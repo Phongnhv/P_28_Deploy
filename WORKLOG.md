@@ -4,25 +4,13 @@
 
 ---
 
-## [YYYY-MM-DD]
+## 2026-08-02
 
-| Member | Task | Status | Output | Time |
-|--------|------|--------|--------|------|
-| [Tên] | [mô tả task] | ✅ Done | [link/kết quả] | 2h |
-| [Tên] | [mô tả task] | 🔄 WIP | [mô tả tiến độ] | 1.5h |
-| [Tên] | [mô tả task] | ❌ Blocked | [lý do block] | - |
+| Member | Task                                         | Status  | Output                                          | Time |
+|--------|----------------------------------------------|---------|-------------------------------------------------|------|
+| Team   | Setup repository & cấu hình Git pre-push hook | ✅ Done | Khởi tạo repo thành công, pre-push hook đã chạy | 0.5h |
 
-**Tổng kết ngày:** [1-2 câu về tiến độ chung]
-
----
-
-## [YYYY-MM-DD]
-
-| Member | Task | Status | Output | Time |
-|--------|------|--------|--------|------|
-| | | | | |
-
-**Tổng kết ngày:**
+**Tổng kết ngày:** Đã hoàn thành setup repository ban đầu và cài đặt Git hooks thành công, sẵn sàng cho quá trình phát triển dự án.
 
 ---
 
