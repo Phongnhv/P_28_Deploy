@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RidePulse DQ – Autonomous Data Quality & Anomaly Intelligence Platform</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- Chart.js for data visualization -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    /* UI Tester Toolbar */
+    .tester-toolbar {
+      background: #0f172a;
+      border-bottom: 2px solid #1677ff;
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      overflow-x: auto;
+      white-space: nowrap;
+      position: sticky;
+      top: 0;
+      z-index: 10000;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    }
+    .tester-toolbar-title {
+      font-weight: 700;
+      font-size: 12px;
+      color: #38bdf8;
+      margin-right: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .tester-btn {
+      background: #1e293b;
+      color: #94a3b8;
+      border: 1px solid #334155;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .tester-btn:hover, .tester-btn.active {
+      background: #1677ff;
+      color: white;
+      border-color: #38bdf8;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- UI Tester Switcher Header Bar -->
+  <div class="tester-toolbar">
+    <div class="tester-toolbar-title">🚀 QUICK SCREEN SWITCHER (CHUYỂN MÀN NHANH):</div>
+    <button class="tester-btn" onclick="navigateTo('screen-1')">Screen 1: Login</button>
+    <button class="tester-btn active" onclick="navigateTo('screen-2')">Screen 2: Steward Dashboard</button>
+    <button class="tester-btn" onclick="navigateTo('screen-3')">Screen 3: Dataset Catalog</button>
+    <button class="tester-btn" onclick="navigateTo('screen-4')">Screen 4: Dataset Profiling</button>
+    <button class="tester-btn" onclick="navigateTo('screen-5')">Screen 5: AI Rule Proposals (HITL)</button>
+    <button class="tester-btn" onclick="openEditModal('fare_amount')">Screen 6: Rule Edit Modal</button>
+    <button class="tester-btn" onclick="navigateTo('screen-7')">Screen 7: Test Stepper & Console</button>
+    <button class="tester-btn" onclick="navigateTo('screen-8')">Screen 8: Anomaly Dashboard</button>
+    <button class="tester-btn" onclick="openDiagnosisModal()">Screen 9: AI Diagnosis Modal</button>
+    <button class="tester-btn" onclick="navigateTo('screen-10')">Screen 10: Trend Analysis</button>
+    <button class="tester-btn" onclick="navigateTo('screen-11')">Screen 11: Viewer Dashboard</button>
+  </div>
+
+  <!-- App Wrapper -->
+  <div class="app-container">
+
+    <!-- Screen 1: Login Page (Overlay Mode) -->
+    <div id="screen-1" class="screen" style="width: 100%; position: absolute; z-index: 999; background: #0f172a; min-height: 100vh;">
+      <div class="login-container">
+        <div class="login-box">
+          <div style="text-align: center; margin-bottom: 24px;">
+            <div style="width: 48px; height: 48px; background: linear-gradient(135deg, #1677ff, #722ed1); border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; font-weight: bold; font-size: 24px; color: white; margin-bottom: 12px;">🚗</div>
+            <h2 style="font-size: 22px; font-weight: 700;">RidePulse DQ Platform</h2>
+            <p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">Autonomous Data Quality & Anomaly Intelligence</p>
+          </div>
+
+          <form onsubmit="handleLogin(event)">
+            <div class="form-group">
+              <label class="form-label">Email / Username</label>
+              <input type="text" class="form-input" value="steward@ridepulse.io" required>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Password</label>
+              <input type="password" class="form-input" value="••••••••••••" required>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Select User Role</label>
+              <div class="role-radio-group">
+                <div class="role-radio-card selected" id="role-option-steward" onclick="selectRoleOption('steward')">
+                  <div style="font-weight: 600; font-size: 13px; color: #38bdf8;">Data Steward</div>
+                  <div style="font-size: 11px; color: var(--text-muted);">Full Access / HITL</div>
+                </div>
+                <div class="role-radio-card" id="role-option-viewer" onclick="selectRoleOption('viewer')">
+                  <div style="font-weight: 600; font-size: 13px; color: #4ade80;">Viewer</div>
+                  <div style="font-size: 11px; color: var(--text-muted);">Read-Only Mode</div>
+                </div>
+              </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 12px; padding: 12px;">
+              Sign In to Platform ➔
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="brand-logo">
+        <div class="logo-icon">🚗</div>
+        <div class="brand-text">RidePulse DQ</div>
+      </div>
+
+      <div class="nav-menu">
+        <div class="nav-section-title">Overview</div>
+        <div class="nav-item active" id="nav-dashboard" onclick="navigateTo('screen-2')">
+          <span>🏠 Dashboard</span>
+        </div>
+        
+        <div class="nav-section-title">Data Quality Pipeline</div>
+        <div class="nav-item" id="nav-catalog" onclick="navigateTo('screen-3')">
+          <span>🗄️ Dataset Catalog</span>
+        </div>
+        <div class="nav-item" id="nav-profiling" onclick="navigateTo('screen-4')">
+          <span>🔍 Dataset Profiling</span>
+        </div>
+        <div class="nav-item steward-only" id="nav-rules" onclick="navigateTo('screen-5')">
+          <span>🤖 AI Rule Proposals</span>
+          <span class="nav-badge">12</span>
+        </div>
+        <div class="nav-item steward-only" id="nav-execution" onclick="navigateTo('screen-7')">
+          <span>⚡ Execution Log</span>
+        </div>
+
+        <div class="nav-section-title">Intelligence</div>
+        <div class="nav-item" id="nav-anomalies" onclick="navigateTo('screen-8')">
+          <span>🚨 Anomaly Center</span>
+          <span class="nav-badge">3</span>
+        </div>
+        <div class="nav-item" id="nav-trends" onclick="navigateTo('screen-10')">
+          <span>📈 Trend Analysis</span>
+        </div>
+      </div>
+
+      <div style="padding: 16px; border-top: 1px solid var(--border-color);">
+        <button class="btn btn-secondary btn-sm" style="width: 100%;" onclick="navigateTo('screen-1')">
+          🔒 Sign Out / Switch Role
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <div class="main-wrapper">
+      <!-- Top Navigation Bar -->
+      <header class="top-header">
+        <div class="header-left">
+          <input type="text" class="form-input" placeholder="Search tables, rules, anomalies..." style="width: 280px; padding: 6px 12px;">
+        </div>
+        <div class="header-right">
+          <div class="role-tag role-steward" id="current-role-badge">
+            <span style="width: 8px; height: 8px; border-radius: 50%; background: currentColor;"></span>
+            <span id="current-role-text">Role: Data Steward</span>
+          </div>
+          <div style="font-weight: 500; font-size: 13px;">Alex Morgan (Data Ops)</div>
+        </div>
+      </header>
+
+      <!-- Main Body Screens -->
+      <main class="content-body">
+
+        <!-- Screen 2: Data Steward Dashboard -->
+        <div id="screen-2" class="screen active">
+          <div class="page-header">
+            <div>
+              <div class="breadcrumb">Home / Dashboard</div>
+              <h1 class="page-title">Data Health Dashboard</h1>
+            </div>
+            <div style="display: flex; gap: 8px;" class="steward-only">
+              <button class="btn btn-secondary" onclick="navigateTo('screen-3')">🔍 Profile New Dataset</button>
+              <button class="btn btn-primary" onclick="navigateTo('screen-5')">⚡ Review AI Rules (12)</button>
+            </div>
+          </div>
+
+          <!-- Overall Health Banner -->
+          <div class="ant-card" style="background: linear-gradient(135deg, rgba(22, 119, 255, 0.15), rgba(114, 46, 209, 0.15)); border-color: rgba(22, 119, 255, 0.3);">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <div>
+                <span class="tag tag-success" style="margin-bottom: 8px;">Health Status: Optimal</span>
+                <div style="font-size: 32px; font-weight: 800; color: #38bdf8;">87.4% <span style="font-size: 14px; color: var(--success); font-weight: 600;">▲ 2.1% this week</span></div>
+                <div style="color: var(--text-secondary); font-size: 13px;">Overall Data Health Score across 4 active ride-hailing operational datasets.</div>
+              </div>
+              <button class="btn btn-primary steward-only" onclick="navigateTo('screen-7')">🚀 Run Full Test Suite</button>
+            </div>
+          </div>
+
+          <!-- Metric Cards Grid -->
+          <div class="grid-4">
+            <div class="metric-card">
+              <div class="metric-title">Passed Rules</div>
+              <div class="metric-value text-success">1,420 <span style="font-size: 13px;">/ 1,438</span></div>
+              <div class="metric-subtext">98.7% Pass rate</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-title">Failed Rules</div>
+              <div class="metric-value text-error">18</div>
+              <div class="metric-subtext">Requires HITL Review</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-title">Active Anomalies</div>
+              <div class="metric-value text-warning">3 <span style="font-size: 13px; color: var(--error);">[1 Critical]</span></div>
+              <div class="metric-subtext">ML Anomaly Engine</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-title">Last Pipeline Scan</div>
+              <div class="metric-value" style="font-size: 20px;">12m ago</div>
+              <div class="metric-subtext">dbt Core Engine v1.7</div>
+            </div>
+          </div>
+
+          <!-- Recent Alerts Table -->
+          <div class="ant-card">
+            <div class="ant-card-title">
+              <span>🚨 Recent Critical Quality Alerts</span>
+              <button class="btn btn-secondary btn-sm" onclick="navigateTo('screen-8')">View All Alerts</button>
+            </div>
+            <div class="ant-table-wrapper">
+              <table class="ant-table">
+                <thead>
+                  <tr>
+                    <th>Severity</th>
+                    <th>Dataset Table</th>
+                    <th>Issue Description</th>
+                    <th>Detected Time</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><span class="tag tag-error">CRITICAL</span></td>
+                    <td><code>trips</code></td>
+                    <td>Negative <code>fare_amount</code> detected (-$15.00)</td>
+                    <td>10 mins ago</td>
+                    <td><button class="btn btn-primary btn-sm" onclick="openDiagnosisModal()">🤖 AI Diagnosis</button></td>
+                  </tr>
+                  <tr>
+                    <td><span class="tag tag-warning">HIGH</span></td>
+                    <td><code>payments</code></td>
+                    <td>Duplicate transaction UUIDs (0.05% rate)</td>
+                    <td>45 mins ago</td>
+                    <td><button class="btn btn-secondary btn-sm" onclick="openDiagnosisModal()">🤖 AI Diagnosis</button></td>
+                  </tr>
+                  <tr>
+                    <td><span class="tag tag-info">MEDIUM</span></td>
+                    <td><code>drivers</code></td>
+                    <td>Null rate spike on <code>rating</code> column</td>
+                    <td>2 hours ago</td>
+                    <td><button class="btn btn-secondary btn-sm" onclick="openDiagnosisModal()">🤖 AI Diagnosis</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Screen 3: Dataset Catalog Selection -->
+        <div id="screen-3" class="screen">
+          <div class="page-header">
+            <div>
+              <div class="breadcrumb">Home / Catalog</div>
+              <h1 class="page-title">Operational Data Catalog</h1>
+            </div>
+          </div>
+
+          <div class="ant-card">
+            <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+              <input type="text" class="form-input" placeholder="Filter by table name..." style="width: 300px;">
+              <select class="form-select" style="width: 180px;">
+                <option>All Owners</option>
+                <option>Data Ops</option>
+                <option>Fleet Team</option>
+                <option>Finance</option>
+              </select>
+            </div>
+
+            <div class="ant-table-wrapper">
+              <table class="ant-table">
+                <thead>
+                  <tr>
+                    <th>Table Name</th>
+                    <th>Rows</th>
+                    <th>Columns</th>
+                    <th>Owner</th>
+                    <th>Last Updated</th>
+                    <th>Health Score</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong style="color: #38bdf8;">trips</strong></td>
+                    <td>4.25 M</td>
+                    <td>24</td>
+                    <td>Data Ops</td>
+                    <td>5 mins ago</td>
+                    <td><span class="tag tag-warning">84.2%</span></td>
+                    <td><button class="btn btn-primary btn-sm steward-only" onclick="startProfiling('trips')">🔍 Start Profiling</button></td>
+                  </tr>
+                  <tr>
+                    <td><strong style="color: #38bdf8;">drivers</strong></td>
+                    <td>85.4 K</td>
+                    <td>18</td>
+                    <td>Fleet Team</td>
+                    <td>1 hour ago</td>
+                    <td><span class="tag tag-success">96.8%</span></td>
+                    <td><button class="btn btn-primary btn-sm steward-only" onclick="startProfiling('drivers')">🔍 Start Profiling</button></td>
+                  </tr>
+                  <tr>
+                    <td><strong style="color: #38bdf8;">payments</strong></td>
+                    <td>6.80 M</td>
+                    <td>16</td>
+                    <td>Finance</td>
+                    <td>12 mins ago</td>
+                    <td><span class="tag tag-warning">88.5%</span></td>
+                    <td><button class="btn btn-primary btn-sm steward-only" onclick="startProfiling('payments')">🔍 Start Profiling</button></td>
+                  </tr>
+                  <tr>
+                    <td><strong style="color: #38bdf8;">customers</strong></td>
+                    <td>1.20 M</td>
+                    <td>12</td>
+                    <td>Growth Team</td>
+                    <td>3 hours ago</td>
+                    <td><span class="tag tag-success">99.1%</span></td>
+                    <td><button class="btn btn-primary btn-sm steward-only" onclick="startProfiling('customers')">🔍 Start Profiling</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Screen 4: Dataset Profiling -->
+        <div id="screen-4" class="screen">
+          <div class="page-header">
+            <div>
+              <div class="breadcrumb">Catalog / Profiling / trips</div>
+              <h1 class="page-title">Dataset Profiling: <code>trips</code></h1>
+            </div>
+            <button class="btn btn-success steward-only" onclick="navigateTo('screen-5')">🤖 Generate AI Rules ➔</button>
+          </div>
+
+          <!-- Progress Bar Card -->
+          <div class="ant-card">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+              <span style="font-weight: 600;">AI Profiling Scan Status</span>
+              <span style="color: var(--success); font-weight: 700;">100% Completed</span>
+            </div>
+            <div class="progress-bar-bg">
+              <div class="progress-bar-fill" style="width: 100%;"></div>
+            </div>
+          </div>
+
+          <!-- Column Profiling Table -->
+          <div class="ant-card">
+            <div class="ant-card-title">Column Metadata & Profiling Statistics</div>
+            <div class="ant-table-wrapper">
+              <table class="ant-table">
+                <thead>
+                  <tr>
+                    <th>Column Name</th>
+                    <th>Data Type</th>
+                    <th>Null %</th>
+                    <th>Unique %</th>
+                    <th>Distribution & Outliers</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>trip_id</code></td>
+                    <td>VARCHAR</td>
+                    <td>0.00%</td>
+                    <td>100.0%</td>
+                    <td><span class="tag tag-success">UUID Primary Key</span></td>
+                  </tr>
+                  <tr>
+                    <td><code>driver_id</code></td>
+                    <td>VARCHAR</td>
+                    <td><span class="text-error" style="font-weight: bold;">1.82%</span></td>
+                    <td>18.4%</td>
+                    <td>Foreign Key (drivers)</td>
+                  </tr>
+                  <tr>
+                    <td><code>fare_amount</code></td>
+                    <td>DECIMAL(10,2)</td>
+                    <td>0.00%</td>
+                    <td>--</td>
+                    <td><span class="text-error">Min: -$15.00 | Outlier Detected</span></td>
+                  </tr>
+                  <tr>
+                    <td><code>dropoff_timestamp</code></td>
+                    <td>TIMESTAMP</td>
+                    <td>0.05%</td>
+                    <td>--</td>
+                    <td>Freshness lag: 14 mins</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Screen 5: AI Rule Proposal & HITL Review Table -->
+        <div id="screen-5" class="screen">
+          <div class="page-header">
+            <div>
+              <div class="breadcrumb">AI Agent Engine / Rule Proposals</div>
+              <h1 class="page-title">AI Suggested Quality Rules (HITL Review)</h1>
+            </div>
+            <div style="display: flex; gap: 8px;" class="steward-only">
+              <button class="btn btn-secondary btn-sm" onclick="batchApprove()">v Approve All (12)</button>
+              <button class="btn btn-primary" onclick="navigateTo('screen-7')">⚡ Save Rules & Generate dbt Tests ➔</button>
+            </div>
+          </div>
+
+          <div class="ant-card">
+            <div class="ant-table-wrapper">
+              <table class="ant-table">
+                <thead>
+                  <tr>
+                    <th>Target Column</th>
+                    <th>Suggested Rule Type</th>
+                    <th>AI Reason & Context</th>
+                    <th>Confidence</th>
+                    <th>Status</th>
+                    <th class="steward-only">HITL Action</th>
+                  </tr>
+                </thead>
+                <tbody id="rule-proposal-rows">
+                  <tr>
+                    <td><code>fare_amount</code></td>
+                    <td><strong>Range Check: >= 0</strong></td>
+                    <td>Detected 14 negative values (-$15.00) in last sync batch.</td>
+                    <td><span class="tag tag-success">98% High</span></td>
+                    <td><span class="tag tag-warning" id="status-rule-1">Pending</span></td>
+                    <td class="steward-only">
+                      <button class="btn btn-success btn-sm" onclick="approveRule(1)">Approve</button>
+                      <button class="btn btn-secondary btn-sm" onclick="openEditModal('fare_amount')">Edit</button>
+                      <button class="btn btn-danger btn-sm" onclick="rejectRule(1)">Reject</button>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><code>driver_id</code></td>
+                    <td><strong>Not Null Check</strong></td>
+                    <td>Critical Foreign Key for driver payout calculations.</td>
+                    <td><span class="tag tag-success">95% High</span></td>
+                    <td><span class="tag tag-warning" id="status-rule-2">Pending</span></td>
+                    <td class="steward-only">
+                      <button class="btn btn-success btn-sm" onclick="approveRule(2)">Approve</button>
+                      <button class="btn btn-secondary btn-sm" onclick="openEditModal('driver_id')">Edit</button>
+                      <button class="btn btn-danger btn-sm" onclick="rejectRule(2)">Reject</button>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><code>trip_id</code></td>
+                    <td><strong>Uniqueness Check</strong></td>
+                    <td>Primary identifier must be 100% unique UUID.</td>
+                    <td><span class="tag tag-success">99% High</span></td>
+                    <td><span class="tag tag-success">Approved</span></td>
+                    <td class="steward-only">
+                      <button class="btn btn-secondary btn-sm" onclick="openEditModal('trip_id')">Edit</button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Screen 7: Running Tests Stepper & Real-time Console Log -->
+        <div id="screen-7" class="screen">
+          <div class="page-header">
+            <div>
+              <div class="breadcrumb">Pipeline / Execution Run #8921</div>
+              <h1 class="page-title">Executing dbt & Great Expectations Tests</h1>
+            </div>
+            <button class="btn btn-primary" onclick="navigateTo('screen-8')">View Anomaly Dashboard ➔</button>
+          </div>
+
+          <!-- Stepper Container -->
+          <div class="ant-card">
+            <div class="stepper">
+              <div class="stepper-step completed">
+                <div class="step-icon">✓</div>
+                <div class="step-text">
+                  <div class="step-title">1. Dataset Profiling</div>
+                  <div class="step-subtitle">Completed in 4s</div>
+                </div>
+              </div>
+
+              <div class="stepper-step completed">
+                <div class="step-icon">✓</div>
+                <div class="step-text">
+                  <div class="step-title">2. Generate dbt Code</div>
+                  <div class="step-subtitle">12 Test Macros</div>
+                </div>
+              </div>
+
+              <div class="stepper-step active" id="step-executing">
+                <div class="step-icon">🔄</div>
+                <div class="step-text">
+                  <div class="step-title">3. Execute Tests</div>
+                  <div class="step-subtitle">Running queries...</div>
+                </div>
+              </div>
+
+              <div class="stepper-step" id="step-anomaly">
+                <div class="step-icon">4</div>
+                <div class="step-text">
+                  <div class="step-title">4. ML Anomaly Check</div>
+                  <div class="step-subtitle">Pending</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Live Terminal Console Log -->
+            <div class="console-window" id="console-output">
+              <div class="log-line"><span class="log-time">[09:12:01]</span> <span class="log-info">[INFO]</span> Compiling 12 dbt quality macros for dataset `trips`...</div>
+              <div class="log-line"><span class="log-time">[09:12:03]</span> <span class="log-success">[PASS]</span> test_trips_trip_id_unique ......................... [PASS in 0.42s]</div>
+              <div class="log-line"><span class="log-time">[09:12:05]</span> <span class="log-error">[FAIL]</span> test_trips_fare_amount_positive ................ [FAIL in 0.81s]</div>
+              <div class="log-line"><span class="log-time">[09:12:06]</span> <span class="log-warn">[WARN]</span> Found 14 rows violating boundary `fare_amount >= 0`</div>
+              <div class="log-line"><span class="log-time">[09:12:08]</span> <span class="log-info">[INFO]</span> Launching ML Anomaly Detection Engine (Isolation Forest model v2)...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Screen 8: Anomaly Dashboard & Alert Center -->
+        <div id="screen-8" class="screen">
+          <div class="page-header">
+            <div>
+              <div class="breadcrumb">Intelligence / Anomaly Dashboard</div>
+              <h1 class="page-title">Anomaly Intelligence & Alerts</h1>
+            </div>
+          </div>
+
+          <div class="grid-4">
+            <div class="metric-card">
+              <div class="metric-title">Quality Score</div>
+              <div class="metric-value text-warning">87.4%</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-title">Total Active Alerts</div>
+              <div class="metric-value">18</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-title">Critical Anomaly</div>
+              <div class="metric-value text-error">4</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-title">Warnings</div>
+              <div class="metric-value text-warning">14</div>
+            </div>
+          </div>
+
+          <div class="ant-card">
+            <div class="ant-card-title">Time-Series Quality & Anomaly Stream</div>
+            <canvas id="anomalyChart" height="90"></canvas>
+          </div>
+
+          <!-- Anomalies Table -->
+          <div class="ant-card">
+            <div class="ant-card-title">Detected Anomalies List</div>
+            <div class="ant-table-wrapper">
+              <table class="ant-table">
+                <thead>
+                  <tr>
+                    <th>Severity</th>
+                    <th>Affected Table</th>
+                    <th>Anomaly Type</th>
+                    <th>Time</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><span class="tag tag-error">CRITICAL</span></td>
+                    <td><code>trips</code></td>
+                    <td>Negative <code>fare_amount</code> anomaly</td>
+                    <td>5 mins ago</td>
+                    <td><span class="tag tag-warning">Active</span></td>
+                    <td><button class="btn btn-primary btn-sm" onclick="openDiagnosisModal()">🤖 AI Diagnosis</button></td>
+                  </tr>
+                  <tr>
+                    <td><span class="tag tag-warning">HIGH</span></td>
+                    <td><code>payments</code></td>
+                    <td>Duplicate transaction hashes</td>
+                    <td>1 hour ago</td>
+                    <td><span class="tag tag-warning">Active</span></td>
+                    <td><button class="btn btn-primary btn-sm" onclick="openDiagnosisModal()">🤖 AI Diagnosis</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Screen 10: Historical Trend & ML Accuracy Metrics -->
+        <div id="screen-10" class="screen">
+          <div class="page-header">
+            <div>
+              <div class="breadcrumb">Analytics / Trends & Model Evaluation</div>
+              <h1 class="page-title">Historical Trends & ML Metrics</h1>
+            </div>
+            <div>
+              <select class="form-select" style="width: 140px;">
+                <option>Daily</option>
+                <option>Weekly</option>
+                <option>Monthly</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid-4">
+            <div class="metric-card">
+              <div class="metric-title">ML Model Precision</div>
+              <div class="metric-value text-success">94.2%</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-title">ML Model Recall</div>
+              <div class="metric-value text-success">91.8%</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-title">ML F1-Score</div>
+              <div class="metric-value text-info">93.0%</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-title">False Positive Rate</div>
+              <div class="metric-value text-success">2.4%</div>
+            </div>
+          </div>
+
+          <div class="ant-card">
+            <div class="ant-card-title">Data Quality Health Trend (30 Days)</div>
+            <canvas id="trendChart" height="100"></canvas>
+          </div>
+        </div>
+
+        <!-- Screen 11: Viewer Dashboard (Read-Only Version) -->
+        <div id="screen-11" class="screen">
+          <div class="page-header">
+            <div>
+              <div class="breadcrumb">Executive View / Viewer Dashboard</div>
+              <h1 class="page-title">Executive Data Quality Overview</h1>
+            </div>
+            <span class="tag tag-success">Read-Only Mode</span>
+          </div>
+
+          <div class="ant-card" style="background: linear-gradient(135deg, rgba(82, 196, 26, 0.15), rgba(22, 119, 255, 0.15)); border-color: rgba(82, 196, 26, 0.3);">
+            <div style="font-size: 32px; font-weight: 800; color: #4ade80;">87.4% <span style="font-size: 14px; color: var(--text-main); font-weight: 500;">Overall Data Health</span></div>
+            <p style="color: var(--text-secondary); font-size: 13px; margin-top: 4px;">System is performing normally. 3 datasets healthy, 1 dataset flagged with warning.</p>
+          </div>
+
+          <div class="grid-4">
+            <div class="metric-card">
+              <div class="metric-title">Active Incident Alerts</div>
+              <div class="metric-value text-warning">3 Alerts</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-title">Healthy Tables</div>
+              <div class="metric-value text-success">3 / 4</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-title">Last Automated Scan</div>
+              <div class="metric-value">12m ago</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-title">Platform Access Level</div>
+              <div class="metric-value text-info" style="font-size: 18px;">Executive Viewer</div>
+            </div>
+          </div>
+
+          <div class="ant-card">
+            <div class="ant-card-title">Executive Incident Summary (Read-Only)</div>
+            <div class="ant-table-wrapper">
+              <table class="ant-table">
+                <thead>
+                  <tr>
+                    <th>Dataset Table</th>
+                    <th>Issue Summary</th>
+                    <th>Severity</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>trips</code></td>
+                    <td>Fare outlier values detected</td>
+                    <td><span class="tag tag-error">CRITICAL</span></td>
+                    <td><span class="tag tag-warning">Under Investigation</span></td>
+                  </tr>
+                  <tr>
+                    <td><code>payments</code></td>
+                    <td>Duplicate transaction hash alert</td>
+                    <td><span class="tag tag-warning">HIGH</span></td>
+                    <td><span class="tag tag-warning">Open</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- Screen 6: Rule Edit Modal -->
+  <div class="modal-backdrop" id="modal-rule-edit">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div class="modal-title">Edit Rule Specification: <code id="edit-column-name">fare_amount</code></div>
+        <button style="background: none; border: none; color: white; cursor: pointer; font-size: 18px;" onclick="closeModal('modal-rule-edit')">✖</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Min Threshold Value</label>
+          <input type="number" class="form-input" id="edit-min-val" value="0.00">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Severity Level</label>
+          <select class="form-select">
+            <option>Critical</option>
+            <option selected>High</option>
+            <option>Medium</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Rule Description</label>
+          <textarea class="form-textarea" rows="3">Fare amount must not be negative and should not exceed $5,000 for standard ride-hailing trips.</textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-rule-edit')">Cancel</button>
+        <button class="btn btn-primary" onclick="saveRuleEdit()">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Screen 9: AI Diagnosis Modal -->
+  <div class="modal-backdrop" id="modal-ai-diagnosis">
+    <div class="modal-dialog" style="max-width: 680px;">
+      <div class="modal-header" style="background: linear-gradient(135deg, rgba(22, 119, 255, 0.2), rgba(114, 46, 209, 0.2));">
+        <div class="modal-title">🤖 AI Agent Root Cause Diagnosis</div>
+        <button style="background: none; border: none; color: white; cursor: pointer; font-size: 18px;" onclick="closeModal('modal-ai-diagnosis')">✖</button>
+      </div>
+      <div class="modal-body">
+        <div style="background: rgba(22, 119, 255, 0.1); border: 1px solid rgba(22, 119, 255, 0.3); border-radius: var(--radius); padding: 12px; margin-bottom: 16px;">
+          <div style="font-weight: 600; color: #38bdf8;">Incident: Negative fare_amount in dataset `trips`</div>
+          <div style="font-size: 12px; color: var(--text-secondary);">AI Confidence Level: 96% High Certainty</div>
+        </div>
+
+        <div style="margin-bottom: 16px;">
+          <h4 style="color: #f87171; margin-bottom: 4px;">📌 Root Cause Analysis</h4>
+          <p style="font-size: 13px; color: var(--text-secondary);">Upstream promo-discount microservice (<code>promo_v2_service</code>) failed to cap maximum discount percentage, resulting in double discounts applied to 14 transactions.</p>
+        </div>
+
+        <div style="margin-bottom: 16px;">
+          <h4 style="color: #fbbf24; margin-bottom: 4px;">💥 Business Impact</h4>
+          <p style="font-size: 13px; color: var(--text-secondary);">Incorrect driver payout calculations and skewed revenue reporting for ride-hailing operations.</p>
+        </div>
+
+        <div>
+          <h4 style="color: #4ade80; margin-bottom: 4px;">💡 AI Suggested Resolution</h4>
+          <div style="background: #090d16; padding: 12px; border-radius: var(--radius); font-family: var(--font-code); font-size: 12px; color: #a7f3d0;">
+            1. Apply dbt filter: fare_amount = GREATEST(0, calculated_fare)<br>
+            2. Move 14 corrupted rows to `trips_quarantine` table.
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-ai-diagnosis')">Close</button>
+        <button class="btn btn-primary" onclick="alert('Resolution ticket created for Data Engineering team!')">Create Engineering Ticket</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

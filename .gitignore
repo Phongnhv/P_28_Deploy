@@ -55,6 +55,10 @@ out/
 *.pyc
 *.pyo
 
+# Generated document archives
+*.docx
+*.zip
+
 # AI logs — tracked structure, ignored content
 .ai-log/*.jsonl
 .ai-log/archive/
