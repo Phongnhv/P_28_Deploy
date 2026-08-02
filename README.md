@@ -115,64 +115,65 @@ uvicorn src.main:app --reload --port 8000
 
 ## 📚 Technical Guidebook — 10 Chương
 
-| Chương | Nội dung | Thời gian |
-|---------|----------|-----------|
-| 1 | Lời mở đầu — Mục tiêu, cách sử dụng | 15 phút |
-| 2 | Khởi tạo dự án — Clone, setup, git workflow | 4 giờ |
-| 3 | Thiết kế kiến trúc — 3-tier, diagrams, ADR | 6 giờ |
-| 4 | **LangGraph Agent** — State, nodes, edges, tools, RAG | 8 giờ |
-| 5 | FastAPI — Routes, validation, error handling, streaming | 6 giờ |
-| 6 | Giao diện — Next.js + Streamlit quickstart | 6 giờ |
-| 7 | DevOps — Docker, CI/CD, deploy, logging | 6 giờ |
-| 8 | Kiểm thử — Unit test, integration test, RAGAS | 4 giờ |
-| 9 | Demo Day — 10 deliverables, checklist, tips | 2 giờ |
-| 10 | Tài nguyên — Khóa học, docs, BMAD method | tham khảo |
+| Chương | Nội dung                                                    | Thời gian |
+| -------- | ------------------------------------------------------------ | ---------- |
+| 1        | Lời mở đầu — Mục tiêu, cách sử dụng                | 15 phút   |
+| 2        | Khởi tạo dự án — Clone, setup, git workflow             | 4 giờ     |
+| 3        | Thiết kế kiến trúc — 3-tier, diagrams, ADR              | 6 giờ     |
+| 4        | **LangGraph Agent** — State, nodes, edges, tools, RAG | 8 giờ     |
+| 5        | FastAPI — Routes, validation, error handling, streaming     | 6 giờ     |
+| 6        | Giao diện — Next.js + Streamlit quickstart                 | 6 giờ     |
+| 7        | DevOps — Docker, CI/CD, deploy, logging                     | 6 giờ     |
+| 8        | Kiểm thử — Unit test, integration test, RAGAS             | 4 giờ     |
+| 9        | Demo Day — 10 deliverables, checklist, tips                 | 2 giờ     |
+| 10       | Tài nguyên — Khóa học, docs, BMAD method                | tham khảo |
 
 📖 **Đọc online:** [phoenix.note.transformerlabs.ai/technical-book](https://phoenix.note.transformerlabs.ai/technical-book)
 
 ## 📋 10 Deliverables cho Demo Day
 
-| # | Deliverable | File vị trí | Template có sẵn |
-|---|-------------|-------------|:---:|
-| 1 | Source Code | `src/` | ✅ |
-| 2 | README.md | `README_boilerplate.md` → copy thành `README.md` | ✅ |
-| 3 | Architecture Diagram | `docs/architecture_diagram.md` | ✅ |
-| 4 | AI Logs | LangSmith (3 env vars) + Auto AI Usage Logging | ✅ |
-| 5 | Live URL | Deploy lên Render/Vercel | ⚡ CI/CD sẵn |
-| 6 | Video Demo | `presentation/` | 📝 |
-| 7 | Pitch Deck | `presentation/` | 📝 |
-| 8 | Development Journal | `JOURNAL.md` | ✅ |
-| 9 | Worklog | `WORKLOG.md` | ✅ |
-| 10 | Evaluation Evidence | `eval/` | 📝 |
+| #  | Deliverable          | File vị trí                                          | Template có sẵn |
+| -- | -------------------- | ------------------------------------------------------ | :---------------: |
+| 1  | Source Code          | `src/`                                               |        ✅        |
+| 2  | README.md            | `README_boilerplate.md` → copy thành `README.md` |        ✅        |
+| 3  | Architecture Diagram | `docs/architecture_diagram.md`                       |        ✅        |
+| 4  | AI Logs              | LangSmith (3 env vars) + Auto AI Usage Logging         |        ✅        |
+| 5  | Live URL             | Deploy lên Render/Vercel                              |   ⚡ CI/CD sẵn   |
+| 6  | Video Demo           | `presentation/`                                      |        📝        |
+| 7  | Pitch Deck           | `presentation/`                                      |        📝        |
+| 8  | Development Journal  | `JOURNAL.md`                                         |        ✅        |
+| 9  | Worklog              | `WORKLOG.md`                                         |        ✅        |
+| 10 | Evaluation Evidence  | `eval/`                                              |        📝        |
 
 ## 🛠 Tech Stack
 
-| Layer | Technology | Version |
-|-------|-----------|---------|
-| AI Agent | LangGraph + LangChain | Latest |
-| Backend | FastAPI + Uvicorn | 0.100+ |
-| LLM | OpenAI GPT-4o-mini | API |
-| Frontend | Next.js / Streamlit | 14+ / 1.30+ |
-| Database | SQLite (dev) / PostgreSQL (prod) | — |
-| DevOps | Docker + GitHub Actions | — |
-| Testing | pytest + pytest-asyncio | 8+ |
+| Layer    | Technology                       | Version     |
+| -------- | -------------------------------- | ----------- |
+| AI Agent | LangGraph + LangChain            | Latest      |
+| Backend  | FastAPI + Uvicorn                | 0.100+      |
+| LLM      | OpenAI GPT-4o-mini               | API         |
+| Frontend | Next.js / Streamlit              | 14+ / 1.30+ |
+| Database | SQLite (dev) / PostgreSQL (prod) | —          |
+| DevOps   | Docker + GitHub Actions          | —          |
+| Testing  | pytest + pytest-asyncio          | 8+          |
 
 ## 📊 AI Usage Logging
 
 Template đã tích hợp sẵn auto-logging hooks cho 6 AI tools:
 
-| Tool | Cơ chế | Config |
-|------|--------|--------|
-| Claude Code | `.claude/settings.json` hooks | Tự động |
-| Cursor | `.cursor/hooks.json` | Tự động |
-| OpenAI Codex CLI | `.codex/hooks.json` | Tự động |
-| Gemini CLI | `.gemini/settings.json` | Tự động |
-| GitHub Copilot | `.github/hooks/hooks.json` | Tự động |
-| Antigravity IDE | Pre-push scan transcript | Tự động trên `git push` |
+| Tool             | Cơ chế                        | Config                       |
+| ---------------- | ------------------------------- | ---------------------------- |
+| Claude Code      | `.claude/settings.json` hooks | Tự động                   |
+| Cursor           | `.cursor/hooks.json`          | Tự động                   |
+| OpenAI Codex CLI | `.codex/hooks.json`           | Tự động                   |
+| Gemini CLI       | `.gemini/settings.json`       | Tự động                   |
+| GitHub Copilot   | `.github/hooks/hooks.json`    | Tự động                   |
+| Antigravity IDE  | Pre-push scan transcript        | Tự động trên`git push` |
 
 Tất cả prompts và tool calls được log vào `.ai-log/session.jsonl` và tự động submit lên grading server mỗi khi `git push`.
 
 **ChatGPT / web tools khác** — log thủ công:
+
 ```bash
 bash scripts/_pyrun.sh scripts/log_manual.py --tool chatgpt --prompt "What you asked"
 ```
