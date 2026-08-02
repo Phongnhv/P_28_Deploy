@@ -12,7 +12,6 @@ venv/
 .venv/
 env/
 
-
 # Environment variables
 .env
 .env.local
@@ -39,6 +38,7 @@ logs/
 *.log
 
 # Test coverage
+.pytest_cache/
 htmlcov/
 .coverage
 coverage.xml
@@ -55,6 +55,10 @@ out/
 # Build
 *.pyc
 *.pyo
+
+# Generated document archives
+*.docx
+*.zip
 
 # AI logs — tracked structure, ignored content
 .ai-log/*.jsonl

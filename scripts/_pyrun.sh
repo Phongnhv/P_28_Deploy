@@ -8,15 +8,11 @@
 # Exits 0 silently if no Python is found — hooks must never block the AI tool.
 set -u
 
-check_py() {
-  "$@" --version >/dev/null 2>&1
-}
-
-if check_py python3; then
+if command -v python3 >/dev/null 2>&1; then
   PY=python3
-elif check_py python; then
+elif command -v python >/dev/null 2>&1; then
   PY=python
-elif check_py py -3; then
+elif command -v py >/dev/null 2>&1; then
   PY="py -3"
 else
   # PATH lookup failed — probe standard Windows install locations.
@@ -27,7 +23,7 @@ else
     "/c/Program Files/Python"*/python.exe \
     "/c/Program Files (x86)/Python"*/python.exe \
     /c/Python*/python.exe; do
-    if [ -x "$cand" ] && check_py "$cand"; then PY="$cand"; break; fi
+    if [ -x "$cand" ]; then PY="$cand"; break; fi
   done
   shopt -u nullglob 2>/dev/null || true
   [ -n "$PY" ] || exit 0
