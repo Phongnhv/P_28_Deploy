@@ -34,7 +34,7 @@ def detect_tool(data: dict) -> str:
     tool_env = os.environ.get("AI_TOOL_NAME", "").lower()
     if tool_env:
         return tool_env
-    
+
     # Heuristics
     if "transcript_path" in data:
         return "codex"
@@ -182,7 +182,8 @@ def main():
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     # Output valid JSON (required by some tools like Gemini)
-    print(json.dumps({"status": "logged"}))
+    if tool != "codex":
+        print(json.dumps({"status": "logged"}))
 
 
 if __name__ == "__main__":
