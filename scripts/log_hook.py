@@ -34,6 +34,7 @@ def detect_tool(data: dict) -> str:
     tool_env = os.environ.get("AI_TOOL_NAME", "").lower()
     if tool_env:
         return tool_env
+    
     # Heuristics
     if "transcript_path" in data:
         return "codex"
