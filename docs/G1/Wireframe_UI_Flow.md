@@ -89,65 +89,65 @@ Thành viên C phác thảo các màn hình trọng tâm theo yêu cầu với p
 ## 5. Hồ sơ hình ảnh UI Prototype (Screen 1–11)
 
 ### Screen 1: Đăng nhập & Chọn Phân quyền (Login & Role Selection)
-![Screen 1: Đăng nhập & Chọn Phân quyền](file:///c:/Users/ADMIN/WorkPlace/Vinuni/AssignmentProject/P-028/docs/images/screen_1_login.png)
+![Screen 1: Đăng nhập & Chọn Phân quyền](images/screen_1_login.png)
 - **📌 Phân tích UX/UI:** Màn hình đăng nhập chọn vai trò Data Steward hoặc Viewer.
 
 ---
 
 ### Screen 2: Steward Dashboard (Data Health Score 87.4% — số liệu minh họa demo)
-![Screen 2: Steward Dashboard](file:///c:/Users/ADMIN/WorkPlace/Vinuni/AssignmentProject/P-028/docs/images/screen_2_steward_dashboard.png)
+![Screen 2: Steward Dashboard](images/screen_2_steward_dashboard.png)
 - **📌 Phân tích UX/UI:** Dashboard tổng quan với điểm số Data Health Score 87.4%.
 
 ---
 
 ### Screen 3: Catalog Lựa chọn Dataset (dich_vu_xe_trips)
-![Screen 3: Catalog Lựa chọn Dataset](file:///c:/Users/ADMIN/WorkPlace/Vinuni/AssignmentProject/P-028/docs/images/screen_3_dataset_catalog.png)
+![Screen 3: Catalog Lựa chọn Dataset](images/screen_3_dataset_catalog.png)
 - **📌 Phân tích UX/UI:** Danh mục tra cứu bảng dữ liệu vận hành gọi xe.
 
 ---
 
 ### Screen 4: Dataset Profiling & Metadata Insights
-![Screen 4: Dataset Profiling & Metadata Insights](file:///c:/Users/ADMIN/WorkPlace/Vinuni/AssignmentProject/P-028/docs/images/screen_4_dataset_profiling.png)
+![Screen 4: Dataset Profiling & Metadata Insights](images/screen_4_dataset_profiling.png)
 - **📌 Phân tích UX/UI:** Kết quả AI Profiling phân tích Null %, Unique % và Outliers.
 
 ---
 
 ### Screen 5: Rule Review Screen (HITL Review Table)
-![Screen 5: Rule Review Screen](file:///c:/Users/ADMIN/WorkPlace/Vinuni/AssignmentProject/P-028/docs/images/screen_5_ai_rule_proposals.png)
+![Screen 5: Rule Review Screen](images/screen_5_ai_rule_proposals.png)
 - **📌 Phân tích UX/UI:** Bảng HITL review chứa danh sách Rule do AI gợi ý với các nút Approve/Reject/Edit.
 
 ---
 
 ### Screen 6: Rule Edit Modal
-![Screen 6: Rule Edit Modal](file:///c:/Users/ADMIN/WorkPlace/Vinuni/AssignmentProject/P-028/docs/images/screen_6_rule_edit_modal.png)
+![Screen 6: Rule Edit Modal](images/screen_6_rule_edit_modal.png)
 - **📌 Phân tích UX/UI:** Modal chỉnh sửa thông số Threshold, Severity và Mô tả rule.
 
 ---
 
 ### Screen 7: Running Tests & Streaming Console Log
-![Screen 7: Running Tests & Streaming Console Log](file:///c:/Users/ADMIN/WorkPlace/Vinuni/AssignmentProject/P-028/docs/images/screen_7_execution_log.png)
+![Screen 7: Running Tests & Streaming Console Log](images/screen_7_execution_log.png)
 - **📌 Phân tích UX/UI:** Chạy dbt test suite với Stepper 4 bước và Live Terminal Log.
 
 ---
 
 ### Screen 8: Anomaly Dashboard & Alert Stream
-![Screen 8: Anomaly Dashboard & Alert Stream](file:///c:/Users/ADMIN/WorkPlace/Vinuni/AssignmentProject/P-028/docs/images/screen_8_anomaly_dashboard.png)
+![Screen 8: Anomaly Dashboard & Alert Stream](images/screen_8_anomaly_dashboard.png)
 - **📌 Phân tích UX/UI:** Biểu đồ Time-Series gắn đốm đỏ Anomaly dots và bảng Alert có nút AI Diagnosis.
 
 ---
 
 ### Screen 9: AI Diagnosis Modal
-![Screen 9: AI Diagnosis Modal](file:///c:/Users/ADMIN/WorkPlace/Vinuni/AssignmentProject/P-028/docs/images/screen_9_ai_diagnosis_modal.png)
+![Screen 9: AI Diagnosis Modal](images/screen_9_ai_diagnosis_modal.png)
 - **📌 Phân tích UX/UI:** Modal giải thích nguyên nhân gốc do AI Agent chẩn đoán.
 
 ---
 
 ### Screen 10: Trend & Evaluation Screen
-![Screen 10: Trend & Evaluation Screen](file:///c:/Users/ADMIN/WorkPlace/Vinuni/AssignmentProject/P-028/docs/images/screen_10_trend_analysis.png)
+![Screen 10: Trend & Evaluation Screen](images/screen_10_trend_analysis.png)
 - **📌 Phân tích UX/UI:** Biểu đồ xu hướng 30 ngày và các chỉ số ML Metrics (Precision, Recall, F1) — số liệu minh họa demo.
 
 ---
 
 ### Screen 11: Executive Viewer Dashboard (Read-Only View)
-![Screen 11: Executive Viewer Dashboard](file:///c:/Users/ADMIN/WorkPlace/Vinuni/AssignmentProject/P-028/docs/images/screen_11_viewer_dashboard.png)
+![Screen 11: Executive Viewer Dashboard](images/screen_11_viewer_dashboard.png)
 - **📌 Phân tích UX/UI:** Giao diện Read-Only an toàn 100% dành cho Viewer.
