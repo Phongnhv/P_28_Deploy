@@ -28,10 +28,10 @@ env/
 .DS_Store
 Thumbs.db
 
-# Data (never commit large data)
-data/
-*.db
-*.sqlite3
+# # Data (never commit large data)
+# #data/
+# *.db
+# *.sqlite3
 
 # Logs
 logs/
