@@ -1,0 +1,9 @@
+﻿table_name,file_name,file_type,rows,columns,size_mb,below_80_mb
+customers,customers.csv,CSV,12024,8,1.3827,True
+customers,customers.sql,SQL,12024,8,1.6827,True
+drivers,drivers.csv,CSV,4008,10,0.4464,True
+drivers,drivers.sql,SQL,4008,10,0.5621,True
+dich_vu_xe_trips,dich_vu_xe_trips.csv,CSV,80160,13,12.6541,True
+dich_vu_xe_trips,dich_vu_xe_trips.sql,SQL,80160,13,15.3496,True
+payments,payments.csv,CSV,80160,8,8.2491,True
+payments,payments.sql,SQL,80160,8,10.0957,True

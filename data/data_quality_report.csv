@@ -1,0 +1,27 @@
+﻿table_name,rule_name,column_name,error_count,description,error_percent
+customers,null_primary_key,customer_id,25,Khóa chính bị NULL.,0.2079
+customers,duplicate_rows,*,24,Dòng bị trùng toàn bộ giá trị.,0.1996
+customers,freshness_lag_over_90_days,updated_at,361,updated_at cũ hơn 90 ngày.,3.0023
+drivers,null_primary_key,driver_id,8,Khóa chính bị NULL.,0.1996
+drivers,duplicate_rows,*,8,Dòng bị trùng toàn bộ giá trị.,0.1996
+drivers,freshness_lag_over_90_days,updated_at,120,updated_at cũ hơn 90 ngày.,2.994
+dich_vu_xe_trips,null_primary_key,trip_id,160,Khóa chính bị NULL.,0.1996
+dich_vu_xe_trips,duplicate_rows,*,160,Dòng bị trùng toàn bộ giá trị.,0.1996
+dich_vu_xe_trips,freshness_lag_over_90_days,updated_at,2407,updated_at cũ hơn 90 ngày.,3.0027
+payments,null_primary_key,payment_id,160,Khóa chính bị NULL.,0.1996
+payments,duplicate_rows,*,160,Dòng bị trùng toàn bộ giá trị.,0.1996
+payments,freshness_lag_over_90_days,updated_at,2403,updated_at cũ hơn 90 ngày.,2.9978
+customers,invalid_email_format,email,60,Email không đúng định dạng.,0.499
+customers,invalid_phone_format,phone,60,Số điện thoại không đúng 10 chữ số.,0.499
+drivers,invalid_license_format,license_number,13,Giấy phép lái xe sai định dạng.,0.3244
+drivers,invalid_vehicle_plate,vehicle_plate,13,Biển số xe sai định dạng.,0.3244
+dich_vu_xe_trips,orphan_customer_id,customer_id,200,customer_id không tồn tại.,0.2495
+dich_vu_xe_trips,orphan_driver_id,driver_id,201,driver_id không tồn tại.,0.2507
+dich_vu_xe_trips,negative_fare,fare_amount,802,Cước chuyến xe âm.,1.0005
+dich_vu_xe_trips,negative_distance,distance_km,240,Quãng đường âm.,0.2994
+dich_vu_xe_trips,invalid_pickup_datetime,pickup_datetime,401,pickup_datetime sai định dạng.,0.5002
+dich_vu_xe_trips,invalid_dropoff_datetime,dropoff_datetime,399,dropoff_datetime sai định dạng.,0.4978
+dich_vu_xe_trips,dropoff_before_pickup,"pickup_datetime,dropoff_datetime",394,Thời gian trả khách trước thời gian đón.,0.4915
+payments,orphan_trip_id,trip_id,400,trip_id không tồn tại.,0.499
+payments,negative_payment_amount,amount,801,Số tiền thanh toán âm.,0.9993
+payments,invalid_paid_at,paid_at,401,paid_at sai định dạng.,0.5002

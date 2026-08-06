@@ -1,0 +1,2 @@
+﻿file_name,file_size_mb,rows,columns,total_cells,dataframe_memory_mb,missing_cells,duplicate_rows,duplicate_percent,numeric_columns,categorical_columns
+yellow_tripdata_2025-12.parquet,70.2871,4305006,20,86100120,750.4165,5977410,0,0.0,17,1

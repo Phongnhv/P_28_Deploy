@@ -1,8 +1,0 @@
-﻿table,rule,failed_rows
-dich_vu_xe_trips,NULL trip_id,45
-dich_vu_xe_trips,fare_amount < 0,214
-dich_vu_xe_trips,freshness_lag_hours > 24,900
-drivers,NULL driver_id,3
-customers,NULL customer_id,9
-payments,NULL payment_id,45
-payments,amount < 0,214
