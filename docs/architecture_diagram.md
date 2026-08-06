@@ -1,38 +1,38 @@
-# Architecture Diagram
+# RidePulse DQ — Architecture Diagrams
 
-## System Overview
-
-```mermaid
-graph TB
-    User([User]) --> UI[Frontend<br/>React/Next.js]
-    UI -->|REST API| API[FastAPI Backend]
-    API --> Agent[LangGraph Agent]
-    Agent --> LLM[LLM Service<br/>GPT-4o / Gemini]
-    Agent --> Tools[Agent Tools]
-    Tools --> DB[(Database)]
-    Agent --> VS[Vector Store<br/>ChromaDB]
-```
-
-## Agent Flow
+## Current scaffold
 
 ```mermaid
-graph LR
-    START((Start)) --> Input[Parse Input]
-    Input --> Analyze[Analyze Query]
-    Analyze --> Decide{Need Tool?}
-    Decide -->|Yes| CallTool[Call Tool]
-    CallTool --> Analyze
-    Decide -->|No| Generate[Generate Response]
-    Generate --> END((End))
+flowchart LR
+    Client --> FastAPI
+    FastAPI --> Routes["health / chat / status"]
+    Routes --> LangGraph["placeholder analyze → respond"]
+    Settings --> FastAPI
+    Settings --> LLMFactory["ChatOpenAI factory; unused by graph"]
 ```
 
-## Component Details
+## Proposed MVP
 
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| Frontend | React/Next.js | User interface |
-| Backend | FastAPI | API server |
-| Agent | LangGraph | AI agent orchestration |
-| LLM | OpenAI/Gemini | Language model |
-| Database | PostgreSQL/SQLite | Data persistence |
-| Vector Store | ChromaDB | RAG / embeddings |
+```mermaid
+flowchart TD
+    Steward --> UI["React UI"]
+    UI --> API["FastAPI"]
+    Parquet["Local pinned NYC TLC Parquet"] --> Ingest["Ingestion service"]
+    API --> Ingest
+    Ingest --> DB[("PostgreSQL")]
+    DB --> Profile["Profiling service"]
+    Profile --> Evidence["Aggregate evidence"]
+    Evidence --> Agent["LangGraph + LLM"]
+    Agent --> Proposal["Structured proposal"]
+    Proposal --> HITL{"Steward review"}
+    HITL -->|Approve/Edit| Compiler["Template SQL compiler"]
+    HITL -->|Reject| Audit["Audit log"]
+    Compiler --> Runner["Read-only runner"]
+    Runner --> DB
+    Runner --> Results["DQ results"]
+    Results --> UI
+    Dagster["Dagster adapter"] -.-> Ingest
+    Dagster -.-> Runner
+```
+
+Chi tiết boundary, trạng thái implementation và security xem [ARCHITECTURE.md](../ARCHITECTURE.md).
