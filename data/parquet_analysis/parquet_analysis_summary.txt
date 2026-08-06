@@ -1,5 +1,0 @@
-- Dataset có 4,305,006 dòng và 20 cột.
-- Tổng số ô thiếu là 5,977,410.
-- Có 0 dòng trùng (0.0000%).
-- Các cột thiếu từ 20% trở lên: passenger_count, RatecodeID, store_and_fwd_flag, congestion_surcharge, Airport_fee.
-- Các cột có tỷ lệ ngoại lệ IQR từ 5% trở lên: VendorID, passenger_count, trip_distance, RatecodeID, fare_amount, tip_amount, tolls_amount, total_amount, congestion_surcharge, Airport_fee.
