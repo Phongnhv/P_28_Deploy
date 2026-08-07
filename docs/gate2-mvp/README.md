@@ -1,96 +1,111 @@
-# RidePulse DQ — Gate 2 MVP
+# RidePulse DQ — Gate 2 MVP plan
 
-> **Status:** Implementation guide
+> **Status:** Canonical implementation plan. The repository is still a starter
+> template; an item is not implemented until its PR is merged and verified.
 >
-> **Deadline:** 23:59, 16/08/2026
+> **Purpose:** a course-project simulation of production practices. It must work
+> end-to-end on a public URL, but it is not an internet production service with an
+> SLA, enterprise identity, or 24/7 operations.
 
-## 1. Mục tiêu Gate 2
+## 1. Fixed decisions
 
-Gate 2 cần một Agent nhận input, xử lý bằng **LLM thực tế** và trả output có ý
-nghĩa cho ít nhất một user flow chính. Ngoài code, nhóm cần video demo tối đa ba
-phút, architecture diagram, tối thiểu 10 PR đã merge, README setup, và năm manual
-test cases có output thực tế.
+| Concern | Gate 2 decision |
+|---|---|
+| Public frontend | React/Vite deployed as a Vercel Static Site |
+| Public backend | FastAPI container deployed as one Google Cloud Run Service |
+| Long-running work | One Google Cloud Run Job, invoked with a persisted job ID |
+| DE tool | dbt Core with `dbt-postgres`, run inside the Cloud Run Job |
+| Data | Supabase Free PostgreSQL and private Storage bucket `ridepulse-gate2` |
+| LLM | OpenAI, invoked only by the backend with an approved model and spend cap |
+| Local development | Docker Compose with React/Vite, FastAPI and PostgreSQL |
 
-MVP này cố ý nhỏ: tập trung một Data Steward flow chạy end-to-end, thay vì triển
-khai đồng thời dbt, ML anomaly detection, vector database, nhiều role, hoặc
-orchestration.
+Render, Firebase, Dagster, a VPS, custom domain, arbitrary file upload and Chicago
+data are outside this Gate 2 plan. The team does not mix providers or introduce a
+second orchestration tool during implementation.
 
-## 2. Quyết định scope
+## 2. What the user can do
 
-| Thành phần | Gate 2 MVP | Không làm ở vòng đầu |
-|---|---|---|
-| Data source | Một CSV taxi-shaped nhỏ, có version trong repo | Download/runtime ingest file lớn |
-| Data volume | 48 dòng nền + 6 lỗi synthetic = 54 dòng | Benchmark 100k–1M dòng |
-| Storage | Đọc trực tiếp CSV; SQLite file chỉ lưu workflow/audit nếu cần persistence | PostgreSQL, migration, Docker DB |
-| LLM | OpenAI model cấu hình qua `.env`, chỉ nhận aggregate profile | Raw rows, arbitrary SQL, fallback giả mạo LLM thật |
-| Rules | `not_null`, `numeric_range`, `accepted_values`, `duplicate_fingerprint` | dbt, custom SQL, tự sửa data |
-| UI | Một Data Steward workspace cho flow chính | 11 màn hình và RBAC production |
+The only primary user is a **Data Steward**. They open the Vercel HTTPS URL, enter a
+shared demo password, choose the registered NYC Yellow Taxi dataset, start analysis,
+view the completed profile, request real LLM rule proposals, approve/edit/reject
+proposals, run approved checks, and view persisted results plus audit history.
 
-SQLite là thư viện có sẵn trong Python. Không cần cài PostgreSQL hay chạy Docker để
-demo Gate 2 này. Nếu không cần giữ lịch sử sau khi tắt app, state workflow có thể
-giữ in-memory trong vòng demo; khuyến nghị SQLite để audit/restart đơn giản.
+This is the one Gate 2 flow: **input → cloud pipeline → meaningful DQ output**.
 
-## 3. User flow được demo
+## 3. Architecture
 
-1. Data Steward mở UI tại `/ui/`.
-2. Chọn **Load demo dataset**. Backend chỉ nhận manifest name allow-list, không nhận
-   đường dẫn/URL từ browser.
-3. Bấm **Build profile**. Backend đọc CSV và tạo aggregate: row count, null rate,
-   distinct count, min/max/p95.
-4. Bấm **Generate proposals**. Backend gửi aggregate evidence, schema rule và danh
-   sách evidence keys tới OpenAI; raw row không rời máy local.
-5. UI hiện 2–4 rule có cấu trúc. Steward approve, edit hoặc reject từng rule.
-6. Steward bấm **Run approved checks**. Chỉ rule `APPROVED` chạy trên CSV.
-7. UI trả Data Health Score, failed/eligible counts, bounded failed row IDs và audit
-   events.
+See the submission-ready diagram in [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ```mermaid
 flowchart LR
-    Steward["Data Steward"] --> UI["Browser UI"]
-    UI --> API["FastAPI"]
-    API --> CSV["Small local taxi CSV"]
-    API --> Profile["Aggregate profiler"]
-    Profile --> Evidence["Aggregate-only evidence"]
-    Evidence --> LLM["OpenAI LLM"]
-    LLM --> Validate["Pydantic + allow-list validator"]
-    Validate --> HITL["Approve / edit / reject"]
-    HITL --> Runner["Safe deterministic rule runner"]
-    Runner --> Results["Results + audit"]
-    API --> SQLite[("Optional SQLite state")]
+    U["Data Steward"] -->|"HTTPS"| FE["Vercel: React/Vite"]
+    FE -->|"HTTPS, /api/v1"| API["Cloud Run Service: FastAPI"]
+    API -->|"create job + invoke"| JOB["Cloud Run Job: pipeline worker"]
+    API --> DB[("Supabase PostgreSQL")]
+    JOB --> DB
+    JOB --> STORE["Supabase private Storage"]
+    JOB --> DBT["dbt Core: transform/test"]
+    JOB --> LLM["OpenAI: aggregate evidence only"]
+    LLM --> API
 ```
 
-## 4. Data fixture
+The browser never connects to PostgreSQL, Supabase Storage, Cloud Run Job, or OpenAI
+directly. PostgreSQL port `5432` is never exposed by the team.
 
-File target: `src/resources/nyc_yellow_demo.csv`. Đây là bundled demo fixture nhỏ;
-không dùng thư mục `data/` vì thư mục đó được gitignore để tránh commit dữ liệu lớn.
+## 4. Dataset and dbt plan
 
-Các cột tối thiểu: `source_row_id`, `vendor_id`, `pickup_at`, `dropoff_at`,
-`passenger_count`, `trip_distance`, `payment_type`, `fare_amount`, `tip_amount`,
-`total_amount`.
+The input artifact is one private Parquet file generated reproducibly from an approved
+NYC Yellow Taxi source. It contains exactly **50,000** rows:
 
-54 dòng gồm:
+| Segment | Rows | Rule |
+|---|---:|---|
+| Unchanged deterministic sample | 48,750 | Direct source-shaped records |
+| Deterministically mutated sample | 1,250 | Known synthetic quality failures |
+| Total | 50,000 | One artifact, one manifest, one checksum |
 
-- 48 dòng nền hợp lệ, được tạo xác định với fixed seed.
-- 1 duplicate fingerprint.
-- 1 `vendor_id` null.
-- 1 chuyến có `trip_distance` và `fare_amount` âm.
-- 1 chuyến distance bằng 0 nhưng fare bất thường cao.
-- 1 `payment_type` ngoài allow-list.
-- 1 `fare_amount` âm bổ sung.
+Each row receives a deterministic `source_row_id`. The 1,250 synthetic records are
+mutations of selected sampled rows, not extra rows; IDs stay unique. Duplicate-rule
+evaluation duplicates a business fingerprint, never the primary ID. The manifest
+records source URL, source checksum, schema version, sample seed, mutation seed and
+expected aggregate failure counts. Generated artifacts and affected-row manifests stay
+out of Git.
 
-Đây là demo fixture có chủ đích, không được trình bày là benchmark hoặc dữ liệu NYC
-TLC hoàn chỉnh.
+After ingestion, the Cloud Run Job executes a small dbt project:
 
-## 5. Definition of done
+1. `stg_trips` normalizes the fixed source schema into the `analytics` schema.
+2. `profile_input` exposes the fixed columns needed by the profiler.
+3. dbt tests validate the expected schema and basic data contract.
 
-- [ ] Flow ở mục 3 chạy qua UI mà không cần sửa dữ liệu bằng tay.
-- [ ] Một live OpenAI call thành công với API key hợp lệ; log/evidence không có raw row.
-- [ ] LLM output sai schema, cột lạ hoặc evidence ref lạ bị từ chối.
-- [ ] Rule chưa approve không thể chạy.
-- [ ] UI có loading, empty và recoverable error state.
-- [ ] Có năm manual cases có timestamp, input aggregate, output model/rule và kết quả.
-- [ ] README root, architecture diagram và video script phản ánh đúng implementation.
-- [ ] Ít nhất 10 PR được review và merge vào `main`.
+dbt is a real transformation/testing stage. It does not replace the Agent, HITL review,
+or DQ rule runner.
 
-Xem [SETUP.md](./SETUP.md), [IMPLEMENTATION_GUIDE.md](./IMPLEMENTATION_GUIDE.md)
-và [TEAM_PLAN.md](./TEAM_PLAN.md) để bắt đầu.
+## 5. Scope and safety boundary
+
+| Included | Intentionally excluded for this course release |
+|---|---|
+| Registered 50k artifact, profile, dbt, LLM proposal, HITL and DQ run | User-uploaded files, arbitrary URL/path input, streaming and schedules |
+| Five typed rule templates | Arbitrary SQL, DDL/DML, automatic source-data repair |
+| Shared password/session, quota and audit log | Real accounts, SSO, RBAC and multi-tenancy |
+| Cloud Run service/job, health checks and manual backup export | HA, SLA, permanent monitoring/on-call and disaster-recovery program |
+| Public Vercel demo | Paid production deployment after the course |
+
+## 6. Release evidence
+
+Gate 2 is complete only when all of these are true:
+
+- Public Vercel URL works from an incognito browser and a non-developer network.
+- The flow above runs against the hosted database and a real OpenAI call; no demo proof
+  uses localhost or mock LLM output.
+- The pipeline stores job status, profile, proposals, reviewer decisions, results and
+  audit events in PostgreSQL.
+- At least ten reviewed PRs are merged into `main`.
+- Root `README.md` has final setup, environment-variable names and sample API/UI
+  requests matching the implemented contract.
+- Five manual cases contain real model output, the reviewer decision and persisted DQ
+  result. Provider-failure handling is an additional automated negative test, not one
+  of the five cases.
+- Architecture diagram and a video of no more than three minutes are ready.
+
+Implementation details are split into [SETUP.md](./SETUP.md),
+[IMPLEMENTATION_GUIDE.md](./IMPLEMENTATION_GUIDE.md) and
+[TEAM_PLAN.md](./TEAM_PLAN.md).

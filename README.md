@@ -1,152 +1,46 @@
 # RidePulse DQ
 
-> MVP trợ lý Data Quality cho Data Steward: profile dataset mobility, đề xuất rule có
-> cấu trúc, bắt buộc HITL và chạy kiểm tra read-only có audit.
+RidePulse DQ is a Gate 2 course project that simulates a production-style
+data-quality workflow for a registered NYC Yellow Taxi dataset. The current repository
+is a starter template; the complete target and work sequence are in
+[docs/gate2-mvp/README.md](./docs/gate2-mvp/README.md).
 
-## Trạng thái repository
-
-**Starter template — product MVP chưa được implement.**
-
-Hiện có:
-
-- FastAPI app với `/health`, `/api/v1/status`, `/api/v1/chat`.
-- LangGraph demo `analyze → respond` với logic placeholder.
-- `ChatOpenAI` service factory nhưng graph chưa gọi LLM.
-- Pydantic settings/request/response schemas.
-- Backend Dockerfile/Compose, GitHub Actions, pytest và Ruff.
-- Static `ui_test` prototype không kết nối backend.
-- 5 automated tests của scaffold.
-
-Chưa có:
-
-- NYC TLC data/manifest/ingestion/profiling.
-- PostgreSQL persistence hoặc migration.
-- Structured rule proposal, HITL, SQL compiler hoặc DQ runner.
-- React frontend và Dagster orchestration.
-
-Mọi capability chưa có được ghi `Proposed / Not implemented` trong tài liệu.
-
-## MVP target
+## Target hosted architecture
 
 ```text
-NYC TLC Yellow Taxi Parquet (100k–1M rows)
-  -> PostgreSQL ingestion
-  -> aggregate profiling
-  -> LangGraph/LLM structured rule proposals
-  -> Data Steward approve/edit/reject
-  -> template SQL compiler
-  -> read-only DQ execution
-  -> React results dashboard + audit
+Vercel React/Vite → Google Cloud Run API/Job → Supabase PostgreSQL + private Storage
+                                      ↓
+                                 dbt Core + OpenAI
 ```
 
-Chicago datasets, streaming, RAG, dbt/Great Expectations, Isolation Forest và
-automatic raw-data repair không nằm trong MVP core.
+This is not a claim that the current starter endpoints implement the target yet.
 
-## Bắt đầu nhanh — current scaffold
+## Local prerequisites for implementation
 
-Yêu cầu Python 3.11. Trên Windows PowerShell:
+- Python 3.11+, Node.js LTS, Docker Desktop with Compose v2, Git.
+- A valid OpenAI project key for manual evaluation only.
+- Provider access for Vercel, Google Cloud and Supabase.
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-Copy-Item .env.example .env
-.\.venv\Scripts\python.exe -m uvicorn src.main:app --reload --port 8000
-```
+Copy `.env.example` to `.env` after the corresponding implementation PR adds it. The
+planned environment names are `DATABASE_URL`, `RUNNER_DATABASE_URL`,
+`DBT_DATABASE_URL`, `OPENAI_API_KEY`, `MODEL_NAME`, `DEMO_ACCESS_PASSWORD` and
+`FRONTEND_ORIGIN`. Secrets never belong in Git or Vercel frontend variables.
 
-Mở Swagger UI tại <http://localhost:8000/docs>.
+## Planned user/API requests
 
-```powershell
-curl.exe http://localhost:8000/health
-curl.exe http://localhost:8000/api/v1/status
-```
-
-Hướng dẫn đầy đủ và troubleshooting: [docs/RUNBOOK.md](docs/RUNBOOK.md).
-
-## Test và lint
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests -v
-.\.venv\Scripts\python.exe -m ruff check src tests
-```
-
-Current baseline: 5 tests; chúng chỉ xác nhận scaffold, không chứng minh MVP đã chạy.
-
-## Documentation map
-
-### Đọc trước khi implement
-
-1. [Product Specification](docs/PRODUCT_SPEC.md)
-2. [Implementation Plan](docs/IMPLEMENTATION_PLAN.md)
-3. [Backlog](docs/BACKLOG.md)
-4. [Architecture](ARCHITECTURE.md)
-5. [API Contract](docs/API_CONTRACT.md)
-6. [Data Model](docs/DATA_MODEL.md)
-7. [Test Plan](docs/TEST_PLAN.md)
-8. [Architecture Decisions](docs/DECISIONS.md)
-9. [Runbook](docs/RUNBOOK.md)
-
-### Làm việc với coding agent
-
-- [Agent rules](AGENTS.md)
-- [AI coding guide](docs/ai-coding/README.md)
-- [Task template](docs/ai-coding/TASK_TEMPLATE.md)
-- [Review checklist](docs/ai-coding/REVIEW_CHECKLIST.md)
-- [Testing checklist](docs/ai-coding/TESTING_CHECKLIST.md)
-- [Debugging playbook](docs/ai-coding/DEBUGGING_PLAYBOOK.md)
-
-### Tài liệu chương trình
-
-- Technical Guidebook offline: [`docs/guide/`](docs/guide/)
-- Deliverables checklist: [`docs/guide/deliverables/checklist.md`](docs/guide/deliverables/checklist.md)
-- AI logging rules: [`.agents/rules/ai-log-hook.md`](.agents/rules/ai-log-hook.md)
-
-## Project structure hiện tại
+After the relevant PRs merge, the user flow calls:
 
 ```text
-src/
-  agents/          # LangGraph scaffold
-  api/             # FastAPI routes
-  models/          # Pydantic schemas
-  services/        # LLM service factory
-tests/              # Scaffold API/Agent tests
-docs/               # Product, contracts, workflow và guidebook
-ui_test/            # Static visual prototype; không phải product frontend
-eval/               # Evaluation placeholder
-scripts/            # Setup và AI logging helpers
+POST /api/v1/session
+GET  /api/v1/datasets
+POST /api/v1/datasets/{dataset_id}/ingestions
+GET  /api/v1/jobs/{job_id}
+POST /api/v1/datasets/{dataset_id}/rule-proposals
+PATCH /api/v1/rule-proposals/{proposal_id}
+POST /api/v1/dq-runs
+GET  /api/v1/dq-runs/{run_id}/results
 ```
 
-Target structure chỉ được tạo dần theo [backlog](docs/BACKLOG.md), không scaffold tất
-cả folder trong một task.
-
-## Team workflow
-
-| Role | Responsibility |
-|---|---|
-| Product/QA owner | Scope, user flow, datasets, acceptance criteria, manual testing |
-| Backend owner | API, schemas, services, data access |
-| Agent owner | LangGraph, prompts, tools, evaluation |
-| UI/Integration owner | UI, API integration, demo flow, deployment support |
-
-- Mỗi task có một owner chính.
-- Task P0 cần reviewer khác owner.
-- Không merge nếu thiếu acceptance criteria hoặc verification result.
-- Product/QA owner chịu trách nhiệm xác nhận scope và manual acceptance.
-
-## AI usage logging
-
-Coding tools được hỗ trợ đã auto-log. Không chạy manual logger sau mỗi task và không
-sửa `.ai-log/`. Nếu dùng web tool không có hook, đọc `.agents/workflows/log.md`.
-
-## Known limitations
-
-- Product flow chưa được implement.
-- Current `/api/v1/status` trả status tĩnh.
-- Current `/api/v1/chat` chỉ echo qua placeholder graph.
-- Docker Compose hiện chỉ chạy backend.
-- `.env.example` và config vẫn chứa option template chưa phải target architecture.
-- Performance, precision/recall và Data Health Score chưa có measured evidence.
-
-## License
-
-MIT — sử dụng cho mục đích giáo dục theo repository template.
+See [API contract](./docs/API_CONTRACT.md), [setup plan](./docs/gate2-mvp/SETUP.md)
+and [team plan](./docs/gate2-mvp/TEAM_PLAN.md). Current starter endpoints are documented
+separately in the API contract and must not be used as evidence for Gate 2 completion.
