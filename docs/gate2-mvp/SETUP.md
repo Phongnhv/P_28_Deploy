@@ -54,9 +54,9 @@ dán giá trị key.
 
 Mở:
 
-- UI: <http://localhost:8000/ui/>
-- Swagger: <http://localhost:8000/docs>
-- Liveness: <http://localhost:8000/health>
+- UI: [http://localhost:8000/ui/](http://localhost:8000/ui/)
+- Swagger: [http://localhost:8000/docs](http://localhost:8000/docs)
+- Liveness: [http://localhost:8000/health](http://localhost:8000/health)
 
 ## 5. Verification cục bộ
 
