@@ -1,13 +1,14 @@
 {
-  "manifest_name": "nyc-yellow-demo-v1",
-  "dataset_name": "NYC Yellow Taxi Trip Records (Demo Fixture)",
-  "source_type": "nyc_yellow_demo_csv",
-  "local_path": "src/resources/nyc_yellow_demo.csv",
-  "file_sha256": "98bc673688f0e70a5f7ea88d4e15ed9f3c0a97af4c8375e41703d3502b1719d8",
-  "total_rows": 73,
-  "clean_rows": 68,
-  "defect_rows": 5,
-  "seed": 42,
+  "manifest_name": "nyc-yellow-50k-v1",
+  "dataset_name": "NYC Yellow Taxi Trip Records (Semantic Enriched 50k Fixture - 21 Columns)",
+  "source_type": "nyc_yellow_50k_semantic_parquet",
+  "local_path": "data/yellow_tripdata_2025/semantic_data/yellow_tripdata_2025_semantic_50k.parquet",
+  "file_sha256": "b1549ceb43dee8e083e34d81b22db37c3afa401737e831c7ed63fb83a5baeff7",
+  "total_rows": 50000,
+  "clean_rows": 48750,
+  "defect_rows": 1250,
+  "sample_seed": 42,
+  "mutation_seed": 1337,
   "schema_version": "1.0",
   "columns": [
     {
@@ -17,7 +18,7 @@
     },
     {
       "name": "vendor_id",
-      "type": "integer",
+      "type": "string",
       "nullable": true
     },
     {
@@ -62,7 +63,7 @@
     },
     {
       "name": "payment_type",
-      "type": "integer",
+      "type": "string",
       "nullable": true
     },
     {
@@ -116,31 +117,11 @@
       "nullable": true
     }
   ],
-  "ground_truth_defects": [
-    {
-      "source_row_id": "row-069",
-      "defect_type": "duplicate_fingerprint",
-      "description": "Duplicate pickup/dropoff/distance with row-001"
-    },
-    {
-      "source_row_id": "row-070",
-      "defect_type": "null_vendor_id",
-      "description": "vendor_id is empty/NULL"
-    },
-    {
-      "source_row_id": "row-071",
-      "defect_type": "negative_distance_and_fare",
-      "description": "trip_distance is -2.5 and fare_amount is -15.0"
-    },
-    {
-      "source_row_id": "row-072",
-      "defect_type": "zero_distance_high_fare",
-      "description": "trip_distance is 0.0 but fare_amount is 125.0"
-    },
-    {
-      "source_row_id": "row-073",
-      "defect_type": "invalid_payment_type",
-      "description": "payment_type is 99 (outside domain 1-4)"
-    }
-  ]
+  "expected_aggregate_defect_counts": {
+    "negative_fare_amount": 250,
+    "negative_trip_distance": 250,
+    "null_vendor_id": 250,
+    "invalid_payment_type": 250,
+    "duplicate_fingerprint": 250
+  }
 }
