@@ -1,0 +1,141 @@
+"""Pydantic v2 schemas cho Rule Proposer structured output.
+
+Critical: RuleParameters dùng closed model (không dùng bare dict) để
+with_structured_output() tạo ra JSON Schema hợp lệ cho Mistral / OpenAI.
+"""
+
+from __future__ import annotations
+
+import logging
+from enum import Enum
+from typing import Optional
+
+from pydantic import BaseModel, Field, model_validator
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Enums
+# ---------------------------------------------------------------------------
+
+class RuleType(str, Enum):
+    NOT_NULL = "NOT_NULL"
+    UNIQUE = "UNIQUE"
+    RANGE = "RANGE"
+    ACCEPTED_VALUES = "ACCEPTED_VALUES"   # kiểm tra giá trị enum
+    REGEX_FORMAT = "REGEX_FORMAT"
+    FRESHNESS = "FRESHNESS"
+    ROW_COUNT = "ROW_COUNT"               # rule cấp bảng
+    NULL_RATE = "NULL_RATE"               # null_pct phải nhỏ hơn ngưỡng
+
+class DataQualityDimension(str, Enum):
+    """(Phần bổ sung cho HITL UI) Giúp Data Steward filter và nhóm các rule trên web"""
+    COMPLETENESS = "COMPLETENESS"
+    UNIQUENESS = "UNIQUENESS"
+    VALIDITY = "VALIDITY"
+    ACCURACY = "ACCURACY"
+    CONSISTENCY = "CONSISTENCY"
+    FRESHNESS = "FRESHNESS"
+
+class Severity(str, Enum):
+    CRITICAL = "CRITICAL"
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
+# ---------------------------------------------------------------------------
+# Parameter bag (closed — tất cả field optional)
+# ---------------------------------------------------------------------------
+
+class RuleParameters(BaseModel):
+    """Closed param bag — chỉ điền các field liên quan đến rule_type."""
+
+    min: Optional[float] = None
+    max: Optional[float] = None
+    accepted_values: Optional[list[str]] = None
+    regex: Optional[str] = None
+    max_age_hours: Optional[float] = None
+    max_null_pct: Optional[float] = None
+    min_row_count: Optional[int] = None
+
+
+# ---------------------------------------------------------------------------
+# Proposed rule (one row in the HITL review table)
+# ---------------------------------------------------------------------------
+
+class ProposedRule(BaseModel):
+    column: Optional[str] = Field(
+        None,
+        description="None cho rule cấp bảng (ROW_COUNT). Phải khớp tên cột trong digest.",
+    )
+    rule_type: RuleType
+    parameters: RuleParameters = Field(default_factory=RuleParameters)
+    confidence_score: float = Field(..., ge=0.0, le=1.0)
+    severity: Severity
+
+    dimension: DataQualityDimension = Field(
+        ..., 
+        description="Phân loại khía cạnh chất lượng dữ liệu để hiển thị cho Data Steward."
+    )
+    rule_description: str = Field(
+        ...,
+        description=(
+            "Một câu mô tả rule bằng tiếng Việt tự nhiên, dành cho Data Steward không biết code. "
+            "Phải nêu rõ tên cột (bằng tiếng Việt nếu có trong Data Dictionary), theo sau là điều kiện cụ thể. "
+            "Ví dụ: 'Cước phí cơ bản (fare_amount) không được mang giá trị âm, vì đây là khoản tiền thanh toán.' "
+            "hoặc 'Số hành khách (passenger_count) phải từ 0 đến 6, phù hợp với sức chứa thực tế của taxi.' "
+            "KHÔNG dùng thuật ngữ kỹ thuật như RANGE, NULL, regex, signal."
+        ),
+    )
+
+    ai_reasoning: str = Field(
+        ...,
+        description=(
+            "Suy luận logic của AI (tiếng Việt), giải thích TẠI SAO rule này được đề xuất. "
+            "Cần thể hiện quá trình suy nghĩ: quan sát từ dữ liệu → diễn giải nghiệp vụ → kết luận về ngưỡng. "
+            "Phải dẫn chứng số liệu cụ thể từ digest VÀ kết nối với ý nghĩa thực tế của cột theo Data Dictionary. "
+            "Ví dụ: 'Profiler ghi nhận fare_amount có negative_pct = 4.7%, nghĩa là gần 5% chuyến đi có cước phí âm — "
+            "điều này không hợp lý về mặt nghiệp vụ vì fare_amount là cước phí tính theo thời gian và quãng đường, "
+            "không thể nhỏ hơn 0. Các giá trị âm nhiều khả năng là lỗi hệ thống hoặc bản ghi hoàn tiền bị ghi sai trường. "
+            "Tôi chọn min = 0 thay vì min > 0 để vẫn cho phép chuyến đi miễn phí hợp lệ.'"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _validate_parameters(self) -> "ProposedRule":
+        """Guardrail: kiểm tra từng rule_type có đủ tham số bắt buộc không."""
+        rt = self.rule_type
+        p = self.parameters
+
+        if rt == RuleType.RANGE and p.min is None and p.max is None:
+            raise ValueError(
+                f"Rule RANGE yêu cầu ít nhất một trong min/max nhưng cả hai đều None "
+                f"(column={self.column!r})"
+            )
+        if rt == RuleType.ACCEPTED_VALUES and not p.accepted_values:
+            raise ValueError(
+                f"Rule ACCEPTED_VALUES yêu cầu danh sách accepted_values không rỗng "
+                f"(column={self.column!r})"
+            )
+        if rt == RuleType.REGEX_FORMAT and not p.regex:
+            raise ValueError(
+                f"Rule REGEX_FORMAT yêu cầu trường regex không rỗng "
+                f"(column={self.column!r})"
+            )
+        return self
+
+
+# ---------------------------------------------------------------------------
+# Top-level schema the LLM is bound to — one call per table
+# ---------------------------------------------------------------------------
+
+class TableRuleProposal(BaseModel):
+    """Schema LLM trả về cho một bảng — one call per table."""
+
+    table: str = Field(..., description="Tên bảng trong database.")
+    rules: list[ProposedRule] = Field(
+        default_factory=list,
+        description="Danh sách các rule đề xuất cho bảng này.",
+    )

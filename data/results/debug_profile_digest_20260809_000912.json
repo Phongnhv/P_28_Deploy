@@ -1,0 +1,438 @@
+{
+  "dataset_profile_digest": {
+    "yellow_tripdata": {
+      "table": "yellow_tripdata",
+      "rows": 50000,
+      "sample": {
+        "rate": 1.0,
+        "n": 50000
+      },
+      "schema_constraints": {
+        "primary_key": [],
+        "unique_constraint_columns": [],
+        "foreign_keys": []
+      },
+      "columns": [
+        {
+          "name": "vendor_id",
+          "type": "TEXT",
+          "role": "categorical",
+          "null_pct": 0.0,
+          "values": [
+            "Curb Mobility, LLC",
+            "Creative Mobile Technologies, LLC",
+            "Unknown Vendor",
+            "Helix",
+            "Myle Technologies Inc"
+          ],
+          "length_stats": {
+            "min": 5,
+            "max": 33,
+            "avg": 21.14
+          },
+          "signals": [
+            "no_nulls",
+            "low_cardinality"
+          ]
+        },
+        {
+          "name": "pickup_at",
+          "type": "TIMESTAMP",
+          "role": "datetime",
+          "null_pct": 0.0,
+          "range": [
+            "2025-01-01T00:01:00",
+            "2025-01-31T23:59:32"
+          ],
+          "signals": [
+            "no_nulls"
+          ]
+        },
+        {
+          "name": "dropoff_at",
+          "type": "TIMESTAMP",
+          "role": "datetime",
+          "null_pct": 0.0,
+          "range": [
+            "2025-01-01T00:07:39",
+            "2025-02-01T18:54:29"
+          ],
+          "signals": [
+            "no_nulls"
+          ]
+        },
+        {
+          "name": "passenger_count",
+          "type": "REAL",
+          "role": "categorical",
+          "null_pct": 15.3,
+          "values": [
+            "1.0",
+            "2.0",
+            "3.0",
+            "4.0",
+            "0.0",
+            "5.0",
+            "6.0"
+          ],
+          "signals": [
+            "low_cardinality"
+          ]
+        },
+        {
+          "name": "trip_distance",
+          "type": "REAL",
+          "role": "numeric",
+          "null_pct": 0.0,
+          "range": [
+            -2.5,
+            18172.93
+          ],
+          "percentiles": {
+            "p1": 0.0,
+            "p5": 0.36000001430511475,
+            "p25": 0.9700000286102295,
+            "p50": 1.6399999856948853,
+            "p75": 3.049999952316284,
+            "p95": 11.640000343322754,
+            "p99": 19.400099620819113
+          },
+          "typical_range": [
+            0.36000001430511475,
+            11.640000343322754
+          ],
+          "negative_pct": 0.5,
+          "zero_pct": 2.51,
+          "signals": [
+            "no_nulls",
+            "has_extreme_outliers",
+            "has_negative_values"
+          ]
+        },
+        {
+          "name": "rate_code_id",
+          "type": "TEXT",
+          "role": "categorical",
+          "null_pct": 0.0,
+          "values": [
+            "Standard rate",
+            "Unknown Ratecode",
+            "JFK",
+            "Null/Unknown",
+            "Negotiated fare",
+            "Newark",
+            "Nassau or Westchester"
+          ],
+          "length_stats": {
+            "min": 3,
+            "max": 21,
+            "avg": 13.2
+          },
+          "signals": [
+            "no_nulls",
+            "low_cardinality"
+          ]
+        },
+        {
+          "name": "store_and_fwd_flag",
+          "type": "TEXT",
+          "role": "categorical",
+          "null_pct": 15.3,
+          "values": [
+            "N",
+            "Y"
+          ],
+          "length_stats": {
+            "min": 1,
+            "max": 1,
+            "avg": 1.0
+          },
+          "signals": [
+            "low_cardinality",
+            "fixed_length"
+          ]
+        },
+        {
+          "name": "pickup_location_id",
+          "type": "TEXT",
+          "role": "id",
+          "null_pct": 0.0,
+          "signals": [
+            "no_nulls"
+          ]
+        },
+        {
+          "name": "dropoff_location_id",
+          "type": "TEXT",
+          "role": "id",
+          "null_pct": 0.0,
+          "signals": [
+            "no_nulls"
+          ]
+        },
+        {
+          "name": "payment_type",
+          "type": "TEXT",
+          "role": "categorical",
+          "null_pct": 0.0,
+          "values": [
+            "Credit card",
+            "Flex Fare trip",
+            "Cash",
+            "Dispute",
+            "No charge",
+            "Invalid Payment (Dispute/Test)"
+          ],
+          "length_stats": {
+            "min": 4,
+            "max": 30,
+            "avg": 10.66
+          },
+          "signals": [
+            "no_nulls",
+            "low_cardinality"
+          ]
+        },
+        {
+          "name": "fare_amount",
+          "type": "REAL",
+          "role": "numeric",
+          "null_pct": 0.0,
+          "range": [
+            -182.9,
+            494.0
+          ],
+          "percentiles": {
+            "p1": -15.0,
+            "p5": 3.0,
+            "p25": 8.25,
+            "p50": 12.100000381469727,
+            "p75": 19.192500591278076,
+            "p95": 52.0,
+            "p99": 74.0999984741211
+          },
+          "typical_range": [
+            3.0,
+            52.0
+          ],
+          "negative_pct": 4.668,
+          "zero_pct": 0.034,
+          "signals": [
+            "no_nulls",
+            "has_extreme_outliers",
+            "has_negative_values"
+          ]
+        },
+        {
+          "name": "extra",
+          "type": "REAL",
+          "role": "numeric",
+          "null_pct": 0.0,
+          "range": [
+            -7.5,
+            12.5
+          ],
+          "percentiles": {
+            "p1": 0.0,
+            "p5": 0.0,
+            "p25": 0.0,
+            "p50": 0.0,
+            "p75": 2.5,
+            "p95": 5.0,
+            "p99": 7.5
+          },
+          "typical_range": [
+            0.0,
+            5.0
+          ],
+          "negative_pct": 0.944,
+          "zero_pct": 50.986,
+          "signals": [
+            "no_nulls",
+            "has_extreme_outliers",
+            "has_negative_values",
+            "has_zero_values"
+          ]
+        },
+        {
+          "name": "mta_tax",
+          "type": "REAL",
+          "role": "categorical",
+          "null_pct": 0.0,
+          "values": [
+            "0.5",
+            "-0.5",
+            "0.0",
+            "1.0"
+          ],
+          "signals": [
+            "no_nulls",
+            "low_cardinality"
+          ]
+        },
+        {
+          "name": "tip_amount",
+          "type": "REAL",
+          "role": "numeric",
+          "null_pct": 0.0,
+          "range": [
+            0.0,
+            99.99
+          ],
+          "percentiles": {
+            "p1": 0.0,
+            "p5": 0.0,
+            "p25": 0.0,
+            "p50": 2.440000057220459,
+            "p75": 3.9200000762939453,
+            "p95": 10.0,
+            "p99": 17.0
+          },
+          "typical_range": [
+            0.0,
+            10.0
+          ],
+          "zero_pct": 32.068,
+          "signals": [
+            "no_nulls",
+            "has_extreme_outliers",
+            "has_zero_values"
+          ]
+        },
+        {
+          "name": "tolls_amount",
+          "type": "REAL",
+          "role": "numeric",
+          "null_pct": 0.0,
+          "range": [
+            -35.32,
+            50.0
+          ],
+          "percentiles": {
+            "p1": 0.0,
+            "p5": 0.0,
+            "p25": 0.0,
+            "p50": 0.0,
+            "p75": 0.0,
+            "p95": 6.940000057220459,
+            "p99": 6.940000057220459
+          },
+          "typical_range": [
+            0.0,
+            6.940000057220459
+          ],
+          "negative_pct": 0.124,
+          "zero_pct": 93.776,
+          "signals": [
+            "no_nulls",
+            "has_extreme_outliers",
+            "has_negative_values",
+            "has_zero_values"
+          ]
+        },
+        {
+          "name": "improvement_surcharge",
+          "type": "REAL",
+          "role": "categorical",
+          "null_pct": 0.0,
+          "values": [
+            "1.0",
+            "-1.0",
+            "0.0",
+            "0.3"
+          ],
+          "signals": [
+            "no_nulls",
+            "low_cardinality"
+          ]
+        },
+        {
+          "name": "total_amount",
+          "type": "REAL",
+          "role": "numeric",
+          "null_pct": 0.0,
+          "range": [
+            -193.84,
+            495.0
+          ],
+          "percentiles": {
+            "p1": -18.5,
+            "p5": 7.570000171661377,
+            "p25": 15.180000305175781,
+            "p50": 19.84000015258789,
+            "p75": 27.66249990463257,
+            "p95": 74.02999877929688,
+            "p99": 102.25
+          },
+          "typical_range": [
+            7.570000171661377,
+            74.02999877929688
+          ],
+          "negative_pct": 2.378,
+          "zero_pct": 0.016,
+          "signals": [
+            "no_nulls",
+            "has_extreme_outliers",
+            "has_negative_values"
+          ]
+        },
+        {
+          "name": "congestion_surcharge",
+          "type": "REAL",
+          "role": "categorical",
+          "null_pct": 15.3,
+          "values": [
+            "2.5",
+            "0.0",
+            "-2.5"
+          ],
+          "signals": [
+            "low_cardinality"
+          ]
+        },
+        {
+          "name": "airport_fee",
+          "type": "REAL",
+          "role": "categorical",
+          "null_pct": 15.3,
+          "values": [
+            "0.0",
+            "1.75",
+            "-1.75"
+          ],
+          "signals": [
+            "low_cardinality"
+          ]
+        },
+        {
+          "name": "cbd_congestion_fee",
+          "type": "REAL",
+          "role": "categorical",
+          "null_pct": 0.0,
+          "values": [
+            "0.75",
+            "0.0",
+            "-0.75"
+          ],
+          "signals": [
+            "no_nulls",
+            "low_cardinality"
+          ]
+        }
+      ],
+      "cross_column_hints": [
+        {
+          "type": "datetime_order",
+          "columns": [
+            "pickup_at",
+            "dropoff_at"
+          ],
+          "description": "Kỳ vọng \"pickup_at\" <= \"dropoff_at\"",
+          "violation_count": 1,
+          "total_checked": 50000,
+          "violation_pct": 2e-05
+        }
+      ]
+    }
+  }
+}

@@ -1,8 +1,11 @@
 from functools import lru_cache
 from typing import Literal
-
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+import os
+
+load_dotenv()
 
 
 class Settings(BaseSettings):
@@ -21,9 +24,21 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
 
     # LLM
-    openai_api_key: str = ""
-    model_name: str = "gpt-4o-mini"
+    openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
+    anthropic_api_key: str | None = os.getenv("ANTHROPIC_API_KEY")
+    mistral_api_key: str | None = os.getenv("MISTRAL_API_KEY")
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+
+    # LLM provider selection
+    llm_provider: Literal["openai", "anthropic", "mistral"] = "mistral"
+
+    # Set model based on provider
+    model_name: str = "mistral-medium-3-5"
+
+    # Rule Proposer tunables
+    rule_proposer_concurrency: int = 10
+    rule_proposer_max_retries: int = 2
+    debug_dump_table_digests: bool = False
 
     # Database
     database_url: str = "sqlite:///./data/app.db"
