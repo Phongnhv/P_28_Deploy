@@ -96,6 +96,17 @@ async def raw_profiler_node(state: AgentState) -> dict:
     # 2. Profile song song (có giới hạn concurrency) và tổng hợp
     aggregated_profile = await _profile_all_tables(connection_string, tables, sampling_rate, max_concurrent_tables)
  
+    # Xuất trace JSON sau khi profile xong
+    run_id = state.get("rule_run_id") or datetime.now().strftime("%Y%m%d_%H%M%S")
+    try:
+        results_dir = Path(get_settings().results_dir)
+        results_dir.mkdir(parents=True, exist_ok=True)
+        dump_file = results_dir / f"debug_raw_profile_{run_id}.json"
+        dump_file.write_text(json.dumps(aggregated_profile, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"Đã xuất trace raw profile ra {dump_file}")
+    except Exception as e:
+        logger.warning(f"Không thể ghi file trace raw profile: {e}")
+ 
     # Nếu TẤT CẢ các bảng đều lỗi, coi như node này thất bại để graph có thể dừng/route
     # sang nhánh xử lý lỗi thay vì âm thầm đi tiếp với profile rỗng.
     if aggregated_profile and all("error" in v for v in aggregated_profile.values()):
@@ -125,13 +136,25 @@ async def profiler_digest_node(state: AgentState) -> dict:
         return {"dataset_profile_digest": {}, "error": msg}
  
     digest = generate_profile_digest(dataset_profile)
+ 
+    # Xuất trace JSON sau khi sinh digest xong
+    run_id = state.get("rule_run_id") or datetime.now().strftime("%Y%m%d_%H%M%S")
+    try:
+        results_dir = Path(get_settings().results_dir)
+        results_dir.mkdir(parents=True, exist_ok=True)
+        dump_file = results_dir / f"debug_profile_digest_{run_id}.json"
+        dump_file.write_text(json.dumps(digest, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"Đã xuất trace profile digest ra {dump_file}")
+    except Exception as e:
+        logger.warning(f"Không thể ghi file trace profile digest: {e}")
+
     return {"dataset_profile_digest": digest}
+
 
 # ===================================================
 # Test Profiler Node
 # ===================================================
 async def main():
-    
     # Thiết lập workflow state giả lập
     state = {
         "metadata": {
@@ -144,35 +167,15 @@ async def main():
         print("Profiling database...")
         raw_result = await raw_profiler_node(state)
         state.update(raw_result)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Khai báo đường dẫn dưới dạng Path object
-        output_path = Path(f"./data/results/debug_profile_{timestamp}.json")
-
-        # Tự động tạo toàn bộ thư mục cha (data/results) nếu chưa có
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Ghi file
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(raw_result, f, ensure_ascii=False, indent=2)
-        print(f"Kết quả chạy raw profiler được lưu vào {output_path}")
+        print("Hoàn thành raw profiling.")
     except Exception as e:
-        logger.error(f"Lỗi khi thực thi profiler_node: {str(e)}", exc_info=True)
-        print(f"Lỗi khi thực thi profiler_node: {str(e)}")
+        logger.error(f"Lỗi khi thực thi raw_profiler_node: {str(e)}", exc_info=True)
+        print(f"Lỗi khi thực thi raw_profiler_node: {str(e)}")
 
     try:
-        print("Profiling digest")
+        print("Profiling digest...")
         digest_result = await profiler_digest_node(state)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Khai báo đường dẫn dưới dạng Path object
-        output_path = Path(f"./data/results/debug_profile_digest_{timestamp}.json")
-
-        # Tự động tạo toàn bộ thư mục cha (data/results) nếu chưa có
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Ghi file
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(digest_result, f, ensure_ascii=False, indent=2)
-        print(f"Kết quả chạy digest profiler được lưu vào {output_path}")
+        print("Hoàn thành profiler digest.")
     except Exception as e:
         logger.error(f"Lỗi khi thực thi profiler_digest_node: {str(e)}", exc_info=True)
         print(f"Lỗi khi thực thi profiler_digest_node: {str(e)}")

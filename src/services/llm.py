@@ -1,7 +1,9 @@
-from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic
-from langchain_mistralai import ChatMistralAI
 from typing import Literal
+
+from langchain_anthropic import ChatAnthropic
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_mistralai import ChatMistralAI
+from langchain_openai import ChatOpenAI
 
 from src.config import get_settings
 
@@ -20,20 +22,26 @@ def get_llm(provider: Provider_type, temperature: float | None = None):
 
     if provider == "openai":
         return ChatOpenAI(
-            model=settings.model_name,
+            model=settings.openai_model_name,
             api_key=settings.openai_api_key,
             temperature=temp,
         )
     elif provider == "anthropic":
         return ChatAnthropic(
-            model=settings.model_name,
+            model=settings.anthropic_model_name,
             api_key=settings.anthropic_api_key,
             temperature=temp,
         )
     elif provider == "mistral":
         return ChatMistralAI(
-            model=settings.model_name,
+            model=settings.mistral_model_name,
             api_key=settings.mistral_api_key,
+            temperature=temp,
+        )
+    elif provider == "google":
+        return ChatGoogleGenerativeAI(
+            model=settings.google_model_name,
+            api_key=settings.google_api_key,
             temperature=temp,
         )
     else:

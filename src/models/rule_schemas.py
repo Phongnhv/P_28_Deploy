@@ -44,6 +44,11 @@ class Severity(str, Enum):
     MEDIUM = "MEDIUM"
     LOW = "LOW"
 
+class RuleStatus(str, Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
 
 # ---------------------------------------------------------------------------
 # Parameter bag (closed — tất cả field optional)

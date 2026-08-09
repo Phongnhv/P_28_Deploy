@@ -1,9 +1,10 @@
+import os
 from functools import lru_cache
 from typing import Literal
+
 from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-import os
 
 load_dotenv()
 
@@ -27,13 +28,18 @@ class Settings(BaseSettings):
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
     anthropic_api_key: str | None = os.getenv("ANTHROPIC_API_KEY")
     mistral_api_key: str | None = os.getenv("MISTRAL_API_KEY")
+    google_api_key: str | None = os.getenv("GOOGLE_API_KEY")
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
 
     # LLM provider selection
-    llm_provider: Literal["openai", "anthropic", "mistral"] = "mistral"
+    llm_provider: Literal["openai", "anthropic", "mistral", "google"] = os.getenv("PROVIDER")
 
     # Set model based on provider
-    model_name: str = "mistral-medium-3-5"
+    # model_name: str = os.getenv("MISTRAL_MODEL") or "mistral-medium-latest"
+    openai_model_name: str = os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
+    anthropic_model_name: str = os.getenv("ANTHROPIC_MODEL") or "claude-opus-5"
+    mistral_model_name: str = os.getenv("MISTRAL_MODEL") or "mistral-medium-latest"
+    google_model_name: str = os.getenv("GOOGLE_MODEL") or "gemini-3.1-flash-lite"
 
     # Rule Proposer tunables
     rule_proposer_concurrency: int = 10
@@ -41,10 +47,13 @@ class Settings(BaseSettings):
     debug_dump_table_digests: bool = False
 
     # Database
-    database_url: str = "sqlite:///./data/app.db"
+    database_url: str = os.getenv("DATABASE_URL")
 
     # Vector Store
-    chroma_persist_dir: str = "./data/chroma"
+    chroma_persist_dir: str = "./data/chroma" # Change to .env later
+
+    # Output
+    results_dir: str = "./data/results" # Change to .env later
 
 
 @lru_cache

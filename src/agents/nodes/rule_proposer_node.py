@@ -33,7 +33,7 @@ from src.agents.tools.profile_digest import (
     split_digest_by_table,
 )
 from src.config import get_settings
-from src.models.rule_schemas import ProposedRule, TableRuleProposal
+from src.models.rule_schemas import ProposedRule, RuleStatus, TableRuleProposal
 from src.services.llm import get_llm
 
 logger = logging.getLogger(__name__)
@@ -144,10 +144,23 @@ def _stamp_rule(
     rule: ProposedRule,
     table_name: str,
     run_id: str,
+    used_ids: set[str] | None = None,
 ) -> dict:
-    """Chuyển ProposedRule sang dict có rule_id, table_name, run_id và hardcoded status PENDING_REVIEW đính kèm."""
+    """Chuyển ProposedRule sang dict có rule_id, table_name, run_id đính kèm.
+
+    used_ids: set chỏa các rule_id đã dùng trong run này (dedup bằng suffix #2, #3).
+    """
     col_key = rule.column if rule.column else "_table"
-    rule_id = f"{table_name}.{col_key}.{rule.rule_type.value}"
+    base_id = f"{table_name}.{col_key}.{rule.rule_type.value}"
+
+    # Unique hoá rule_id trong phạm vi 1 run
+    rule_id = base_id
+    if used_ids is not None:
+        counter = 2
+        while rule_id in used_ids:
+            rule_id = f"{base_id}#{counter}"
+            counter += 1
+        used_ids.add(rule_id)
 
     # Lọc validation guardrail — validate lại lần nữa phòng trường hợp LLM bypass
     try:
@@ -173,7 +186,12 @@ def _stamp_rule(
         "dimension": rule.dimension.value,
         "rule_description": rule.rule_description,
         "ai_reasoning": rule.ai_reasoning,
-        "status": "PENDING_REVIEW",  # ← hardcoded
+        "status": RuleStatus.PENDING.value,
+        "edited_parameters": None,
+        "reviewer": None,
+        "review_note": None,
+        "reviewed_at": None,
+        "created_at": datetime.utcnow().isoformat() + "Z",
     }
 
 
@@ -236,9 +254,10 @@ async def rule_proposer_node(state: AgentState) -> dict:
     )
 
     # 5. Xử lý kết quả
-    run_id = uuid.uuid4().hex
+    run_id = state.get("rule_run_id") or uuid.uuid4().hex
     flat_rules: list[dict] = []
     errors: list[dict] = []
+    used_ids: set[str] = set()
 
     for table_name, result in zip(table_names, results):
         if isinstance(result, Exception):
@@ -248,7 +267,7 @@ async def rule_proposer_node(state: AgentState) -> dict:
 
         proposal: TableRuleProposal = result
         for rule in proposal.rules:
-            stamped = _stamp_rule(rule, table_name, run_id)
+            stamped = _stamp_rule(rule, table_name, run_id, used_ids)
             if stamped:  # bỏ qua sentinel rỗng (rule bị loại do validation)
                 flat_rules.append(stamped)
 
@@ -259,11 +278,30 @@ async def rule_proposer_node(state: AgentState) -> dict:
         len(errors),
     )
 
+    # Xuất trace JSON sau khi đề xuất rules xong
+    try:
+        results_dir = Path(settings.results_dir)
+        results_dir.mkdir(parents=True, exist_ok=True)
+        dump_file = results_dir / f"debug_proposed_rules_{run_id}.json"
+        dump_payload = {
+            "run_id": run_id,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "total_rules": len(flat_rules),
+            "total_errors": len(errors),
+            "proposed_rules": flat_rules,
+            "errors": errors,
+        }
+        dump_file.write_text(json.dumps(dump_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"Đã xuất trace proposed rules ra {dump_file}")
+    except Exception as e:
+        logger.warning(f"Không thể ghi file trace proposed rules: {e}")
+
     return {
         "proposed_rules": flat_rules,
         "rule_proposal_errors": errors,
         "rule_run_id": run_id,
     }
+
 
 
 # ---------------------------------------------------------------------------
@@ -339,18 +377,13 @@ async def main():
     print("Bắt đầu rule_proposer_node …")
     result = await rule_proposer_node(state)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = Path(f"./data/results/debug_proposed_rules_{timestamp}.json")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
-
-    print(f"Kết quả lưu tại: {out_path}")
+    print("Hoàn thành rule_proposer_node.")
     print(f"  Tổng rules   : {len(result.get('proposed_rules', []))}")
-    print(f"  Errors        : {len(result.get('rule_proposal_errors', []))}")
-    print(f"  run_id        : {result.get('rule_run_id')}")
+    print(f"  Errors       : {len(result.get('rule_proposal_errors', []))}")
+    print(f"  run_id       : {result.get('rule_run_id')}")
 
 
 if __name__ == "__main__":
     asyncio.run(main())
     # Run test syntax: python -m src.agents.nodes.rule_proposer_node
+

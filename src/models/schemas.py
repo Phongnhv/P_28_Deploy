@@ -1,6 +1,6 @@
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ChatRequest(BaseModel):
@@ -48,34 +48,39 @@ class RunStatusResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Rule Review — GET /dq/rules
+# Rule Review — GET /dq/runs/{run_id}/rules
 # ---------------------------------------------------------------------------
 
 class RuleReviewResponse(BaseModel):
-    id: int
     run_id: str
+    rule_id: str
     dataset_id: str
     table_name: str
-    column_name: Optional[str] = None
+    column: Optional[str] = None
     rule_type: str
     parameters: dict[str, Any]
     edited_parameters: Optional[dict[str, Any]] = None
     effective_parameters: dict[str, Any]
     confidence_score: float
     severity: str
+    dimension: str
+    rule_description: str
     ai_reasoning: str
     status: str  # PENDING / APPROVED / REJECTED
     reviewer: Optional[str] = None
+    review_note: Optional[str] = None
     reviewed_at: Optional[str] = None
     created_at: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
-# Rule Update — PATCH /dq/rules/{rule_id}
+# Rule Update — PATCH /dq/runs/{run_id}/rules/{rule_id}
 # ---------------------------------------------------------------------------
 
 class RuleUpdateRequest(BaseModel):
-    status: str = Field(..., description="APPROVED hoặc REJECTED")
+    status: Literal["APPROVED", "REJECTED"] = Field(
+        ..., description="APPROVED hoặc REJECTED"
+    )
     edited_parameters: Optional[dict[str, Any]] = Field(
         None,
         description="Tham số Steward chỉnh sửa (immutable AI params được giữ riêng)",
@@ -86,18 +91,28 @@ class RuleUpdateRequest(BaseModel):
     reviewer: Optional[str] = Field(
         None, description="Tên / email Steward thực hiện review"
     )
+    review_note: Optional[str] = Field(
+        None, description="Lý do reject — bắt buộc khi status=REJECTED"
+    )
+
+    @model_validator(mode="after")
+    def _check_review_note_on_reject(self) -> "RuleUpdateRequest":
+        if self.status == "REJECTED" and not self.review_note:
+            raise ValueError("review_note là bắt buộc khi status=REJECTED")
+        return self
 
 
 # ---------------------------------------------------------------------------
-# Bulk Review — POST /dq/rules/bulk-review
+# Bulk Review — POST /dq/runs/{run_id}/rules/bulk-review
 # ---------------------------------------------------------------------------
 
 class BulkDecision(BaseModel):
-    rule_id: int
-    status: str  # APPROVED / REJECTED
+    rule_id: str
+    status: Literal["APPROVED", "REJECTED"]
     edited_parameters: Optional[dict[str, Any]] = None
     severity: Optional[str] = None
     reviewer: Optional[str] = None
+    review_note: Optional[str] = None
 
 
 class BulkReviewRequest(BaseModel):
@@ -109,6 +124,34 @@ class BulkReviewRequest(BaseModel):
 class BulkReviewResponse(BaseModel):
     updated_count: int
     rules: list[RuleReviewResponse]
+    not_found: list[str] = Field(
+        default_factory=list,
+        description="Danh sách rule_id không tìm thấy trong run này",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Review Summary — GET /dq/runs/{run_id}/review-summary
+# ---------------------------------------------------------------------------
+
+class DimensionCounts(BaseModel):
+    total: int
+    pending: int
+    approved: int
+    rejected: int
+
+
+class ReviewSummaryResponse(BaseModel):
+    total: int
+    pending: int
+    approved: int
+    rejected: int
+    edited: int
+    is_complete: bool = Field(
+        ..., description="True khi pending=0 và total>0 — tất cả rule đã được review"
+    )
+    by_dimension: dict[str, DimensionCounts]
+    by_severity: dict[str, DimensionCounts]
 
 
 # ---------------------------------------------------------------------------
@@ -120,4 +163,3 @@ class ApprovedRulesResponse(BaseModel):
     run_id: str
     count: int
     rules: list[RuleReviewResponse]
-

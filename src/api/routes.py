@@ -17,6 +17,7 @@ from src.models.schemas import (
     ChatResponse,
     ProposeRequest,
     ProposeResponse,
+    ReviewSummaryResponse,
     RuleReviewResponse,
     RuleUpdateRequest,
     RunStatusResponse,
@@ -92,10 +93,10 @@ async def propose(
     request: ProposeRequest,
     background_tasks: BackgroundTasks,
 ) -> ProposeResponse:
-    """Khởi động Run 1: profiler → digest → rule_proposer → persist_rules.
+    """Khởi động Run 1: profiler → digest → rule_proposer → hitl_gate.
 
     Trả về run_id ngay lập tức. Client poll GET /dq/runs/{run_id} để kiểm tra
-    trạng thái hoàn thành.
+    trạng thái hoàn thành. Sau khi DONE, rules sẵn sàng để Steward review.
     """
     from src.services.rule_store import create_run
 
@@ -123,55 +124,117 @@ async def get_run_status(run_id: str) -> RunStatusResponse:
     return RunStatusResponse(**run)
 
 
-@dq_router.get("/rules", response_model=list[RuleReviewResponse])
+# ---------------------------------------------------------------------------
+# HITL Rule Review — nested dưới /runs/{run_id}
+# Vì sao nested: rule_id chỉ unique trong 1 run, khớp PK ghép (run_id, rule_id)
+# ---------------------------------------------------------------------------
+
+@dq_router.get(
+    "/runs/{run_id}/rules",
+    response_model=list[RuleReviewResponse],
+)
 async def list_rules(
-    run_id: str | None = None,
+    run_id: str,
     status: str | None = None,
     table_name: str | None = None,
+    dimension: str | None = None,
 ) -> list[RuleReviewResponse]:
-    """Lấy danh sách rule — feeds Screen 5 (Rule Review Table).
+    """Lấy danh sách rule của 1 run — feeds Screen 5 (Rule Review Table).
 
-    Query params: run_id, status (PENDING/APPROVED/REJECTED), table_name.
+    Query params: status (PENDING/APPROVED/REJECTED), table_name, dimension.
+    Trả [] nếu run đang RUNNING (chưa có rules) — không phải 404.
     """
-    from src.services.rule_store import list_rules as store_list_rules
+    from src.services.rule_store import get_run, list_rules as store_list_rules
 
-    rows = await asyncio.to_thread(store_list_rules, run_id, status, table_name)
+    run = await asyncio.to_thread(get_run, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
+
+    rows = await asyncio.to_thread(store_list_rules, run_id, status, table_name, dimension)
     return [RuleReviewResponse(**r) for r in rows]
 
 
-@dq_router.patch("/rules/{rule_id}", response_model=RuleReviewResponse)
-async def update_rule(rule_id: int, body: RuleUpdateRequest) -> RuleReviewResponse:
+@dq_router.post(
+    "/runs/{run_id}/rules/bulk-review",
+    response_model=BulkReviewResponse,
+)
+async def bulk_review(run_id: str, body: BulkReviewRequest) -> BulkReviewResponse:
+    """Duyệt / từ chối nhiều rule cùng lúc (checkbox flow).
+
+    Trả not_found cho các rule_id không tìm thấy trong run này.
+    """
+    from src.services.rule_store import bulk_review as store_bulk_review, get_run
+
+    run = await asyncio.to_thread(get_run, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
+
+    decisions = [d.model_dump() for d in body.decisions]
+    updated, not_found_ids = await asyncio.to_thread(store_bulk_review, run_id, decisions)
+    return BulkReviewResponse(
+        updated_count=len(updated),
+        rules=[RuleReviewResponse(**r) for r in updated],
+        not_found=not_found_ids,
+    )
+
+
+@dq_router.patch(
+    "/runs/{run_id}/rules/{rule_id:path}",
+    response_model=RuleReviewResponse,
+)
+async def update_rule(
+    run_id: str,
+    rule_id: str,
+    body: RuleUpdateRequest,
+) -> RuleReviewResponse:
     """Approve / reject / edit một rule (Steward action).
 
     Trường 'parameters' AI-proposed luôn được giữ nguyên (audit trail).
     Steward override được lưu vào 'edited_parameters'.
+    review_note bắt buộc khi status=REJECTED.
     """
-    from src.services.rule_store import review_rule
+    from src.services.rule_store import get_run, review_rule
 
-    updated = await asyncio.to_thread(
-        review_rule,
-        rule_id=rule_id,
-        status=body.status,
-        edited_parameters=body.edited_parameters,
-        severity=body.severity,
-        reviewer=body.reviewer,
-    )
+    run = await asyncio.to_thread(get_run, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
+
+    try:
+        updated = await asyncio.to_thread(
+            review_rule,
+            run_id=run_id,
+            rule_id=rule_id,
+            status=body.status,
+            edited_parameters=body.edited_parameters,
+            severity=body.severity,
+            reviewer=body.reviewer,
+            review_note=body.review_note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
     if not updated:
-        raise HTTPException(status_code=404, detail=f"rule_id={rule_id} không tồn tại")
+        raise HTTPException(
+            status_code=404,
+            detail=f"rule_id={rule_id!r} không tồn tại trong run_id={run_id!r}",
+        )
     return RuleReviewResponse(**updated)
 
 
-@dq_router.post("/rules/bulk-review", response_model=BulkReviewResponse)
-async def bulk_review(body: BulkReviewRequest) -> BulkReviewResponse:
-    """Duyệt / từ chối nhiều rule cùng lúc (checkbox flow)."""
-    from src.services.rule_store import bulk_review as store_bulk_review
+@dq_router.get(
+    "/runs/{run_id}/review-summary",
+    response_model=ReviewSummaryResponse,
+)
+async def get_review_summary(run_id: str) -> ReviewSummaryResponse:
+    """Tóm tắt tiến độ review — badge UI (tổng, PENDING, APPROVED, REJECTED, by_dimension)."""
+    from src.services.rule_store import get_review_summary as store_summary, get_run
 
-    decisions = [d.model_dump() for d in body.decisions]
-    updated = await asyncio.to_thread(store_bulk_review, decisions)
-    return BulkReviewResponse(
-        updated_count=len(updated),
-        rules=[RuleReviewResponse(**r) for r in updated],
-    )
+    run = await asyncio.to_thread(get_run, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
+
+    summary = await asyncio.to_thread(store_summary, run_id)
+    return ReviewSummaryResponse(**summary)
 
 
 @dq_router.get(
@@ -180,7 +243,11 @@ async def bulk_review(body: BulkReviewRequest) -> BulkReviewResponse:
 )
 async def get_approved_rules(run_id: str) -> ApprovedRulesResponse:
     """Lấy tất cả rule APPROVED — input contract cho Test Generator (Run 2)."""
-    from src.services.rule_store import get_approved_rules as store_get_approved
+    from src.services.rule_store import get_approved_rules as store_get_approved, get_run
+
+    run = await asyncio.to_thread(get_run, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
 
     rules = await asyncio.to_thread(store_get_approved, run_id)
     return ApprovedRulesResponse(
@@ -197,4 +264,3 @@ async def generate_tests(run_id: str):
         status_code=501,
         detail="generate-tests chưa được implement — milestone Test Generator.",
     )
-
