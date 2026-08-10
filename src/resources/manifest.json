@@ -1,0 +1,127 @@
+{
+  "manifest_name": "nyc-yellow-50k-v1",
+  "dataset_name": "NYC Yellow Taxi Trip Records (Semantic Enriched 50k Fixture - 21 Columns)",
+  "source_type": "nyc_yellow_50k_semantic_parquet",
+  "local_path": "data/yellow_tripdata_2025/semantic_data/yellow_tripdata_2025_semantic_50k.parquet",
+  "file_sha256": "b1549ceb43dee8e083e34d81b22db37c3afa401737e831c7ed63fb83a5baeff7",
+  "total_rows": 50000,
+  "clean_rows": 48750,
+  "defect_rows": 1250,
+  "sample_seed": 42,
+  "mutation_seed": 1337,
+  "schema_version": "1.0",
+  "columns": [
+    {
+      "name": "source_row_id",
+      "type": "string",
+      "nullable": false
+    },
+    {
+      "name": "vendor_id",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "pickup_at",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "dropoff_at",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "passenger_count",
+      "type": "integer",
+      "nullable": true
+    },
+    {
+      "name": "trip_distance",
+      "type": "float",
+      "nullable": true
+    },
+    {
+      "name": "rate_code_id",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "store_and_fwd_flag",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "pickup_location_id",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "dropoff_location_id",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "payment_type",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "fare_amount",
+      "type": "float",
+      "nullable": true
+    },
+    {
+      "name": "extra",
+      "type": "float",
+      "nullable": true
+    },
+    {
+      "name": "mta_tax",
+      "type": "float",
+      "nullable": true
+    },
+    {
+      "name": "tip_amount",
+      "type": "float",
+      "nullable": true
+    },
+    {
+      "name": "tolls_amount",
+      "type": "float",
+      "nullable": true
+    },
+    {
+      "name": "improvement_surcharge",
+      "type": "float",
+      "nullable": true
+    },
+    {
+      "name": "total_amount",
+      "type": "float",
+      "nullable": true
+    },
+    {
+      "name": "congestion_surcharge",
+      "type": "float",
+      "nullable": true
+    },
+    {
+      "name": "airport_fee",
+      "type": "float",
+      "nullable": true
+    },
+    {
+      "name": "cbd_congestion_fee",
+      "type": "float",
+      "nullable": true
+    }
+  ],
+  "expected_aggregate_defect_counts": {
+    "negative_fare_amount": 250,
+    "negative_trip_distance": 250,
+    "null_vendor_id": 250,
+    "invalid_payment_type": 250,
+    "duplicate_fingerprint": 250
+  }
+}
