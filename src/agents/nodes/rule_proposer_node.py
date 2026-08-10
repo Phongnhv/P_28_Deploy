@@ -59,7 +59,7 @@ def _load_data_dictionary() -> str:
 
     if target_path.exists():
         try:
-            with open(target_path, "r", encoding="utf-8") as f:
+            with open(target_path, encoding="utf-8") as f:
                 data = json.load(f)
             return json.dumps(data, ensure_ascii=False, indent=2)
         except Exception as exc:
@@ -226,11 +226,9 @@ async def rule_proposer_node(state: AgentState) -> dict:
             "rule_run_id": "",
         }
 
-    base_dir = (
-        settings.output_dir
-        if hasattr(settings, "output_dir") and isinstance(settings.output_dir, (str, Path))
-        else getattr(settings, "results_dir", "./output")
-    )
+    out_dir = getattr(settings, "output_dir", None)
+    res_dir = getattr(settings, "results_dir", None)
+    base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
     rule_proposer_dir = Path(base_dir) / "rule_proposer"
 
     # 2. Debug dump (tuỳ chọn)
@@ -376,7 +374,7 @@ async def main():
 
     latest = files[-1]
     print(f"Đọc digest từ: {latest}")
-    with open(latest, "r", encoding="utf-8") as f:
+    with open(latest, encoding="utf-8") as f:
         raw = json.load(f)
 
     # Xây fake state

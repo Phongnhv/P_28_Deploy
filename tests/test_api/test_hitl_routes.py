@@ -13,10 +13,8 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
 
 from src.main import app
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

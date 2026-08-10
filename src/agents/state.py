@@ -18,7 +18,7 @@ class AgentState(TypedDict, total=False):
     metadata: dict
     profiler_result: dict
     dataset_profile_digest: dict
-    
+
     # RidePulse DQ specific state fields
     dataset_id: str
     proposed_rules: list

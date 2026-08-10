@@ -17,19 +17,16 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from sqlalchemy import (
     DateTime,
     Float,
     Index,
-    Integer,
     String,
     Text,
     create_engine,
     event,
-    func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
@@ -86,14 +83,14 @@ class ProposedRuleModel(Base):
 
     dataset_id:   Mapped[str]           = mapped_column(String(256), nullable=False)
     table_name:   Mapped[str]           = mapped_column(String(256), nullable=False, index=True)
-    column_name:  Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    column_name:  Mapped[str | None] = mapped_column(String(256), nullable=True)
     rule_type:    Mapped[str]           = mapped_column(String(64),  nullable=False)
 
     # AI-proposed params — IMMUTABLE để giữ audit trail
     parameters: Mapped[str] = mapped_column(Text, nullable=False)
 
     # Steward override (nullable)
-    edited_parameters: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    edited_parameters: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     confidence_score: Mapped[float] = mapped_column(Float,       nullable=False)
     severity:         Mapped[str]   = mapped_column(String(32),  nullable=False)
@@ -104,11 +101,11 @@ class ProposedRuleModel(Base):
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=RuleStatus.PENDING.value, index=True
     )
-    reviewer:     Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
-    review_note:  Mapped[Optional[str]] = mapped_column(Text,        nullable=True)
-    reviewed_at:  Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    reviewer:     Mapped[str | None] = mapped_column(String(256), nullable=True)
+    review_note:  Mapped[str | None] = mapped_column(Text,        nullable=True)
+    reviewed_at:  Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at:   Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+        DateTime, nullable=False, default=lambda: datetime.now(UTC)
     )
 
     __table_args__ = (
@@ -162,9 +159,9 @@ class ProposalRunModel(Base):
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="QUEUED"
     )  # QUEUED / RUNNING / DONE / FAILED
-    error:      Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error:      Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+        DateTime, nullable=False, default=lambda: datetime.now(UTC)
     )
 
     def to_dict(self) -> dict:
@@ -235,7 +232,7 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
     Returns:
         Số rule đã lưu thành công.
     """
-    from src.models.rule_schemas import ProposedRule, RuleParameters
+    from src.models.rule_schemas import ProposedRule
 
     saved = 0
     with Session(get_engine()) as session:
@@ -247,7 +244,6 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
             ep = rule.get("edited_parameters")
             if ep is not None:
                 try:
-                    from src.models.rule_schemas import RuleType
                     ProposedRule.model_validate({
                         "column": rule.get("column"),
                         "rule_type": rule.get("rule_type"),
@@ -339,7 +335,6 @@ def review_rule(
     """
     # Validate edited_parameters trước khi ghi
     if edited_parameters is not None:
-        from src.models.rule_schemas import ProposedRule
         try:
             _validate_edited_params(run_id, rule_id, edited_parameters)
         except ValueError:
@@ -350,7 +345,7 @@ def review_rule(
         if not row:
             return None
         row.status = status
-        row.reviewed_at = datetime.now(timezone.utc)
+        row.reviewed_at = datetime.now(UTC)
         if reviewer is not None:
             row.reviewer = reviewer
         if review_note is not None:
@@ -410,7 +405,7 @@ def bulk_review(
                 not_found_ids.append(rid)
                 continue
             row.status = decision.get("status", row.status)
-            row.reviewed_at = datetime.now(timezone.utc)
+            row.reviewed_at = datetime.now(UTC)
             if decision.get("reviewer"):
                 row.reviewer = decision["reviewer"]
             if decision.get("review_note") is not None:

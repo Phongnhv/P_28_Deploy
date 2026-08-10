@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 import logging
+import uuid
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
@@ -144,7 +144,8 @@ async def list_rules(
     Query params: status (PENDING/APPROVED/REJECTED), table_name, dimension.
     Trả [] nếu run đang RUNNING (chưa có rules) — không phải 404.
     """
-    from src.services.rule_store import get_run, list_rules as store_list_rules
+    from src.services.rule_store import get_run
+    from src.services.rule_store import list_rules as store_list_rules
 
     run = await asyncio.to_thread(get_run, run_id)
     if not run:
@@ -163,7 +164,8 @@ async def bulk_review(run_id: str, body: BulkReviewRequest) -> BulkReviewRespons
 
     Trả not_found cho các rule_id không tìm thấy trong run này.
     """
-    from src.services.rule_store import bulk_review as store_bulk_review, get_run
+    from src.services.rule_store import bulk_review as store_bulk_review
+    from src.services.rule_store import get_run
 
     run = await asyncio.to_thread(get_run, run_id)
     if not run:
@@ -227,7 +229,8 @@ async def update_rule(
 )
 async def get_review_summary(run_id: str) -> ReviewSummaryResponse:
     """Tóm tắt tiến độ review — badge UI (tổng, PENDING, APPROVED, REJECTED, by_dimension)."""
-    from src.services.rule_store import get_review_summary as store_summary, get_run
+    from src.services.rule_store import get_review_summary as store_summary
+    from src.services.rule_store import get_run
 
     run = await asyncio.to_thread(get_run, run_id)
     if not run:
@@ -243,7 +246,8 @@ async def get_review_summary(run_id: str) -> ReviewSummaryResponse:
 )
 async def get_approved_rules(run_id: str) -> ApprovedRulesResponse:
     """Lấy tất cả rule APPROVED — input contract cho Test Generator (Run 2)."""
-    from src.services.rule_store import get_approved_rules as store_get_approved, get_run
+    from src.services.rule_store import get_approved_rules as store_get_approved
+    from src.services.rule_store import get_run
 
     run = await asyncio.to_thread(get_run, run_id)
     if not run:

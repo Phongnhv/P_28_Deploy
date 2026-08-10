@@ -7,8 +7,7 @@ with_structured_output() tạo ra JSON Schema hợp lệ cho Mistral / OpenAI.
 from __future__ import annotations
 
 import logging
-from enum import Enum
-from typing import Optional
+from enum import StrEnum
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -19,7 +18,7 @@ logger = logging.getLogger(__name__)
 # Enums
 # ---------------------------------------------------------------------------
 
-class RuleType(str, Enum):
+class RuleType(StrEnum):
     NOT_NULL = "NOT_NULL"
     UNIQUE = "UNIQUE"
     RANGE = "RANGE"
@@ -29,7 +28,7 @@ class RuleType(str, Enum):
     ROW_COUNT = "ROW_COUNT"               # rule cấp bảng
     NULL_RATE = "NULL_RATE"               # null_pct phải nhỏ hơn ngưỡng
 
-class DataQualityDimension(str, Enum):
+class DataQualityDimension(StrEnum):
     """(Phần bổ sung cho HITL UI) Giúp Data Steward filter và nhóm các rule trên web"""
     COMPLETENESS = "COMPLETENESS"
     UNIQUENESS = "UNIQUENESS"
@@ -38,13 +37,13 @@ class DataQualityDimension(str, Enum):
     CONSISTENCY = "CONSISTENCY"
     FRESHNESS = "FRESHNESS"
 
-class Severity(str, Enum):
+class Severity(StrEnum):
     CRITICAL = "CRITICAL"
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"
     LOW = "LOW"
 
-class RuleStatus(str, Enum):
+class RuleStatus(StrEnum):
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
@@ -57,13 +56,13 @@ class RuleStatus(str, Enum):
 class RuleParameters(BaseModel):
     """Closed param bag — chỉ điền các field liên quan đến rule_type."""
 
-    min: Optional[float] = None
-    max: Optional[float] = None
-    accepted_values: Optional[list[str]] = None
-    regex: Optional[str] = None
-    max_age_hours: Optional[float] = None
-    max_null_pct: Optional[float] = None
-    min_row_count: Optional[int] = None
+    min: float | None = None
+    max: float | None = None
+    accepted_values: list[str] | None = None
+    regex: str | None = None
+    max_age_hours: float | None = None
+    max_null_pct: float | None = None
+    min_row_count: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +70,7 @@ class RuleParameters(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ProposedRule(BaseModel):
-    column: Optional[str] = Field(
+    column: str | None = Field(
         None,
         description="None cho rule cấp bảng (ROW_COUNT). Phải khớp tên cột trong digest.",
     )
@@ -81,7 +80,7 @@ class ProposedRule(BaseModel):
     severity: Severity
 
     dimension: DataQualityDimension = Field(
-        ..., 
+        ...,
         description="Phân loại khía cạnh chất lượng dữ liệu để hiển thị cho Data Steward."
     )
     rule_description: str = Field(
@@ -109,7 +108,7 @@ class ProposedRule(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_parameters(self) -> "ProposedRule":
+    def _validate_parameters(self) -> ProposedRule:
         """Guardrail: kiểm tra từng rule_type có đủ tham số bắt buộc không."""
         rt = self.rule_type
         p = self.parameters

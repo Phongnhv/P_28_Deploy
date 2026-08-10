@@ -6,16 +6,12 @@ Không cần LLM — dựng fake proposed_rules bằng tay.
 
 from __future__ import annotations
 
-import asyncio
-import json
 import uuid
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -78,7 +74,7 @@ def _make_rule_dict(
         "reviewer": None,
         "review_note": None,
         "reviewed_at": None,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -149,7 +145,11 @@ def test_stamp_rule_3_positional_args_backward_compat():
     """_stamp_rule(rule, table, run_id) 3 positional args vẫn chạy."""
     from src.agents.nodes.rule_proposer_node import _stamp_rule
     from src.models.rule_schemas import (
-        DataQualityDimension, ProposedRule, RuleParameters, RuleType, Severity,
+        DataQualityDimension,
+        ProposedRule,
+        RuleParameters,
+        RuleType,
+        Severity,
     )
 
     rule = ProposedRule(
@@ -171,7 +171,11 @@ def test_stamp_rule_dedup_suffix():
     """_stamp_rule sinh suffix #2 khi 2 rule cùng (column, rule_type)."""
     from src.agents.nodes.rule_proposer_node import _stamp_rule
     from src.models.rule_schemas import (
-        DataQualityDimension, ProposedRule, RuleParameters, RuleType, Severity,
+        DataQualityDimension,
+        ProposedRule,
+        RuleParameters,
+        RuleType,
+        Severity,
     )
 
     def make_rule():
@@ -201,8 +205,7 @@ def test_stamp_rule_dedup_suffix():
 
 def test_save_proposed_rules_keeps_all_fields(in_memory_engine):
     """save_proposed_rules phải giữ đủ dimension, rule_description, rule_id."""
-    from src.services.rule_store import save_proposed_rules
-    from src.services.rule_store import ProposedRuleModel
+    from src.services.rule_store import ProposedRuleModel, save_proposed_rules
 
     run_id = uuid.uuid4().hex
     rule = _make_rule_dict(run_id, "t.col_a.NOT_NULL", dimension="COMPLETENESS")
@@ -219,7 +222,7 @@ def test_save_proposed_rules_keeps_all_fields(in_memory_engine):
 
 def test_save_proposed_rules_idempotent(in_memory_engine):
     """save_proposed_rules gọi 2 lần cùng run_id → không IntegrityError, không nhân đôi row."""
-    from src.services.rule_store import save_proposed_rules, list_rules
+    from src.services.rule_store import list_rules, save_proposed_rules
 
     run_id = uuid.uuid4().hex
     rule = _make_rule_dict(run_id, "t.col_a.NOT_NULL")
@@ -233,7 +236,7 @@ def test_save_proposed_rules_idempotent(in_memory_engine):
 
 def test_two_runs_same_rule_id_coexist(in_memory_engine):
     """Hai rule cùng rule_id khác run_id cùng tồn tại (chứng minh PK ghép đúng)."""
-    from src.services.rule_store import save_proposed_rules, list_rules
+    from src.services.rule_store import list_rules, save_proposed_rules
 
     run_a = uuid.uuid4().hex
     run_b = uuid.uuid4().hex
@@ -297,6 +300,7 @@ async def test_hitl_gate_node_does_not_fail_when_trace_dir_missing(in_memory_eng
         patch("pathlib.Path.mkdir", side_effect=PermissionError("Mocked Permission Denied")),
     ):
         mock_s.return_value.results_dir = str(tmp_path / "protected_dir")
+        mock_s.return_value.output_dir = str(tmp_path / "protected_dir")
         result = await hitl_gate_node(state)
 
     # Phải không raise, rules_saved vẫn đúng
@@ -311,7 +315,7 @@ async def test_hitl_gate_node_does_not_fail_when_trace_dir_missing(in_memory_eng
 
 def test_review_rule_sets_status_and_keeps_params(in_memory_engine):
     """review_rule → status, reviewer, reviewed_at được set; parameters gốc không đổi."""
-    from src.services.rule_store import save_proposed_rules, review_rule
+    from src.services.rule_store import review_rule, save_proposed_rules
 
     run_id = uuid.uuid4().hex
     rule_id = "t.col_a.NOT_NULL"
@@ -333,7 +337,7 @@ def test_review_rule_sets_status_and_keeps_params(in_memory_engine):
 
 def test_review_rule_edited_parameters(in_memory_engine):
     """review_rule với edited_parameters → effective_parameters dùng bản edit."""
-    from src.services.rule_store import save_proposed_rules, review_rule
+    from src.services.rule_store import review_rule, save_proposed_rules
 
     run_id = uuid.uuid4().hex
     rule_id = "t.amount.RANGE"
@@ -375,7 +379,7 @@ def test_review_rule_not_found_returns_none(in_memory_engine):
 
 def test_bulk_review_returns_not_found(in_memory_engine):
     """bulk_review trả đúng not_found cho id sai."""
-    from src.services.rule_store import save_proposed_rules, bulk_review
+    from src.services.rule_store import bulk_review, save_proposed_rules
 
     run_id = uuid.uuid4().hex
     rule_id = "t.col_a.NOT_NULL"
@@ -398,7 +402,7 @@ def test_bulk_review_returns_not_found(in_memory_engine):
 
 def test_get_review_summary(in_memory_engine):
     """get_review_summary khớp số đúng."""
-    from src.services.rule_store import save_proposed_rules, review_rule, get_review_summary
+    from src.services.rule_store import get_review_summary, review_rule, save_proposed_rules
 
     run_id = uuid.uuid4().hex
     rules = [
@@ -431,7 +435,7 @@ def test_get_review_summary(in_memory_engine):
 
 def test_edited_parameters_invalid_raises_value_error(in_memory_engine):
     """edited_parameters vô lý (RANGE thiếu cả min/max) → ValueError."""
-    from src.services.rule_store import save_proposed_rules, review_rule
+    from src.services.rule_store import review_rule, save_proposed_rules
 
     run_id = uuid.uuid4().hex
     rule_id = "t.amount.RANGE"

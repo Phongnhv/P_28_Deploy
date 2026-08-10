@@ -4,13 +4,13 @@ profiler_node_prompt = ChatPromptTemplate(
     [
         (
             "system",
-            """Bạn là một AI Data Profiler chuyên nghiệp. 
+            """Bạn là một AI Data Profiler chuyên nghiệp.
             Nhiệm vụ của bạn là phân tích các số liệu thống kê dữ liệu được cung cấp và thực hiện các yêu cầu sau:
             1. Phân tích và xác định kiểu dữ liệu ngữ nghĩa (semantic types) cho từng cột (ví dụ: ID, SĐT, Email, Tọa độ Lat/Long, Số tiền, Thời gian, Trạng thái, v.v.).
             2. Viết một đoạn tóm tắt ngắn gọn (3-4 câu) bằng tiếng Việt mô tả cấu trúc, quy mô và chất lượng dữ liệu của bảng (đặc biệt lưu ý các cột có tỷ lệ null cao hoặc phân phối bất thường).
 
             Hãy trình bày kết quả phân tích một cách rõ ràng, mạch lạc và có cấu trúc tốt.
-            """
+            """,
         ),
         (
             "user",

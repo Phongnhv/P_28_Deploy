@@ -104,8 +104,9 @@ async def main():
     """
     import logging
     import uuid
+
     from src.config import get_settings
-    from src.services.rule_store import create_run, init_db, update_run_status, list_rules, get_review_summary
+    from src.services.rule_store import create_run, get_review_summary, init_db, list_rules, update_run_status
 
     logging.basicConfig(
         level=logging.INFO,

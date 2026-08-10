@@ -1,4 +1,4 @@
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -18,7 +18,7 @@ class ChatResponse(BaseModel):
 
 class ProposeRequest(BaseModel):
     dataset_id: str = Field(..., description="ID định danh dataset cần kiểm tra")
-    connection_string: Optional[str] = Field(
+    connection_string: str | None = Field(
         None,
         description="Connection string DB. Nếu None, dùng DATABASE_URL từ cấu hình.",
     )
@@ -43,8 +43,8 @@ class RunStatusResponse(BaseModel):
     run_id: str
     dataset_id: str
     status: str  # QUEUED / RUNNING / DONE / FAILED
-    error: Optional[str] = None
-    created_at: Optional[str] = None
+    error: str | None = None
+    created_at: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -56,10 +56,10 @@ class RuleReviewResponse(BaseModel):
     rule_id: str
     dataset_id: str
     table_name: str
-    column: Optional[str] = None
+    column: str | None = None
     rule_type: str
     parameters: dict[str, Any]
-    edited_parameters: Optional[dict[str, Any]] = None
+    edited_parameters: dict[str, Any] | None = None
     effective_parameters: dict[str, Any]
     confidence_score: float
     severity: str
@@ -67,10 +67,10 @@ class RuleReviewResponse(BaseModel):
     rule_description: str
     ai_reasoning: str
     status: str  # PENDING / APPROVED / REJECTED
-    reviewer: Optional[str] = None
-    review_note: Optional[str] = None
-    reviewed_at: Optional[str] = None
-    created_at: Optional[str] = None
+    reviewer: str | None = None
+    review_note: str | None = None
+    reviewed_at: str | None = None
+    created_at: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -81,17 +81,17 @@ class RuleUpdateRequest(BaseModel):
     status: Literal["APPROVED", "REJECTED"] = Field(
         ..., description="APPROVED hoặc REJECTED"
     )
-    edited_parameters: Optional[dict[str, Any]] = Field(
+    edited_parameters: dict[str, Any] | None = Field(
         None,
         description="Tham số Steward chỉnh sửa (immutable AI params được giữ riêng)",
     )
-    severity: Optional[str] = Field(
+    severity: str | None = Field(
         None, description="Mức độ nghiêm trọng Steward muốn override"
     )
-    reviewer: Optional[str] = Field(
+    reviewer: str | None = Field(
         None, description="Tên / email Steward thực hiện review"
     )
-    review_note: Optional[str] = Field(
+    review_note: str | None = Field(
         None, description="Lý do reject — bắt buộc khi status=REJECTED"
     )
 
@@ -109,10 +109,10 @@ class RuleUpdateRequest(BaseModel):
 class BulkDecision(BaseModel):
     rule_id: str
     status: Literal["APPROVED", "REJECTED"]
-    edited_parameters: Optional[dict[str, Any]] = None
-    severity: Optional[str] = None
-    reviewer: Optional[str] = None
-    review_note: Optional[str] = None
+    edited_parameters: dict[str, Any] | None = None
+    severity: str | None = None
+    reviewer: str | None = None
+    review_note: str | None = None
 
 
 class BulkReviewRequest(BaseModel):

@@ -1,10 +1,11 @@
 import json
-import pytest
-from unittest.mock import AsyncMock, patch
-from sqlalchemy import create_engine, Table, Column, Integer, String, Float, MetaData
 
-from src.agents.tools.db_profiler_tool import profile_database
+import pytest
+from sqlalchemy import Column, Float, Integer, MetaData, String, Table, create_engine
+
 from src.agents.nodes.profiler_node import raw_profiler_node
+from src.agents.tools.db_profiler_tool import profile_database
+from src.agents.tools.profile_digest import generate_profile_digest
 
 
 @pytest.fixture
@@ -94,13 +95,11 @@ async def test_profiler_node_execution(temp_db_url):
     # Verify that the test table was profiled
     profile = result["dataset_profile"]
     assert "dich_vu_xe_trips" in profile
-    
+
     table_profile = profile["dich_vu_xe_trips"]
     assert table_profile["table_metadata"]["table_name"] == "dich_vu_xe_trips"
     assert table_profile["table_metadata"]["total_rows"] == 4
 
-
-from src.agents.tools.profile_digest import generate_profile_digest
 
 def test_profile_digest(temp_db_url):
     """Kiểm thử hàm generate_profile_digest chuyển đổi thống kê."""
@@ -110,18 +109,18 @@ def test_profile_digest(temp_db_url):
         "sampling_rate": 1.0
     })
     raw_profile = json.loads(res_json_str)
-    
+
     dataset_profile = {"dich_vu_xe_trips": raw_profile}
     digest = generate_profile_digest(dataset_profile)
-    
+
     assert "dich_vu_xe_trips" in digest
     table_digest = digest["dich_vu_xe_trips"]
     assert table_digest["table"] == "dich_vu_xe_trips"
     assert table_digest["rows"] == 4
     assert table_digest["sample"]["n"] == 4
-    
+
     columns = {col["name"]: col for col in table_digest["columns"]}
-    
+
     # fare_amount stats
     assert "fare_amount" in columns
     assert columns["fare_amount"]["null_pct"] == 25.0
@@ -130,7 +129,7 @@ def test_profile_digest(temp_db_url):
     else:
         assert columns["fare_amount"]["role"] == "categorical"
         assert len(columns["fare_amount"]["values"]) > 0
-    
+
     # driver_name should be categorical since distinct <= 50
     assert "driver_name" in columns
     assert columns["driver_name"]["role"] == "categorical"

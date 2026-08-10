@@ -1,6 +1,7 @@
 import json
 import logging
-from datetime import datetime, timezone, date
+from datetime import UTC, date, datetime
+
 from langchain_core.tools import tool
 from sqlalchemy import create_engine, inspect, text, types
 
@@ -33,7 +34,7 @@ def _parse_and_calculate_freshness(max_time_val):
     else:
         return str(max_time_val), None
 
-    now = datetime.now(timezone.utc) if parsed_dt.tzinfo else datetime.now()
+    now = datetime.now(UTC) if parsed_dt.tzinfo else datetime.now()
     gap_seconds = (now - parsed_dt).total_seconds()
     return parsed_dt.isoformat(), round(gap_seconds, 2)
 
@@ -155,7 +156,7 @@ def _detect_datetime_pairs(datetime_cols: list[str]) -> list[tuple[str, str]]:
         return []
 
     # Các cặp suffix ngầm hiểu start < end
-    ORDERED_PAIRS = [
+    ordered_pairs = [
         ("pickup", "dropoff"),
         ("start", "end"),
         ("created", "updated"),
@@ -170,7 +171,7 @@ def _detect_datetime_pairs(datetime_cols: list[str]) -> list[tuple[str, str]]:
     cols_lower = {c.lower(): c for c in datetime_cols}
 
     # Exact-suffix matching
-    for prefix_a, prefix_b in ORDERED_PAIRS:
+    for prefix_a, prefix_b in ordered_pairs:
         matched_a = [orig for low, orig in cols_lower.items() if prefix_a in low]
         matched_b = [orig for low, orig in cols_lower.items() if prefix_b in low]
         for a in matched_a:
@@ -261,7 +262,7 @@ def profile_database(
                             "sampling_rate": sampling_rate,
                             "sampled_rows": 0,
                             "is_sampled": False,
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "timestamp": datetime.now(UTC).isoformat(),
                         },
                         "schema_constraints": schema_constraints,
                         "columns": {},
@@ -580,7 +581,7 @@ def profile_database(
                         "sampling_rate": current_sampling_rate,
                         "sampled_rows": sampled_rows,
                         "is_sampled": is_sampled,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "timestamp": datetime.now(UTC).isoformat(),
                     },
                     # P0.1: schema constraints ở cấp bảng
                     "schema_constraints": schema_constraints,
