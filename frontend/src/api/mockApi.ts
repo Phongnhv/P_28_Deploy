@@ -8,6 +8,7 @@ import type {
   DqRun,
   DqRunCreateResponse,
   Job,
+  ManualRuleInput,
   ReviewInput,
   RuleProposal,
   SessionResponse,
@@ -156,11 +157,13 @@ async function finishJob(jobId: string, type: Job["type"]) {
 }
 
 export const mockApi: ApiClient = {
-  async createSession(password): Promise<SessionResponse> {
+  async createSession(username, password): Promise<SessionResponse> {
     await wait(300);
-    if (password.trim().length < 4) throw new Error("Use the local demo password: demo");
+    if (!["user", "steward", "admin"].includes(username) || password !== username) {
+      throw new Error("Use user/user, steward/steward, or admin/admin.");
+    }
     addAudit("SESSION_STARTED", "session", "local-session", "Started a local Data Steward session.");
-    return { csrf_token: "local-csrf-token", expires_at: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString() };
+    return { username, role: username === "user" ? "USER" : username === "admin" ? "ADMIN" : "STEWARD", csrf_token: "local-csrf-token", expires_at: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString() };
   },
   async deleteSession() {
     await wait(150);
@@ -196,6 +199,13 @@ export const mockApi: ApiClient = {
   async listProposals(id) {
     await wait(200);
     return id === datasetId ? proposals : [];
+  },
+  async createManualRule(id, input: ManualRuleInput) {
+    if (id !== datasetId) throw new Error("Dataset not found.");
+    const proposal: RuleProposal = { id: `manual-${Date.now()}`, dataset_id: datasetId, ...input, status: "PROPOSED", evidence_refs: [], evidence_summary: "Manually authored by the Data Steward; no agent evidence attached.", confidence: 1, model_name: "manual", created_at: now(), updated_at: now() };
+    proposals = [...proposals, proposal];
+    addAudit("MANUAL_RULE_CREATED", "rule_proposal", proposal.id, `Created manual rule “${proposal.title}”.`);
+    return proposal;
   },
   async reviewProposal(id, input: ReviewInput) {
     await wait(220);

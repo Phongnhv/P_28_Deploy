@@ -1,6 +1,7 @@
 export type JobStatus = "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED_RETRYABLE" | "FAILED";
 export type JobType = "INGEST_PROFILE" | "PROPOSE_RULES" | "RUN_DQ";
 export type ProposalStatus = "PROPOSED" | "APPROVED" | "EDITED" | "REJECTED";
+export type UserRole = "USER" | "STEWARD" | "ADMIN";
 export type RuleType =
   | "not_null"
   | "numeric_range"
@@ -9,6 +10,8 @@ export type RuleType =
   | "duplicate_fingerprint";
 
 export interface SessionResponse {
+  username: string;
+  role: UserRole;
   csrf_token: string;
   expires_at: string;
 }
@@ -134,8 +137,15 @@ export interface ReviewInput {
   rule?: RuleSpec;
 }
 
+export interface ManualRuleInput {
+  title: string;
+  description: string;
+  severity: RuleProposal["severity"];
+  rule: RuleSpec;
+}
+
 export interface ApiClient {
-  createSession(password: string): Promise<SessionResponse>;
+  createSession(username: string, password: string): Promise<SessionResponse>;
   deleteSession(): Promise<void>;
   listDatasets(): Promise<Dataset[]>;
   startIngestion(datasetId: string, idempotencyKey: string): Promise<CreateJobResponse>;
@@ -143,6 +153,7 @@ export interface ApiClient {
   getProfile(datasetId: string): Promise<DatasetProfile | null>;
   startRuleProposals(datasetId: string, idempotencyKey: string): Promise<CreateJobResponse>;
   listProposals(datasetId: string): Promise<RuleProposal[]>;
+  createManualRule(datasetId: string, input: ManualRuleInput): Promise<RuleProposal>;
   reviewProposal(proposalId: string, input: ReviewInput): Promise<RuleProposal>;
   startDqRun(ruleIds: string[], idempotencyKey: string): Promise<DqRunCreateResponse>;
   getDqRun(runId: string): Promise<DqRun>;

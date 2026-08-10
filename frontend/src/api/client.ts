@@ -8,6 +8,7 @@ import type {
   DqResult,
   DqRun,
   Job,
+  ManualRuleInput,
   ReviewInput,
   RuleProposal,
   SessionResponse,
@@ -74,10 +75,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 export const realApiClient: ApiClient = {
-  async createSession(password) {
+  async createSession(username, password) {
     const result = await request<SessionResponse>("/api/v1/session", {
       method: "POST",
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ username, password }),
     });
     setCsrfToken(result.csrf_token);
     return result;
@@ -109,6 +110,9 @@ export const realApiClient: ApiClient = {
   },
   listProposals(datasetId) {
     return request<RuleProposal[]>(`/api/v1/rule-proposals?dataset_id=${encodeURIComponent(datasetId)}`);
+  },
+  createManualRule(datasetId, input: ManualRuleInput) {
+    return request<RuleProposal>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/rule-proposals/manual`, { method: "POST", body: JSON.stringify(input) });
   },
   reviewProposal(proposalId, input) {
     return request<RuleProposal>(`/api/v1/rule-proposals/${proposalId}`, {
