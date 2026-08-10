@@ -29,7 +29,8 @@ env/
 Thumbs.db
 
 # # Data (never commit large data)
-# #data/
+data/
+/data/yellow_tripdata_2025/raw/
 # *.db
 # *.sqlite3
 
