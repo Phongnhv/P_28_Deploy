@@ -151,7 +151,13 @@ def _stamp_rule(
     used_ids: set chỏa các rule_id đã dùng trong run này (dedup bằng suffix #2, #3).
     """
     col_key = rule.column if rule.column else "_table"
-    base_id = f"{table_name}.{col_key}.{rule.rule_type.value}"
+    if rule.rule_type.value == "CROSS_FIELD_COMPARISON":
+        target_column = rule.parameters.target_column
+        base_id = (
+            f"{table_name}.{col_key}.VS.{target_column}.{rule.rule_type.value}"
+        )
+    else:
+        base_id = f"{table_name}.{col_key}.{rule.rule_type.value}"
 
     # Unique hoá rule_id trong phạm vi 1 run
     rule_id = base_id

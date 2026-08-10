@@ -27,6 +27,7 @@ class RuleType(StrEnum):
     FRESHNESS = "FRESHNESS"
     ROW_COUNT = "ROW_COUNT"               # rule cấp bảng
     NULL_RATE = "NULL_RATE"               # null_pct phải nhỏ hơn ngưỡng
+    CROSS_FIELD_COMPARISON = "CROSS_FIELD_COMPARISON"
 
 class DataQualityDimension(StrEnum):
     """(Phần bổ sung cho HITL UI) Giúp Data Steward filter và nhóm các rule trên web"""
@@ -63,6 +64,8 @@ class RuleParameters(BaseModel):
     max_age_hours: float | None = None
     max_null_pct: float | None = None
     min_row_count: int | None = None
+    target_column: str | None = None
+    operator: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +130,13 @@ class ProposedRule(BaseModel):
             raise ValueError(
                 f"Rule REGEX_FORMAT yêu cầu trường regex không rỗng "
                 f"(column={self.column!r})"
+            )
+        if rt == RuleType.CROSS_FIELD_COMPARISON and (
+            p.target_column is None or p.operator is None
+        ):
+            raise ValueError(
+                "Rule CROSS_FIELD_COMPARISON yêu cầu target_column và operator "
+                f"không được None (column={self.column!r})"
             )
         return self
 
