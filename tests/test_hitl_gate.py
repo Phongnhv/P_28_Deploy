@@ -269,10 +269,13 @@ async def test_hitl_gate_node_returns_rules_saved(in_memory_engine, tmp_path):
 
     with patch("src.agents.nodes.hitl_gate_node.get_settings") as mock_s:
         mock_s.return_value.results_dir = str(tmp_path)
+        mock_s.return_value.output_dir = str(tmp_path)
         result = await hitl_gate_node(state)
 
     assert result["metadata"]["rules_saved"] == 2
     assert result["metadata"]["hitl_status"] == "AWAITING_REVIEW"
+    assert (tmp_path / "hitl" / f"proposed_rules_{run_id}.json").exists()
+    assert result["metadata"]["trace_path"] == str(tmp_path / "hitl" / f"proposed_rules_{run_id}.json")
 
 
 @pytest.mark.asyncio

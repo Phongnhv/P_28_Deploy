@@ -99,9 +99,15 @@ async def raw_profiler_node(state: AgentState) -> dict:
     # Xuất trace JSON sau khi profile xong
     run_id = state.get("rule_run_id") or datetime.now().strftime("%Y%m%d_%H%M%S")
     try:
-        results_dir = Path(get_settings().results_dir)
-        results_dir.mkdir(parents=True, exist_ok=True)
-        dump_file = results_dir / f"debug_raw_profile_{run_id}.json"
+        settings = get_settings()
+        base_dir = (
+            settings.output_dir
+            if hasattr(settings, "output_dir") and isinstance(settings.output_dir, (str, Path))
+            else getattr(settings, "results_dir", "./output")
+        )
+        profiler_dir = Path(base_dir) / "profiler"
+        profiler_dir.mkdir(parents=True, exist_ok=True)
+        dump_file = profiler_dir / f"debug_raw_profile_{run_id}.json"
         dump_file.write_text(json.dumps(aggregated_profile, ensure_ascii=False, indent=2), encoding="utf-8")
         logger.info(f"Đã xuất trace raw profile ra {dump_file}")
     except Exception as e:
@@ -140,14 +146,20 @@ async def profiler_digest_node(state: AgentState) -> dict:
     # Xuất trace JSON sau khi sinh digest xong
     run_id = state.get("rule_run_id") or datetime.now().strftime("%Y%m%d_%H%M%S")
     try:
-        results_dir = Path(get_settings().results_dir)
-        results_dir.mkdir(parents=True, exist_ok=True)
-        dump_file = results_dir / f"debug_profile_digest_{run_id}.json"
+        settings = get_settings()
+        base_dir = (
+            settings.output_dir
+            if hasattr(settings, "output_dir") and isinstance(settings.output_dir, (str, Path))
+            else getattr(settings, "results_dir", "./output")
+        )
+        profiler_dir = Path(base_dir) / "profiler"
+        profiler_dir.mkdir(parents=True, exist_ok=True)
+        dump_file = profiler_dir / f"debug_profile_digest_{run_id}.json"
         dump_file.write_text(json.dumps(digest, ensure_ascii=False, indent=2), encoding="utf-8")
         logger.info(f"Đã xuất trace profile digest ra {dump_file}")
     except Exception as e:
         logger.warning(f"Không thể ghi file trace profile digest: {e}")
-
+ 
     return {"dataset_profile_digest": digest}
 
 

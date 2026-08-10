@@ -53,7 +53,8 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = "./data/chroma" # Change to .env later
 
     # Output
-    results_dir: str = "./data/results" # Change to .env later
+    output_dir: str = "./output"
+    results_dir: str = "./output" # Backwards-compatible alias
 
 
 @lru_cache

@@ -60,9 +60,14 @@ async def hitl_gate_node(state: AgentState) -> dict:
     # 2. Ghi trace JSON — lỗi chỉ log warning, không fail run
     trace_path: str | None = None
     try:
-        results_dir = Path(settings.results_dir)
-        results_dir.mkdir(parents=True, exist_ok=True)
-        out_path = results_dir / f"proposed_rules_{run_id}.json"
+        base_dir = (
+            settings.output_dir
+            if hasattr(settings, "output_dir") and isinstance(settings.output_dir, (str, Path))
+            else getattr(settings, "results_dir", "./output")
+        )
+        hitl_dir = Path(base_dir) / "hitl"
+        hitl_dir.mkdir(parents=True, exist_ok=True)
+        out_path = hitl_dir / f"proposed_rules_{run_id}.json"
         trace_payload = {
             "run_id": run_id,
             "dataset_id": dataset_id,

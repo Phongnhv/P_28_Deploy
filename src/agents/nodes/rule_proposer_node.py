@@ -226,9 +226,16 @@ async def rule_proposer_node(state: AgentState) -> dict:
             "rule_run_id": "",
         }
 
+    base_dir = (
+        settings.output_dir
+        if hasattr(settings, "output_dir") and isinstance(settings.output_dir, (str, Path))
+        else getattr(settings, "results_dir", "./output")
+    )
+    rule_proposer_dir = Path(base_dir) / "rule_proposer"
+
     # 2. Debug dump (tuỳ chọn)
     if settings.debug_dump_table_digests:
-        paths = dump_table_digests(per_table, "data/results/digest_by_table")
+        paths = dump_table_digests(per_table, str(rule_proposer_dir / "digest_by_table"))
         logger.info("Đã dump %d table digest ra: %s", len(paths), paths)
 
     # 3. Chuẩn bị LLM với structured output
@@ -280,9 +287,8 @@ async def rule_proposer_node(state: AgentState) -> dict:
 
     # Xuất trace JSON sau khi đề xuất rules xong
     try:
-        results_dir = Path(settings.results_dir)
-        results_dir.mkdir(parents=True, exist_ok=True)
-        dump_file = results_dir / f"debug_proposed_rules_{run_id}.json"
+        rule_proposer_dir.mkdir(parents=True, exist_ok=True)
+        dump_file = rule_proposer_dir / f"debug_proposed_rules_{run_id}.json"
         dump_payload = {
             "run_id": run_id,
             "generated_at": datetime.utcnow().isoformat() + "Z",
@@ -354,11 +360,17 @@ async def main():
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
 
-    # Tìm file digest mới nhất trong data/results/
-    pattern = os.path.abspath("./data/results/debug_profile_digest_*.json")
-    files = sorted(glob.glob(pattern))
+    # Tìm file digest mới nhất trong output/profiler/ hoặc data/results/
+    patterns = [
+        os.path.abspath("./output/profiler/debug_profile_digest_*.json"),
+        os.path.abspath("./data/results/debug_profile_digest_*.json"),
+    ]
+    files = []
+    for pat in patterns:
+        files.extend(glob.glob(pat))
+    files = sorted(files)
     if not files:
-        print("Không tìm thấy file debug_profile_digest_*.json trong data/results/")
+        print("Không tìm thấy file debug_profile_digest_*.json trong output/profiler/ hoặc data/results/")
         print("Hãy chạy profiler trước: python -m src.agents.nodes.profiler_node")
         return
 
