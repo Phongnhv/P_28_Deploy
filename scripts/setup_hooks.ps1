@@ -14,10 +14,7 @@ bash scripts/_pyrun.sh scripts/submit_log.py || true
 exit 0
 '@
 
-# Git executes this file through the shebang. UTF-8 BOM makes the shebang invalid
-# on Git for Windows, so write UTF-8 without a BOM explicitly.
-$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-[System.IO.File]::WriteAllText($HookFile, $HookBody, $Utf8NoBom)
+Set-Content -Path $HookFile -Value $HookBody -Encoding UTF8 -NoNewline
 Write-Host "[ai-log] Git pre-push hook installed."
 
 if (-not (Test-Path .ai-log)) { New-Item -ItemType Directory -Path .ai-log | Out-Null }

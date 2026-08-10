@@ -1,0 +1,110 @@
+{
+  "dataset_name": "NYC Yellow Taxi Trip Records Data Dictionary",
+  "source_file": "data_dictionary_trip_records_yellow.xlsx",
+  "total_fields": 20,
+  "fields": [
+    {
+      "field_name": "VendorID",
+      "description": "Mã định danh nhà cung cấp thiết bị TPEP cung cấp bản ghi chuyến đi (ví dụ: 1 = Creative Mobile Technologies, 2 = VeriFone Inc.).",
+      "code_mappings": null
+    },
+    {
+      "field_name": "tpep_pickup_datetime",
+      "description": "Ngày và giờ khi đồng hồ tính cước bắt đầu bật (thời điểm đón khách / bắt đầu chuyến đi).",
+      "code_mappings": null
+    },
+    {
+      "field_name": "tpep_dropoff_datetime",
+      "description": "Ngày và giờ khi đồng hồ tính cước tắt (thời điểm trả khách / kết thúc chuyến đi).",
+      "code_mappings": null
+    },
+    {
+      "field_name": "passenger_count",
+      "description": "Số lượng hành khách trên xe (đây là giá trị do tài xế nhập thủ công vào hệ thống).",
+      "code_mappings": null
+    },
+    {
+      "field_name": "trip_distance",
+      "description": "Khoảng cách chuyến đi di chuyển tính bằng dặm (miles) do đồng hồ tính cước ghi nhận.",
+      "code_mappings": null
+    },
+    {
+      "field_name": "RatecodeID",
+      "description": "Mã biểu giá cước cuối cùng có hiệu lực khi kết thúc chuyến đi (1 = Cước tiêu chuẩn, 2 = JFK, 3 = Newark, 4 = Nassau/Westchester, 5 = Cước thương lượng, 6 = Chuyến đi theo nhóm).",
+      "code_mappings": null
+    },
+    {
+      "field_name": "store_and_fwd_flag",
+      "description": "Cờ chỉ định bản ghi chuyến đi có được lưu tạm trong bộ nhớ xe trước khi gửi về máy chủ hay không do mất kết nối (Y = Lưu và chuyển tiếp sau, N = Gửi trực tiếp thời gian thực).",
+      "code_mappings": {
+        "Y": "Chuyến đi được lưu tạm và chuyển tiếp sau (store and forward)",
+        "N": "Chuyến đi gửi trực tiếp (không lưu tạm)"
+      }
+    },
+    {
+      "field_name": "PULocationID",
+      "description": "Mã khu vực taxi TLC (TLC Taxi Zone ID) nơi đồng hồ tính cước được bật (địa điểm đón khách).",
+      "code_mappings": null
+    },
+    {
+      "field_name": "DOLocationID",
+      "description": "Mã khu vực taxi TLC (TLC Taxi Zone ID) nơi đồng hồ tính cước được tắt (địa điểm trả khách).",
+      "code_mappings": null
+    },
+    {
+      "field_name": "payment_type",
+      "description": "Mã số biểu thị phương thức thanh toán của hành khách (1 = Thẻ tín dụng, 2 = Tiền mặt, 3 = Miễn phí, 4 = Khiếu nại/Tranh chấp, 5 = Không xác định, 6 = Chuyến đi bị hủy).",
+      "code_mappings": null
+    },
+    {
+      "field_name": "fare_amount",
+      "description": "Cước phí cơ bản tính theo thời gian và khoảng cách di chuyển do đồng hồ tính cước tự động tính toán.",
+      "code_mappings": null
+    },
+    {
+      "field_name": "extra",
+      "description": "Các khoản phụ phí bổ sung và phụ phí giờ cao điểm / ban đêm (ví dụ: 0.50$ và 1.00$).",
+      "code_mappings": null
+    },
+    {
+      "field_name": "mta_tax",
+      "description": "Thuế MTA (0.50$) được tự động kích hoạt dựa trên biểu giá tính cước đang áp dụng.",
+      "code_mappings": null
+    },
+    {
+      "field_name": "tip_amount",
+      "description": "Tiền tip (tiền boa) – Trường này được tự động ghi nhận khi thanh toán bằng thẻ tín dụng; tiền tip bằng tiền mặt không được ghi nhận trong hệ thống.",
+      "code_mappings": null
+    },
+    {
+      "field_name": "tolls_amount",
+      "description": "Tổng số tiền phí cầu đường đã thanh toán trong suốt chuyến đi.",
+      "code_mappings": null
+    },
+    {
+      "field_name": "improvement_surcharge",
+      "description": "Phụ phí cải thiện dịch vụ (0.30$ hoặc 1.00$) được tính khi bắt đầu mở đồng hồ tính cước chuyến đi.",
+      "code_mappings": null
+    },
+    {
+      "field_name": "total_amount",
+      "description": "Tổng số tiền thanh toán từ hành khách (bao gồm cước phí fare, phụ phí extra, thuế mta_tax, phí cầu đường tolls, phí cải thiện, phí ùn tắc, tiền tip qua thẻ; không bao gồm tip bằng tiền mặt).",
+      "code_mappings": null
+    },
+    {
+      "field_name": "congestion_surcharge",
+      "description": "Tổng số tiền phụ phí ùn tắc giao thông bang New York (NYS congestion surcharge) thu trong chuyến đi.",
+      "code_mappings": null
+    },
+    {
+      "field_name": "airport_fee",
+      "description": "Phí dịch vụ sân bay (1.25$ hoặc 1.75$), chỉ áp dụng khi đón khách tại các sân bay LaGuardia (LGA) và John F. Kennedy (JFK).",
+      "code_mappings": null
+    },
+    {
+      "field_name": "cbd_congestion_fee",
+      "description": "Phí giải tỏa ùn tắc khu vực trung tâm Manhattan (CBD) của MTA tính trên mỗi chuyến đi (bắt đầu áp dụng từ 05/01/2025).",
+      "code_mappings": null
+    }
+  ]
+}

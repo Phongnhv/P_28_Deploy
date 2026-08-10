@@ -1,8 +1,12 @@
+import os
 from functools import lru_cache
 from typing import Literal
 
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+load_dotenv()
 
 
 class Settings(BaseSettings):
@@ -21,15 +25,36 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
 
     # LLM
-    openai_api_key: str = ""
-    model_name: str = "gpt-4o-mini"
+    openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
+    anthropic_api_key: str | None = os.getenv("ANTHROPIC_API_KEY")
+    mistral_api_key: str | None = os.getenv("MISTRAL_API_KEY")
+    google_api_key: str | None = os.getenv("GOOGLE_API_KEY")
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
 
+    # LLM provider selection
+    llm_provider: Literal["openai", "anthropic", "mistral", "google"] = os.getenv("PROVIDER")
+
+    # Set model based on provider
+    # model_name: str = os.getenv("MISTRAL_MODEL") or "mistral-medium-latest"
+    openai_model_name: str = os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
+    anthropic_model_name: str = os.getenv("ANTHROPIC_MODEL") or "claude-opus-5"
+    mistral_model_name: str = os.getenv("MISTRAL_MODEL") or "mistral-medium-latest"
+    google_model_name: str = os.getenv("GOOGLE_MODEL") or "gemini-3.1-flash-lite"
+
+    # Rule Proposer tunables
+    rule_proposer_concurrency: int = 10
+    rule_proposer_max_retries: int = 2
+    debug_dump_table_digests: bool = False
+
     # Database
-    database_url: str = "sqlite:///./data/app.db"
+    database_url: str = os.getenv("DATABASE_URL")
 
     # Vector Store
-    chroma_persist_dir: str = "./data/chroma"
+    chroma_persist_dir: str = "./data/chroma" # Change to .env later
+
+    # Output
+    output_dir: str = "./output"
+    results_dir: str = "./output" # Backwards-compatible alias
 
 
 @lru_cache
