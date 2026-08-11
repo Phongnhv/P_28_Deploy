@@ -203,3 +203,55 @@ rule_proposer_prompt = ChatPromptTemplate.from_messages(
         ("user", _RULE_PROPOSER_USER),
     ]
 )
+
+
+# ---------------------------------------------------------------------------
+# SQL Repair Prompt (Agentic Repair Loop)
+# ---------------------------------------------------------------------------
+# Input variables: table_name, schema_info, rules_json, error_sql, db_error
+# ---------------------------------------------------------------------------
+
+_SQL_REPAIR_SYSTEM = """\
+Bạn là một chuyên gia cơ sở dữ liệu SQL (PostgreSQL & SQLite). \
+Nhiệm vụ của bạn là sửa một câu lệnh SQL bị lỗi cú pháp hoặc ngữ nghĩa được báo cáo bởi công cụ cơ sở dữ liệu.
+
+Quy tắc BẮT BUỘC:
+1. CHỈ TRẢ VỀ CÂU LỆNH SELECT. Tuyệt đối không sinh DDL/DML (UPDATE, DELETE, INSERT, DROP, ALTER, v.v.).
+2. Đảm bảo giữ nguyên các bind parameters có dạng `:param_name` thay vì điền cứng giá trị.
+3. Không làm thay đổi logic kiểm tra dữ liệu của các rules đã định nghĩa.
+4. Trả về DUY NHẤT câu lệnh SQL đã sửa trong một khối mã markdown: ```sql ... ```. Không giải thích dông dài.
+"""
+
+_SQL_REPAIR_USER = """\
+Bảng mục tiêu: `{table_name}`
+
+Schema cột hiện tại của bảng:
+```json
+{schema_info}
+```
+
+Các quy tắc (rules) được kiểm thử trong câu lệnh này:
+```json
+{rules_json}
+```
+
+Câu lệnh SQL bị lỗi:
+```sql
+{error_sql}
+```
+
+Thông báo lỗi chi tiết từ cơ sở dữ liệu:
+```
+{db_error}
+```
+
+Hãy phân tích nguyên nhân lỗi (ví dụ: sai tên cột, sai hàm regex, sai cú pháp CASE WHEN, thừa/thiếu dấu ngoặc) và trả về câu lệnh SQL đã được sửa hoàn chỉnh.
+"""
+
+sql_repair_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", _SQL_REPAIR_SYSTEM),
+        ("user", _SQL_REPAIR_USER),
+    ]
+)
+

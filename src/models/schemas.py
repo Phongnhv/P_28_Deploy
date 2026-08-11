@@ -163,3 +163,81 @@ class ApprovedRulesResponse(BaseModel):
     run_id: str
     count: int
     rules: list[RuleReviewResponse]
+
+
+# ---------------------------------------------------------------------------
+# Test Execution Schemas — Run 2
+# ---------------------------------------------------------------------------
+
+class ExecuteTestsResponse(BaseModel):
+    test_run_id: str
+    status: str = "QUEUED"
+
+
+class TestRunStatusResponse(BaseModel):
+    test_run_id: str
+    dataset_id: str
+    status: str
+    error: str | None = None
+    created_at: str | None = None
+
+
+class TestResultResponse(BaseModel):
+    test_run_id: str
+    rule_id: str
+    table_name: str
+    column: str | None = None
+    rule_type: str
+    status: str
+    violation_count: int
+    total_rows: int
+    violation_rate: float
+    sample_failures: list[dict[str, Any]] | None = None
+    sql_text: str
+    duration_ms: float
+    error: str | None = None
+    created_at: str | None = None
+
+
+class TestResultsListResponse(BaseModel):
+    test_run_id: str
+    count: int
+    results: list[TestResultResponse]
+
+
+# ---------------------------------------------------------------------------
+# Active Rules & Publish Schemas
+# ---------------------------------------------------------------------------
+
+class PublishRulesResponse(BaseModel):
+    run_id: str
+    published_count: int
+    message: str
+
+
+class ActiveRuleResponse(BaseModel):
+    rule_id: str
+    dataset_id: str
+    table_name: str
+    column: str | None = None
+    rule_type: str
+    parameters: dict[str, Any]
+    severity: str
+    dimension: str
+    rule_description: str
+    status: str  # ACTIVE / INACTIVE
+    last_run_id: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class ActiveRulesListResponse(BaseModel):
+    total_rules: int
+    rules: list[ActiveRuleResponse]
+
+
+class ExecuteActiveTestsRequest(BaseModel):
+    dataset_id: str = Field(default="all", description="ID định danh dataset hoặc 'all'")
+    table_name: str | None = Field(default=None, description="Lọc theo bảng cụ thể")
+
+
