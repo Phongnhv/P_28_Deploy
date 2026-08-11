@@ -76,13 +76,24 @@ async def raw_profiler_node(state: AgentState) -> dict:
     if connection_string.startswith("postgresql://"):
         connection_string = connection_string.replace("postgresql://", "postgresql+psycopg2://", 1)
 
-    # 1. Quét danh sách các bảng trong database
+    # Danh sách các bảng hệ thống/metadata của RidePulse DQ cần bỏ qua
+    SYSTEM_TABLES = {
+        "proposal_runs",
+        "proposed_rules",
+        "active_rules",
+        "test_runs",
+        "test_results",
+        "alembic_version",
+    }
+
+    # 1. Quét danh sách các bảng trong database (lọc bỏ bảng hệ thống)
     try:
         engine = create_engine(connection_string)
         try:
             with engine.connect():
                 inspector = inspect(engine)
-                tables = inspector.get_table_names()
+                all_tables = inspector.get_table_names()
+                tables = [t for t in all_tables if t.lower() not in SYSTEM_TABLES]
         finally:
             engine.dispose()
     except Exception as e:
@@ -90,7 +101,7 @@ async def raw_profiler_node(state: AgentState) -> dict:
         return {"error": f"Lỗi khi kết nối database hoặc lấy danh sách bảng: {str(e)}"}
 
     if not tables:
-        logger.warning("Không tìm thấy bảng nào trong database.")
+        logger.warning("Không tìm thấy bảng nghiệp vụ nào trong database (đã bỏ qua bảng hệ thống: %s).", SYSTEM_TABLES)
         return {"dataset_profile": {}}
 
     # 2. Profile song song (có giới hạn concurrency) và tổng hợp
