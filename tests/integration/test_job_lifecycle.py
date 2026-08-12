@@ -37,3 +37,9 @@ async def test_job_dispatch_and_idempotency():
         update_job_status(job_id, "COMPLETED")
         job = get_job(job_id)
         assert job.status == "COMPLETED"
+
+        # 4. Test GET poll endpoint
+        res3 = await client.get(f"/api/v1/jobs/{job_id}")
+        assert res3.status_code == 200
+        assert res3.json()["job_id"] == job_id
+        assert res3.json()["status"] == "COMPLETED"
