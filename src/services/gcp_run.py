@@ -1,7 +1,7 @@
 import os
 import logging
 import httpx
-from google.cloud import run_v2
+# from google.cloud import run_v2 (moved inside function to prevent ImportError on local)
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,12 @@ def dispatch_cloud_run_job(job_id: str, job_type: str) -> bool:
     
     if not project_id:
         logger.warning("GOOGLE_CLOUD_PROJECT not set, skipping Cloud Run dispatch.")
+        return False
+        
+    try:
+        from google.cloud import run_v2
+    except ImportError:
+        logger.error("google-cloud-run library not installed. Cannot dispatch to Google Cloud.")
         return False
         
     client = run_v2.JobsClient()

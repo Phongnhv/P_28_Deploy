@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: localpassword
-      POSTGRES_DB: postgres
+      POSTGRES_DB: ridepulse
     ports:
       - "5432:5432"
     volumes:

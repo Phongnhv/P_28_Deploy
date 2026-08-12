@@ -1,0 +1,3 @@
+# Force LF line endings for CSV/Parquet data fixtures to keep checksums stable on Windows
+src/resources/nyc_yellow_demo.csv text eol=lf
+data/yellow_tripdata_2025/semantic_data/yellow_tripdata_2025_semantic_50k.csv text eol=lf

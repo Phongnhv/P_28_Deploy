@@ -9,14 +9,17 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 # ---- Stage 2: Production ----
 FROM python:3.11-slim
 
-WORKDIR /app
-
-# Copy installed packages from builder
-COPY --from=builder /root/.local /root/.local
-ENV PATH=/root/.local/bin:$PATH
-
 # Security: run as non-root user
 RUN useradd -m appuser
+
+WORKDIR /app
+
+# Copy installed packages from builder to appuser home
+COPY --from=builder /root/.local /home/appuser/.local
+ENV PATH=/home/appuser/.local/bin:$PATH
+
+# Fix permissions
+RUN chown -R appuser:appuser /home/appuser/.local
 
 # Copy application code
 COPY . .
