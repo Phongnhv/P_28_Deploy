@@ -1,5 +1,6 @@
-import json
+"""Unit tests for Profiler Tool, Profiler Node, and Profile Digest."""
 
+import json
 import pytest
 from sqlalchemy import Column, Float, Integer, MetaData, String, Table, create_engine
 
@@ -73,7 +74,6 @@ def test_profile_database_tool(temp_db_url):
     assert "top_categories" in driver_stats
     assert len(driver_stats["top_categories"]) > 0
     assert driver_stats["top_categories"][0]["value"] == "Nguyen An"
-
 
 
 @pytest.mark.asyncio

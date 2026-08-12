@@ -181,15 +181,15 @@ async def test_failure_isolation():
     }
 
     async def mock_ainvoke(messages):
-        # Cần biết bảng nào đang được call — trích table_name từ message
+        # Cần biết bảng nào đang được call — trích table_name từ JSON table_digest
         content = str(messages)
         for t in tables:
-            if f"`{t}`" in content:
+            if f'"table": "{t}"' in content:
                 resp = proposals[t]
                 if isinstance(resp, Exception):
                     raise resp
                 return resp
-        raise ValueError("Unknown table in mock")
+        raise ValueError(f"Unknown table in mock: {content[:100]}")
 
     mock_structured_llm = AsyncMock()
     mock_structured_llm.ainvoke.side_effect = mock_ainvoke
