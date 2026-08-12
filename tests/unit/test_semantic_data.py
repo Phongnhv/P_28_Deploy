@@ -68,7 +68,7 @@ def test_semantic_sha256_checksum():
     """Kiểm tra SHA-256 hash của tệp semantic parquet khớp 100% với manifest."""
     project_root = _get_project_root()
     parquet_path = project_root / "data" / "yellow_tripdata_2025" / "semantic_data" / "yellow_tripdata_2025_semantic_50k.parquet"
-    manifest = load_manifest("nyc-yellow-demo-v1")
+    manifest = load_manifest("nyc-yellow-50k-v1")
 
     sha256 = hashlib.sha256()
     with open(parquet_path, "rb") as f:

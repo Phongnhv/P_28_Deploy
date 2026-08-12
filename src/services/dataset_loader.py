@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any
 
 MANIFEST_ALLOW_LIST: dict[str, str] = {
-    "nyc-yellow-demo-v1": "src/resources/manifest.json"
+    "nyc-yellow-demo-v1": "src/resources/manifest.json",
+    "nyc-yellow-50k-v1": "data/yellow_tripdata_2025/semantic_data/manifest.json"
 }
 
 

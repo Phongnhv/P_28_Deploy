@@ -14,4 +14,15 @@
 
 ---
 
+## 2026-08-12
+
+| Member | Task                                         | Status  | Output                                          | Time |
+|--------|----------------------------------------------|---------|-------------------------------------------------|------|
+| Đạt    | Setup AI_LOG_API_KEY và kiểm tra log push    | ✅ Done | Cấu hình thành công, gửi AI log về server OK    | 0.5h |
+
+**Tổng kết ngày:** Cấu hình và tích hợp thành công key AI Log gửi về grading server, tiến hành git push kiểm tra.
+
+---
+
 <!-- Format: copy block trên cho mỗi ngày làm việc -->
+

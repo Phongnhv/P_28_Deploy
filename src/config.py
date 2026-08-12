@@ -18,7 +18,7 @@ class Settings(BaseSettings):
 
     # App
     app_name: str = "AI20K Agent"
-    app_env: Literal["development", "production", "test"] = "development"
+    app_env: Literal["development", "production", "test", "local"] = "development"
     app_port: int = Field(default=8000, ge=1, le=65535)
     app_host: str = "0.0.0.0"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
 
     # LLM provider selection
-    llm_provider: Literal["openai", "anthropic", "mistral", "google"] = os.getenv("PROVIDER")
+    llm_provider: Literal["openai", "anthropic", "mistral", "google"] = os.getenv("PROVIDER") or "openai"
 
     # Set model based on provider
     # model_name: str = os.getenv("MISTRAL_MODEL") or "mistral-medium-latest"
