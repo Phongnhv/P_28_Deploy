@@ -183,7 +183,7 @@ def main():
 
     # Output valid JSON (required by some tools like Gemini)
     if tool != "codex":
-                  print(json.dumps({"status": "logged"}))
+        print(json.dumps({"status": "logged"}))
     
 
 if __name__ == "__main__":
