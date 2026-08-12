@@ -274,12 +274,12 @@ def generate_profile_digest(dataset_profile: dict) -> dict:
         table_digest = {
             "table": table_name,
             "rows": total_rows,
+            # P2.1: ưu tiên cross-column hints ở đầu digest để LLM chú ý
+            "cross_column_hints": cross_column_hints,
             "sample": sample_info,
             # P0.1: schema constraints ở cấp bảng
             "schema_constraints": schema_constraints_digest,
             "columns": columns_digest,
-            # P2.1: cross-column hints ở cấp bảng
-            "cross_column_hints": cross_column_hints,
         }
 
         digest[table_name] = table_digest

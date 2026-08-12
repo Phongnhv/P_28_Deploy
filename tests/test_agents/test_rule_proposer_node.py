@@ -181,15 +181,15 @@ async def test_failure_isolation():
     }
 
     async def mock_ainvoke(messages):
-        # Cần biết bảng nào đang được call — trích table_name từ message
+        # Cần biết bảng nào đang được call — trích table_name từ JSON table_digest
         content = str(messages)
         for t in tables:
-            if f"`{t}`" in content:
+            if f'"table": "{t}"' in content:
                 resp = proposals[t]
                 if isinstance(resp, Exception):
                     raise resp
                 return resp
-        raise ValueError("Unknown table in mock")
+        raise ValueError(f"Unknown table in mock: {content[:100]}")
 
     mock_structured_llm = AsyncMock()
     mock_structured_llm.ainvoke.side_effect = mock_ainvoke
@@ -321,3 +321,49 @@ def test_stamp_rule_table_level():
 
     assert stamped["rule_id"] == "orders._table.ROW_COUNT"
     assert stamped["column"] is None
+
+
+def test_parse_and_stamp_cross_field_comparison_from_llm_response():
+    """Parse payload LLM và stamp đúng rule_id cho rule so sánh liên cột."""
+    from src.agents.nodes.rule_proposer_node import _stamp_rule
+
+    llm_response = {
+        "table": "yellow_taxi_trips",
+        "rules": [
+            {
+                "column": "tpep_pickup_datetime",
+                "rule_type": "CROSS_FIELD_COMPARISON",
+                "parameters": {
+                    "target_column": "tpep_dropoff_datetime",
+                    "operator": "<=",
+                },
+                "confidence_score": 0.98,
+                "severity": "CRITICAL",
+                "dimension": "CONSISTENCY",
+                "rule_description": (
+                    "Thời điểm đón khách phải xảy ra trước hoặc cùng lúc với "
+                    "thời điểm trả khách."
+                ),
+                "ai_reasoning": (
+                    "Digest có datetime_order và nghiệp vụ yêu cầu đón khách "
+                    "trước khi trả khách."
+                ),
+            }
+        ],
+    }
+
+    proposal = TableRuleProposal.model_validate(llm_response)
+    rule = proposal.rules[0]
+    stamped = _stamp_rule(rule, proposal.table, "cross-field-run")
+
+    assert rule.rule_type == RuleType.CROSS_FIELD_COMPARISON
+    assert rule.parameters.target_column == "tpep_dropoff_datetime"
+    assert rule.parameters.operator == "<="
+    assert stamped["rule_id"] == (
+        "yellow_taxi_trips.tpep_pickup_datetime.VS."
+        "tpep_dropoff_datetime.CROSS_FIELD_COMPARISON"
+    )
+    assert stamped["parameters"] == {
+        "target_column": "tpep_dropoff_datetime",
+        "operator": "<=",
+    }

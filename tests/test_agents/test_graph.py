@@ -1,16 +1,270 @@
+"""Integration tests for LangGraph workflows (Proposal Graph & Execution Graph)."""
+
+import uuid
 import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+from sqlalchemy import create_engine, text
 
-from src.agents.graph import agent
+import src.services.rule_store as rule_store_module
+from src.agents.graph import (
+    _should_repair_or_run,
+    build_execution_graph,
+    build_proposal_graph,
+    run_execution_graph,
+    run_proposal_graph,
+)
+from src.services.rule_store import (
+    create_run,
+    create_test_run,
+    get_active_rules,
+    get_approved_rules,
+    get_run,
+    get_test_results,
+    get_test_run,
+    init_db,
+    publish_approved_rules,
+    review_rule,
+    save_proposed_rules,
+)
+
+
+@pytest.fixture(autouse=True)
+def setup_test_db(tmp_path, monkeypatch):
+    """Tạo SQLite file tạm để kiểm thử Graph."""
+    db_file = tmp_path / "test_graph.db"
+    sqlite_url = f"sqlite:///{db_file}"
+    test_engine = create_engine(
+        sqlite_url,
+        connect_args={"check_same_thread": False},
+    )
+    monkeypatch.setattr(rule_store_module, "_engine", test_engine)
+    init_db()
+
+    with test_engine.connect() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS demo_graph_table;"))
+        conn.execute(text("""
+            CREATE TABLE demo_graph_table (
+                id INTEGER PRIMARY KEY,
+                fare REAL,
+                status TEXT
+            );
+        """))
+        conn.execute(text("""
+            INSERT INTO demo_graph_table VALUES
+            (1, 10.0, 'OK'),
+            (2, 20.0, 'OK'),
+            (3, NULL, 'ERROR'),
+            (4, 50.0, 'OK');
+        """))
+        conn.commit()
+
+    yield test_engine
+
+    with test_engine.connect() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS demo_graph_table;"))
+        conn.commit()
+
+
+def test_build_graphs():
+    """Kiểm tra việc biên dịch cả 2 Graph không phát sinh lỗi."""
+    proposal_graph = build_proposal_graph()
+    assert proposal_graph is not None
+
+    execution_graph = build_execution_graph()
+    assert execution_graph is not None
+
+
+def test_conditional_edges_routing():
+    """Kiểm tra hàm điều hướng rẽ nhánh _should_repair_or_run."""
+    # 1. Tất cả test hợp lệ -> run
+    state_valid = {
+        "generated_tests": [
+            {"test_id": "t1", "valid": True, "attempts": 0},
+            {"test_id": "t2", "valid": True, "attempts": 0},
+        ]
+    }
+    assert _should_repair_or_run(state_valid) == "run"
+
+    # 2. Có test không hợp lệ và attempts < 3 -> repair
+    state_repair = {
+        "generated_tests": [
+            {"test_id": "t1", "valid": True, "attempts": 0},
+            {"test_id": "t2", "valid": False, "attempts": 1},
+        ]
+    }
+    assert _should_repair_or_run(state_repair) == "repair"
+
+    # 3. Có test không hợp lệ nhưng attempts >= 3 -> run (bỏ qua/fail-safe)
+    state_max_attempts = {
+        "generated_tests": [
+            {"test_id": "t2", "valid": False, "attempts": 3},
+        ]
+    }
+    assert _should_repair_or_run(state_max_attempts) == "run"
 
 
 @pytest.mark.asyncio
-async def test_agent_basic_flow():
-    result = await agent.ainvoke({"query": "Hello"})
-    assert "response" in result
+async def test_proposal_graph_execution(monkeypatch, tmp_path):
+    """Kiểm thử Run 1 (Proposal Graph) end-to-end với mock LLM."""
+    run_id = f"graph_prop_{uuid.uuid4().hex[:8]}"
+    create_run(run_id, "demo_graph_table")
+
+    # Mock rule_proposer trả về 2 rules
+    mock_rules = [
+        {
+            "rule_id": "demo_graph_table.fare.NOT_NULL",
+            "table_name": "demo_graph_table",
+            "column": "fare",
+            "rule_type": "NOT_NULL",
+            "parameters": {},
+            "confidence_score": 1.0,
+            "severity": "CRITICAL",
+            "dimension": "COMPLETENESS",
+            "rule_description": "Fare không được null",
+            "ai_reasoning": "Yêu cầu nghiệp vụ",
+            "status": "PENDING",
+        }
+    ]
+
+    async def mock_rule_proposer(state):
+        return {
+            "proposed_rules": mock_rules,
+            "rule_run_id": run_id,
+            "rule_proposal_errors": [],
+        }
+
+    monkeypatch.setattr("src.agents.nodes.rule_proposer_node.rule_proposer_node", mock_rule_proposer)
+
+    graph = build_proposal_graph()
+    initial_state = {
+        "dataset_id": "demo_graph_table",
+        "rule_run_id": run_id,
+        "metadata": {
+            "connection_string": f"sqlite:///{tmp_path / 'test_graph.db'}",
+            "sampling_rate": 1.0,
+        },
+    }
+
+    final_state = await graph.ainvoke(initial_state)
+
+    # Xác minh metadata từ hitl_gate_node
+    meta = final_state.get("metadata", {})
+    assert meta.get("hitl_status") == "AWAITING_REVIEW"
+    assert meta.get("rules_saved") == 1
+
+    # Kiểm tra DB đã lưu rule
+    saved_run = get_run(run_id)
+    assert saved_run is not None
 
 
 @pytest.mark.asyncio
-async def test_agent_state_structure():
-    result = await agent.ainvoke({"query": "Test query"})
-    assert isinstance(result, dict)
-    assert "query" in result
+async def test_execution_graph_execution():
+    """Kiểm thử Run 2 (Execution Graph) end-to-end trên Active Ruleset."""
+    test_run_id = f"graph_exec_{uuid.uuid4().hex[:8]}"
+    create_test_run(test_run_id, "demo_graph_table")
+
+    rules = [
+        {
+            "rule_id": "demo_graph_table.fare.NOT_NULL",
+            "dataset_id": "demo_graph_table",
+            "table_name": "demo_graph_table",
+            "column": "fare",
+            "rule_type": "NOT_NULL",
+            "parameters": {},
+            "severity": "CRITICAL",
+            "dimension": "COMPLETENESS",
+            "rule_description": "Fare không được null",
+            "status": "ACTIVE",
+        },
+        {
+            "rule_id": "demo_graph_table._table.ROW_COUNT",
+            "dataset_id": "demo_graph_table",
+            "table_name": "demo_graph_table",
+            "column": None,
+            "rule_type": "ROW_COUNT",
+            "parameters": {"min_row_count": 2},
+            "severity": "MEDIUM",
+            "dimension": "COMPLETENESS",
+            "rule_description": "Bảng có >= 2 dòng",
+            "status": "ACTIVE",
+        },
+    ]
+
+    graph = build_execution_graph()
+    initial_state = {
+        "dataset_id": "demo_graph_table",
+        "test_run_id": test_run_id,
+        "approved_rules": rules,
+    }
+
+    final_state = await graph.ainvoke(initial_state)
+
+    # 1. Kiểm tra kết quả test_results
+    test_results = final_state.get("test_results", [])
+    assert len(test_results) == 2
+
+    res_map = {r["rule_id"]: r for r in test_results}
+    # fare NOT_NULL có 1 dòng null trên 4 dòng -> FAILED
+    assert res_map["demo_graph_table.fare.NOT_NULL"]["status"] == "FAILED"
+    assert res_map["demo_graph_table.fare.NOT_NULL"]["violation_count"] == 1
+
+    # ROW_COUNT có 4 dòng >= 2 -> PASSED
+    assert res_map["demo_graph_table._table.ROW_COUNT"]["status"] == "PASSED"
+
+    # 2. Kiểm tra test_run record trong DB
+    db_run = get_test_run(test_run_id)
+    assert db_run is not None
+    assert db_run["status"] == "DONE"
+
+    # 3. Kiểm tra test_results lưu trong DB
+    db_results = get_test_results(test_run_id)
+    assert len(db_results) == 2
+
+
+@pytest.mark.asyncio
+async def test_runners(monkeypatch, tmp_path):
+    """Kiểm tra 2 hàm pipeline runner tiện ích: run_proposal_graph & run_execution_graph."""
+    mock_rules = [
+        {
+            "rule_id": "demo_graph_table.status.ACCEPTED_VALUES",
+            "table_name": "demo_graph_table",
+            "column": "status",
+            "rule_type": "ACCEPTED_VALUES",
+            "parameters": {"accepted_values": ["OK", "ERROR"]},
+            "confidence_score": 1.0,
+            "severity": "HIGH",
+            "dimension": "VALIDITY",
+            "rule_description": "Trạng thái hợp lệ",
+            "ai_reasoning": "Mẫu",
+            "status": "PENDING",
+        }
+    ]
+
+    async def mock_rule_proposer(state):
+        return {
+            "proposed_rules": mock_rules,
+            "rule_run_id": state.get("rule_run_id"),
+            "rule_proposal_errors": [],
+        }
+
+    monkeypatch.setattr("src.agents.nodes.rule_proposer_node.rule_proposer_node", mock_rule_proposer)
+
+    # 1. Chạy run_proposal_graph
+    prop_res = await run_proposal_graph(
+        dataset_id="demo_graph_table",
+        connection_string=f"sqlite:///{tmp_path / 'test_graph.db'}",
+    )
+    prop_run_id = prop_res["run_id"]
+    assert prop_run_id is not None
+    assert len(prop_res["rules"]) == 1
+
+    # 2. Steward duyệt và publish
+    review_rule(prop_run_id, "demo_graph_table.status.ACCEPTED_VALUES", "APPROVED")
+    publish_approved_rules(prop_run_id)
+
+    # 3. Chạy run_execution_graph
+    exec_res = await run_execution_graph(dataset_id="demo_graph_table")
+    assert exec_res["test_run_id"] is not None
+    assert len(exec_res["results"]) == 1
+    assert exec_res["results"][0]["status"] == "PASSED"
+

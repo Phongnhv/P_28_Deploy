@@ -48,6 +48,7 @@ và Từ điển dữ liệu (Data Dictionary) được cung cấp.
 | FRESHNESS        | role "datetime" — kiểm tra dữ liệu mới nhất không quá N giờ                                                       |
 | ROW_COUNT        | rule cấp bảng — đặt min_row_count dựa trên trường "rows" trong digest                                              |
 | NULL_RATE        | null_pct cao bất thường (> 5%) — đặt max_null_pct ngưỡng cảnh báo                                                 |
+| CROSS_FIELD_COMPARISON | áp dụng khi digest có `cross_column_hints` (như `datetime_order`) hoặc hai cột có quan hệ thứ tự logic nghiệp vụ (như `pickup_datetime` <= `dropoff_datetime`) |
 
 ## Các signal quan trọng từ digest (ưu tiên đọc kỹ)
 
@@ -57,7 +58,7 @@ và Từ điển dữ liệu (Data Dictionary) được cung cấp.
 - `has_extreme_outliers`: min/max xa p1/p99 — nên dùng `typical_range` thay vì `range` khi đặt RANGE.
 - `has_negative_values`: tồn tại giá trị âm — xem `negative_pct` để quyết định rule có cần min >= 0 không.
 - `fixed_length`: độ dài chuỗi cố định — gợi ý mạnh cho REGEX_FORMAT hoặc length constraint.
-- `cross_column_hints` (cấp bảng): gợi ý quan hệ liên cột (e.g., pickup <= dropoff) — xem xét rule RANGE hoặc custom.
+- `cross_column_hints` (cấp bảng): gợi ý quan hệ liên cột (e.g., pickup <= dropoff) — ưu tiên xem xét rule CROSS_FIELD_COMPARISON.
 
 ## Hướng dẫn quan trọng
 
@@ -86,6 +87,7 @@ và Từ điển dữ liệu (Data Dictionary) được cung cấp.
    - UNIQUE → dimension = UNIQUENESS \
    - RANGE, ACCEPTED_VALUES, REGEX_FORMAT, ROW_COUNT → dimension = VALIDITY \
    - FRESHNESS → dimension = FRESHNESS \
+   - CROSS_FIELD_COMPARISON → dimension = CONSISTENCY \
    - Nếu không chắc → dimension = VALIDITY \
 9. **`rule_description`**: Một câu tiếng Việt dễ hiểu, tự nhiên dành cho Data Steward. \
    Nêu tên cột bằng tiếng Việt (nếu có trong Data Dictionary) kèm tên kỹ thuật trong ngoặc, \
@@ -93,8 +95,8 @@ và Từ điển dữ liệu (Data Dictionary) được cung cấp.
    VD: "Cước phí cơ bản (fare_amount) không được mang giá trị âm, vì đây là tiền tính theo đồng hồ chứ không phải hoàn tiền." \
    KHÔNG viết kiểu template máy móc như "Cột X không được để trống." hay "Cột X phải có giá trị từ A đến B."
 
-**⚠️ NHẮC LẠI:** Trường `rule_type` CHỈ được nhận 8 giá trị sau, không hơn không kém: \
-NOT_NULL, UNIQUE, RANGE, ACCEPTED_VALUES, REGEX_FORMAT, FRESHNESS, ROW_COUNT, NULL_RATE.
+**⚠️ NHẮC LẠI:** Trường `rule_type` CHỈ được nhận 9 giá trị sau, không hơn không kém: \
+NOT_NULL, UNIQUE, RANGE, ACCEPTED_VALUES, REGEX_FORMAT, FRESHNESS, ROW_COUNT, NULL_RATE, CROSS_FIELD_COMPARISON.
 """
 
 _RULE_PROPOSER_FEW_SHOT = """\
@@ -149,6 +151,23 @@ Các ví dụ dưới đây minh hoạ văn phong và mức độ lập luận k
   "ai_reasoning": "Profiler ghi nhận null_pct = 15.3%, đây là con số đáng chú ý vì passenger_count là trường tài xế nhập thủ công khi bắt đầu chuyến. Null trong trường hợp này không có nghĩa là 'không có hành khách' — mà là tài xế quên nhập hoặc thiết bị mất kết nối. Tôi không đặt ngưỡng quá chặt (5%) vì dữ liệu quan sát đã cho thấy 15.3% là baseline hiện tại, khả năng cao do đặc thù thiết bị của một vendor. Ngưỡng 10% được chọn để cảnh báo nếu tình trạng này lan rộng thêm, nhưng không tạo alert ồ ạt ngay lập tức."
 }
 ```
+
+### Ví dụ 5 — CROSS_FIELD_COMPARISON cho thứ tự thời gian liên cột
+
+```json
+{
+  "column": "tpep_pickup_datetime",
+  "rule_type": "CROSS_FIELD_COMPARISON",
+  "parameters": {
+    "target_column": "tpep_dropoff_datetime",
+    "operator": "<="
+  },
+  "severity": "CRITICAL",
+  "dimension": "CONSISTENCY",
+  "rule_description": "Thời điểm đón khách (tpep_pickup_datetime) phải xảy ra trước hoặc cùng lúc với thời điểm trả khách (tpep_dropoff_datetime).",
+  "ai_reasoning": "Digest chỉ ra signal datetime_order giữa tpep_pickup_datetime và tpep_dropoff_datetime với 0% vi phạm. Về mặt nghiệp vụ taxi, hành khách luôn được đón trước khi trả, do đó tpep_pickup_datetime phải nhỏ hơn hoặc bằng tpep_dropoff_datetime."
+}
+```
 """
 
 _RULE_PROPOSER_USER = """\
@@ -184,3 +203,55 @@ rule_proposer_prompt = ChatPromptTemplate.from_messages(
         ("user", _RULE_PROPOSER_USER),
     ]
 )
+
+
+# ---------------------------------------------------------------------------
+# SQL Repair Prompt (Agentic Repair Loop)
+# ---------------------------------------------------------------------------
+# Input variables: table_name, schema_info, rules_json, error_sql, db_error
+# ---------------------------------------------------------------------------
+
+_SQL_REPAIR_SYSTEM = """\
+Bạn là một chuyên gia cơ sở dữ liệu SQL (PostgreSQL & SQLite). \
+Nhiệm vụ của bạn là sửa một câu lệnh SQL bị lỗi cú pháp hoặc ngữ nghĩa được báo cáo bởi công cụ cơ sở dữ liệu.
+
+Quy tắc BẮT BUỘC:
+1. CHỈ TRẢ VỀ CÂU LỆNH SELECT. Tuyệt đối không sinh DDL/DML (UPDATE, DELETE, INSERT, DROP, ALTER, v.v.).
+2. Đảm bảo giữ nguyên các bind parameters có dạng `:param_name` thay vì điền cứng giá trị.
+3. Không làm thay đổi logic kiểm tra dữ liệu của các rules đã định nghĩa.
+4. Trả về DUY NHẤT câu lệnh SQL đã sửa trong một khối mã markdown: ```sql ... ```. Không giải thích dông dài.
+"""
+
+_SQL_REPAIR_USER = """\
+Bảng mục tiêu: `{table_name}`
+
+Schema cột hiện tại của bảng:
+```json
+{schema_info}
+```
+
+Các quy tắc (rules) được kiểm thử trong câu lệnh này:
+```json
+{rules_json}
+```
+
+Câu lệnh SQL bị lỗi:
+```sql
+{error_sql}
+```
+
+Thông báo lỗi chi tiết từ cơ sở dữ liệu:
+```
+{db_error}
+```
+
+Hãy phân tích nguyên nhân lỗi (ví dụ: sai tên cột, sai hàm regex, sai cú pháp CASE WHEN, thừa/thiếu dấu ngoặc) và trả về câu lệnh SQL đã được sửa hoàn chỉnh.
+"""
+
+sql_repair_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", _SQL_REPAIR_SYSTEM),
+        ("user", _SQL_REPAIR_USER),
+    ]
+)
+

@@ -29,3 +29,10 @@ class AgentState(TypedDict, total=False):
     rule_run_id: str             # batch key dùng để lọc Rule Review Screen
     dataset_profile: dict        # raw profile từ raw_profiler_node
 
+    # Run 2: Test Execution state fields
+    test_run_id: str             # ID của phiên chạy test (Run 2)
+    generated_tests: list        # Danh sách test queries được render và validated
+    test_results: list           # Danh sách kết quả thực thi từng rule
+    test_generation_errors: list # Danh sách lỗi phát sinh trong quá trình sinh/sửa/chạy test
+
+
