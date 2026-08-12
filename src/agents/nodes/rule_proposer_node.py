@@ -58,8 +58,16 @@ def _build_coverage_requirements(table_digest: dict) -> list[dict]:
     đại diện. Đây không phải rule output và không tự đặt threshold thay cho LLM.
     """
     requirements: list[dict] = []
+    digest_columns = table_digest.get("columns") or []
+    available_columns = {
+        column.get("name")
+        for column in digest_columns
+        if isinstance(column, dict) and column.get("name")
+    }
 
-    for column in table_digest.get("columns", []):
+    for column in digest_columns:
+        if not isinstance(column, dict):
+            continue
         name = column.get("name")
         if not name:
             continue
@@ -129,15 +137,47 @@ def _build_coverage_requirements(table_digest: dict) -> list[dict]:
                 "evidence": {"length_stats": column.get("length_stats")},
             })
 
-    for hint in table_digest.get("cross_column_hints", []):
-        columns = hint.get("columns", [])
-        if len(columns) >= 2:
-            requirements.append({
-                "column": columns[0],
-                "rule_type": "CROSS_FIELD_COMPARISON",
-                "target_column": columns[1],
-                "evidence": hint,
-            })
+    cross_field_operators = {
+        "datetime_order": "<=",
+    }
+    for hint in table_digest.get("cross_column_hints") or []:
+        if not isinstance(hint, dict):
+            continue
+
+        columns = hint.get("columns")
+        if not isinstance(columns, list) or len(columns) < 2:
+            continue
+
+        source_column, target_column = columns[0], columns[1]
+        if (
+            not isinstance(source_column, str)
+            or not isinstance(target_column, str)
+            or source_column not in available_columns
+            or target_column not in available_columns
+        ):
+            logger.warning(
+                "Bỏ qua cross-column hint có cột không hợp lệ: %s",
+                hint,
+            )
+            continue
+
+        operator = cross_field_operators.get(hint.get("type"))
+        if operator is None:
+            logger.warning(
+                "Bỏ qua cross-column hint chưa hỗ trợ type=%r",
+                hint.get("type"),
+            )
+            continue
+
+        requirements.append({
+            "column": source_column,
+            "rule_type": "CROSS_FIELD_COMPARISON",
+            "parameters": {
+                "target_column": target_column,
+                "operator": operator,
+            },
+            "evidence": hint,
+        })
 
     requirements.append({
         "column": None,
