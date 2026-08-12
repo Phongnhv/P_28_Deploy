@@ -1,31 +1,14 @@
 #!/usr/bin/env python3
 """
 Antigravity IDE log scanner — extracts the exact user-typed prompts from
-local Antigravity conversation transcripts.
+local Antigravity conversation databases and transcripts.
 
-Source of truth:
-    ~/.gemini/antigravity-ide/brain/<conv_id>/.system_generated/logs/transcript.jsonl
-    (with fallback to the legacy ~/.gemini/antigravity/brain/... layout)
-
-Each transcript line is a JSON object. We emit one log entry per line where
-`type == "USER_INPUT"` AND `source == "USER_EXPLICIT"`. The text inside
-<USER_REQUEST>...</USER_REQUEST> is the exact prompt the student typed
-(auxiliary <ADDITIONAL_METADATA> and <USER_SETTINGS_CHANGE> blocks are
-stripped).
-
-Why not other sources we considered?
-  - ~/.gemini/antigravity-ide/conversations/<conv>.pb is encrypted.
-  - brain/<conv>/task.md / walkthrough.md are AI-generated artifacts, not the
-    user's prompt.
-  - ~/.gemini/tmp/<slug>/chats/session-*.json is the Gemini CLI, not the
-    Antigravity IDE.
-
-Conversation → repo mapping
----------------------------
-The brain folder has no .project_root file. We map a conv to the current repo
-by scanning its transcript for tool-call `Cwd` values. A conv counts as
-belonging to this repo when one of its Cwd values either equals, is an
-ancestor of, or is a descendant of the current repo root.
+Sources:
+  1. Primary (Antigravity IDE / SQLite):
+     ~/.gemini/antigravity-ide/conversations/<conv_id>.db
+     (and fallback to ~/.gemini/antigravity/conversations/<conv_id>.db)
+  2. Legacy / Fallback (Plaintext Transcripts):
+     ~/.gemini/antigravity-ide/brain/<conv_id>/.system_generated/logs/transcript.jsonl
 
 Usage:
   python scripts/log_antigravity.py --auto            # default: last 24h
@@ -36,12 +19,14 @@ Usage:
 
 Env overrides:
   ANTIGRAVITY_BRAIN_DIR  point at a different brain/ directory
+  ANTIGRAVITY_CONV_DIR   point at a different conversations/ directory
   AI_LOG_DIR             where session.jsonl is written (default: .ai-log)
 """
 import argparse
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 from datetime import datetime, timezone, timedelta
@@ -58,10 +43,14 @@ if sys.platform == "win32":
 VN_TZ = timezone(timedelta(hours=7))
 GEMINI_HOME = Path.home() / ".gemini"
 
-# Antigravity has shipped under two folder names; prefer the newer IDE one.
 BRAIN_CANDIDATES = (
     GEMINI_HOME / "antigravity-ide" / "brain",
     GEMINI_HOME / "antigravity" / "brain",
+)
+
+CONV_CANDIDATES = (
+    GEMINI_HOME / "antigravity-ide" / "conversations",
+    GEMINI_HOME / "antigravity" / "conversations",
 )
 
 USER_REQUEST_RE = re.compile(r"<USER_REQUEST>(.*?)</USER_REQUEST>", re.DOTALL)
@@ -82,10 +71,6 @@ def git(cmd: str) -> str:
         return ""
 
 
-# ---------------------------------------------------------------------------
-# Locating brain/
-# ---------------------------------------------------------------------------
-
 def get_brain_dirs() -> list[Path]:
     """Brain directories to scan, newest layout first."""
     env = os.environ.get("ANTIGRAVITY_BRAIN_DIR")
@@ -93,6 +78,15 @@ def get_brain_dirs() -> list[Path]:
         p = Path(env)
         return [p] if p.exists() else []
     return [p for p in BRAIN_CANDIDATES if p.exists()]
+
+
+def get_conv_dirs() -> list[Path]:
+    """Conversations directories containing SQLite .db files."""
+    env = os.environ.get("ANTIGRAVITY_CONV_DIR")
+    if env:
+        p = Path(env)
+        return [p] if p.exists() else []
+    return [p for p in CONV_CANDIDATES if p.exists()]
 
 
 # ---------------------------------------------------------------------------
@@ -160,12 +154,73 @@ def _conv_matches_repo(cwds: set[str], repo_root_n: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Prompt extraction
+# Protobuf / SQLite decoding helpers
 # ---------------------------------------------------------------------------
 
+def decode_varint(data: bytes, offset: int = 0) -> tuple[int, int]:
+    res = 0
+    shift = 0
+    while offset < len(data):
+        b = data[offset]
+        offset += 1
+        res |= (b & 0x7F) << shift
+        if not (b & 0x80):
+            break
+        shift += 7
+    return res, offset
+
+
+def extract_timestamp_from_meta(meta: bytes | None) -> str:
+    if not meta:
+        return ""
+    idx = meta.find(b"\x08")
+    while idx != -1 and idx + 5 <= len(meta):
+        try:
+            val, _ = decode_varint(meta, idx + 1)
+            if 1700000000 < val < 2500000000:
+                dt = datetime.fromtimestamp(val, timezone.utc)
+                return dt.isoformat()
+        except Exception:
+            pass
+        idx = meta.find(b"\x08", idx + 1)
+    return ""
+
+
+def extract_prompt_from_payload(payload: bytes) -> str:
+    if not payload:
+        return ""
+    idx = payload.find(b"\x9a\x01")
+    if idx != -1:
+        try:
+            sub_len, sub_start = decode_varint(payload, idx + 2)
+            sub_bytes = payload[sub_start : sub_start + sub_len]
+            if sub_bytes.startswith(b"\x12"):
+                text_len, text_start = decode_varint(sub_bytes, 1)
+                prompt_bytes = sub_bytes[text_start : text_start + text_len]
+                text = prompt_bytes.decode("utf-8")
+                m = USER_REQUEST_RE.search(text)
+                if m:
+                    return m.group(1).strip()
+                cleaned = AUX_BLOCK_RE.sub("", text).strip()
+                if cleaned:
+                    return cleaned
+        except Exception:
+            pass
+
+    try:
+        raw_text = payload.decode("utf-8", errors="ignore")
+        m = USER_REQUEST_RE.search(raw_text)
+        if m:
+            return m.group(1).strip()
+        cleaned = AUX_BLOCK_RE.sub("", raw_text).strip()
+        cleaned = re.sub(r"^[\x00-\x1f]+", "", cleaned).strip()
+        return cleaned
+    except Exception:
+        return ""
+
+
 def extract_user_prompt(content: str) -> str:
-    """Pull the text between <USER_REQUEST>...</USER_REQUEST>. Fall back to
-    stripping known auxiliary blocks if no wrapper is present."""
+    """Pull the text between <USER_REQUEST>...</USER_REQUEST>."""
     if not isinstance(content, str):
         return ""
     m = USER_REQUEST_RE.search(content)
@@ -174,10 +229,6 @@ def extract_user_prompt(content: str) -> str:
     cleaned = AUX_BLOCK_RE.sub("", content)
     return cleaned.strip()
 
-
-# ---------------------------------------------------------------------------
-# Reading existing log to avoid duplicates
-# ---------------------------------------------------------------------------
 
 def get_logged_entry_ids(log_file: Path) -> set[str]:
     logged: set[str] = set()
@@ -199,63 +250,160 @@ def get_logged_entry_ids(log_file: Path) -> set[str]:
 
 
 # ---------------------------------------------------------------------------
-# Iterating user inputs
+# Scanning SQLite Conversations
 # ---------------------------------------------------------------------------
 
-def iter_user_inputs(brain_dirs: list[Path], cutoff: datetime | None,
-                     only_conv: str | None, repo_root_n: str):
-    """Yield user-input dicts from every matching conversation transcript."""
-    for brain in brain_dirs:
-        for conv_dir in sorted(brain.iterdir()):
-            if not conv_dir.is_dir():
+def iter_sqlite_inputs(conv_dirs: list[Path], cutoff: datetime | None,
+                       only_conv: str | None, repo_root_n: str):
+    """Yield user-input dicts from SQLite conversation databases."""
+    seen_convs = set()
+    for cdir in conv_dirs:
+        for db_file in sorted(cdir.glob("*.db")):
+            conv_id = db_file.stem
+            if only_conv and conv_id != only_conv:
                 continue
-            if only_conv and conv_dir.name != only_conv:
+            if conv_id in seen_convs:
                 continue
-            transcript = (
-                conv_dir / ".system_generated" / "logs" / "transcript.jsonl"
-            )
-            if not transcript.exists() or transcript.stat().st_size == 0:
-                continue
+            seen_convs.add(conv_id)
 
-            cwds = _conv_cwds(transcript)
-            # If we have a repo root, skip convs that never touched it.
-            if repo_root_n and not _conv_matches_repo(cwds, repo_root_n):
-                continue
+            try:
+                uri = f"file:{db_file.as_posix()}?mode=ro"
+                conn = sqlite3.connect(uri, uri=True, timeout=3.0)
+            except Exception:
+                try:
+                    conn = sqlite3.connect(str(db_file), timeout=3.0)
+                except Exception:
+                    continue
 
-            with open(transcript, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
+            try:
+                cursor = conn.cursor()
+
+                # Gating by repo root
+                if repo_root_n:
+                    matched = False
                     try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if (entry.get("type") != "USER_INPUT"
-                            or entry.get("source") != "USER_EXPLICIT"):
+                        cursor.execute("SELECT data FROM trajectory_metadata_blob LIMIT 5")
+                        for (blob,) in cursor.fetchall():
+                            if blob:
+                                blob_str = _normalize(blob.decode("utf-8", errors="ignore"))
+                                if repo_root_n in blob_str:
+                                    matched = True
+                                    break
+                    except Exception:
+                        pass
+
+                    if not matched:
+                        try:
+                            cursor.execute("SELECT step_payload FROM steps LIMIT 15")
+                            for (payload,) in cursor.fetchall():
+                                if payload:
+                                    p_str = _normalize(payload.decode("utf-8", errors="ignore"))
+                                    if repo_root_n in p_str:
+                                        matched = True
+                                        break
+                        except Exception:
+                            pass
+
+                    if not matched:
                         continue
 
-                    ts = entry.get("created_at") or ""
+                # Query step_type 14 (USER_INPUT)
+                cursor.execute(
+                    "SELECT idx, step_type, metadata, step_payload "
+                    "FROM steps WHERE step_type = '14' OR step_type = 14 "
+                    "ORDER BY CAST(idx AS INTEGER)"
+                )
+                for idx, step_type, meta, payload in cursor.fetchall():
+                    if not payload:
+                        continue
+                    ts = extract_timestamp_from_meta(meta)
                     if cutoff and ts:
                         try:
-                            ts_dt = datetime.fromisoformat(
-                                ts.replace("Z", "+00:00")
-                            )
+                            ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                             if ts_dt < cutoff:
                                 continue
                         except ValueError:
                             pass
 
-                    text = extract_user_prompt(entry.get("content", ""))
-                    if len(text) < 2:
+                    prompt_text = extract_prompt_from_payload(payload)
+                    if len(prompt_text) < 2:
                         continue
 
                     yield {
-                        "conv_id": conv_dir.name,
-                        "step_index": int(entry.get("step_index", 0)),
+                        "conv_id": conv_id,
+                        "step_index": int(idx),
                         "timestamp": ts,
-                        "text": text,
+                        "text": prompt_text,
                     }
+            finally:
+                conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Iterating user inputs (SQLite primary + JSONL fallback)
+# ---------------------------------------------------------------------------
+
+def iter_user_inputs(brain_dirs: list[Path], conv_dirs: list[Path],
+                      cutoff: datetime | None, only_conv: str | None,
+                      repo_root_n: str):
+    """Yield user inputs from SQLite databases and/or transcript JSONLs."""
+    yielded_any = False
+    for item in iter_sqlite_inputs(conv_dirs, cutoff, only_conv, repo_root_n):
+        yielded_any = True
+        yield item
+
+    # Fallback to transcript.jsonl files if SQLite returned nothing
+    if not yielded_any:
+        for brain in brain_dirs:
+            for conv_dir in sorted(brain.iterdir()):
+                if not conv_dir.is_dir():
+                    continue
+                if only_conv and conv_dir.name != only_conv:
+                    continue
+                transcript = (
+                    conv_dir / ".system_generated" / "logs" / "transcript.jsonl"
+                )
+                if not transcript.exists() or transcript.stat().st_size == 0:
+                    continue
+
+                cwds = _conv_cwds(transcript)
+                if repo_root_n and not _conv_matches_repo(cwds, repo_root_n):
+                    continue
+
+                with open(transcript, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            entry = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if (entry.get("type") != "USER_INPUT"
+                                or entry.get("source") != "USER_EXPLICIT"):
+                            continue
+
+                        ts = entry.get("created_at") or ""
+                        if cutoff and ts:
+                            try:
+                                ts_dt = datetime.fromisoformat(
+                                    ts.replace("Z", "+00:00")
+                                )
+                                if ts_dt < cutoff:
+                                    continue
+                            except ValueError:
+                                pass
+
+                        text = extract_user_prompt(entry.get("content", ""))
+                        if len(text) < 2:
+                            continue
+
+                        yield {
+                            "conv_id": conv_dir.name,
+                            "step_index": int(entry.get("step_index", 0)),
+                            "timestamp": ts,
+                            "text": text,
+                        }
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +413,7 @@ def iter_user_inputs(brain_dirs: list[Path], cutoff: datetime | None,
 def build_entry(msg: dict, repo: str, branch: str, commit: str,
                 student: str) -> dict:
     ts = msg["timestamp"]
-    if ts.endswith("Z"):
+    if ts.endswith("Z") or "+00:00" in ts:
         try:
             ts = (
                 datetime.fromisoformat(ts.replace("Z", "+00:00"))
@@ -313,15 +461,14 @@ def main() -> None:
     parser.add_argument("model", nargs="?", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
-    # Legacy manual mode: `log_antigravity.py "my summary" gemini`
     if args.summary and not (args.auto or args.conv_id or args.all):
         _legacy_log(args.summary, args.model or "gemini")
         return
 
     brain_dirs = get_brain_dirs()
-    if not brain_dirs:
-        print("[antigravity-log] No Antigravity brain/ directory found "
-              f"(checked {', '.join(str(p) for p in BRAIN_CANDIDATES)}).",
+    conv_dirs = get_conv_dirs()
+    if not brain_dirs and not conv_dirs:
+        print("[antigravity-log] No Antigravity brain/ or conversations/ directory found.",
               file=sys.stderr)
         sys.exit(0)
 
@@ -343,7 +490,7 @@ def main() -> None:
         "USERNAME", os.environ.get("USER", "unknown"))
 
     new_entries: list[dict] = []
-    for msg in iter_user_inputs(brain_dirs, cutoff, args.conv_id, repo_root_n):
+    for msg in iter_user_inputs(brain_dirs, conv_dirs, cutoff, args.conv_id, repo_root_n):
         entry = build_entry(msg, repo or Path.cwd().name, branch, commit,
                             student)
         if entry["entry_id"] in logged_ids:
@@ -373,11 +520,6 @@ def main() -> None:
     print(f"[antigravity-log] Logged {len(new_entries)} prompt(s) from "
           f"Antigravity IDE.", file=sys.stderr)
 
-
-# ---------------------------------------------------------------------------
-# Legacy manual mode (kept for back-compat with log_manual.py callers and the
-# old .agents/rules instructions). New rules tell the AI not to call this.
-# ---------------------------------------------------------------------------
 
 def _legacy_log(summary: str, model: str) -> None:
     ts = datetime.now(VN_TZ).isoformat()
