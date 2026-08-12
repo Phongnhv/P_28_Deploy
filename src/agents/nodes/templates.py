@@ -94,6 +94,10 @@ và Từ điển dữ liệu (Data Dictionary) được cung cấp.
    sau đó mô tả điều kiện một cách có ngữ cảnh. \
    VD: "Cước phí cơ bản (fare_amount) không được mang giá trị âm, vì đây là tiền tính theo đồng hồ chứ không phải hoàn tiền." \
    KHÔNG viết kiểu template máy móc như "Cột X không được để trống." hay "Cột X phải có giá trị từ A đến B."
+10. **Độ phủ bắt buộc:** Không chỉ trả về vài rule đại diện. Hãy duyệt hết checklist evidence \
+    được cung cấp trong user message và tạo rule cho từng ứng viên có đủ bằng chứng. \
+    Một cột có thể có nhiều rule khác loại; chỉ loại ứng viên khi thực sự mâu thuẫn với ý nghĩa nghiệp vụ. \
+    Với bảng dữ liệu giàu evidence, mục tiêu thông thường là 1–3 rule phù hợp trên mỗi cột, không có giới hạn 8 rule.
 
 **⚠️ NHẮC LẠI:** Trường `rule_type` CHỈ được nhận 9 giá trị sau, không hơn không kém: \
 NOT_NULL, UNIQUE, RANGE, ACCEPTED_VALUES, REGEX_FORMAT, FRESHNESS, ROW_COUNT, NULL_RATE, CROSS_FIELD_COMPARISON.
@@ -187,6 +191,15 @@ _RULE_PROPOSER_USER = """\
 {table_digest}
 ```
 
+## Checklist rule ứng viên sinh tự động từ evidence
+```json
+{coverage_requirements}
+```
+
+Checklist trên là danh sách cần đánh giá đầy đủ, không phải ví dụ. Không được dừng sau vài rule đầu. \
+Mỗi rule tạo ra phải giữ nguyên đúng tên `column` trong digest và phải dẫn chứng evidence tương ứng trong `ai_reasoning`. \
+Không tạo rule ngoài checklist trừ khi Data Dictionary cung cấp bằng chứng nghiệp vụ rõ ràng.
+
 {few_shot_examples}
 
 Hãy trả về JSON structured output theo schema TableRuleProposal. \
@@ -203,55 +216,3 @@ rule_proposer_prompt = ChatPromptTemplate.from_messages(
         ("user", _RULE_PROPOSER_USER),
     ]
 )
-
-
-# ---------------------------------------------------------------------------
-# SQL Repair Prompt (Agentic Repair Loop)
-# ---------------------------------------------------------------------------
-# Input variables: table_name, schema_info, rules_json, error_sql, db_error
-# ---------------------------------------------------------------------------
-
-_SQL_REPAIR_SYSTEM = """\
-Bạn là một chuyên gia cơ sở dữ liệu SQL (PostgreSQL & SQLite). \
-Nhiệm vụ của bạn là sửa một câu lệnh SQL bị lỗi cú pháp hoặc ngữ nghĩa được báo cáo bởi công cụ cơ sở dữ liệu.
-
-Quy tắc BẮT BUỘC:
-1. CHỈ TRẢ VỀ CÂU LỆNH SELECT. Tuyệt đối không sinh DDL/DML (UPDATE, DELETE, INSERT, DROP, ALTER, v.v.).
-2. Đảm bảo giữ nguyên các bind parameters có dạng `:param_name` thay vì điền cứng giá trị.
-3. Không làm thay đổi logic kiểm tra dữ liệu của các rules đã định nghĩa.
-4. Trả về DUY NHẤT câu lệnh SQL đã sửa trong một khối mã markdown: ```sql ... ```. Không giải thích dông dài.
-"""
-
-_SQL_REPAIR_USER = """\
-Bảng mục tiêu: `{table_name}`
-
-Schema cột hiện tại của bảng:
-```json
-{schema_info}
-```
-
-Các quy tắc (rules) được kiểm thử trong câu lệnh này:
-```json
-{rules_json}
-```
-
-Câu lệnh SQL bị lỗi:
-```sql
-{error_sql}
-```
-
-Thông báo lỗi chi tiết từ cơ sở dữ liệu:
-```
-{db_error}
-```
-
-Hãy phân tích nguyên nhân lỗi (ví dụ: sai tên cột, sai hàm regex, sai cú pháp CASE WHEN, thừa/thiếu dấu ngoặc) và trả về câu lệnh SQL đã được sửa hoàn chỉnh.
-"""
-
-sql_repair_prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", _SQL_REPAIR_SYSTEM),
-        ("user", _SQL_REPAIR_USER),
-    ]
-)
-

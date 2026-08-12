@@ -51,6 +51,102 @@ số lượng hành khách, khoảng cách di chuyển, các khoản cước ph�
 DATA_DICTIONARY_PATH = Path(__file__).resolve().parents[3] / "data" / "data_dictionary_trip_records_yellow.json"
 
 
+def _build_coverage_requirements(table_digest: dict) -> list[dict]:
+    """Sinh checklist rule ứng viên hoàn toàn từ evidence trong digest.
+
+    Checklist hướng LLM phủ hết tín hiệu có căn cứ thay vì chỉ trả một nhóm rule
+    đại diện. Đây không phải rule output và không tự đặt threshold thay cho LLM.
+    """
+    requirements: list[dict] = []
+
+    for column in table_digest.get("columns", []):
+        name = column.get("name")
+        if not name:
+            continue
+
+        role = column.get("role")
+        signals = set(column.get("signals", []))
+        null_pct = column.get("null_pct", 0.0) or 0.0
+
+        if "no_nulls" in signals and (
+            role in {"id", "datetime"}
+            or name in {"vendor_id", "rate_code_id", "payment_type"}
+        ):
+            requirements.append({
+                "column": name,
+                "rule_type": "NOT_NULL",
+                "evidence": ["no_nulls", f"role={role}"],
+            })
+
+        if signals.intersection({"has_pk_constraint", "has_unique_constraint", "unique_full_table"}):
+            requirements.append({
+                "column": name,
+                "rule_type": "UNIQUE",
+                "evidence": sorted(signals.intersection({
+                    "has_pk_constraint", "has_unique_constraint", "unique_full_table"
+                })),
+            })
+
+        if role == "numeric" and signals.intersection({
+            "has_extreme_outliers", "has_negative_values", "has_zero_values"
+        }):
+            requirements.append({
+                "column": name,
+                "rule_type": "RANGE",
+                "evidence": sorted(signals.intersection({
+                    "has_extreme_outliers", "has_negative_values", "has_zero_values"
+                })),
+            })
+
+        values = [value for value in column.get("values", []) if value is not None]
+        if role == "categorical" and values:
+            requirements.append({
+                "column": name,
+                "rule_type": "ACCEPTED_VALUES",
+                "evidence": {"values": values},
+            })
+
+        if role == "datetime":
+            requirements.append({
+                "column": name,
+                "rule_type": "FRESHNESS",
+                "evidence": {"range": column.get("range")},
+            })
+
+        if null_pct > 5.0 and name not in {
+            "congestion_surcharge", "airport_fee", "cbd_congestion_fee"
+        }:
+            requirements.append({
+                "column": name,
+                "rule_type": "NULL_RATE",
+                "evidence": {"null_pct": null_pct},
+            })
+
+        if "fixed_length" in signals:
+            requirements.append({
+                "column": name,
+                "rule_type": "REGEX_FORMAT",
+                "evidence": {"length_stats": column.get("length_stats")},
+            })
+
+    for hint in table_digest.get("cross_column_hints", []):
+        columns = hint.get("columns", [])
+        if len(columns) >= 2:
+            requirements.append({
+                "column": columns[0],
+                "rule_type": "CROSS_FIELD_COMPARISON",
+                "target_column": columns[1],
+                "evidence": hint,
+            })
+
+    requirements.append({
+        "column": None,
+        "rule_type": "ROW_COUNT",
+        "evidence": {"rows": table_digest.get("rows", 0)},
+    })
+    return requirements
+
+
 def _load_data_dictionary() -> str:
     """Đọc data dictionary JSON từ file data_dictionary_trip_records_yellow.json."""
     target_path = DATA_DICTIONARY_PATH
@@ -100,6 +196,10 @@ async def _propose_for_table(
                     domain_context=DOMAIN_CONTEXT,
                     data_dictionary=_load_data_dictionary(),
                     historical_rules=json.dumps(historical, ensure_ascii=False),
+                    coverage_requirements=json.dumps(
+                        _build_coverage_requirements(table_digest),
+                        ensure_ascii=False,
+                    ),
                     few_shot_examples=_RULE_PROPOSER_FEW_SHOT,
                 )
                 result: TableRuleProposal = await structured_llm.ainvoke(messages)
