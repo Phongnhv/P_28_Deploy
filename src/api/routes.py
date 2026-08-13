@@ -1,33 +1,32 @@
 import json
 import logging
 import uuid
-from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, Response
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 
-from src.models.database import (
-    AuditEventModel,
-    ColumnProfileModel,
-    DatasetModel,
-    DqResultModel,
-    DqRunModel,
-    JobModel,
-    ProfileModel,
-    RuleProposalModel,
-    RuleVersionModel,
-    SessionModel,
+from src.agents.graph import agent
+from src.models.schemas import (
+    ActiveRuleResponse,
+    ActiveRulesListResponse,
+    ApprovedRulesResponse,
+    BulkReviewRequest,
+    BulkReviewResponse,
+    ChatRequest,
+    ChatResponse,
+    ExecuteActiveTestsRequest,
+    ExecuteTestsResponse,
+    ProposeRequest,
+    ProposeResponse,
+    PublishRulesResponse,
+    ReviewSummaryResponse,
+    RuleReviewResponse,
+    RuleUpdateRequest,
+    RunStatusResponse,
+    TestResultResponse,
+    TestResultsListResponse,
+    TestRunStatusResponse,
 )
-from src.services.job_runner import add_audit_event, run_dq_checks, run_ingest_profile, run_propose_rules
-from src.services.rule_store import get_engine
-from src.services.session_service import (
-    SESSION_COOKIE_NAME,
-    create_user_session,
-    enforce_role,
-    get_current_session,
-    verify_csrf,
-)
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -836,4 +835,210 @@ def compatibility_trigger_job(
     elif request.type == "PROPOSE_RULES":
         background_tasks.add_task(run_propose_rules, job_id, "dataset-nyc-yellow-taxi-50k", None, "SYSTEM")
 
-    return {"job_id": job.id, "status": job.status, "message": "Job accepted"}
+async def _run_execution_pipeline(
+    test_run_id: str,
+    proposal_run_id: str,
+    dataset_id: str,
+) -> None:
+    """Background task: chạy Run 2 (Test Execution Graph) và cập nhật status vào DB."""
+    from src.agents.graph import build_execution_graph
+    from src.services.rule_store import get_approved_rules as store_get_approved
+    from src.services.rule_store import update_test_run_status
+
+    try:
+        update_test_run_status(test_run_id, "RUNNING")
+        approved_rules = store_get_approved(proposal_run_id)
+
+        execution_graph = build_execution_graph()
+        state = {
+            "test_run_id": test_run_id,
+            "rule_run_id": proposal_run_id,
+            "dataset_id": dataset_id,
+            "approved_rules": approved_rules,
+        }
+        await execution_graph.ainvoke(state)
+        logger.info("Run 2 hoàn thành: test_run_id=%s", test_run_id)
+
+    except Exception as exc:
+        logger.error("Run 2 thất bại test_run_id=%s: %s", test_run_id, exc, exc_info=True)
+        update_test_run_status(test_run_id, "FAILED", error=str(exc))
+
+
+@dq_router.post(
+    "/runs/{run_id}/generate-tests",
+    response_model=ExecuteTestsResponse,
+)
+@dq_router.post(
+    "/runs/{run_id}/execute-tests",
+    response_model=ExecuteTestsResponse,
+)
+async def execute_tests(
+    run_id: str,
+    background_tasks: BackgroundTasks,
+) -> ExecuteTestsResponse:
+    """Kích hoạt Run 2: load approved rules → test_generator → validate → repair → run → anomaly.
+
+    Trả về test_run_id ngay lập tức. Client poll GET /dq/test-runs/{test_run_id}
+    để kiểm tra trạng thái và kết quả.
+    """
+    from src.services.rule_store import create_test_run, get_run
+
+    proposal_run = await asyncio.to_thread(get_run, run_id)
+    if not proposal_run:
+        raise HTTPException(status_code=404, detail=f"proposal run_id={run_id!r} không tồn tại")
+
+    dataset_id = proposal_run.get("dataset_id", "unknown")
+    test_run_id = uuid.uuid4().hex
+    create_test_run(test_run_id, dataset_id)
+
+    background_tasks.add_task(
+        _run_execution_pipeline,
+        test_run_id=test_run_id,
+        proposal_run_id=run_id,
+        dataset_id=dataset_id,
+    )
+    return ExecuteTestsResponse(test_run_id=test_run_id, status="QUEUED")
+
+
+@dq_router.get(
+    "/test-runs/{test_run_id}",
+    response_model=TestRunStatusResponse,
+)
+async def get_test_run_status(test_run_id: str) -> TestRunStatusResponse:
+    """Poll trạng thái của một test run."""
+    from src.services.rule_store import get_test_run as store_get_test_run
+
+    run = await asyncio.to_thread(store_get_test_run, test_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"test_run_id={test_run_id!r} không tồn tại")
+    return TestRunStatusResponse(**run)
+
+
+@dq_router.get(
+    "/test-runs/{test_run_id}/results",
+    response_model=TestResultsListResponse,
+)
+async def get_test_run_results(
+    test_run_id: str,
+    status: str | None = None,
+) -> TestResultsListResponse:
+    """Lấy danh sách kết quả kiểm thử của từng rule trong test run."""
+    from src.services.rule_store import (
+        get_test_results as store_get_results,
+        get_test_run as store_get_test_run,
+    )
+
+    run = await asyncio.to_thread(store_get_test_run, test_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"test_run_id={test_run_id!r} không tồn tại")
+
+    rows = await asyncio.to_thread(store_get_results, test_run_id, status)
+    return TestResultsListResponse(
+        test_run_id=test_run_id,
+        count=len(rows),
+        results=[TestResultResponse(**r) for r in rows],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Publish & Active Rules Registry Endpoints
+# ---------------------------------------------------------------------------
+
+@dq_router.post(
+    "/runs/{run_id}/publish",
+    response_model=PublishRulesResponse,
+)
+async def publish_run_rules(run_id: str) -> PublishRulesResponse:
+    """Xuất bản (Publish/Merge) các rules đã APPROVED từ proposal run vào Active Ruleset chính thức."""
+    from src.services.rule_store import get_run, publish_approved_rules
+
+    proposal_run = await asyncio.to_thread(get_run, run_id)
+    if not proposal_run:
+        raise HTTPException(status_code=404, detail=f"proposal run_id={run_id!r} không tồn tại")
+
+    count = await asyncio.to_thread(publish_approved_rules, run_id)
+    return PublishRulesResponse(
+        run_id=run_id,
+        published_count=count,
+        message=f"Đã xuất bản thành công {count} rules vào Active Ruleset.",
+    )
+
+
+@dq_router.get(
+    "/active-rules",
+    response_model=ActiveRulesListResponse,
+)
+async def list_active_rules(
+    dataset_id: str | None = None,
+    table_name: str | None = None,
+) -> ActiveRulesListResponse:
+    """Lấy danh sách các rules đang hoạt động (Active Ruleset)."""
+    from src.services.rule_store import get_active_rules as store_get_active_rules
+
+    rules = await asyncio.to_thread(store_get_active_rules, dataset_id, table_name)
+    return ActiveRulesListResponse(
+        total_rules=len(rules),
+        rules=[ActiveRuleResponse(**r) for r in rules],
+    )
+
+
+@dq_router.patch(
+    "/active-rules/{rule_id}/deactivate",
+)
+async def deactivate_active_rule(rule_id: str) -> dict:
+    """Vô hiệu hoá một active rule."""
+    from src.services.rule_store import deactivate_rule as store_deactivate_rule
+
+    success = await asyncio.to_thread(store_deactivate_rule, rule_id)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"rule_id={rule_id!r} không tồn tại hoặc đã bị vô hiệu hóa")
+    return {"message": f"Rule {rule_id} đã được chuyển sang INACTIVE.", "status": "INACTIVE"}
+
+
+@dq_router.post(
+    "/execute-active-tests",
+    response_model=ExecuteTestsResponse,
+)
+async def execute_active_tests(
+    request: ExecuteActiveTestsRequest,
+    background_tasks: BackgroundTasks,
+) -> ExecuteTestsResponse:
+    """Kích hoạt chạy test trên bộ Active Ruleset chính thức."""
+    from src.services.rule_store import create_test_run, get_active_rules
+
+    test_run_id = uuid.uuid4().hex
+    dataset_id = request.dataset_id or "all"
+    create_test_run(test_run_id, dataset_id)
+
+    async def _run_active_execution(test_run_id: str, dataset_id: str, table_name: str | None) -> None:
+        from src.agents.graph import build_execution_graph
+        from src.services.rule_store import update_test_run_status
+
+        try:
+            update_test_run_status(test_run_id, "RUNNING")
+            active_rules = get_active_rules(
+                dataset_id=None if dataset_id == "all" else dataset_id,
+                table_name=table_name,
+            )
+
+            execution_graph = build_execution_graph()
+            state = {
+                "test_run_id": test_run_id,
+                "dataset_id": dataset_id,
+                "approved_rules": active_rules,
+            }
+            await execution_graph.ainvoke(state)
+            logger.info("Chạy test trên Active Ruleset hoàn thành: test_run_id=%s", test_run_id)
+        except Exception as exc:
+            logger.error("Chạy test trên Active Ruleset thất bại test_run_id=%s: %s", test_run_id, exc, exc_info=True)
+            update_test_run_status(test_run_id, "FAILED", error=str(exc))
+
+    background_tasks.add_task(
+        _run_active_execution,
+        test_run_id=test_run_id,
+        dataset_id=dataset_id,
+        table_name=request.table_name,
+    )
+    return ExecuteTestsResponse(test_run_id=test_run_id, status="QUEUED")
+
+
