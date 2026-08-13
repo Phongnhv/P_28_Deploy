@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import logging
 from enum import StrEnum
+from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,8 @@ class RuleStatus(StrEnum):
 class RuleParameters(BaseModel):
     """Closed param bag — chỉ điền các field liên quan đến rule_type."""
 
+    model_config = ConfigDict(extra="forbid")
+
     min: float | None = None
     max: float | None = None
     accepted_values: list[str] | None = None
@@ -65,7 +68,7 @@ class RuleParameters(BaseModel):
     max_null_pct: float | None = None
     min_row_count: int | None = None
     target_column: str | None = None
-    operator: str | None = None
+    operator: Literal["<=", "<", ">=", ">", "=", "==", "!=", "<>"] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +76,8 @@ class RuleParameters(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ProposedRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     column: str | None = Field(
         None,
         description="None cho rule cấp bảng (ROW_COUNT). Phải khớp tên cột trong digest.",
@@ -148,8 +153,12 @@ class ProposedRule(BaseModel):
 class TableRuleProposal(BaseModel):
     """Schema LLM trả về cho một bảng — one call per table."""
 
+    model_config = ConfigDict(extra="forbid")
+
     table: str = Field(..., description="Tên bảng trong database.")
     rules: list[ProposedRule] = Field(
         default_factory=list,
+        min_length=2,
+        max_length=5,
         description="Danh sách các rule đề xuất cho bảng này.",
     )
