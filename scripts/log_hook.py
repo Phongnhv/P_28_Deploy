@@ -67,7 +67,8 @@ def normalize(data: dict, tool: str) -> dict | None:
         if repo.endswith(".git"):
             repo = repo[:-4]
     if not repo:
-        repo = Path.cwd().name or "P-028"
+        toplevel = git("git rev-parse --show-toplevel")
+        repo = Path(toplevel).name if toplevel else "P-028"
 
     base = {
         "ts": ts,
