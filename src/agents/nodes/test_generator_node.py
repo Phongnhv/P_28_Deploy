@@ -11,18 +11,17 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-import json
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from src.agents.state import AgentState
 from src.config import get_settings
-from src.models.rule_schemas import RuleStatus, RuleType
+from src.models.rule_schemas import RuleType
 from src.services.rule_store import get_approved_rules, get_engine
-from pathlib import Path
-
-
 
 logger = logging.getLogger(__name__)
 
@@ -278,10 +277,13 @@ async def test_generator_node(state: AgentState) -> dict:
     )
 
     # Xuất trace file
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     try:
-        out_dir = Path("output/test_generator")
+        settings = get_settings()
+        base_dir = getattr(settings, "output_dir", None) or "./output"
+        out_dir = Path(base_dir) / "test_generator"
         out_dir.mkdir(parents=True, exist_ok=True)
-        dump_file = out_dir / f"debug_generated_tests_{run_id}.json"
+        dump_file = out_dir / f"debug_generated_tests_{timestamp}_{run_id}.json"
         dump_file.write_text(
             json.dumps(all_generated, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -306,10 +308,11 @@ async def main():
 
     Run: python -m src.agents.nodes.test_generator_node
     """
-    import asyncio
     import glob
-    from src.services.rule_store import get_active_rules, get_engine, init_db
+
     from sqlalchemy import text
+
+    from src.services.rule_store import get_active_rules, get_engine, init_db
 
     logging.basicConfig(
         level=logging.INFO,
@@ -335,9 +338,8 @@ async def main():
         engine = get_engine()
         with engine.connect() as conn:
             query = text("""
-                SELECT run_id, rule_id, dataset_id, table_name, column_name, rule_type, 
-                       parameters, edited_parameters, severity, dimension, rule_description, status
-                FROM proposed_rules 
+                SELECT run_id, rule_id, dataset_id, table_name, column_name, rule_type, parameters, edited_parameters, severity, dimension, rule_description, status
+                FROM proposed_rules
                 WHERE status IN ('APPROVED', 'MERGED')
                 ORDER BY created_at DESC;
             """)
@@ -377,7 +379,7 @@ async def main():
                 return
 
             latest_file = sorted(files, key=os.path.getmtime)[-1]
-            with open(latest_file, "r", encoding="utf-8") as f:
+            with open(latest_file, encoding="utf-8") as f:
                 raw_data = json.load(f)
 
             rules = raw_data.get("proposed_rules", []) if isinstance(raw_data, dict) else raw_data

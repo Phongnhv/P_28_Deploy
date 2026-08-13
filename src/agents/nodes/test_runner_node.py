@@ -10,11 +10,11 @@ Thu thập:
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+import json
 import logging
 import time
-import json
-from typing import Any
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import text
 
 from src.agents.state import AgentState
@@ -99,6 +99,8 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
                 "table_name": table_name,
                 "column": rule.get("column"),
                 "rule_type": rule.get("rule_type", ""),
+                "severity": rule.get("severity", "MEDIUM"),
+                "dimension": rule.get("dimension", "VALIDITY"),
                 "status": "ERROR",
                 "violation_count": 0,
                 "total_rows": 0,
@@ -118,11 +120,14 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
     start_t = time.perf_counter()
     try:
         with engine.connect() as conn:
-            res = conn.execute(text(sql), params)
+            stmt = text(sql)
+            if params:
+                stmt = stmt.bindparams(**params)
+            res = conn.execute(stmt)
             row = res.mappings().fetchone()
     except Exception as exc:
         duration_ms = (time.perf_counter() - start_t) * 1000
-        logger.error("Lỗi thực thi test SQL trên bảng %s: %s", table_name, exc)
+        logger.error("Lỗi thực thi SQL test query [%s]: %s", sql, exc)
         for meta in rules_meta:
             rule = meta.get("rule", {})
             results.append({
@@ -130,6 +135,8 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
                 "table_name": table_name,
                 "column": rule.get("column"),
                 "rule_type": rule.get("rule_type", ""),
+                "severity": rule.get("severity", "MEDIUM"),
+                "dimension": rule.get("dimension", "VALIDITY"),
                 "status": "ERROR",
                 "violation_count": 0,
                 "total_rows": 0,
@@ -176,6 +183,8 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
                 "table_name": table_name,
                 "column": rule.get("column"),
                 "rule_type": r_type,
+                "severity": rule.get("severity", "MEDIUM"),
+                "dimension": rule.get("dimension", "VALIDITY"),
                 "status": status,
                 "violation_count": v_count,
                 "total_rows": total_rows,
@@ -204,6 +213,8 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
             "table_name": table_name,
             "column": col,
             "rule_type": rule.get("rule_type", "UNIQUE"),
+            "severity": rule.get("severity", "CRITICAL"),
+            "dimension": rule.get("dimension", "UNIQUENESS"),
             "status": status,
             "violation_count": v_count,
             "total_rows": total_rows,
@@ -229,6 +240,8 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
             "table_name": table_name,
             "column": None,
             "rule_type": rule.get("rule_type", "ROW_COUNT"),
+            "severity": rule.get("severity", "HIGH"),
+            "dimension": rule.get("dimension", "COMPLETENESS"),
             "status": status,
             "violation_count": v_count,
             "total_rows": total_rows,
@@ -284,6 +297,8 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
             "table_name": table_name,
             "column": col,
             "rule_type": rule.get("rule_type", "FRESHNESS"),
+            "severity": rule.get("severity", "MEDIUM"),
+            "dimension": rule.get("dimension", "FRESHNESS"),
             "status": status,
             "violation_count": v_count,
             "total_rows": total_rows,
@@ -315,13 +330,18 @@ async def test_runner_node(state: AgentState) -> dict:
         all_results.extend(res_list)
 
     test_run_id = state.get("test_run_id") or state.get("rule_run_id") or "test_run"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Xuất trace file
     try:
         from pathlib import Path
-        out_dir = Path("output/test_runner")
+
+        from src.config import get_settings
+        settings = get_settings()
+        base_dir = getattr(settings, "output_dir", None) or "./output"
+        out_dir = Path(base_dir) / "test_runner"
         out_dir.mkdir(parents=True, exist_ok=True)
-        dump_file = out_dir / f"debug_test_results_{test_run_id}.json"
+        dump_file = out_dir / f"debug_test_results_{timestamp}_{test_run_id}.json"
         dump_file.write_text(
             json.dumps(all_results, ensure_ascii=False, indent=2, default=str),
             encoding="utf-8",
@@ -344,10 +364,9 @@ async def main():
 
     Run: python -m src.agents.nodes.test_runner_node
     """
-    import asyncio
     import glob
     import os
-    from pathlib import Path
+
     from src.services.rule_store import init_db
 
     logging.basicConfig(
@@ -378,7 +397,7 @@ async def main():
     latest_file = sorted(files, key=os.path.getmtime)[-1]
     print(f"📖 Đọc test queries từ: {latest_file}")
 
-    with open(latest_file, "r", encoding="utf-8") as f:
+    with open(latest_file, encoding="utf-8") as f:
         tests = json.load(f)
 
     valid_tests = [t for t in tests if t.get("valid", True)]

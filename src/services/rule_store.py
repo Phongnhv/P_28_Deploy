@@ -625,11 +625,11 @@ def save_test_results(test_run_id: str, results: list[dict]) -> int:
         session.query(TestResultModel).filter_by(test_run_id=test_run_id).delete()
 
         for res in results:
-            sample_fail = res.get("sample_failures")
-            if sample_fail is not None and not isinstance(sample_fail, str):
-                sample_fail_str = json.dumps(sample_fail, ensure_ascii=False)
+            row_samples = res.get("sample_failures")
+            if row_samples is not None and not isinstance(row_samples, str):
+                sample_fail_str = json.dumps(row_samples, default=str, ensure_ascii=False)
             else:
-                sample_fail_str = sample_fail
+                sample_fail_str = row_samples
 
             row = TestResultModel(
                 test_run_id=test_run_id,

@@ -271,3 +271,78 @@ sql_repair_prompt = ChatPromptTemplate.from_messages(
         ("user", _SQL_REPAIR_USER),
     ]
 )
+
+
+# ---------------------------------------------------------------------------
+# Steward Insights Prompt (DQ Advisor & Executive Summary)
+# ---------------------------------------------------------------------------
+# Input variables: dataset_id, dq_score, dq_grade, dq_dimensions_json,
+#                  test_summary_json, failed_rules_json, anomalies_json, profile_digest_json
+# ---------------------------------------------------------------------------
+
+_STEWARD_INSIGHTS_SYSTEM = """\
+Bạn là một AI Data Quality & Governance Advisor chuyên nghiệp dành riêng cho Data Steward và Data Management Team.
+Nhiệm vụ của bạn là phân tích kết quả kiểm thử chất lượng dữ liệu (DQ Test Run), các cảnh báo bất thường (Anomalies) và hồ sơ dữ liệu (Profile Digest) để tạo ra một bản Báo Cáo Tổng Kết (Steward Insights Report) sâu sắc, khách quan và có tính hành động cao.
+
+## Yêu cầu trình bày:
+Báo cáo phải được viết bằng tiếng Việt, định dạng Markdown rõ ràng, chuyên nghiệp với 4 phần chuẩn:
+
+### 1. 📊 Tổng Quan Sức Khỏe Dữ Liệu (Executive DQ Summary)
+- Tóm tắt điểm DQ Score, Grade (A/B/C/D) và đánh giá nhanh hiện trạng dữ liệu.
+- Phân tích ngắn gọn tình hình phân bổ chất lượng theo các chiều (Completeness, Validity, Uniqueness, Consistency, Freshness).
+
+### 2. 🚨 Phân Tích Lỗi & Cảnh Báo Bất Thường (Failure & Anomaly Drill-Down)
+- Đi sâu vào các rule bị FAILED hoặc có cảnh báo ANOMALY (đột biến Z-score).
+- Nêu giả thuyết nguyên nhân gốc rễ (Potential Root Cause) kết hợp với ngữ cảnh phân phối dữ liệu (ví dụ: null spike do thiết bị, giá trị âm do nghiệp vụ hoàn tiền, hay lỗi pipeline).
+- Đánh giá mức độ rủi ro đối với downstream reports / business metrics.
+
+### 3. 🎯 Đánh Giá & Gợi Ý Tinh Chỉnh Ruleset (Rule Tuning Recommendations)
+- Chỉ ra các rule có thể đang quá khắt khe (Overly strict / False positive) và gợi ý điều chỉnh ngưỡng (threshold) hoặc bộ lọc (WHERE condition).
+- Gợi ý bổ sung rule mới nếu phát hiện vùng dữ liệu quan trọng chưa được bảo vệ.
+
+### 4. 🛠️ Kế Hoạch Hành Động Đề Xuất (Actionable Next Steps)
+- Đưa ra danh sách hành động cụ thể dạng Markdown Checklist (`- [ ] ...`) phân rõ trách nhiệm:
+  - Cho Data Steward (Review, approve rule điều chỉnh, nghiệm thu dataset).
+  - Cho Data Engineering / Source Team (Kiểm tra pipeline, sửa source bug nếu có).
+"""
+
+_STEWARD_INSIGHTS_USER = """\
+Dưới đây là thông tin chi tiết của đợt kiểm thử chất lượng dữ liệu cho dataset `{dataset_id}`:
+
+### 1. Điểm số & Xếp hạng:
+- **DQ Score**: {dq_score}/100 (Xếp hạng: **{dq_grade}**)
+- **Điểm theo từng chiều DQ (Dimensions)**:
+```json
+{dq_dimensions_json}
+```
+
+### 2. Thống kê kết quả kiểm thử:
+```json
+{test_summary_json}
+```
+
+### 3. Chi tiết các Rule bị Vi Phạm hoặc Lỗi (Failed / Error Rules):
+```json
+{failed_rules_json}
+```
+
+### 4. Các cảnh báo bất thường (Anomalies & Z-Score spikes):
+```json
+{anomalies_json}
+```
+
+### 5. Profile Digest của Dataset:
+```json
+{profile_digest_json}
+```
+
+Hãy tạo bản Báo cáo Steward Insights hoàn chỉnh theo đúng cấu trúc 4 phần đã yêu cầu.
+"""
+
+steward_insights_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", _STEWARD_INSIGHTS_SYSTEM),
+        ("user", _STEWARD_INSIGHTS_USER),
+    ]
+)
+

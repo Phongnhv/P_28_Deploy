@@ -430,9 +430,10 @@ async def rule_proposer_node(state: AgentState) -> dict:
     )
 
     # Xuất trace JSON sau khi đề xuất rules xong
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     try:
         rule_proposer_dir.mkdir(parents=True, exist_ok=True)
-        dump_file = rule_proposer_dir / f"debug_proposed_rules_{run_id}.json"
+        dump_file = rule_proposer_dir / f"debug_proposed_rules_{timestamp}_{run_id}.json"
         dump_payload = {
             "run_id": run_id,
             "generated_at": datetime.utcnow().isoformat() + "Z",

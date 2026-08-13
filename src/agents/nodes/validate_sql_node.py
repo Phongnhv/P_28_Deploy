@@ -10,6 +10,8 @@ Bắt được lỗi:
 from __future__ import annotations
 
 import logging
+from datetime import datetime
+
 from sqlalchemy import text
 
 from src.agents.state import AgentState
@@ -71,14 +73,19 @@ async def validate_sql_node(state: AgentState) -> dict:
     )
 
     run_id = state.get("rule_run_id") or state.get("test_run_id") or "test_run"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Xuất trace file
     try:
-        from pathlib import Path
         import json
-        out_dir = Path("output/validate_sql")
+        from pathlib import Path
+
+        from src.config import get_settings
+        settings = get_settings()
+        base_dir = getattr(settings, "output_dir", None) or "./output"
+        out_dir = Path(base_dir) / "validate_sql"
         out_dir.mkdir(parents=True, exist_ok=True)
-        dump_file = out_dir / f"debug_validated_tests_{run_id}.json"
+        dump_file = out_dir / f"debug_validated_tests_{timestamp}_{run_id}.json"
         dump_file.write_text(
             json.dumps(updated_tests, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -101,11 +108,10 @@ async def main():
 
     Run: python -m src.agents.nodes.validate_sql_node
     """
-    import asyncio
     import glob
     import json
     import os
-    from pathlib import Path
+
     from src.services.rule_store import init_db
 
     logging.basicConfig(
@@ -131,7 +137,7 @@ async def main():
     latest_file = sorted(files, key=os.path.getmtime)[-1]
     print(f"📖 Đọc generated tests từ: {latest_file}")
 
-    with open(latest_file, "r", encoding="utf-8") as f:
+    with open(latest_file, encoding="utf-8") as f:
         tests = json.load(f)
 
     print(f"🎯 Tổng số queries nạp để validate: {len(tests)}")
