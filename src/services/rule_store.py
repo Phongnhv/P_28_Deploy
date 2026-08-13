@@ -17,7 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from src.config import get_settings
-from src.models.database import Base, JobModel, RuleProposalModel, RuleVersionModel, DatasetModel
+from src.models.database import Base, DatasetModel, JobModel, RuleProposalModel, RuleVersionModel
 from src.models.rule_schemas import RuleStatus
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ def get_engine():
 
 
 # ---------------------------------------------------------------------------
-# Base & Models
+# Models
 # ---------------------------------------------------------------------------
 
 
@@ -409,7 +409,7 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
         for rule in rules:
             rule_id = rule.get("rule_id", f"rule_{uuid.uuid4().hex}")
             status_val = rule.get("status", "PENDING")
-            
+
             # Map for RuleProposalModel: if it is PENDING or PROPOSED, map to PROPOSED. Otherwise keep it.
             rp_status = "PROPOSED" if status_val in ("PENDING", "PROPOSED") else status_val
 
@@ -556,7 +556,7 @@ def review_rule(
             row.severity = severity.upper()
 
         spec = json.loads(row.rule_spec)
-        
+
         # Determine original parameter format from spec before editing
         orig_spec_params = {}
         if row.rule_type == "RANGE":
@@ -590,7 +590,7 @@ def review_rule(
                 proposed_row.review_note = review_note
             if edited_parameters:
                 proposed_row.edited_parameters = json.dumps(edited_parameters, ensure_ascii=False)
-            
+
             if proposed_row.parameters:
                 orig_params = json.loads(proposed_row.parameters)
 
@@ -741,11 +741,11 @@ def save_test_results(test_run_id: str, results: list[dict]) -> int:
         session.query(TestResultModel).filter_by(test_run_id=test_run_id).delete()
 
         for res in results:
-            sample_fail = res.get("sample_failures")
-            if sample_fail is not None and not isinstance(sample_fail, str):
-                sample_fail_str = json.dumps(sample_fail, ensure_ascii=False)
+            row_samples = res.get("sample_failures")
+            if row_samples is not None and not isinstance(row_samples, str):
+                sample_fail_str = json.dumps(row_samples, default=str, ensure_ascii=False)
             else:
-                sample_fail_str = sample_fail
+                sample_fail_str = row_samples
 
             row = TestResultModel(
                 test_run_id=test_run_id,
@@ -888,7 +888,7 @@ def publish_approved_rules(run_id: str) -> int:
 
             # Cập nhật status trong proposed_rules thành MERGED
             p.status = "MERGED"
-            
+
             # Cập nhật status trong rule_versions thành MERGED
             rv_id = f"rv_{p.id}"
             rv = session.get(RuleVersionModel, rv_id)

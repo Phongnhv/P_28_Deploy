@@ -170,9 +170,12 @@ def extract_user_prompt(content: str) -> str:
         return ""
     m = USER_REQUEST_RE.search(content)
     if m:
-        return m.group(1).strip()
-    cleaned = AUX_BLOCK_RE.sub("", content)
-    return cleaned.strip()
+        text = m.group(1).strip()
+    else:
+        text = AUX_BLOCK_RE.sub("", content).strip()
+    # Strip null bytes and non-printable control characters except \n, \r, \t
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "", text)
+    return text.strip()
 
 
 # ---------------------------------------------------------------------------

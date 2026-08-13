@@ -1,8 +1,8 @@
 """Integration tests for LangGraph workflows (Proposal Graph & Execution Graph)."""
 
 import uuid
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy import create_engine, text
 
 import src.services.rule_store as rule_store_module
@@ -16,15 +16,12 @@ from src.agents.graph import (
 from src.services.rule_store import (
     create_run,
     create_test_run,
-    get_active_rules,
-    get_approved_rules,
     get_run,
     get_test_results,
     get_test_run,
     init_db,
     publish_approved_rules,
     review_rule,
-    save_proposed_rules,
 )
 
 

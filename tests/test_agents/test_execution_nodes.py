@@ -1,10 +1,9 @@
 """Unit & Integration tests for Test Generator & Execution Flow Nodes (Run 2)."""
 
-import os
 import re
-import pytest
 import uuid
-from datetime import datetime, UTC
+
+import pytest
 from sqlalchemy import create_engine, event, text
 
 import src.services.rule_store as rule_store_module
@@ -13,7 +12,6 @@ from src.agents.nodes.test_generator_node import generate_tests_for_table
 from src.agents.nodes.validate_sql_node import validate_single_sql
 from src.services.rule_store import (
     create_test_run,
-    get_engine,
     get_test_results,
     get_test_run,
     init_db,
@@ -239,7 +237,7 @@ async def test_execution_graph_end_to_end():
         "approved_rules": rules,
     }
 
-    final_state = await execution_graph.ainvoke(initial_state)
+    _final_state = await execution_graph.ainvoke(initial_state)
 
     # 1. Kiểm tra trạng thái run
     run_rec = get_test_run(test_run_id)
@@ -286,9 +284,10 @@ async def test_execution_graph_end_to_end():
 @pytest.mark.asyncio
 async def test_agentic_repair_loop_recovery(monkeypatch):
     """Kiểm tra Agentic Loop: LLM sửa câu SQL lỗi và pipeline vẫn chạy thành công."""
+    from unittest.mock import AsyncMock, MagicMock
+
     from src.agents.nodes.llm_repair_node import llm_repair_node
     from src.agents.nodes.validate_sql_node import validate_sql_node
-    from unittest.mock import AsyncMock, MagicMock
 
     # Giả lập query bị lỗi cú pháp
     bad_test = {
@@ -332,6 +331,7 @@ async def test_agentic_repair_loop_recovery(monkeypatch):
 async def test_api_execute_tests_endpoint():
     """Kiểm tra gọi qua FastAPI API endpoints của Run 2."""
     from fastapi.testclient import TestClient
+
     from src.main import app
     from src.services.rule_store import create_run
 

@@ -5,6 +5,7 @@ $ErrorActionPreference = 'Stop'
 
 $HookFile = '.git/hooks/pre-push'
 
+<<<<<<< HEAD
 # # Git on Windows runs hooks via Git Bash, so the hook body must be bash.
 # $HookBody = @'
 # #!/usr/bin/env bash
@@ -19,6 +20,12 @@ $HookFile = '.git/hooks/pre-push'
 $HookBody = "#!/usr/bin/env bash`n# Pre-push: sweep recent Antigravity / Gemini prompts, then submit AI logs.`nbash scripts/_pyrun.sh scripts/log_antigravity.py --auto || true`nbash scripts/_pyrun.sh scripts/submit_log.py || true`nexit 0`n"
 
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+=======
+# Git on Windows runs hooks via Git Bash, so the hook body must be bash with LF line endings and no BOM.
+$HookBody = "#!/usr/bin/env bash`n# Pre-push: sweep recent Antigravity / Gemini prompts, then submit AI logs.`nbash scripts/_pyrun.sh scripts/log_antigravity.py --auto || true`nbash scripts/_pyrun.sh scripts/submit_log.py || true`nexit 0`n"
+
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+>>>>>>> origin/main
 [System.IO.File]::WriteAllText((Join-Path (Get-Location) $HookFile), $HookBody, $Utf8NoBom)
 Write-Host "[ai-log] Git pre-push hook installed."
 
