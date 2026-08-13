@@ -121,7 +121,7 @@ def test_extract_remediation_actions():
 
 @pytest.mark.asyncio
 async def test_steward_insights_node_with_mock_llm():
-    """Kiểm tra thực thi node thành công với mock LLM."""
+    """Kiểm tra thực thi node thành công với mock LLM (Structured Output)."""
     state: AgentState = {
         "dataset_id": "test_trips",
         "test_results": [
@@ -131,20 +131,21 @@ async def test_steward_insights_node_with_mock_llm():
         "anomalies": [],
     }
 
-    mock_llm_response = (
-        "# 📊 Steward Report\n\n"
-        "### 1. Executive Summary\nDQ Score is 98.5.\n\n"
-        "### 4. Actionable Next Steps\n"
-        "- [ ] Adjust tolerance for rule r2.\n"
-        "- [ ] Approve dataset publication.\n"
+    from src.models.steward_insights_schemas import StewardStructuredInsights
+
+    mock_response = StewardStructuredInsights(
+        executive_dq_summary="DQ Score is 98.5.",
+        failure_anomaly_drill_down="Analyze failures.",
+        rule_tuning_recommendations="Tuning tips.",
+        steward_next_steps=["Adjust tolerance for rule r2.", "Approve dataset publication."],
+        engineering_next_steps=["Check pipeline data."]
     )
 
-    from langchain_core.messages import AIMessage
+    mock_structured_llm = MagicMock()
+    mock_structured_llm.ainvoke = AsyncMock(return_value=mock_response)
 
     mock_llm = MagicMock()
-    mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content=mock_llm_response))
-    mock_llm.invoke.return_value = AIMessage(content=mock_llm_response)
-    mock_llm.return_value = AIMessage(content=mock_llm_response)
+    mock_llm.with_structured_output.return_value = mock_structured_llm
 
     with patch("src.agents.nodes.steward_insights_node.get_llm", return_value=mock_llm):
         output = await steward_insights_node(state)
@@ -154,8 +155,8 @@ async def test_steward_insights_node_with_mock_llm():
     assert "dq_grade" in output
     assert "dq_dimensions" in output
     assert "steward_summary" in output
-    assert "# 📊 Steward Report" in output["steward_summary"]
-    assert len(output["remediation_actions"]) == 2
+    assert "### 1. 📊 Tổng Quan Sức Khỏe Dữ Liệu" in output["steward_summary"]
+    assert len(output["remediation_actions"]) == 3
     assert output["remediation_actions"][0]["action"] == "Adjust tolerance for rule r2."
 
 
