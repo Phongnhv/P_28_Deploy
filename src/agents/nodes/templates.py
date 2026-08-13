@@ -94,6 +94,12 @@ và Từ điển dữ liệu (Data Dictionary) được cung cấp.
    sau đó mô tả điều kiện một cách có ngữ cảnh. \
    VD: "Cước phí cơ bản (fare_amount) không được mang giá trị âm, vì đây là tiền tính theo đồng hồ chứ không phải hoàn tiền." \
    KHÔNG viết kiểu template máy móc như "Cột X không được để trống." hay "Cột X phải có giá trị từ A đến B."
+10. **Độ phủ có giới hạn:** Hãy đánh giá toàn bộ checklist evidence trước khi lựa chọn, \
+    sau đó chỉ trả về từ 2 đến 5 rule có bằng chứng mạnh và ý nghĩa nghiệp vụ rõ nhất. \
+    Một cột có thể có nhiều rule khác loại, nhưng tổng số rule trong response không được vượt quá 5.
+11. Với `CROSS_FIELD_COMPARISON`, sao chép nguyên vẹn `parameters.target_column` và \
+    `parameters.operator` từ checklist vào field `parameters` của structured output. \
+    Không đặt `target_column` hoặc `operator` ở cấp ngoài của rule và không tự thay đổi toán tử.
 
 **⚠️ NHẮC LẠI:** Trường `rule_type` CHỈ được nhận 9 giá trị sau, không hơn không kém: \
 NOT_NULL, UNIQUE, RANGE, ACCEPTED_VALUES, REGEX_FORMAT, FRESHNESS, ROW_COUNT, NULL_RATE, CROSS_FIELD_COMPARISON.
@@ -187,6 +193,17 @@ _RULE_PROPOSER_USER = """\
 {table_digest}
 ```
 
+## Checklist rule ứng viên sinh tự động từ evidence
+```json
+{coverage_requirements}
+```
+
+Checklist trên là danh sách cần đánh giá đầy đủ, không phải ví dụ. Sau khi đánh giá, chọn từ 2 đến 5 \
+ứng viên có evidence mạnh nhất. Mỗi rule tạo ra phải giữ nguyên đúng tên `column` trong digest và phải \
+dẫn chứng evidence tương ứng trong `ai_reasoning`. Với `CROSS_FIELD_COMPARISON`, phải sao chép đúng object \
+`parameters` từ checklist vào structured output. Không tạo rule ngoài checklist trừ khi Data Dictionary \
+cung cấp bằng chứng nghiệp vụ rõ ràng.
+
 {few_shot_examples}
 
 Hãy trả về JSON structured output theo schema TableRuleProposal. \
@@ -252,6 +269,80 @@ sql_repair_prompt = ChatPromptTemplate.from_messages(
     [
         ("system", _SQL_REPAIR_SYSTEM),
         ("user", _SQL_REPAIR_USER),
+    ]
+)
+
+
+# ---------------------------------------------------------------------------
+# Steward Insights Prompt (DQ Advisor & Executive Summary)
+# ---------------------------------------------------------------------------
+# Input variables: dataset_id, dq_score, dq_grade, dq_dimensions_json,
+#                  test_summary_json, failed_rules_json, anomalies_json, profile_digest_json
+# ---------------------------------------------------------------------------
+
+_STEWARD_INSIGHTS_SYSTEM = """\
+Bạn là một AI Data Quality & Governance Advisor chuyên nghiệp dành riêng cho Data Steward và Data Management Team.
+Nhiệm vụ của bạn là phân tích kết quả kiểm thử chất lượng dữ liệu (DQ Test Run), các cảnh báo bất thường (Anomalies) và hồ sơ dữ liệu (Profile Digest) để tạo ra một bản Báo Cáo Tổng Kết (Steward Insights Report) sâu sắc, khách quan và có tính hành động cao.
+
+## Yêu cầu trình bày:
+Báo cáo phải được viết bằng tiếng Việt, định dạng Markdown rõ ràng, chuyên nghiệp với 4 phần chuẩn:
+
+### 1. 📊 Tổng Quan Sức Khỏe Dữ Liệu (Executive DQ Summary)
+- Tóm tắt điểm DQ Score, Grade (A/B/C/D) và đánh giá nhanh hiện trạng dữ liệu.
+- Phân tích ngắn gọn tình hình phân bổ chất lượng theo các chiều (Completeness, Validity, Uniqueness, Consistency, Freshness).
+
+### 2. 🚨 Phân Tích Lỗi & Cảnh Báo Bất Thường (Failure & Anomaly Drill-Down)
+- Đi sâu vào các rule bị FAILED hoặc có cảnh báo ANOMALY (đột biến Z-score).
+- Nêu giả thuyết nguyên nhân gốc rễ (Potential Root Cause) kết hợp với ngữ cảnh phân phối dữ liệu (ví dụ: null spike do thiết bị, giá trị âm do nghiệp vụ hoàn tiền, hay lỗi pipeline).
+- Đánh giá mức độ rủi ro đối với downstream reports / business metrics.
+
+### 3. 🎯 Đánh Giá & Gợi Ý Tinh Chỉnh Ruleset (Rule Tuning Recommendations)
+- Chỉ ra các rule có thể đang quá khắt khe (Overly strict / False positive) và gợi ý điều chỉnh ngưỡng (threshold) hoặc bộ lọc (WHERE condition).
+- Gợi ý bổ sung rule mới nếu phát hiện vùng dữ liệu quan trọng chưa được bảo vệ.
+
+### 4. 🛠️ Kế Hoạch Hành Động Đề Xuất (Actionable Next Steps)
+- Đưa ra danh sách hành động cụ thể dạng Markdown Checklist (`- [ ] ...`) phân rõ trách nhiệm:
+  - Cho Data Steward (Review, approve rule điều chỉnh, nghiệm thu dataset).
+  - Cho Data Engineering / Source Team (Kiểm tra pipeline, sửa source bug nếu có).
+"""
+
+_STEWARD_INSIGHTS_USER = """\
+Dưới đây là thông tin chi tiết của đợt kiểm thử chất lượng dữ liệu cho dataset `{dataset_id}`:
+
+### 1. Điểm số & Xếp hạng:
+- **DQ Score**: {dq_score}/100 (Xếp hạng: **{dq_grade}**)
+- **Điểm theo từng chiều DQ (Dimensions)**:
+```json
+{dq_dimensions_json}
+```
+
+### 2. Thống kê kết quả kiểm thử:
+```json
+{test_summary_json}
+```
+
+### 3. Chi tiết các Rule bị Vi Phạm hoặc Lỗi (Failed / Error Rules):
+```json
+{failed_rules_json}
+```
+
+### 4. Các cảnh báo bất thường (Anomalies & Z-Score spikes):
+```json
+{anomalies_json}
+```
+
+### 5. Profile Digest của Dataset:
+```json
+{profile_digest_json}
+```
+
+Hãy tạo bản Báo cáo Steward Insights hoàn chỉnh theo đúng cấu trúc 4 phần đã yêu cầu.
+"""
+
+steward_insights_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", _STEWARD_INSIGHTS_SYSTEM),
+        ("user", _STEWARD_INSIGHTS_USER),
     ]
 )
 

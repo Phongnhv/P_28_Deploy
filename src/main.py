@@ -11,7 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src.api.routes import router, dq_router
+from src.api.routes import dq_router, router
 from src.config import get_settings
 from src.services.rule_store import get_engine, init_db
 

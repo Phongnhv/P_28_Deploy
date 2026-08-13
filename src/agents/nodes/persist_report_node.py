@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 
 from src.agents.state import AgentState
@@ -22,29 +23,48 @@ from src.services.rule_store import (
 logger = logging.getLogger(__name__)
 
 
-def _dump_report_file(test_run_id: str, payload: dict) -> str:
-    """Ghi báo cáo kết quả test ra file JSON phục vụ debug / audit."""
-    out_dir = Path("output/reports")
+def _dump_report_file(test_run_id: str, payload: dict, steward_summary: str | None = None) -> tuple[str, str | None]:
+    """Ghi báo cáo kết quả test ra file JSON và Markdown phục vụ debug / audit."""
+    from src.config import get_settings
+    settings = get_settings()
+    base_dir = Path(getattr(settings, "output_dir", None) or "./output")
+    res_dir = Path(getattr(settings, "results_dir", None) or "./data/results")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = base_dir / "reports"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"test_run_{test_run_id}.json"
+    out_path = out_dir / f"test_run_{timestamp}_{test_run_id}.json"
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
 
-    # Ghi thêm bản copy vào data/results để tương thích ngược
-    data_dir = Path("data/results")
+    # Ghi thêm bản copy vào results để tương thích ngược
+    data_dir = res_dir if res_dir != base_dir else (base_dir / "results")
     data_dir.mkdir(parents=True, exist_ok=True)
-    with open(data_dir / f"test_run_{test_run_id}.json", "w", encoding="utf-8") as f:
+    with open(data_dir / f"test_run_{timestamp}_{test_run_id}.json", "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
 
-    return str(out_path)
+    # Ghi file Markdown tổng kết cho Data Steward
+    md_path = None
+    if steward_summary:
+        md_file = out_dir / f"steward_report_{timestamp}_{test_run_id}.md"
+        with open(md_file, "w", encoding="utf-8") as f:
+            f.write(steward_summary)
+        md_path = str(md_file)
+
+    return str(out_path), md_path
 
 
 async def persist_report_node(state: AgentState) -> dict:
-    """LangGraph Node: Persist test results and finalize run status."""
+    """LangGraph Node: Persist test results, steward insights and finalize run status."""
     test_run_id = state.get("test_run_id") or state.get("rule_run_id") or "test_run"
     test_results = state.get("test_results", [])
     anomalies = state.get("anomalies", [])
     errors = state.get("test_generation_errors", [])
+    dq_score = state.get("dq_score")
+    dq_grade = state.get("dq_grade")
+    dq_dimensions = state.get("dq_dimensions", {})
+    steward_summary = state.get("steward_summary")
+    remediation_actions = state.get("remediation_actions", [])
 
     # Lưu vào database
     await asyncio.to_thread(save_test_results, test_run_id, test_results)
@@ -58,20 +78,28 @@ async def persist_report_node(state: AgentState) -> dict:
         "test_run_id": test_run_id,
         "dataset_id": state.get("dataset_id"),
         "status": final_status,
+        "dq_score": dq_score,
+        "dq_grade": dq_grade,
+        "dq_dimensions": dq_dimensions,
         "total_rules_tested": len(test_results),
         "passed_count": sum(1 for r in test_results if r.get("status") == "PASSED"),
         "failed_count": sum(1 for r in test_results if r.get("status") == "FAILED"),
         "error_count": sum(1 for r in test_results if r.get("status") == "ERROR"),
         "anomalies": anomalies,
+        "remediation_actions": remediation_actions,
         "test_results": test_results,
         "errors": errors,
     }
-    report_file_path = await asyncio.to_thread(_dump_report_file, test_run_id, report_payload)
+    report_file_path, steward_md_path = await asyncio.to_thread(
+        _dump_report_file, test_run_id, report_payload, steward_summary
+    )
 
     logger.info("Đã lưu kết quả Test Run %s vào DB và file: %s", test_run_id, report_file_path)
 
     metadata = dict(state.get("metadata", {}))
     metadata["report_file_path"] = report_file_path
+    if steward_md_path:
+        metadata["steward_report_path"] = steward_md_path
     metadata["test_run_status"] = final_status
 
     return {
@@ -88,9 +116,9 @@ async def main():
 
     Run: python -m src.agents.nodes.persist_report_node
     """
-    import asyncio
     import glob
     import os
+
     from src.services.rule_store import create_test_run, get_test_results, get_test_run, init_db
 
     logging.basicConfig(
@@ -113,7 +141,7 @@ async def main():
 
     latest_res_file = sorted(res_files, key=os.path.getmtime)[-1]
     print(f"📖 Đọc test results từ: {latest_res_file}")
-    with open(latest_res_file, "r", encoding="utf-8") as f:
+    with open(latest_res_file, encoding="utf-8") as f:
         test_results = json.load(f)
 
     # 2. Tìm file anomalies (nếu có)
@@ -121,7 +149,7 @@ async def main():
     anomalies = []
     if anom_files:
         latest_anom_file = sorted(anom_files, key=os.path.getmtime)[-1]
-        with open(latest_anom_file, "r", encoding="utf-8") as f:
+        with open(latest_anom_file, encoding="utf-8") as f:
             anomalies = json.load(f)
 
     test_run_id = f"exec_persist_{uuid.uuid4().hex[:8]}"
@@ -144,7 +172,7 @@ async def main():
     db_run = get_test_run(test_run_id)
     db_results = get_test_results(test_run_id)
 
-    print(f"\n📊 Báo cáo Run 2 đã được lưu:")
+    print("\n📊 Báo cáo Run 2 đã được lưu:")
     print(f"    Test Run ID    : {test_run_id}")
     print(f"    Trạng thái DB  : {db_run.get('status') if db_run else status}")
     print(f"    Số rules trong DB: {len(db_results)}")

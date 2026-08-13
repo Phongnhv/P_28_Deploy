@@ -8,7 +8,6 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, 
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from src.agents.graph import agent
 from src.models.database import (
     AuditEventModel,
     ColumnProfileModel,
@@ -30,8 +29,6 @@ from src.models.schemas import (
     ApprovedRulesResponse,
     BulkReviewRequest,
     BulkReviewResponse,
-    ChatRequest,
-    ChatResponse,
     ExecuteActiveTestsRequest,
     ExecuteTestsResponse,
     PublishRulesResponse,
@@ -1640,7 +1637,6 @@ async def list_proposal_rules(
     dimension: str | None = None,
 ) -> list[RuleReviewResponse]:
     from src.services.rule_store import get_run, list_rules
-
     run = await asyncio.to_thread(get_run, run_id)
     if not run:
         raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
@@ -1659,7 +1655,6 @@ async def review_proposal_rule(
     body: RuleUpdateRequest,
 ) -> RuleReviewResponse:
     from src.services.rule_store import get_run, review_rule
-
     run = await asyncio.to_thread(get_run, run_id)
     if not run:
         raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")

@@ -60,3 +60,48 @@ Thực hiện đúng nội dung trong `implementation_plan.md` để AI Rule Pro
 - Đặt tạm `PROVIDER=openai` trong process test vì `.env` hiện không cung cấp provider hợp lệ cho test collection.
 - Đồng bộ `venv` bằng dependencies đã có sẵn trong `requirements.txt`; không sửa `requirements.txt`.
 - Đặt tạm `PYTHONUTF8=1` khi chạy standalone harness để PowerShell hiển thị tiếng Việt đúng encoding.
+
+---
+
+## Cập nhật review follow-up — 2026-08-12
+
+### `src/agents/nodes/templates.py`
+
+- Khôi phục đầy đủ `_SQL_REPAIR_SYSTEM`, `_SQL_REPAIR_USER` và `sql_repair_prompt` đã bị xóa ngoài ý muốn.
+- Giữ nguyên contract đầu vào mà `llm_repair_node.py` đang sử dụng: `table_name`, `schema_info`, `rules_json`, `error_sql`, `db_error`.
+- Giữ guardrail chỉ cho phép LLM trả về một câu `SELECT`, không sinh DDL/DML và không làm mất bind parameters.
+- Đồng bộ Rule Proposer Prompt với Gate 2: đánh giá toàn bộ checklist nhưng chỉ chọn từ 2 đến 5 rule có evidence mạnh nhất.
+- Bổ sung chỉ dẫn bắt buộc `CROSS_FIELD_COMPARISON` phải sao chép `parameters.target_column` và `parameters.operator` từ checklist vào đúng field `parameters` của structured output.
+
+### `src/agents/nodes/rule_proposer_node.py`
+
+- Chuẩn hóa checklist `CROSS_FIELD_COMPARISON` sang đúng cấu trúc schema:
+  `{"parameters": {"target_column": ..., "operator": "<="}}`.
+- Mapping tường minh `datetime_order` thành toán tử `<=`; không suy đoán toán tử từ mô tả tự do.
+- Chỉ tạo requirement khi source column và target column đều là chuỗi hợp lệ và tồn tại trong digest.
+- Bỏ qua an toàn các hint sai cấu trúc, tham chiếu cột không tồn tại hoặc có type chưa được hỗ trợ.
+
+### `src/models/rule_schemas.py`
+
+- Cấu hình `extra="forbid"` cho `RuleParameters`, `ProposedRule` và `TableRuleProposal` để từ chối unknown fields thay vì âm thầm bỏ qua.
+- Giới hạn `operator` bằng allow-list typed: `<=`, `<`, `>=`, `>`, `=`, `==`, `!=`, `<>`.
+- Áp dụng contract Gate 2 cho structured output: mỗi `TableRuleProposal` phải chứa từ 2 đến 5 rule.
+
+### Tests
+
+- Không duy trì file test trùng `tests/test_rule_proposer.py`; regression test được hợp nhất vào `tests/test_agents/test_rule_proposer_node.py`.
+- Bổ sung kiểm tra checklist sinh đúng nested `parameters.target_column` và `parameters.operator`.
+- Bổ sung kiểm tra bỏ qua hint type chưa hỗ trợ và hint tham chiếu cột không tồn tại.
+- Bổ sung kiểm tra schema từ chối `target_column` đặt sai cấp và operator không nằm trong allow-list.
+- Cập nhật fixture mock để tuân thủ contract 2–5 rule.
+
+### Kết quả kiểm tra ngày 2026-08-12
+
+- `pytest tests/test_agents/test_rule_proposer_node.py tests/test_agents/test_execution_nodes.py -p no:cacheprovider -q`: **18 passed**, 1 cảnh báo deprecation từ FastAPI/Starlette.
+- `ruff check` trên các file thay đổi: **All checks passed**.
+- `ruff check src tests` toàn repository vẫn thất bại với **158 lỗi baseline** trong các file ngoài phạm vi thay đổi; không dùng `--fix` để tránh sửa lan rộng.
+- `git diff --check`: không phát hiện whitespace error.
+- Full suite: **77 passed, 1 skipped, 1 failed, 2 errors**. Ba lỗi còn lại nằm ngoài phạm vi thay đổi này:
+  - Pytest collect nhầm `test_generator_node(state)` và `test_runner_node(state)` trong source thành test nên không tìm thấy fixture `state`.
+  - `tests/integration/test_job_lifecycle.py::test_job_dispatch_and_idempotency` lỗi khi SQLite đăng ký lại hàm `REGEXP` (`sqlite3.OperationalError: Error creating function`).
+- Không thực hiện live LLM call và không thực hiện rebase/cherry-pick lịch sử Git.

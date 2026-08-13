@@ -35,4 +35,11 @@ class AgentState(TypedDict, total=False):
     test_results: list           # Danh sách kết quả thực thi từng rule
     test_generation_errors: list # Danh sách lỗi phát sinh trong quá trình sinh/sửa/chạy test
 
+    # Run 2: Steward Insights & DQ Score fields
+    dq_score: float              # Điểm chất lượng tổng thể (0.0 - 100.0)
+    dq_grade: str                # Xếp hạng chất lượng dữ liệu (A / B / C / D)
+    dq_dimensions: dict          # Điểm theo từng chiều DQ (COMPLETENESS, VALIDITY, etc.)
+    steward_summary: str         # Báo cáo tổng kết Markdown cho Data Steward
+    remediation_actions: list    # Danh sách hành động khuyến nghị dạng structured
+
 

@@ -6,6 +6,7 @@ The system currently supports:
 1. **Run 1 (Proposal Flow):** `raw_profiler` ➔ `profiler_digest` ➔ `rule_proposer` ➔ `hitl_gate` (persisting proposed rules as `PENDING` into the DB).
 2. **HITL REST APIs:** Allowing Data Stewards to review, edit, approve, or reject rules (updating state to `APPROVED` / `REJECTED`).
 
+
 The next milestone is **Run 2 (Execution Flow)**:
 ```
 load_approved_rules (DB) ➔ test_generator (Template Render) ➔ validate_sql (EXPLAIN)

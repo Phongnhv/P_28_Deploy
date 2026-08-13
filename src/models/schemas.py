@@ -2,16 +2,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-
-class ChatRequest(BaseModel):
-    message: str = Field(..., min_length=1, max_length=5000, description="Tin nhắn từ user")
-
-
-class ChatResponse(BaseModel):
-    response: str = Field(..., description="Phản hồi từ agent")
-    analysis: str = Field(default="", description="Phân tích nội bộ")
-
-
 # ---------------------------------------------------------------------------
 # DQ Proposal (Run 1) — POST /dq/propose
 # ---------------------------------------------------------------------------

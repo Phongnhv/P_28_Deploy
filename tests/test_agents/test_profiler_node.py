@@ -1,6 +1,7 @@
 """Unit tests for Profiler Tool, Profiler Node, and Profile Digest."""
 
 import json
+
 import pytest
 from sqlalchemy import Column, Float, Integer, MetaData, String, Table, create_engine
 
