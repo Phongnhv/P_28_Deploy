@@ -21,7 +21,7 @@
             "type": "command",
             "name": "log-stop",
             "command": "bash scripts/_pyrun.sh scripts/log_hook.py --tool=codex",
-            "commandWindows": "scripts\_pyrun.cmd scripts\log_hook.py --tool=codex",
+            "commandWindows": "scripts\\pyrun.cmd scripts\\log_hook.py --tool=codex", 
             "timeout": 10
           }
         ]

@@ -13,7 +13,6 @@ import re
 from datetime import datetime
 from typing import Any
 
-from src.agents.nodes.templates import steward_insights_prompt
 from src.agents.state import AgentState
 from src.services.llm import get_llm
 
@@ -243,6 +242,7 @@ async def steward_insights_node(state: AgentState) -> dict:
     remediation_actions: list[dict] = []
 
     try:
+        from src.agents.nodes.templates import steward_insights_prompt
         from src.config import get_settings
         from src.models.steward_insights_schemas import StewardStructuredInsights
 
