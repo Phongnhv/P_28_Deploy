@@ -8,7 +8,6 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, 
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from src.agents.graph import agent
 from src.models.database import (
     AuditEventModel,
     ColumnProfileModel,
@@ -27,8 +26,6 @@ from src.models.schemas import (
     ApprovedRulesResponse,
     BulkReviewRequest,
     BulkReviewResponse,
-    ChatRequest,
-    ChatResponse,
     ExecuteActiveTestsRequest,
     ExecuteTestsResponse,
     PublishRulesResponse,
@@ -831,17 +828,6 @@ def list_audit_logs(
 # ---------------------------------------------------------------------------
 # Agent Chat & Status Routes
 # ---------------------------------------------------------------------------
-@router.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(request: ChatRequest):
-    if not request.message:
-        raise HTTPException(status_code=422, detail="Message cannot be empty")
-    state = {"query": request.message}
-    result = await agent.ainvoke(state)
-    return ChatResponse(
-        response=result.get("response", ""),
-        analysis=result.get("analysis", "")
-    )
-
 @router.get("/status")
 async def status_endpoint():
     return {"status": "healthy", "agent": "ready"}
