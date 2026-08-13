@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import (
@@ -13,10 +14,11 @@ from sqlalchemy import (
     create_engine,
     event,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from src.config import get_settings
 from src.models.database import Base, JobModel, RuleProposalModel, RuleVersionModel
+from src.models.rule_schemas import RuleStatus
 
 logger = logging.getLogger(__name__)
 
@@ -51,13 +53,8 @@ def get_engine():
 
 
 # ---------------------------------------------------------------------------
-# Base & Models
+# Models
 # ---------------------------------------------------------------------------
-
-class Base(DeclarativeBase):
-    pass
-
-
 
 class ProposedRuleModel(Base):
     __tablename__ = "proposed_rules"
@@ -387,7 +384,7 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
         session.commit()
 
         for rule in rules:
-            rule_id = rule.get("rule_id", f"rule_{uuid_str()}")
+            rule_id = rule.get("rule_id", f"rule_{uuid.uuid4().hex}")
 
             # Map parameters to RuleSpec
             rule_spec = {
