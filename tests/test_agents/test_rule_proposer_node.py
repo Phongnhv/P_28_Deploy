@@ -94,6 +94,74 @@ def test_split_digest_by_table_empty():
     assert split_digest_by_table(None) == {}  # type: ignore[arg-type]
 
 
+def test_build_coverage_requirements_uses_structured_cross_field_parameters():
+    """Checklist phải map cross-column hint đúng vào RuleParameters."""
+    from src.agents.nodes.rule_proposer_node import _build_coverage_requirements
+
+    digest = {
+        "rows": 50_000,
+        "cross_column_hints": [
+            {
+                "type": "datetime_order",
+                "columns": ["pickup_at", "dropoff_at"],
+                "violation_pct": 0.0,
+            },
+            {
+                "type": "unsupported_relation",
+                "columns": ["pickup_at", "dropoff_at"],
+            },
+            {
+                "type": "datetime_order",
+                "columns": ["pickup_at", "missing_column"],
+            },
+        ],
+        "columns": [
+            {
+                "name": "pickup_at",
+                "role": "datetime",
+                "null_pct": 0.0,
+                "range": ["2025-01-01", "2025-01-31"],
+                "signals": ["no_nulls"],
+            },
+            {
+                "name": "dropoff_at",
+                "role": "datetime",
+                "null_pct": 0.0,
+                "range": ["2025-01-01", "2025-01-31"],
+                "signals": ["no_nulls"],
+            },
+            {
+                "name": "payment_type",
+                "role": "categorical",
+                "null_pct": 0.0,
+                "values": ["Cash", "Credit card"],
+                "signals": ["no_nulls", "low_cardinality"],
+            },
+            {
+                "name": "fare_amount",
+                "role": "numeric",
+                "null_pct": 0.0,
+                "signals": ["has_negative_values", "has_extreme_outliers"],
+            },
+        ],
+    }
+
+    requirements = _build_coverage_requirements(digest)
+    cross_field_requirements = [
+        item
+        for item in requirements
+        if item["rule_type"] == "CROSS_FIELD_COMPARISON"
+    ]
+
+    assert len(cross_field_requirements) == 1
+    assert cross_field_requirements[0]["column"] == "pickup_at"
+    assert cross_field_requirements[0]["parameters"] == {
+        "target_column": "dropoff_at",
+        "operator": "<=",
+    }
+    assert "target_column" not in cross_field_requirements[0]
+
+
 # ---------------------------------------------------------------------------
 # 2. Schema validation guardrails
 # ---------------------------------------------------------------------------
@@ -177,19 +245,19 @@ async def test_failure_isolation():
     proposals = {
         "orders": _make_table_proposal("orders", n_rules=2),
         "customers": Exception("LLM timeout"),
-        "drivers": _make_table_proposal("drivers", n_rules=1),
+        "drivers": _make_table_proposal("drivers", n_rules=2),
     }
 
     async def mock_ainvoke(messages):
-        # Cần biết bảng nào đang được call — trích table_name từ JSON table_digest
+        # Cần biết bảng nào đang được call — trích table_name từ message
         content = str(messages)
         for t in tables:
-            if f'"table": "{t}"' in content:
+            if f"`{t}`" in content:
                 resp = proposals[t]
                 if isinstance(resp, Exception):
                     raise resp
                 return resp
-        raise ValueError(f"Unknown table in mock: {content[:100]}")
+        raise ValueError("Unknown table in mock")
 
     mock_structured_llm = AsyncMock()
     mock_structured_llm.ainvoke.side_effect = mock_ainvoke
@@ -238,7 +306,7 @@ async def test_retry_on_failure():
     table_name = "orders"
     digest = _make_digest([table_name])
 
-    success_proposal = _make_table_proposal(table_name, n_rules=1)
+    success_proposal = _make_table_proposal(table_name, n_rules=2)
     call_count = {"n": 0}
 
     async def flaky_ainvoke(messages):
@@ -348,7 +416,17 @@ def test_parse_and_stamp_cross_field_comparison_from_llm_response():
                     "Digest có datetime_order và nghiệp vụ yêu cầu đón khách "
                     "trước khi trả khách."
                 ),
-            }
+            },
+            {
+                "column": "tpep_pickup_datetime",
+                "rule_type": "NOT_NULL",
+                "parameters": {},
+                "confidence_score": 0.95,
+                "severity": "CRITICAL",
+                "dimension": "COMPLETENESS",
+                "rule_description": "Thời điểm đón khách phải luôn có giá trị.",
+                "ai_reasoning": "Digest xác nhận cột thời điểm đón không có giá trị thiếu.",
+            },
         ],
     }
 
@@ -367,3 +445,17 @@ def test_parse_and_stamp_cross_field_comparison_from_llm_response():
         "target_column": "tpep_dropoff_datetime",
         "operator": "<=",
     }
+
+    invalid_rule = dict(llm_response["rules"][0])
+    invalid_rule["target_column"] = "tpep_dropoff_datetime"
+    with pytest.raises(ValidationError):
+        TableRuleProposal.model_validate({
+            "table": llm_response["table"],
+            "rules": [invalid_rule, llm_response["rules"][1]],
+        })
+
+    with pytest.raises(ValidationError):
+        RuleParameters(
+            target_column="tpep_dropoff_datetime",
+            operator="UNSAFE_OPERATOR",
+        )
