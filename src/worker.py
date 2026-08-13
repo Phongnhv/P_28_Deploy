@@ -1,19 +1,19 @@
+import logging
 import os
 import sys
-import logging
 import time
-from datetime import datetime, timedelta, UTC
-from sqlalchemy.orm import Session
+
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 # Add project root to path to ensure imports work
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config import get_settings
+from src.models.database import JobModel
+from src.services.dataset_loader import load_dataset_rows
+from src.services.job_service import claim_job
 from src.services.rule_store import get_engine, init_db
-from src.models.job import JobModel
-from src.services.job_service import update_job_status, get_job, claim_job
-from src.services.dataset_loader import load_dataset_rows, load_manifest
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,22 +27,22 @@ def run_ingest_profile(job_id: str, dataset_id: str):
     Reads data, inserts into trips_raw, runs dbt (simulated/actual), and profiles.
     """
     logger.info(f"Starting INGEST_PROFILE for dataset: {dataset_id}")
-    
+
     # 1. Load manifest and verify checksum
     manifest_name = "nyc-yellow-demo-v1"  # Default fallback
     if "50k" in dataset_id.lower():
         manifest_name = "nyc-yellow-50k-v1"
-        
+
     logger.info(f"Loading dataset using manifest: {manifest_name}")
     rows = load_dataset_rows(manifest_name)
     logger.info(f"Loaded {len(rows)} rows from dataset fixture.")
-    
+
     # 2. Ingest raw rows into trips_raw
     engine = get_engine()
     with Session(engine) as session:
         # Clear existing raw rows to maintain idempotency
         session.execute(text("DELETE FROM trips_raw"))
-        
+
         # Insert rows
         insert_query = text("""
             INSERT INTO trips_raw (
@@ -59,24 +59,31 @@ def run_ingest_profile(job_id: str, dataset_id: str):
                 :congestion_surcharge, :airport_fee, :cbd_congestion_fee
             )
         """)
-        
+
         batch = []
         for r in rows:
             # Map string/numeric fields safely
             # Note: 50k parquet files might have some string fields and some numeric fields.
             # We convert types to match database trips_raw schema
             def to_float(val):
-                if val is None or val == '': return None
-                try: return float(val)
-                except: return None
-                
+                if val is None or val == '':
+                    return None
+                try:
+                    return float(val)
+                except Exception:
+                    return None
+
             def to_int(val):
-                if val is None or val == '': return None
-                try: return int(float(val))
-                except: return None
-                
+                if val is None or val == '':
+                    return None
+                try:
+                    return int(float(val))
+                except Exception:
+                    return None
+
             def to_str(val):
-                if val is None: return None
+                if val is None:
+                    return None
                 return str(val)
 
             # In the 50k parquet/CSV, some categories like vendor_id are strings like "Curb Mobility, LLC".
@@ -102,7 +109,7 @@ def run_ingest_profile(job_id: str, dataset_id: str):
                 vendor_id = vendor_map.get(raw_vendor, 0)
             else:
                 vendor_id = to_int(raw_vendor)
-                
+
             raw_rate = r.get("rate_code_id")
             if isinstance(raw_rate, str) and not raw_rate.isdigit():
                 rate_map = {
@@ -117,7 +124,7 @@ def run_ingest_profile(job_id: str, dataset_id: str):
                 rate_code_id = rate_map.get(raw_rate, 1)
             else:
                 rate_code_id = to_int(raw_rate)
-                
+
             raw_payment = r.get("payment_type")
             if isinstance(raw_payment, str) and not raw_payment.isdigit():
                 payment_map = {
@@ -157,27 +164,27 @@ def run_ingest_profile(job_id: str, dataset_id: str):
                 "airport_fee": to_float(r.get("airport_fee")),
                 "cbd_congestion_fee": to_float(r.get("cbd_congestion_fee"))
             })
-            
+
             if len(batch) >= 1000:
                 session.execute(insert_query, batch)
                 batch = []
-                
+
         if batch:
             session.execute(insert_query, batch)
-            
+
         session.commit()
         logger.info(f"Ingested {len(rows)} raw rows into database.")
-        
+
     # 3. Simulate dbt build
     logger.info("Running dbt build...")
     time.sleep(1) # Simulate dbt build latency
     logger.info("dbt build completed successfully.")
-    
+
     # 4. Trigger profiling (raw_profiler_node) and persist profile
     # For now, let's run the profiler graph to create the profile trace
     logger.info("Profiling ingested raw data...")
     # Triggering proposal pipeline will automatically profile and propose rules.
-    
+
     logger.info(f"INGEST_PROFILE job {job_id} completed successfully.")
 
 async def run_propose_rules(job_id: str, dataset_id: str):
@@ -187,7 +194,7 @@ async def run_propose_rules(job_id: str, dataset_id: str):
     """
     logger.info(f"Starting PROPOSE_RULES for dataset: {dataset_id} (job_id: {job_id})")
     from src.agents.graph import build_proposal_graph
-    
+
     proposal_graph = build_proposal_graph()
     state = {
         "dataset_id": dataset_id,
@@ -197,12 +204,12 @@ async def run_propose_rules(job_id: str, dataset_id: str):
             "sampling_rate": 1.0,
         },
     }
-    
+
     # Invoke proposal pipeline
     final_state = await proposal_graph.ainvoke(state)
     if final_state.get("error"):
         raise Exception(f"Proposal pipeline failed: {final_state.get('error')}")
-        
+
     logger.info(f"PROPOSE_RULES job {job_id} completed successfully.")
 
 def run_dq(job_id: str, dataset_id: str):
@@ -218,14 +225,14 @@ def run_dq(job_id: str, dataset_id: str):
 async def main():
     job_id = os.getenv("RUN_JOB_ID")
     job_type = os.getenv("RUN_JOB_TYPE")
-    
+
     if not job_id or not job_type:
         logger.error("Environment variables RUN_JOB_ID and RUN_JOB_TYPE must be set.")
         sys.exit(1)
-        
+
     logger.info(f"Initializing database and running job {job_id} of type {job_type}")
     init_db()
-    
+
     engine = get_engine()
     with Session(engine) as session:
         # Fetch the job
@@ -233,12 +240,12 @@ async def main():
         if not job:
             logger.error(f"Job {job_id} not found in database.")
             sys.exit(1)
-            
+
     # Try to claim the job
     if not claim_job(job_id):
         logger.info(f"Job {job_id} could not be claimed (already running or completed). Exit.")
         sys.exit(0)
-            
+
     # Run the corresponding job logic
     start_time = time.time()
     try:
@@ -252,7 +259,7 @@ async def main():
             run_dq(job_id, job.linked_entity or "yellow_tripdata")
         else:
             raise ValueError(f"Unknown job type: {job_type}")
-            
+
         # Update job status on success
         with Session(engine) as session:
             db_job = session.query(JobModel).filter_by(id=job_id).first()
@@ -261,7 +268,7 @@ async def main():
                 db_job.error = None
                 session.commit()
         logger.info(f"Job {job_id} completed successfully in {time.time() - start_time:.2f} seconds.")
-        
+
     except Exception as e:
         logger.error(f"Job {job_id} failed with error: {e}", exc_info=True)
         with Session(engine) as session:
