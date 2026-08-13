@@ -19,14 +19,12 @@ async def test_proposal_review_transitions(client):
     # Force profile status ready in DB first
     with Session(get_engine()) as session:
         from src.models.database import DatasetModel
+
         d = session.query(DatasetModel).filter(DatasetModel.id == "dataset-nyc-yellow-taxi-50k").first()
         d.status = "PROFILE_READY"
         session.commit()
 
-    job_res = await client.post(
-        "/api/v1/datasets/dataset-nyc-yellow-taxi-50k/rule-proposals",
-        headers=job_headers
-    )
+    job_res = await client.post("/api/v1/datasets/dataset-nyc-yellow-taxi-50k/rule-proposals", headers=job_headers)
     assert job_res.status_code == 202
     job_id = job_res.json()["job_id"]
     run_propose_rules(job_id, "dataset-nyc-yellow-taxi-50k")
@@ -41,9 +39,7 @@ async def test_proposal_review_transitions(client):
 
     # 3. Approve a proposal (e.g. proposal-range)
     approve_res = await client.patch(
-        "/api/v1/rule-proposals/proposal-range",
-        headers=headers,
-        json={"action": "approve"}
+        "/api/v1/rule-proposals/proposal-range", headers=headers, json={"action": "approve"}
     )
     assert approve_res.status_code == 200
     assert approve_res.json()["status"] == "APPROVED"
@@ -56,9 +52,7 @@ async def test_proposal_review_transitions(client):
 
     # 4. Reject a proposal (e.g. proposal-not-null)
     reject_res = await client.patch(
-        "/api/v1/rule-proposals/proposal-not-null",
-        headers=headers,
-        json={"action": "reject"}
+        "/api/v1/rule-proposals/proposal-not-null", headers=headers, json={"action": "reject"}
     )
     assert reject_res.status_code == 200
     assert reject_res.json()["status"] == "REJECTED"
@@ -75,12 +69,8 @@ async def test_proposal_review_transitions(client):
         json={
             "action": "edit",
             "severity": "LOW",
-            "rule": {
-                "type": "accepted_values",
-                "column": "payment_type",
-                "allowed_values": ["1", "2"]
-            }
-        }
+            "rule": {"type": "accepted_values", "column": "payment_type", "allowed_values": ["1", "2"]},
+        },
     )
     assert edit_res.status_code == 200
     assert edit_res.json()["status"] == "APPROVED"
@@ -88,11 +78,17 @@ async def test_proposal_review_transitions(client):
 
     # Verify edited rule version exists in DB with new parameters
     with Session(get_engine()) as session:
-        rv = session.query(RuleVersionModel).filter(RuleVersionModel.rule_proposal_id == "proposal-accepted-values").first()
+        rv = (
+            session.query(RuleVersionModel)
+            .filter(RuleVersionModel.rule_proposal_id == "proposal-accepted-values")
+            .first()
+        )
         assert rv is not None
         import json
+
         spec = json.loads(rv.rule_spec)
         assert spec["allowed_values"] == ["1", "2"]
+
 
 @pytest.mark.asyncio
 async def test_manual_rule_creation(client):
@@ -110,17 +106,12 @@ async def test_manual_rule_creation(client):
             "title": "Manual clean trip distance",
             "description": "Clean trip distance threshold",
             "severity": "MEDIUM",
-            "rule": {
-                "type": "numeric_range",
-                "column": "trip_distance",
-                "min_value": 0.1,
-                "max_value": 100.0
-            }
-        }
+            "rule": {"type": "numeric_range", "column": "trip_distance", "min_value": 0.1, "max_value": 100.0},
+        },
     )
     assert res.status_code == 200
     data = res.json()
-    assert data["status"] == "APPROVED"
+    assert data["status"] == "PROPOSED"
     assert data["rule"]["type"] == "numeric_range"
     assert data["rule"]["min_value"] == 0.1
     assert data["rule"]["max_value"] == 100.0

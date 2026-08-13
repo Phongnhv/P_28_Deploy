@@ -17,12 +17,14 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from src.config import get_settings
-from src.models.database import Base, JobModel, RuleProposalModel, RuleVersionModel, DatasetModel
+from src.models.database import Base, DatasetAccessModel, DatasetModel, JobModel, RuleProposalModel, RuleVersionModel
 from src.models.rule_schemas import RuleStatus
+from src.services.session_service import ensure_default_users
 
 logger = logging.getLogger(__name__)
 
 _engine = None  # lazy-initialised
+
 
 def get_engine():
     global _engine
@@ -40,16 +42,20 @@ def get_engine():
             if "sqlite" in db_url:
                 cursor = dbapi_conn.cursor()
                 cursor.execute("PRAGMA journal_mode=WAL")
+                # journal_mode returns one row. Consume it before registering the
+                # UDF; otherwise SQLite can report a busy statement on startup.
+                cursor.fetchone()
+
                 # Hỗ trợ hàm REGEXP trong SQLite cho rule REGEX_FORMAT
                 def _sqlite_regexp(expr, item):
                     if item is None:
                         return False
                     return re.search(expr, str(item)) is not None
+
                 dbapi_conn.create_function("REGEXP", 2, _sqlite_regexp)
                 cursor.close()
 
     return _engine
-
 
 
 # ---------------------------------------------------------------------------
@@ -57,19 +63,17 @@ def get_engine():
 # ---------------------------------------------------------------------------
 
 
-
-
 class ProposedRuleModel(Base):
     __tablename__ = "proposed_rules"
 
     # Composite PK — rule_id chỉ unique trong 1 run
-    run_id:  Mapped[str] = mapped_column(String(64),  primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     rule_id: Mapped[str] = mapped_column(String(512), primary_key=True)
 
-    dataset_id:   Mapped[str]           = mapped_column(String(256), nullable=False)
-    table_name:   Mapped[str]           = mapped_column(String(256), nullable=False, index=True)
-    column_name:  Mapped[str | None] = mapped_column(String(256), nullable=True)
-    rule_type:    Mapped[str]           = mapped_column(String(64),  nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    table_name: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    column_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    rule_type: Mapped[str] = mapped_column(String(64), nullable=False)
 
     # AI-proposed params — IMMUTABLE để giữ audit trail
     parameters: Mapped[str] = mapped_column(Text, nullable=False)
@@ -77,25 +81,21 @@ class ProposedRuleModel(Base):
     # Steward override (nullable)
     edited_parameters: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    confidence_score: Mapped[float] = mapped_column(Float,       nullable=False)
-    severity:         Mapped[str]   = mapped_column(String(32),  nullable=False)
-    dimension:        Mapped[str]   = mapped_column(String(32),  nullable=False, index=True)
-    rule_description: Mapped[str]   = mapped_column(Text,        nullable=False)
-    ai_reasoning:     Mapped[str]   = mapped_column(Text,        nullable=False)
+    confidence_score: Mapped[float] = mapped_column(Float, nullable=False)
+    severity: Mapped[str] = mapped_column(String(32), nullable=False)
+    dimension: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    rule_description: Mapped[str] = mapped_column(Text, nullable=False)
+    ai_reasoning: Mapped[str] = mapped_column(Text, nullable=False)
 
-    status: Mapped[str] = mapped_column(
-        String(32), nullable=False, default=RuleStatus.PENDING.value, index=True
-    )
-    reviewer:     Mapped[str | None] = mapped_column(String(256), nullable=True)
-    review_note:  Mapped[str | None] = mapped_column(Text,        nullable=True)
-    reviewed_at:  Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at:   Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
-    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=RuleStatus.PENDING.value, index=True)
+    reviewer: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
     __table_args__ = (
         Index("ix_proposed_rules_run_status", "run_id", "status"),
-        Index("ix_proposed_rules_run_dim",    "run_id", "dimension"),
+        Index("ix_proposed_rules_run_dim", "run_id", "dimension"),
     )
 
     @property
@@ -110,29 +110,25 @@ class ProposedRuleModel(Base):
     def to_dict(self) -> dict:
         """Chuyển sang dict cho API response."""
         return {
-            "run_id":             self.run_id,
-            "rule_id":            self.rule_id,
-            "dataset_id":         self.dataset_id,
-            "table_name":         self.table_name,
-            "column":             self.column_name,   # boundary rename: DB column_name → API column
-            "rule_type":          self.rule_type,
-            "parameters":         json.loads(self.parameters) if self.parameters else {},
-            "edited_parameters":  (
-                json.loads(self.edited_parameters)
-                if self.edited_parameters
-                else None
-            ),
+            "run_id": self.run_id,
+            "rule_id": self.rule_id,
+            "dataset_id": self.dataset_id,
+            "table_name": self.table_name,
+            "column": self.column_name,  # boundary rename: DB column_name → API column
+            "rule_type": self.rule_type,
+            "parameters": json.loads(self.parameters) if self.parameters else {},
+            "edited_parameters": (json.loads(self.edited_parameters) if self.edited_parameters else None),
             "effective_parameters": self.effective_parameters,
-            "confidence_score":   self.confidence_score,
-            "severity":           self.severity,
-            "dimension":          self.dimension,
-            "rule_description":   self.rule_description,
-            "ai_reasoning":       self.ai_reasoning,
-            "status":             self.status,
-            "reviewer":           self.reviewer,
-            "review_note":        self.review_note,
-            "reviewed_at":        self.reviewed_at.isoformat() if self.reviewed_at else None,
-            "created_at":         self.created_at.isoformat() if self.created_at else None,
+            "confidence_score": self.confidence_score,
+            "severity": self.severity,
+            "dimension": self.dimension,
+            "rule_description": self.rule_description,
+            "ai_reasoning": self.ai_reasoning,
+            "status": self.status,
+            "reviewer": self.reviewer,
+            "review_note": self.review_note,
+            "reviewed_at": self.reviewed_at.isoformat() if self.reviewed_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
 
@@ -142,6 +138,7 @@ class ActiveRuleModel(Base):
     Đây là Single Source of Truth cho Test Generator (Run 2).
     Được cập nhật khi Data Steward bấm Publish các rule đã APPROVED từ proposed_rules.
     """
+
     __tablename__ = "active_rules"
 
     rule_id: Mapped[str] = mapped_column(String(512), primary_key=True)
@@ -157,14 +154,10 @@ class ActiveRuleModel(Base):
     dimension: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     rule_description: Mapped[str] = mapped_column(Text, nullable=False)
 
-    status: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="ACTIVE", index=True
-    )  # ACTIVE / INACTIVE
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE", index=True)  # ACTIVE / INACTIVE
     last_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
     )
@@ -190,72 +183,66 @@ class ActiveRuleModel(Base):
 class ProposalRunModel(Base):
     __tablename__ = "proposal_runs"
 
-    run_id:     Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     dataset_id: Mapped[str] = mapped_column(String(256), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="QUEUED"
     )  # QUEUED / RUNNING / DONE / FAILED
-    error:      Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
-    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
     def to_dict(self) -> dict:
         return {
-            "run_id":     self.run_id,
+            "run_id": self.run_id,
             "dataset_id": self.dataset_id,
-            "status":     self.status,
-            "error":      self.error,
+            "status": self.status,
+            "error": self.error,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
 
 class TestRunModel(Base):
     """Lưu metadata của mỗi lần chạy Run 2 (Execution Graph)."""
+
     __tablename__ = "test_runs"
 
     test_run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    dataset_id:  Mapped[str] = mapped_column(String(256), nullable=False)
-    status:      Mapped[str] = mapped_column(
+    dataset_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="QUEUED"
     )  # QUEUED / RUNNING / DONE / FAILED
-    error:       Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at:  Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
-    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
     def to_dict(self) -> dict:
         return {
             "test_run_id": self.test_run_id,
-            "dataset_id":  self.dataset_id,
-            "status":      self.status,
-            "error":       self.error,
-            "created_at":  self.created_at.isoformat() if self.created_at else None,
+            "dataset_id": self.dataset_id,
+            "status": self.status,
+            "error": self.error,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
 
 class TestResultModel(Base):
     """Lưu kết quả chạy test của từng rule trong một test run."""
+
     __tablename__ = "test_results"
 
-    test_run_id:     Mapped[str] = mapped_column(String(64), primary_key=True)
-    rule_id:         Mapped[str] = mapped_column(String(512), primary_key=True)
-    table_name:      Mapped[str] = mapped_column(String(256), nullable=False, index=True)
-    column_name:     Mapped[str | None] = mapped_column(String(256), nullable=True)
-    rule_type:       Mapped[str] = mapped_column(String(64), nullable=False)
-    status:          Mapped[str] = mapped_column(
-        String(32), nullable=False
-    )  # PASSED / FAILED / ERROR / SKIPPED
+    test_run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    rule_id: Mapped[str] = mapped_column(String(512), primary_key=True)
+    table_name: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    column_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    rule_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)  # PASSED / FAILED / ERROR / SKIPPED
     violation_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    total_rows:      Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    violation_rate:  Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    total_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    violation_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     sample_failures: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list[dict]
-    sql_text:        Mapped[str] = mapped_column(Text, nullable=False)
-    duration_ms:     Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    error:           Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at:      Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
-    )
+    sql_text: Mapped[str] = mapped_column(Text, nullable=False)
+    duration_ms: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
     __table_args__ = (
         Index("ix_test_results_run_status", "test_run_id", "status"),
@@ -264,22 +251,21 @@ class TestResultModel(Base):
 
     def to_dict(self) -> dict:
         return {
-            "test_run_id":     self.test_run_id,
-            "rule_id":         self.rule_id,
-            "table_name":      self.table_name,
-            "column":          self.column_name,
-            "rule_type":       self.rule_type,
-            "status":          self.status,
+            "test_run_id": self.test_run_id,
+            "rule_id": self.rule_id,
+            "table_name": self.table_name,
+            "column": self.column_name,
+            "rule_type": self.rule_type,
+            "status": self.status,
             "violation_count": self.violation_count,
-            "total_rows":      self.total_rows,
-            "violation_rate":  self.violation_rate,
+            "total_rows": self.total_rows,
+            "violation_rate": self.violation_rate,
             "sample_failures": json.loads(self.sample_failures) if self.sample_failures else None,
-            "sql_text":        self.sql_text,
-            "duration_ms":     self.duration_ms,
-            "error":           self.error,
-            "created_at":      self.created_at.isoformat() if self.created_at else None,
+            "sql_text": self.sql_text,
+            "duration_ms": self.duration_ms,
+            "error": self.error,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
-
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +278,7 @@ def init_db() -> None:
     # Seed default demo dataset if not present
     try:
         with Session(engine) as session:
+            ensure_default_users(session)
             demo_dataset = session.get(DatasetModel, "dataset-nyc-yellow-taxi-50k")
             if not demo_dataset:
                 demo_dataset = DatasetModel(
@@ -307,6 +294,26 @@ def init_db() -> None:
                 session.add(demo_dataset)
                 session.commit()
                 logger.info("Seeded default demo dataset 'dataset-nyc-yellow-taxi-50k'")
+            for username, access_level in (("user", "READ"), ("steward", "MANAGE")):
+                existing_access = (
+                    session.query(DatasetAccessModel)
+                    .filter(
+                        DatasetAccessModel.dataset_id == demo_dataset.id,
+                        DatasetAccessModel.username == username,
+                    )
+                    .first()
+                )
+                if not existing_access:
+                    session.add(
+                        DatasetAccessModel(
+                            id=f"access-{demo_dataset.id}-{username}",
+                            dataset_id=demo_dataset.id,
+                            username=username,
+                            access_level=access_level,
+                            granted_by="system-seed",
+                        )
+                    )
+            session.commit()
     except Exception as e:
         logger.warning("Failed to seed default dataset: %s", e)
 
@@ -315,11 +322,7 @@ def init_db() -> None:
         with Session(engine) as session:
             active_count = session.query(ActiveRuleModel).count()
             if active_count == 0:
-                legacy_approved = (
-                    session.query(ProposedRuleModel)
-                    .filter_by(status=RuleStatus.APPROVED.value)
-                    .all()
-                )
+                legacy_approved = session.query(ProposedRuleModel).filter_by(status=RuleStatus.APPROVED.value).all()
                 if legacy_approved:
                     for p in legacy_approved:
                         active_rule = ActiveRuleModel(
@@ -342,10 +345,10 @@ def init_db() -> None:
         logger.warning("Không thể chạy migration helper cho active_rules: %s", exc)
 
 
-
 # ---------------------------------------------------------------------------
 # CRUD — ProposalRun (Mapped to JobModel)
 # ---------------------------------------------------------------------------
+
 
 def create_run(run_id: str, dataset_id: str) -> dict:
     """Tạo bản ghi run mới (Job) với status=PENDING/QUEUED."""
@@ -359,7 +362,7 @@ def create_run(run_id: str, dataset_id: str) -> dict:
             linked_entity=dataset_id,
             idempotency_key=f"propose-run-{run_id}",
             created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            updated_at=datetime.utcnow(),
         )
         session.add(job)
         session.commit()
@@ -368,8 +371,9 @@ def create_run(run_id: str, dataset_id: str) -> dict:
             "dataset_id": job.linked_entity,
             "status": "QUEUED",
             "error": None,
-            "created_at": job.created_at.isoformat()
+            "created_at": job.created_at.isoformat(),
         }
+
 
 def update_run_status(run_id: str, status: str, error: str | None = None) -> None:
     """Cập nhật status của run (Job)."""
@@ -382,6 +386,7 @@ def update_run_status(run_id: str, status: str, error: str | None = None) -> Non
             job.updated_at = datetime.utcnow()
             session.commit()
 
+
 def get_run(run_id: str) -> dict | None:
     """Lấy thông tin run (Job) theo run_id."""
     with Session(get_engine()) as session:
@@ -393,9 +398,10 @@ def get_run(run_id: str) -> dict | None:
                 "dataset_id": job.linked_entity or "unknown",
                 "status": status_map.get(job.status, job.status),
                 "error": job.error,
-                "created_at": job.created_at.isoformat() if job.created_at else None
+                "created_at": job.created_at.isoformat() if job.created_at else None,
             }
         return None
+
 
 def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
     """Lưu danh sách rule vào DB với status=PROPOSED."""
@@ -409,15 +415,12 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
         for rule in rules:
             rule_id = rule.get("rule_id", f"rule_{uuid.uuid4().hex}")
             status_val = rule.get("status", "PENDING")
-            
+
             # Map for RuleProposalModel: if it is PENDING or PROPOSED, map to PROPOSED. Otherwise keep it.
             rp_status = "PROPOSED" if status_val in ("PENDING", "PROPOSED") else status_val
 
             # Map parameters to RuleSpec
-            rule_spec = {
-                "type": rule.get("rule_type", "not_null"),
-                "column": rule.get("column")
-            }
+            rule_spec = {"type": rule.get("rule_type", "not_null"), "column": rule.get("column")}
             params = rule.get("parameters", {})
             if "min" in params:
                 rule_spec["min_value"] = params["min"]
@@ -446,7 +449,7 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
                 confidence=rule.get("confidence_score", 1.0),
                 model_name="agent-proposer",
                 created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
+                updated_at=datetime.utcnow(),
             )
             session.add(row)
 
@@ -465,7 +468,7 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
                 dimension=rule.get("dimension", "VALIDITY"),
                 rule_description=rule.get("rule_description", ""),
                 ai_reasoning=rule.get("ai_reasoning", ""),
-                status=status_val
+                status=status_val,
             )
             session.add(proposed_row)
 
@@ -473,6 +476,7 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
         session.commit()
     logger.info("Saved %d rule proposals for dataset_id=%s", saved, dataset_id)
     return saved
+
 
 def list_rules(
     run_id: str | None = None,
@@ -499,28 +503,31 @@ def list_rules(
             edited_params = json.loads(r.edited_parameters) if r.edited_parameters else None
             effective_params = edited_params if edited_params else params
 
-            result.append({
-                "run_id": r.run_id,
-                "rule_id": r.rule_id,
-                "dataset_id": r.dataset_id,
-                "table_name": r.table_name,
-                "column": r.column_name,
-                "rule_type": r.rule_type,
-                "parameters": params,
-                "edited_parameters": edited_params,
-                "effective_parameters": effective_params,
-                "confidence_score": r.confidence_score,
-                "severity": r.severity,
-                "dimension": r.dimension,
-                "rule_description": r.rule_description,
-                "ai_reasoning": r.ai_reasoning,
-                "status": r.status,
-                "reviewer": r.reviewer,
-                "review_note": r.review_note,
-                "reviewed_at": r.reviewed_at.isoformat() if r.reviewed_at else None,
-                "created_at": r.created_at.isoformat() if r.created_at else None
-            })
+            result.append(
+                {
+                    "run_id": r.run_id,
+                    "rule_id": r.rule_id,
+                    "dataset_id": r.dataset_id,
+                    "table_name": r.table_name,
+                    "column": r.column_name,
+                    "rule_type": r.rule_type,
+                    "parameters": params,
+                    "edited_parameters": edited_params,
+                    "effective_parameters": effective_params,
+                    "confidence_score": r.confidence_score,
+                    "severity": r.severity,
+                    "dimension": r.dimension,
+                    "rule_description": r.rule_description,
+                    "ai_reasoning": r.ai_reasoning,
+                    "status": r.status,
+                    "reviewer": r.reviewer,
+                    "review_note": r.review_note,
+                    "reviewed_at": r.reviewed_at.isoformat() if r.reviewed_at else None,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+            )
         return result
+
 
 def review_rule(
     run_id: str,
@@ -540,7 +547,9 @@ def review_rule(
         # Validate edited_parameters
         if edited_parameters is not None:
             if row.rule_type == "RANGE":
-                if not isinstance(edited_parameters, dict) or ("min" not in edited_parameters and "max" not in edited_parameters):
+                if not isinstance(edited_parameters, dict) or (
+                    "min" not in edited_parameters and "max" not in edited_parameters
+                ):
                     raise ValueError("edited_parameters không hợp lệ cho rule RANGE (yêu cầu min hoặc max)")
             elif row.rule_type == "ACCEPTED_VALUES":
                 if not isinstance(edited_parameters, dict) or "accepted_values" not in edited_parameters:
@@ -556,7 +565,7 @@ def review_rule(
             row.severity = severity.upper()
 
         spec = json.loads(row.rule_spec)
-        
+
         # Determine original parameter format from spec before editing
         orig_spec_params = {}
         if row.rule_type == "RANGE":
@@ -590,7 +599,7 @@ def review_rule(
                 proposed_row.review_note = review_note
             if edited_parameters:
                 proposed_row.edited_parameters = json.dumps(edited_parameters, ensure_ascii=False)
-            
+
             if proposed_row.parameters:
                 orig_params = json.loads(proposed_row.parameters)
 
@@ -612,7 +621,7 @@ def review_rule(
                     rule_spec=json.dumps(spec),
                     status="APPROVED",
                     version=1,
-                    created_at=datetime.utcnow()
+                    created_at=datetime.utcnow(),
                 )
                 session.add(rv)
             session.commit()
@@ -638,8 +647,9 @@ def review_rule(
             "reviewer": reviewer or (proposed_row.reviewer if proposed_row else None),
             "review_note": review_note or (proposed_row.review_note if proposed_row else None),
             "reviewed_at": row.updated_at.isoformat() if row.updated_at else None,
-            "created_at": row.created_at.isoformat() if row.created_at else None
+            "created_at": row.created_at.isoformat() if row.created_at else None,
         }
+
 
 def bulk_review(run_id: str, decisions: list[dict]) -> tuple[list[dict], list[str]]:
     updated = []
@@ -652,13 +662,14 @@ def bulk_review(run_id: str, decisions: list[dict]) -> tuple[list[dict], list[st
             edited_parameters=d.get("edited_parameters"),
             severity=d.get("severity"),
             reviewer=d.get("reviewer"),
-            review_note=d.get("review_note")
+            review_note=d.get("review_note"),
         )
         if res:
             updated.append(res)
         else:
             not_found.append(d["rule_id"])
     return updated, not_found
+
 
 def get_review_summary(run_id: str) -> dict:
     """Tóm tắt tiến độ review."""
@@ -678,8 +689,9 @@ def get_review_summary(run_id: str) -> dict:
         "edited": 0,
         "is_complete": (pending == 0 and total > 0),
         "by_dimension": {},
-        "by_severity": {}
+        "by_severity": {},
     }
+
 
 def get_approved_rules(run_id: str) -> list[dict]:
     """Lấy tất cả rule APPROVED cho một run — input contract cho Test Generator."""
@@ -689,6 +701,7 @@ def get_approved_rules(run_id: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 # CRUD — TestRun & TestResult (Run 2)
 # ---------------------------------------------------------------------------
+
 
 def create_test_run(test_run_id: str, dataset_id: str) -> dict:
     """Tạo bản ghi test run mới với status=QUEUED."""
@@ -796,6 +809,7 @@ def get_rule_history(rule_id: str, limit: int = 30) -> list[dict]:
 # CRUD — Active Rules (Published Ruleset)
 # ---------------------------------------------------------------------------
 
+
 def publish_approved_rules(run_id: str) -> int:
     """Xuất bản (Publish/Merge) các rules đã APPROVED từ run_id vào bảng active_rules.
 
@@ -814,15 +828,11 @@ def publish_approved_rules(run_id: str) -> int:
             return 0
         dataset_id = job.linked_entity
 
-        approved_proposals = (
-            session.query(RuleProposalModel)
-            .filter_by(dataset_id=dataset_id, status="APPROVED")
-            .all()
-        )
+        approved_proposals = session.query(RuleProposalModel).filter_by(dataset_id=dataset_id, status="APPROVED").all()
 
         def _extract_clean_parameters(rule_type: str, spec: dict) -> dict:
             params = {}
-            if rule_type == "RANGE": # range type
+            if rule_type == "RANGE":  # range type
                 if "min" in spec:
                     params["min"] = spec["min"]
                 elif "min_value" in spec:
@@ -888,7 +898,7 @@ def publish_approved_rules(run_id: str) -> int:
 
             # Cập nhật status trong proposed_rules thành MERGED
             p.status = "MERGED"
-            
+
             # Cập nhật status trong rule_versions thành MERGED
             rv_id = f"rv_{p.id}"
             rv = session.get(RuleVersionModel, rv_id)
@@ -926,5 +936,3 @@ def deactivate_rule(rule_id: str) -> bool:
             session.commit()
             return True
         return False
-
-

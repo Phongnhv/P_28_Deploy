@@ -9,14 +9,21 @@ import type {
   DatasetProfile,
   DqResult,
   DqRun,
+  DatasetAccess,
+  DatasetAccessLevel,
   Job,
   ManualRuleInput,
   RuleProposal,
+  RuleConfiguration,
+  RuleConfigurationInput,
   RuleSpec,
+  UserAccount,
+  UserCreateInput,
+  UserUpdateInput,
   UserRole,
 } from "./types";
 
-type View = "overview" | "rules" | "runs" | "audit";
+type View = "overview" | "rules" | "runs" | "audit" | "admin";
 
 const sleep = (duration: number) =>
   new Promise((resolve) => window.setTimeout(resolve, duration));
@@ -211,6 +218,10 @@ function App() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [profile, setProfile] = useState<DatasetProfile | null>(null);
   const [proposals, setProposals] = useState<RuleProposal[]>([]);
+  const [ruleConfigurations, setRuleConfigurations] = useState<RuleConfiguration[]>([]);
+  const [adminUsers, setAdminUsers] = useState<UserAccount[]>([]);
+  const [datasetAccess, setDatasetAccess] = useState<DatasetAccess[]>([]);
+  const [adminLoading, setAdminLoading] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [activeJob, setActiveJob] = useState<Job | null>(null);
   const [activeRun, setActiveRun] = useState<DqRun | null>(null);
@@ -230,6 +241,7 @@ function App() {
     [proposals],
   );
   const canOperate = role === "STEWARD" || role === "ADMIN";
+  const canAdmin = role === "ADMIN";
 
   const refreshWorkspace = useCallback(async () => {
     setLoading(true);
@@ -245,6 +257,7 @@ function App() {
       if (nextDataset?.status === "PROFILE_READY") {
         setProfile(await api.getProfile(nextDataset.id));
         setProposals(await api.listProposals(nextDataset.id));
+        setRuleConfigurations(await api.listRuleConfigurations(nextDataset.id));
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -260,9 +273,24 @@ function App() {
     }
   }, []);
 
+  const refreshAdmin = useCallback(async () => {
+    if (!dataset || !canAdmin) return;
+    setAdminLoading(true);
+    try {
+      const [users, access] = await Promise.all([api.listUsers(), api.listDatasetAccess(dataset.id)]);
+      setAdminUsers(users);
+      setDatasetAccess(access);
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to load administration controls."));
+    } finally {
+      setAdminLoading(false);
+    }
+  }, [canAdmin, dataset]);
+
   useEffect(() => {
     if (authenticated) void refreshWorkspace();
   }, [authenticated, refreshWorkspace]);
+  useEffect(() => { if (view === "admin") void refreshAdmin(); }, [refreshAdmin, view]);
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(""), 3500);
@@ -361,6 +389,7 @@ function App() {
     try {
       await api.reviewProposal(id, { action });
       setProposals(await api.listProposals(dataset.id));
+      setRuleConfigurations(await api.listRuleConfigurations(dataset.id));
       setAuditLogs(await api.listAuditLogs());
       setToast(
         action === "approve"
@@ -370,6 +399,49 @@ function App() {
     } catch (err) {
       setError(getErrorMessage(err, "Unable to update proposal."));
     }
+  }
+
+  async function deleteProposal(id: string) {
+    if (!dataset) return;
+    try {
+      await api.deleteProposal(id);
+      setProposals(await api.listProposals(dataset.id));
+      setRuleConfigurations(await api.listRuleConfigurations(dataset.id));
+      setAuditLogs(await api.listAuditLogs());
+      setToast("Proposal removed. Audit history was retained.");
+    } catch (err) { setError(getErrorMessage(err, "Unable to delete proposal.")); }
+  }
+
+  async function saveRuleConfiguration(id: string, input: RuleConfigurationInput) {
+    if (!dataset) return;
+    try {
+      await api.updateRuleConfiguration(id, input);
+      setRuleConfigurations(await api.listRuleConfigurations(dataset.id));
+      setAuditLogs(await api.listAuditLogs());
+      setToast("Execution settings saved.");
+    } catch (err) { setError(getErrorMessage(err, "Unable to update rule settings.")); }
+  }
+
+  async function createAdminUser(input: UserCreateInput) {
+    try { await api.createUser(input); await refreshAdmin(); setToast(`Account '${input.username}' created.`); }
+    catch (err) { setError(getErrorMessage(err, "Unable to create account.")); }
+  }
+
+  async function updateAdminUser(username: string, input: UserUpdateInput) {
+    try { await api.updateUser(username, input); await refreshAdmin(); setToast(`Account '${username}' updated.`); }
+    catch (err) { setError(getErrorMessage(err, "Unable to update account.")); }
+  }
+
+  async function grantAdminAccess(username: string, accessLevel: DatasetAccessLevel) {
+    if (!dataset) return;
+    try { await api.grantDatasetAccess(dataset.id, username, accessLevel); await refreshAdmin(); setToast(`Dataset access updated for '${username}'.`); }
+    catch (err) { setError(getErrorMessage(err, "Unable to grant dataset access.")); }
+  }
+
+  async function revokeAdminAccess(username: string) {
+    if (!dataset) return;
+    try { await api.revokeDatasetAccess(dataset.id, username); await refreshAdmin(); setToast(`Dataset access revoked for '${username}'.`); }
+    catch (err) { setError(getErrorMessage(err, "Unable to revoke dataset access.")); }
   }
 
   async function saveEdit(input: {
@@ -443,7 +515,7 @@ function App() {
         </div>
         <div className="sidebar-label">WORKSPACE</div>
         <nav>
-          {(["overview", "rules", "runs", "audit"] as View[]).map((item) => (
+          {(["overview", "rules", "runs", "audit", ...(canAdmin ? ["admin" as View] : [])] as View[]).map((item) => (
             <button
               key={item}
               className={`nav-item ${view === item ? "active" : ""}`}
@@ -455,8 +527,8 @@ function App() {
                   : item === "rules"
                     ? "✦"
                     : item === "runs"
-                      ? "↗"
-                      : "≡"}
+                    ? "↗"
+                      : item === "admin" ? "⚙" : "≡"}
               </span>
               {item === "overview"
                 ? "Overview"
@@ -464,7 +536,7 @@ function App() {
                   ? "Rule proposals"
                   : item === "runs"
                     ? "DQ runs"
-                    : "Audit history"}
+                    : item === "admin" ? "Admin control" : "Audit history"}
               {item === "rules" &&
                 proposals.some((proposal) =>
                   ["PROPOSED", "EDITED"].includes(proposal.status),
@@ -515,7 +587,7 @@ function App() {
                   ? "Rule proposals"
                   : view === "runs"
                     ? "DQ runs"
-                    : "Audit history"}
+                    : view === "admin" ? "Admin control" : "Audit history"}
             </strong>
           </div>
           <div className="topbar-actions">
@@ -604,6 +676,9 @@ function App() {
               onApprove={(id) => void reviewProposal(id, "approve")}
               onReject={(id) => void reviewProposal(id, "reject")}
               onEdit={setEditingProposal}
+              configurations={ruleConfigurations}
+              onDelete={(id) => void deleteProposal(id)}
+              onSaveConfiguration={(id, input) => void saveRuleConfiguration(id, input)}
               onCreateManual={() => setManualRuleOpen(true)}
               onRun={() => void runApprovedRules()}
             />
@@ -619,6 +694,7 @@ function App() {
             />
           )}
           {view === "audit" && <AuditPage logs={auditLogs} />}
+          {view === "admin" && canAdmin && <AdminPage users={adminUsers} access={datasetAccess} loading={adminLoading} onCreate={createAdminUser} onUpdate={updateAdminUser} onGrant={grantAdminAccess} onRevoke={revokeAdminAccess} />}
         </div>
       </main>
       {editingProposal && (
@@ -909,6 +985,7 @@ function StatCard({
 
 function RulesPage({
   proposals,
+  configurations,
   profileReady,
   busy,
   canOperate,
@@ -916,10 +993,13 @@ function RulesPage({
   onApprove,
   onReject,
   onEdit,
+  onDelete,
+  onSaveConfiguration,
   onCreateManual,
   onRun,
 }: {
   proposals: RuleProposal[];
+  configurations: RuleConfiguration[];
   profileReady: boolean;
   busy: boolean;
   canOperate: boolean;
@@ -927,6 +1007,8 @@ function RulesPage({
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
   onEdit: (proposal: RuleProposal) => void;
+  onDelete: (id: string) => void;
+  onSaveConfiguration: (id: string, input: RuleConfigurationInput) => void;
   onCreateManual: () => void;
   onRun: () => void;
 }) {
@@ -1025,6 +1107,9 @@ function RulesPage({
                 onApprove={() => onApprove(proposal.id)}
                 onReject={() => onReject(proposal.id)}
                 onEdit={() => onEdit(proposal)}
+                onDelete={() => onDelete(proposal.id)}
+                configuration={configurations.find((item) => item.rule_id === proposal.id)}
+                onSaveConfiguration={(input) => onSaveConfiguration(proposal.id, input)}
               />
             ))}
           </div>
@@ -1040,12 +1125,18 @@ function ProposalCard({
   onApprove,
   onReject,
   onEdit,
+  onDelete,
+  configuration,
+  onSaveConfiguration,
 }: {
   proposal: RuleProposal;
   canOperate: boolean;
   onApprove: () => void;
   onReject: () => void;
   onEdit: () => void;
+  onDelete: () => void;
+  configuration?: RuleConfiguration;
+  onSaveConfiguration: (input: RuleConfigurationInput) => void;
 }) {
   const pending = ["PROPOSED", "EDITED"].includes(proposal.status);
   const editable = pending || proposal.status === "APPROVED";
@@ -1117,10 +1208,28 @@ function ProposalCard({
               <span>→</span>
             </button>
           )}
+          {proposal.status !== "APPROVED" && (
+            <button className="button ghost" onClick={onDelete}>Delete</button>
+          )}
         </div>
+      )}
+      {proposal.status === "APPROVED" && canOperate && (
+        <RuleConfigurationControl configuration={configuration} onSave={onSaveConfiguration} />
       )}
     </article>
   );
+}
+
+function RuleConfigurationControl({ configuration, onSave }: { configuration?: RuleConfiguration; onSave: (input: RuleConfigurationInput) => void }) {
+  const [executionStatus, setExecutionStatus] = useState<RuleConfiguration["execution_status"]>(configuration?.execution_status ?? "ACTIVE");
+  const [frequency, setFrequency] = useState<RuleConfiguration["schedule_frequency"]>(configuration?.schedule_frequency ?? "MANUAL");
+  const [timezone, setTimezone] = useState(configuration?.timezone ?? "UTC");
+  useEffect(() => {
+    setExecutionStatus(configuration?.execution_status ?? "ACTIVE");
+    setFrequency(configuration?.schedule_frequency ?? "MANUAL");
+    setTimezone(configuration?.timezone ?? "UTC");
+  }, [configuration]);
+  return <div className="rule-settings"><span className="eyebrow">EXECUTION SETTINGS</span><div className="rule-settings-fields"><select value={executionStatus} onChange={(event) => setExecutionStatus(event.target.value as RuleConfiguration["execution_status"])}><option value="ACTIVE">Active</option><option value="PAUSED">Paused</option></select><select value={frequency} onChange={(event) => setFrequency(event.target.value as RuleConfiguration["schedule_frequency"])}><option value="MANUAL">Manual only</option><option value="HOURLY">Hourly</option><option value="DAILY">Daily</option></select><input value={timezone} onChange={(event) => setTimezone(event.target.value)} aria-label="Timezone" /><button className="button ghost" onClick={() => onSave({ execution_status: executionStatus, schedule_frequency: frequency, timezone })}>Save settings</button></div></div>;
 }
 
 function RunsPage({
@@ -1267,6 +1376,23 @@ function RunsPage({
       )}
     </>
   );
+}
+
+function AdminPage({ users, access, loading, onCreate, onUpdate, onGrant, onRevoke }: { users: UserAccount[]; access: DatasetAccess[]; loading: boolean; onCreate: (input: UserCreateInput) => void; onUpdate: (username: string, input: UserUpdateInput) => void; onGrant: (username: string, level: DatasetAccessLevel) => void; onRevoke: (username: string) => void }) {
+  const [username, setUsername] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState<UserRole>("USER");
+  const [grantUsername, setGrantUsername] = useState("");
+  const [grantLevel, setGrantLevel] = useState<DatasetAccessLevel>("READ");
+  const grantedNames = new Set(access.map((item) => item.username));
+  return <><div className="page-heading"><div><span className="eyebrow">ADMINISTRATION</span><h1>Accounts and access</h1><p>Provision local demo users and grant read or manage access to the registered dataset.</p></div></div><div className="admin-grid"><section className="panel"><div className="panel-heading"><div><span className="eyebrow">ACCOUNT DIRECTORY</span><h3>Local users</h3></div><span className="panel-caption">{users.length} accounts</span></div><form className="admin-form" onSubmit={(event) => { event.preventDefault(); onCreate({ username, display_name: displayName, password, role }); setUsername(""); setDisplayName(""); setPassword(""); }}><input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="username" required /><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="display name" required /><input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="password (8+ chars)" type="password" minLength={8} required /><select value={role} onChange={(event) => setRole(event.target.value as UserRole)}><option>USER</option><option>STEWARD</option><option>ADMIN</option></select><button className="button primary">Create account</button></form><div className="admin-list">{loading ? <div className="table-empty">Loading accounts…</div> : users.map((user) => <AdminUserRow key={user.id} user={user} onUpdate={onUpdate} />)}</div></section><section className="panel"><div className="panel-heading"><div><span className="eyebrow">DATASET ACCESS</span><h3>Registered artifact</h3></div><span className="panel-caption">{access.length} grants</span></div><form className="admin-form grant" onSubmit={(event) => { event.preventDefault(); if (grantUsername) onGrant(grantUsername, grantLevel); }}><select value={grantUsername} onChange={(event) => setGrantUsername(event.target.value)} required><option value="">Select account</option>{users.filter((user) => !grantedNames.has(user.username)).map((user) => <option key={user.username} value={user.username}>{user.username} · {user.role}</option>)}</select><select value={grantLevel} onChange={(event) => setGrantLevel(event.target.value as DatasetAccessLevel)}><option value="READ">Read</option><option value="MANAGE">Manage</option></select><button className="button primary">Grant access</button></form><div className="admin-list">{access.map((grant) => <div className="admin-row" key={grant.id}><div><strong>{grant.display_name}</strong><small>{grant.username} · {grant.role}</small></div><span className="status-pill info"><span className="status-dot" />{grant.access_level}</span><button className="button ghost" onClick={() => onRevoke(grant.username)}>Revoke</button></div>)}</div></section></div></>;
+}
+
+function AdminUserRow({ user, onUpdate }: { user: UserAccount; onUpdate: (username: string, input: UserUpdateInput) => void }) {
+  const [role, setRole] = useState<UserRole>(user.role);
+  const [status, setStatus] = useState(user.status);
+  return <div className="admin-row"><div><strong>{user.display_name}</strong><small>{user.username} · created {formatTime(user.created_at)}</small></div><select value={role} onChange={(event) => setRole(event.target.value as UserRole)}><option>USER</option><option>STEWARD</option><option>ADMIN</option></select><select value={status} onChange={(event) => setStatus(event.target.value as typeof status)}><option>ACTIVE</option><option>SUSPENDED</option><option>DISABLED</option></select><button className="button ghost" onClick={() => onUpdate(user.username, { role, status })}>Save</button></div>;
 }
 
 function AuditPage({ logs }: { logs: AuditLog[] }) {

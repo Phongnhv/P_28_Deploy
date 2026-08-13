@@ -11,7 +11,14 @@ import type {
   ManualRuleInput,
   ReviewInput,
   RuleProposal,
+  RuleConfiguration,
+  RuleConfigurationInput,
   SessionResponse,
+  DatasetAccess,
+  DatasetAccessLevel,
+  UserAccount,
+  UserCreateInput,
+  UserUpdateInput,
 } from "../types";
 
 const datasetId = "dataset-nyc-yellow-taxi-50k";
@@ -130,10 +137,24 @@ let jobs: Job[] = [];
 let runs: DqRun[] = [];
 let results = new Map<string, DqResult[]>();
 let auditLogs: AuditLog[] = [];
+let configurations: RuleConfiguration[] = [];
+let currentUsername = "";
+let currentRole = "USER";
+let accounts: Array<UserAccount & { password: string }> = [
+  { id: "user-user", username: "user", display_name: "User", password: "user", role: "USER", status: "ACTIVE", created_by: "system-seed", created_at: now(), updated_at: now() },
+  { id: "user-steward", username: "steward", display_name: "Steward", password: "steward", role: "STEWARD", status: "ACTIVE", created_by: "system-seed", created_at: now(), updated_at: now() },
+  { id: "user-admin", username: "admin", display_name: "Admin", password: "admin", role: "ADMIN", status: "ACTIVE", created_by: "system-seed", created_at: now(), updated_at: now() },
+];
+let access: DatasetAccess[] = [
+  { id: "access-user", dataset_id: datasetId, username: "user", display_name: "User", role: "USER", access_level: "READ", granted_by: "system-seed", granted_at: now() },
+  { id: "access-steward", dataset_id: datasetId, username: "steward", display_name: "Steward", role: "STEWARD", access_level: "MANAGE", granted_by: "system-seed", granted_at: now() },
+];
 
 function addAudit(action: string, entityType: string, entityId: string, summary: string) {
-  auditLogs = [{ id: `audit-${Date.now()}`, action, entity_type: entityType, entity_id: entityId, actor: "Data Steward", summary, created_at: now() }, ...auditLogs];
+  auditLogs = [{ id: `audit-${Date.now()}`, action, entity_type: entityType, entity_id: entityId, actor: currentUsername || "local-system", summary, created_at: now() }, ...auditLogs];
 }
+
+function ensureAdmin() { if (currentRole !== "ADMIN") throw new Error("Only an administrator can manage accounts and access."); }
 
 function makeJob(type: Job["type"]): Job {
   const timestamp = now();
@@ -159,15 +180,18 @@ async function finishJob(jobId: string, type: Job["type"]) {
 export const mockApi: ApiClient = {
   async createSession(username, password): Promise<SessionResponse> {
     await wait(300);
-    if (!["user", "steward", "admin"].includes(username) || password !== username) {
-      throw new Error("Use user/user, steward/steward, or admin/admin.");
-    }
+    const account = accounts.find((item) => item.username === username.trim().toLowerCase());
+    if (!account || account.status !== "ACTIVE" || account.password !== password) throw new Error("Invalid username or password.");
+    currentUsername = account.username;
+    currentRole = account.role;
     addAudit("SESSION_STARTED", "session", "local-session", "Started a local Data Steward session.");
-    return { username, role: username === "user" ? "USER" : username === "admin" ? "ADMIN" : "STEWARD", csrf_token: "local-csrf-token", expires_at: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString() };
+    return { username: account.username, role: account.role, csrf_token: "local-csrf-token", expires_at: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString() };
   },
   async deleteSession() {
     await wait(150);
     addAudit("SESSION_ENDED", "session", "local-session", "Ended the local Data Steward session.");
+    currentUsername = "";
+    currentRole = "USER";
   },
   async listDatasets() {
     await wait(250);
@@ -215,11 +239,31 @@ export const mockApi: ApiClient = {
     const updated = { ...existing, ...input, status, rule: input.rule ?? existing.rule, updated_at: now() };
     delete (updated as Partial<ReviewInput>).action;
     proposals = proposals.map((proposal) => proposal.id === id ? updated : proposal);
+    if (status === "APPROVED" && !configurations.some((item) => item.rule_id === id)) configurations = [...configurations, { rule_id: id, execution_status: "ACTIVE", schedule_frequency: "MANUAL", timezone: "UTC", updated_at: now() }];
     addAudit(`PROPOSAL_${status}`, "rule_proposal", id, `${status === "APPROVED" ? "Approved" : status === "REJECTED" ? "Rejected" : "Edited"} rule proposal “${updated.title}”.`);
     return updated;
   },
+  async deleteProposal(id) {
+    const proposal = proposals.find((item) => item.id === id);
+    if (!proposal) throw new Error("Proposal not found.");
+    if (proposal.status === "APPROVED") throw new Error("Reject an approved proposal before deleting it.");
+    proposals = proposals.filter((item) => item.id !== id);
+    configurations = configurations.filter((item) => item.rule_id !== id);
+    addAudit("PROPOSAL_DELETED", "rule_proposal", id, `Deleted rule proposal “${proposal.title}”.`);
+  },
+  async listRuleConfigurations(id) {
+    return id === datasetId ? configurations : [];
+  },
+  async updateRuleConfiguration(id, input: RuleConfigurationInput) {
+    const proposal = proposals.find((item) => item.id === id);
+    if (!proposal || proposal.status !== "APPROVED") throw new Error("Only approved rules can be configured.");
+    const updated: RuleConfiguration = { rule_id: id, ...input, updated_at: now() };
+    configurations = configurations.some((item) => item.rule_id === id) ? configurations.map((item) => item.rule_id === id ? updated : item) : [...configurations, updated];
+    addAudit("RULE_CONFIGURATION_UPDATED", "rule_configuration", id, `Updated execution settings for “${proposal.title}”.`);
+    return updated;
+  },
   async startDqRun(ruleIds, _idempotencyKey) {
-    const approved = proposals.filter((proposal) => ruleIds.includes(proposal.id) && proposal.status === "APPROVED");
+    const approved = proposals.filter((proposal) => ruleIds.includes(proposal.id) && proposal.status === "APPROVED" && configurations.find((item) => item.rule_id === proposal.id)?.execution_status !== "PAUSED");
     if (!approved.length) throw new Error("At least one approved rule is required.");
     const job = makeJob("RUN_DQ");
     const run: DqRun = { id: `run-${Date.now()}`, job_id: job.id, dataset_id: datasetId, rule_ids: approved.map((proposal) => proposal.id), status: "PENDING", total_failed: 0, total_checked: 0, created_at: now() };
@@ -247,4 +291,26 @@ export const mockApi: ApiClient = {
     await wait(180);
     return auditLogs;
   },
+  async listUsers() { ensureAdmin(); return accounts.map(({ password: _password, ...account }) => account); },
+  async createUser(input: UserCreateInput) {
+    ensureAdmin(); const username = input.username.trim().toLowerCase();
+    if (accounts.some((item) => item.username === username)) throw new Error("An account with this username already exists.");
+    const account = { id: `user-${Date.now()}`, username, display_name: input.display_name.trim(), password: input.password, role: input.role, status: "ACTIVE" as const, created_by: currentUsername, created_at: now(), updated_at: now() };
+    accounts = [...accounts, account]; addAudit("USER_CREATED", "user", account.id, `Created account '${username}'.`); const { password: _password, ...publicAccount } = account; return publicAccount;
+  },
+  async updateUser(username: string, input: UserUpdateInput) {
+    ensureAdmin(); const existing = accounts.find((item) => item.username === username.toLowerCase());
+    if (!existing) throw new Error("User not found.");
+    if (existing.username === currentUsername && (input.status === "SUSPENDED" || input.status === "DISABLED" || (input.role && input.role !== "ADMIN"))) throw new Error("An admin cannot remove their own active admin access.");
+    const updated = { ...existing, ...input, password: input.password ?? existing.password, updated_at: now() }; accounts = accounts.map((item) => item.username === existing.username ? updated : item);
+    access = access.map((item) => item.username === updated.username ? { ...item, display_name: updated.display_name, role: updated.role } : item); addAudit("USER_UPDATED", "user", updated.id, `Updated account '${updated.username}'.`); const { password: _password, ...publicAccount } = updated; return publicAccount;
+  },
+  async listDatasetAccess(id: string) { ensureAdmin(); return id === datasetId ? access : []; },
+  async grantDatasetAccess(id: string, username: string, accessLevel: DatasetAccessLevel) {
+    ensureAdmin(); const account = accounts.find((item) => item.username === username.toLowerCase()); if (!account) throw new Error("User not found.");
+    const existing = access.find((item) => item.dataset_id === id && item.username === account.username);
+    const grant: DatasetAccess = existing ? { ...existing, access_level: accessLevel, granted_by: currentUsername, granted_at: now() } : { id: `access-${Date.now()}`, dataset_id: id, username: account.username, display_name: account.display_name, role: account.role, access_level: accessLevel, granted_by: currentUsername, granted_at: now() };
+    access = existing ? access.map((item) => item.id === existing.id ? grant : item) : [...access, grant]; addAudit("DATASET_ACCESS_GRANTED", "dataset_access", grant.id, `Updated access for '${account.username}'.`); return grant;
+  },
+  async revokeDatasetAccess(id: string, username: string) { ensureAdmin(); const grant = access.find((item) => item.dataset_id === id && item.username === username.toLowerCase()); if (!grant) throw new Error("Dataset access grant not found."); access = access.filter((item) => item.id !== grant.id); addAudit("DATASET_ACCESS_REVOKED", "dataset_access", grant.id, `Revoked access for '${username}'.`); },
 };
