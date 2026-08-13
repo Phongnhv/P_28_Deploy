@@ -337,7 +337,9 @@ def main() -> None:
     if not args.all:
         cutoff = datetime.now(tz=VN_TZ) - timedelta(hours=args.hours)
 
-    repo_root_n = "" if args.no_repo_filter else _normalize(str(Path.cwd()))
+    repo_root = git("git rev-parse --show-toplevel")
+    default_repo_name = Path(repo_root).name if repo_root else "P-028"
+    repo_root_n = "" if args.no_repo_filter else _normalize(repo_root or str(Path.cwd()))
 
     repo = git("git remote get-url origin").split("/")[-1].replace(".git", "")
     branch = git("git rev-parse --abbrev-ref HEAD")
@@ -347,7 +349,7 @@ def main() -> None:
 
     new_entries: list[dict] = []
     for msg in iter_user_inputs(brain_dirs, cutoff, args.conv_id, repo_root_n):
-        entry = build_entry(msg, repo or Path.cwd().name, branch, commit,
+        entry = build_entry(msg, repo or default_repo_name, branch, commit,
                             student)
         if entry["entry_id"] in logged_ids:
             continue
