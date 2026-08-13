@@ -13,7 +13,6 @@ import re
 from datetime import datetime
 from typing import Any
 
-from src.agents.nodes.templates import steward_insights_prompt
 from src.agents.state import AgentState
 from src.services.llm import get_llm
 
@@ -243,11 +242,15 @@ async def steward_insights_node(state: AgentState) -> dict:
     remediation_actions: list[dict] = []
 
     try:
+        from src.agents.nodes.templates import steward_insights_prompt
         from src.config import get_settings
+        from src.models.steward_insights_schemas import StewardStructuredInsights
+
         settings = get_settings()
         llm = get_llm(settings.llm_provider, temperature=0.2)
-        chain = steward_insights_prompt | llm
-        response = await chain.ainvoke({
+
+        structured_llm = llm.with_structured_output(StewardStructuredInsights)
+        prompt_value = await steward_insights_prompt.ainvoke({
             "dataset_id": dataset_id,
             "dq_score": dq_score,
             "dq_grade": dq_grade,
@@ -257,10 +260,34 @@ async def steward_insights_node(state: AgentState) -> dict:
             "anomalies_json": json.dumps(anomalies, ensure_ascii=False, indent=2, default=str),
             "profile_digest_json": json.dumps(profile_digest, ensure_ascii=False, indent=2, default=str),
         })
+        response = await structured_llm.ainvoke(prompt_value)
 
-        content = response.content if hasattr(response, "content") else str(response)
-        steward_summary = _clean_markdown(str(content))
-        remediation_actions = _extract_remediation_actions(steward_summary)
+        steward_next_steps_str = "\n".join(f"- [ ] {action}" for action in response.steward_next_steps)
+        eng_next_steps_str = "\n".join(f"- [ ] {action}" for action in response.engineering_next_steps)
+
+        steward_summary = f"""# 📊 Báo Cáo Chất Lượng Dữ Liệu: {dataset_id}
+
+### 1. 📊 Tổng Quan Sức Khỏe Dữ Liệu (Executive DQ Summary)
+{response.executive_dq_summary}
+
+### 2. 🚨 Phân Tích Lỗi & Cảnh Báo Bất Thường (Failure & Anomaly Drill-Down)
+{response.failure_anomaly_drill_down}
+
+### 3. 🎯 Đánh Giá & Gợi Ý Tinh Chỉnh Ruleset (Rule Tuning Recommendations)
+{response.rule_tuning_recommendations}
+
+### 4. 🛠️ Kế Hoạch Hành Động Đề Xuất (Actionable Next Steps)
+#### Dành cho Data Steward:
+{steward_next_steps_str}
+
+#### Dành cho Data Engineering / Source Team:
+{eng_next_steps_str}
+"""
+
+        remediation_actions = [
+            {"action": action, "completed": False}
+            for action in response.steward_next_steps + response.engineering_next_steps
+        ]
         logger.info("Đã tạo Steward Insights Report thành công cho dataset %s (DQ Score: %.2f)", dataset_id, dq_score)
 
     except Exception as exc:
