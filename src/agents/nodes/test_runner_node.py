@@ -36,9 +36,16 @@ def _fetch_sample_failures(
     dialect_name: str = "sqlite",
     limit: int = 5,
 ) -> list[dict]:
-    """Lấy tối đa 5 bản ghi mẫu vi phạm điều kiện."""
+    """Lấy tối đa 5 bản ghi mẫu vi phạm điều kiện.
+
+    CRITICAL SAFETY GUARD: predicate MUST be programmatically constructed (e.g. from _build_row_predicate)
+    and must not accept raw user input directly.
+    """
     if not predicate or predicate == "1=0":
         return []
+
+    # Basic runtime safety guards
+    assert "--" not in predicate and ";" not in predicate, "Security violation: potential SQL injection detected in predicate"
 
     quoted_table = _quote_ident(table_name, dialect_name)
     sample_sql = f"SELECT * FROM {quoted_table} WHERE {predicate} LIMIT {limit}"

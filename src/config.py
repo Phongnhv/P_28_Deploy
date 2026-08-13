@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     debug_dump_table_digests: bool = False
 
     # Database
-    database_url: str = os.getenv("DATABASE_URL")
+    database_url: str = Field(default="sqlite:///steward_local.db")
 
     # Vector Store
     chroma_persist_dir: str = "./data/chroma" # Change to .env later

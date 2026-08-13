@@ -1,10 +1,41 @@
 import json
 import logging
 import uuid
+from datetime import datetime, UTC
+import asyncio
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Header, Request, Response
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from src.agents.graph import agent
+from src.models.database import (
+    SessionModel,
+    DatasetModel,
+    JobModel,
+    RuleProposalModel,
+    RuleVersionModel,
+    DqRunModel,
+    DqResultModel,
+    AuditEventModel,
+    ProfileModel,
+    ColumnProfileModel,
+)
+from src.services.rule_store import get_engine
+from src.services.session_service import (
+    get_current_session,
+    verify_csrf,
+    enforce_role,
+    create_user_session,
+    SESSION_COOKIE_NAME,
+)
+from src.services.job_runner import (
+    run_ingest_profile,
+    run_propose_rules,
+    run_dq_checks,
+    add_audit_event,
+)
+from src.services.job_service import get_job
 from src.models.schemas import (
     ActiveRuleResponse,
     ActiveRulesListResponse,
@@ -30,6 +61,7 @@ from src.models.schemas import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+dq_router = APIRouter(prefix="/dq", tags=["Data Quality"])
 
 # ---------------------------------------------------------------------------
 # DB Dependency
@@ -278,7 +310,9 @@ def start_ingestion(
 
     collision_job_id = verify_idempotency(db, idempotency_key)
     if collision_job_id:
-        return CreateJobResponse(job_id=collision_job_id, status="PENDING")
+        coll_job = db.query(JobModel).filter(JobModel.id == collision_job_id).first()
+        status_val = coll_job.status if coll_job else "PENDING"
+        return CreateJobResponse(job_id=collision_job_id, status=status_val)
 
     job_id = str(uuid.uuid4())
     job = JobModel(
@@ -311,7 +345,7 @@ def start_ingestion(
     return CreateJobResponse(job_id=job_id, status="PENDING")
 
 @router.get("/jobs/{id}")
-def get_job_status(id: str, db: Session = Depends(get_db)):
+def get_job_status(id: str, session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])), db: Session = Depends(get_db)):
     """
     GET /api/v1/jobs/{id} - Returns current status of job.
     """
@@ -385,7 +419,9 @@ def start_rule_proposals(
 
     collision_job_id = verify_idempotency(db, idempotency_key)
     if collision_job_id:
-        return CreateJobResponse(job_id=collision_job_id, status="PENDING")
+        coll_job = db.query(JobModel).filter(JobModel.id == collision_job_id).first()
+        status_val = coll_job.status if coll_job else "PENDING"
+        return CreateJobResponse(job_id=collision_job_id, status=status_val)
 
     job_id = str(uuid.uuid4())
     job = JobModel(
@@ -657,7 +693,9 @@ def start_dq_run(
         # Find matching run id
         existing_run = db.query(DqRunModel).filter(DqRunModel.job_id == collision_job_id).first()
         run_id = existing_run.id if existing_run else ""
-        return DqRunCreateResponse(job_id=collision_job_id, run_id=run_id, status="PENDING")
+        coll_job = db.query(JobModel).filter(JobModel.id == collision_job_id).first()
+        status_val = coll_job.status if coll_job else "PENDING"
+        return DqRunCreateResponse(job_id=collision_job_id, run_id=run_id, status=status_val)
 
     # Resolve dataset_id from the first rule
     rule_id = body.rule_ids[0]
@@ -777,24 +815,48 @@ def list_audit_logs(
     GET /api/v1/audit-logs - Returns paginated system logs.
     """
     logs = db.query(AuditEventModel).order_by(AuditEventModel.created_at.desc()).offset(offset).limit(limit).all()
+    session_ids = {log.session_id for log in logs if log.session_id}
+    sessions = {}
+    if session_ids:
+        session_objs = db.query(SessionModel).filter(SessionModel.id.in_(list(session_ids))).all()
+        sessions = {s.id: s.username for s in session_objs}
+
     return [
         AuditLogSchema(
             id=log.id,
             action=log.action_code,
             entity_type=log.entity_type,
             entity_id=log.entity_id,
-            actor=f"{log.actor_role} ({db.query(SessionModel).filter(SessionModel.id == log.session_id).first().username if log.session_id and db.query(SessionModel).filter(SessionModel.id == log.session_id).first() else 'system'})",
+            actor=f"{log.actor_role} ({sessions.get(log.session_id, 'system')})",
             summary=json.loads(log.detail_json).get("message", f"Transitioned {log.entity_type} {log.entity_id}"),
             created_at=log.created_at.isoformat()
         ) for log in logs
     ]
 
 # ---------------------------------------------------------------------------
+# Agent Chat & Status Routes
+# ---------------------------------------------------------------------------
+@router.post("/chat", response_model=ChatResponse)
+async def chat_endpoint(request: ChatRequest):
+    if not request.message:
+        raise HTTPException(status_code=422, detail="Message cannot be empty")
+    state = {"query": request.message}
+    result = await agent.ainvoke(state)
+    return ChatResponse(
+        response=result.get("response", ""),
+        analysis=result.get("analysis", "")
+    )
+
+@router.get("/status")
+async def status_endpoint():
+    return {"status": "healthy", "agent": "ready"}
+
+# ---------------------------------------------------------------------------
 # Compatibility / Smoke Test Route
 # ---------------------------------------------------------------------------
 class SmokeCreateJobRequest(BaseModel):
     type: str
-    linked_entity: str = None
+    linked_entity: str | None = None
 
 @router.post("/jobs", status_code=202)
 def compatibility_trigger_job(
@@ -834,6 +896,8 @@ def compatibility_trigger_job(
         background_tasks.add_task(run_ingest_profile, job_id, "dataset-nyc-yellow-taxi-50k", None, "SYSTEM")
     elif request.type == "PROPOSE_RULES":
         background_tasks.add_task(run_propose_rules, job_id, "dataset-nyc-yellow-taxi-50k", None, "SYSTEM")
+
+    return {"job_id": job_id, "status": "PENDING"}
 
 async def _run_execution_pipeline(
     test_run_id: str,
@@ -1040,5 +1104,119 @@ async def execute_active_tests(
         table_name=request.table_name,
     )
     return ExecuteTestsResponse(test_run_id=test_run_id, status="QUEUED")
+
+
+# ---------------------------------------------------------------------------
+# HITL REST API Endpoints
+# ---------------------------------------------------------------------------
+
+@dq_router.get(
+    "/runs/{run_id}/rules",
+    response_model=list[RuleReviewResponse],
+)
+async def list_proposal_rules(
+    run_id: str,
+    status: str | None = None,
+    dimension: str | None = None,
+) -> list[RuleReviewResponse]:
+    from src.services.rule_store import list_rules, get_run
+    run = await asyncio.to_thread(get_run, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
+    
+    rules = await asyncio.to_thread(list_rules, run_id=run_id, status=status, dimension=dimension)
+    return [RuleReviewResponse(**r) for r in rules]
+
+
+@dq_router.patch(
+    "/runs/{run_id}/rules/{rule_id}",
+    response_model=RuleReviewResponse,
+)
+async def review_proposal_rule(
+    run_id: str,
+    rule_id: str,
+    body: RuleUpdateRequest,
+) -> RuleReviewResponse:
+    from src.services.rule_store import review_rule, get_run
+    run = await asyncio.to_thread(get_run, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
+    
+    res = await asyncio.to_thread(
+        review_rule,
+        run_id=run_id,
+        rule_id=rule_id,
+        status=body.status.value if hasattr(body.status, 'value') else body.status,
+        edited_parameters=body.edited_parameters,
+        severity=body.severity,
+        reviewer=body.reviewer,
+        review_note=body.review_note
+    )
+    if not res:
+        raise HTTPException(status_code=404, detail=f"rule_id={rule_id!r} không tồn tại trong run_id={run_id!r}")
+    return RuleReviewResponse(**res)
+
+
+@dq_router.post(
+    "/runs/{run_id}/rules/bulk-review",
+    response_model=BulkReviewResponse,
+)
+async def bulk_review_proposal_rules(
+    run_id: str,
+    body: BulkReviewRequest,
+) -> BulkReviewResponse:
+    from src.services.rule_store import bulk_review, get_run
+    run = await asyncio.to_thread(get_run, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
+    
+    decisions_dict = [
+        {
+            "rule_id": d.rule_id,
+            "status": d.status.value if hasattr(d.status, 'value') else d.status,
+            "edited_parameters": d.edited_parameters,
+            "severity": d.severity,
+            "reviewer": d.reviewer,
+            "review_note": d.review_note
+        } for d in body.decisions
+    ]
+    updated, not_found = await asyncio.to_thread(bulk_review, run_id, decisions_dict)
+    return BulkReviewResponse(
+        updated_count=len(updated),
+        rules=[RuleReviewResponse(**r) for r in updated],
+        not_found=not_found
+    )
+
+
+@dq_router.get(
+    "/runs/{run_id}/review-summary",
+    response_model=ReviewSummaryResponse,
+)
+async def get_run_review_summary(run_id: str) -> ReviewSummaryResponse:
+    from src.services.rule_store import get_review_summary, get_run
+    run = await asyncio.to_thread(get_run, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
+    
+    res = await asyncio.to_thread(get_review_summary, run_id)
+    return ReviewSummaryResponse(**res)
+
+
+@dq_router.get(
+    "/runs/{run_id}/approved-rules",
+    response_model=ApprovedRulesResponse,
+)
+async def get_run_approved_rules(run_id: str) -> ApprovedRulesResponse:
+    from src.services.rule_store import get_approved_rules, get_run
+    run = await asyncio.to_thread(get_run, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
+    
+    rules = await asyncio.to_thread(get_approved_rules, run_id)
+    return ApprovedRulesResponse(
+        run_id=run_id,
+        count=len(rules),
+        rules=[RuleReviewResponse(**r) for r in rules]
+    )
 
 

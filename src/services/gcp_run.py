@@ -19,7 +19,7 @@ def dispatch_cloud_run_job(job_id: str, job_type: str) -> bool:
         logger.info(f"Local environment detected. Dispatching job {job_id} to local worker.")
         try:
             worker_url = os.getenv("LOCAL_WORKER_URL", "http://worker:8001/run")
-            response = httpx.post(f"{worker_url}?job_id={job_id}&job_type={job_type}", timeout=5.0)
+            response = httpx.post(worker_url, params={"job_id": job_id, "job_type": job_type}, timeout=5.0)
             response.raise_for_status()
             logger.info("Local worker successfully triggered.")
             return True
