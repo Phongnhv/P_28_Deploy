@@ -1,7 +1,8 @@
-import subprocess
-from fastapi import FastAPI, BackgroundTasks
 import os
+import subprocess
 import sys
+
+from fastapi import BackgroundTasks, FastAPI
 
 app = FastAPI()
 
@@ -12,7 +13,7 @@ def run_job(job_id: str, job_type: str):
     env = os.environ.copy()
     env["RUN_JOB_ID"] = job_id
     env["RUN_JOB_TYPE"] = job_type
-    
+
     # Replace 'src.worker' with your actual worker entrypoint module
     print(f"[LocalWorker] Starting Job {job_id} ({job_type})...")
     try:

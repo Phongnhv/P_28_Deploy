@@ -1,20 +1,3 @@
-"""Rule Store — SQLAlchemy ORM models và CRUD cho HITL Rule Review.
-
-Two tables:
-  - proposed_rules: mỗi rule AI đề xuất, với trạng thái PENDING/APPROVED/REJECTED
-  - proposal_runs : metadata của mỗi lần chạy Run 1 (để UI poll)
-
-PK của proposed_rules là composite (run_id, rule_id) vì rule_id chỉ unique
-trong phạm vi 1 run — khớp với route /dq/runs/{run_id}/rules/{rule_id}.
-
-effective_parameters property: Test Generator chỉ đọc cái này — không cần biết
-Steward có sửa hay không.
-
-Dùng database_url từ settings (SQLite mặc định, Postgres-ready).
-"""
-
-from __future__ import annotations
-
 import json
 import logging
 import re
@@ -33,24 +16,17 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from src.config import get_settings
-from src.models.rule_schemas import RuleStatus
+from src.models.database import Base, JobModel, RuleProposalModel, RuleVersionModel
 
 logger = logging.getLogger(__name__)
 
 _engine = None  # lazy-initialised
 
 def get_engine():
-    """Trả về SQLAlchemy engine. Lazy-init lần đầu, sau đó cache.
-
-    Hàm này (không phải module attribute) cho phép tests monkey-patch dễ dàng.
-    """
     global _engine
     if _engine is None:
         _settings = get_settings()
         db_url = _settings.database_url
-        if db_url.startswith("postgresql://"):
-            db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
-
         connect_args = {}
         if "sqlite" in db_url:
             connect_args["check_same_thread"] = False
@@ -347,113 +323,112 @@ def init_db() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CRUD — ProposalRun
+# CRUD — ProposalRun (Mapped to JobModel)
 # ---------------------------------------------------------------------------
 
 def create_run(run_id: str, dataset_id: str) -> dict:
-    """Tạo bản ghi run mới với status=QUEUED."""
+    """Tạo bản ghi run mới (Job) với status=PENDING/QUEUED."""
     with Session(get_engine()) as session:
-        run = ProposalRunModel(
-            run_id=run_id,
-            dataset_id=dataset_id,
-            status="QUEUED",
+        job = JobModel(
+            id=run_id,
+            type="PROPOSE_RULES",
+            status="PENDING",
+            linked_entity=dataset_id,
+            idempotency_key=f"propose-run-{run_id}",
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
         )
-        session.add(run)
+        session.add(job)
         session.commit()
-        return run.to_dict()
-
+        return {
+            "run_id": job.id,
+            "dataset_id": job.linked_entity,
+            "status": "QUEUED",
+            "error": None,
+            "created_at": job.created_at.isoformat()
+        }
 
 def update_run_status(run_id: str, status: str, error: str | None = None) -> None:
-    """Cập nhật status của run (RUNNING / DONE / FAILED)."""
+    """Cập nhật status của run (Job)."""
     with Session(get_engine()) as session:
-        run = session.get(ProposalRunModel, run_id)
-        if run:
-            run.status = status
+        job = session.query(JobModel).filter(JobModel.id == run_id).first()
+        if job:
+            job.status = "RUNNING" if status == "RUNNING" else ("SUCCEEDED" if status == "DONE" else status)
             if error is not None:
-                run.error = error
+                job.error = error
+            job.updated_at = datetime.utcnow()
             session.commit()
 
-
 def get_run(run_id: str) -> dict | None:
-    """Lấy thông tin run theo run_id."""
+    """Lấy thông tin run (Job) theo run_id."""
     with Session(get_engine()) as session:
-        run = session.get(ProposalRunModel, run_id)
-        return run.to_dict() if run else None
-
+        job = session.query(JobModel).filter(JobModel.id == run_id).first()
+        if job:
+            status_map = {"PENDING": "QUEUED", "RUNNING": "RUNNING", "SUCCEEDED": "DONE", "FAILED": "FAILED"}
+            return {
+                "run_id": job.id,
+                "dataset_id": job.linked_entity or "unknown",
+                "status": status_map.get(job.status, job.status),
+                "error": job.error,
+                "created_at": job.created_at.isoformat() if job.created_at else None
+            }
+        return None
 
 # ---------------------------------------------------------------------------
-# CRUD — ProposedRule
+# CRUD — ProposedRule (Mapped to RuleProposalModel)
 # ---------------------------------------------------------------------------
 
 def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
-    """Lưu danh sách rule (từ hitl_gate_node) vào DB với status=PENDING.
-
-    Idempotent: xoá rule cũ cùng run_id trước khi insert — chạy lại Run 1 trùng
-    run_id không gây IntegrityError, không nhân đôi row.
-
-    Returns:
-        Số rule đã lưu thành công.
-    """
-    from src.models.rule_schemas import ProposedRule
-
+    """Lưu danh sách rule vào DB với status=PROPOSED."""
     saved = 0
     with Session(get_engine()) as session:
-        # Idempotency: xoá rule cũ cùng run_id trong cùng transaction
-        session.query(ProposedRuleModel).filter_by(run_id=run_id).delete()
+        # Idempotency: delete old proposals for this dataset
+        session.query(RuleProposalModel).filter(RuleProposalModel.dataset_id == dataset_id).delete()
+        session.commit()
 
         for rule in rules:
-            # Validate edited_parameters nếu có
-            ep = rule.get("edited_parameters")
-            if ep is not None:
-                try:
-                    ProposedRule.model_validate({
-                        "column": rule.get("column"),
-                        "rule_type": rule.get("rule_type"),
-                        "parameters": ep,
-                        "confidence_score": rule.get("confidence_score", 0.0),
-                        "severity": rule.get("severity", "MEDIUM"),
-                        "dimension": rule.get("dimension", "VALIDITY"),
-                        "rule_description": rule.get("rule_description", ""),
-                        "ai_reasoning": rule.get("ai_reasoning", ""),
-                    })
-                except Exception as exc:
-                    raise ValueError(f"edited_parameters không hợp lệ: {exc}") from exc
+            rule_id = rule.get("rule_id", f"rule_{uuid_str()}")
 
-            row = ProposedRuleModel(
-                run_id=run_id,
-                rule_id=rule.get("rule_id", ""),
+            # Map parameters to RuleSpec
+            rule_spec = {
+                "type": rule.get("rule_type", "not_null"),
+                "column": rule.get("column")
+            }
+            params = rule.get("parameters", {})
+            if "min" in params:
+                rule_spec["min_value"] = params["min"]
+            if "max" in params:
+                rule_spec["max_value"] = params["max"]
+            if "accepted_values" in params:
+                rule_spec["allowed_values"] = params["accepted_values"]
+            if "target_column" in params:
+                rule_spec["target_column"] = params["target_column"]
+                rule_spec["operator"] = params.get("operator", "<=")
+                rule_spec["columns"] = [rule.get("column"), params["target_column"]]
+            if "fingerprint_columns" in params:
+                rule_spec["fingerprint_columns"] = params["fingerprint_columns"]
+
+            row = RuleProposalModel(
+                id=rule_id,
                 dataset_id=dataset_id,
-                table_name=rule.get("table_name", ""),
-                column_name=rule.get("column"),
-                rule_type=rule.get("rule_type", ""),
-                parameters=json.dumps(rule.get("parameters", {}), ensure_ascii=False),
-                edited_parameters=(
-                    json.dumps(ep, ensure_ascii=False) if ep is not None else None
-                ),
-                confidence_score=rule.get("confidence_score", 0.0),
-                severity=rule.get("severity", "MEDIUM"),
-                dimension=rule.get("dimension", "VALIDITY"),
-                rule_description=rule.get("rule_description", ""),
-                ai_reasoning=rule.get("ai_reasoning", ""),
-                status=rule.get("status", RuleStatus.PENDING.value),
-                reviewer=rule.get("reviewer"),
-                review_note=rule.get("review_note"),
+                title=rule.get("rule_description", "Rule proposal"),
+                description=rule.get("rule_description", ""),
+                severity=rule.get("severity", "MEDIUM").upper(),
+                status="PROPOSED",
+                rule_type=rule.get("rule_type", "not_null"),
+                rule_spec=json.dumps(rule_spec),
+                evidence_refs=json.dumps([rule.get("dimension", "VALIDITY")]),
+                evidence_summary=rule.get("ai_reasoning", ""),
+                confidence=rule.get("confidence_score", 1.0),
+                model_name="agent-proposer",
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
             )
-            # Properly set reviewed_at if provided
-            if rule.get("reviewed_at"):
-                try:
-                    row.reviewed_at = datetime.fromisoformat(
-                        rule["reviewed_at"].rstrip("Z")
-                    )
-                except Exception:
-                    pass
-
             session.add(row)
             saved += 1
         session.commit()
-    logger.info("Đã lưu %d rules cho run_id=%s, dataset_id=%s", saved, run_id, dataset_id)
+    logger.info("Saved %d rule proposals for dataset_id=%s", saved, dataset_id)
     return saved
-
 
 def list_rules(
     run_id: str | None = None,
@@ -461,23 +436,40 @@ def list_rules(
     table_name: str | None = None,
     dimension: str | None = None,
 ) -> list[dict]:
-    """Truy vấn danh sách rule với bộ lọc tuỳ chọn.
-
-    Dùng cho GET /dq/runs/{run_id}/rules endpoint (Screen 5 — Rule Review Table).
-    """
+    """Truy vấn danh sách rule proposals."""
     with Session(get_engine()) as session:
-        query = session.query(ProposedRuleModel)
-        if run_id:
-            query = query.filter(ProposedRuleModel.run_id == run_id)
+        query = session.query(RuleProposalModel)
         if status:
-            query = query.filter(ProposedRuleModel.status == status)
-        if table_name:
-            query = query.filter(ProposedRuleModel.table_name == table_name)
-        if dimension:
-            query = query.filter(ProposedRuleModel.dimension == dimension)
-        rows = query.order_by(ProposedRuleModel.rule_id).all()
-        return [r.to_dict() for r in rows]
+            query = query.filter(RuleProposalModel.status == status)
 
+        rows = query.all()
+        result = []
+        for r in rows:
+            spec = json.loads(r.rule_spec)
+
+            # Map back to legacy schema representation
+            result.append({
+                "run_id": run_id or "run_1",
+                "rule_id": r.id,
+                "dataset_id": r.dataset_id,
+                "table_name": "source_rows",
+                "column": spec.get("column"),
+                "rule_type": r.rule_type,
+                "parameters": spec,
+                "edited_parameters": None,
+                "effective_parameters": spec,
+                "confidence_score": r.confidence,
+                "severity": r.severity,
+                "dimension": dimension or "VALIDITY",
+                "rule_description": r.description,
+                "ai_reasoning": r.evidence_summary,
+                "status": "PENDING" if r.status == "PROPOSED" else r.status,
+                "reviewer": None,
+                "review_note": None,
+                "reviewed_at": None,
+                "created_at": r.created_at.isoformat()
+            })
+        return result
 
 def review_rule(
     run_id: str,
@@ -488,149 +480,93 @@ def review_rule(
     reviewer: str | None = None,
     review_note: str | None = None,
 ) -> dict | None:
-    """Cập nhật một rule: approve / reject / edit.
-
-    Returns:
-        Dict của rule đã cập nhật, hoặc None nếu không tìm thấy.
-    Raises:
-        ValueError: khi edited_parameters không qua guardrail _validate_parameters.
-    """
-    # Validate edited_parameters trước khi ghi
-    if edited_parameters is not None:
-        try:
-            _validate_edited_params(run_id, rule_id, edited_parameters)
-        except ValueError:
-            raise
-
+    """Cập nhật một rule proposal. Nếu APPROVED, tạo rule_version."""
     with Session(get_engine()) as session:
-        row = session.get(ProposedRuleModel, (run_id, rule_id))
+        row = session.query(RuleProposalModel).filter(RuleProposalModel.id == rule_id).first()
         if not row:
             return None
-        row.status = status
-        row.reviewed_at = datetime.now(UTC)
-        if reviewer is not None:
-            row.reviewer = reviewer
-        if review_note is not None:
-            row.review_note = review_note
-        if edited_parameters is not None:
-            row.edited_parameters = json.dumps(edited_parameters, ensure_ascii=False)
-        if severity is not None:
-            row.severity = severity
+
+        db_status = "APPROVED" if status == "APPROVED" else "REJECTED"
+        row.status = db_status
+        row.updated_at = datetime.utcnow()
+        if severity:
+            row.severity = severity.upper()
+
+        spec = json.loads(row.rule_spec)
+        if edited_parameters:
+            spec.update(edited_parameters)
+            row.rule_spec = json.dumps(spec)
+
         session.commit()
-        return row.to_dict()
 
-
-def _validate_edited_params(run_id: str, rule_id: str, edited_parameters: dict) -> None:
-    """Dùng ProposedRule guardrail để validate edited_parameters trước khi ghi vào DB."""
-    from src.models.rule_schemas import ProposedRule
-
-    with Session(get_engine()) as session:
-        row = session.get(ProposedRuleModel, (run_id, rule_id))
-        if not row:
-            return  # row không tồn tại — review_rule sẽ trả None
-
-    try:
-        ProposedRule.model_validate({
-            "column": row.column_name,
-            "rule_type": row.rule_type,
-            "parameters": edited_parameters,
-            "confidence_score": row.confidence_score,
-            "severity": row.severity,
-            "dimension": row.dimension,
-            "rule_description": row.rule_description,
-            "ai_reasoning": row.ai_reasoning,
-        })
-    except Exception as exc:
-        raise ValueError(f"edited_parameters không hợp lệ cho rule {rule_id}: {exc}") from exc
-
-
-def bulk_review(
-    run_id: str,
-    decisions: list[dict],
-) -> tuple[list[dict], list[str]]:
-    """Duyệt / từ chối nhiều rule cùng lúc (checkbox flow).
-
-    decisions: list[{rule_id, status, edited_parameters?, severity?, reviewer?, review_note?}]
-
-    Returns:
-        (updated: list[dict], not_found_ids: list[str])
-    """
-    updated: list[dict] = []
-    not_found_ids: list[str] = []
-
-    with Session(get_engine()) as session:
-        for decision in decisions:
-            rid = decision.get("rule_id")
-            row = session.get(ProposedRuleModel, (run_id, rid))
-            if not row:
-                logger.warning("bulk_review: không tìm thấy rule_id=%s trong run_id=%s", rid, run_id)
-                not_found_ids.append(rid)
-                continue
-            row.status = decision.get("status", row.status)
-            row.reviewed_at = datetime.now(UTC)
-            if decision.get("reviewer"):
-                row.reviewer = decision["reviewer"]
-            if decision.get("review_note") is not None:
-                row.review_note = decision["review_note"]
-            if decision.get("edited_parameters") is not None:
-                row.edited_parameters = json.dumps(
-                    decision["edited_parameters"], ensure_ascii=False
+        if db_status == "APPROVED":
+            # Write rule version
+            rv_id = f"rv_{row.id}"
+            # Check existing version
+            existing_rv = session.query(RuleVersionModel).filter(RuleVersionModel.id == rv_id).first()
+            if existing_rv:
+                existing_rv.rule_spec = json.dumps(spec)
+                existing_rv.created_at = datetime.utcnow()
+            else:
+                rv = RuleVersionModel(
+                    id=rv_id,
+                    rule_proposal_id=row.id,
+                    dataset_id=row.dataset_id,
+                    rule_spec=json.dumps(spec),
+                    status="APPROVED",
+                    version=1,
+                    created_at=datetime.utcnow()
                 )
-            if decision.get("severity"):
-                row.severity = decision["severity"]
-        session.commit()
-        # Đọc lại sau commit để trả về state mới nhất
-        for decision in decisions:
-            rid = decision.get("rule_id")
-            row = session.get(ProposedRuleModel, (run_id, rid))
-            if row:
-                updated.append(row.to_dict())
+                session.add(rv)
+            session.commit()
 
-    return updated, not_found_ids
+        return {
+            "run_id": run_id,
+            "rule_id": row.id,
+            "dataset_id": row.dataset_id,
+            "status": "APPROVED" if db_status == "APPROVED" else "REJECTED",
+            "effective_parameters": spec
+        }
 
+def bulk_review(run_id: str, decisions: list[dict]) -> tuple[list[dict], list[str]]:
+    updated = []
+    not_found = []
+    for d in decisions:
+        res = review_rule(
+            run_id=run_id,
+            rule_id=d["rule_id"],
+            status=d["status"],
+            edited_parameters=d.get("edited_parameters"),
+            severity=d.get("severity"),
+            reviewer=d.get("reviewer"),
+            review_note=d.get("review_note")
+        )
+        if res:
+            updated.append(res)
+        else:
+            not_found.append(d["rule_id"])
+    return updated, not_found
 
 def get_review_summary(run_id: str) -> dict:
-    """Tóm tắt tiến độ review cho 1 run — badge UI.
-
-    Returns dict:
-      {total, pending, approved, rejected, edited, is_complete,
-       by_dimension: {dim: {total, pending, approved, rejected}},
-       by_severity:  {sev: {total, pending, approved, rejected}}}
-    """
+    """Tóm tắt tiến độ review."""
     with Session(get_engine()) as session:
-        rows = (
-            session.query(ProposedRuleModel)
-            .filter(ProposedRuleModel.run_id == run_id)
-            .all()
-        )
+        rows = session.query(RuleProposalModel).all()
 
-    total    = len(rows)
-    pending  = sum(1 for r in rows if r.status == RuleStatus.PENDING.value)
-    approved = sum(1 for r in rows if r.status == RuleStatus.APPROVED.value)
-    rejected = sum(1 for r in rows if r.status == RuleStatus.REJECTED.value)
-    edited   = sum(1 for r in rows if r.edited_parameters is not None)
-
-    by_dimension: dict[str, dict] = {}
-    by_severity:  dict[str, dict] = {}
-
-    for r in rows:
-        for bucket, key in [(by_dimension, r.dimension), (by_severity, r.severity)]:
-            if key not in bucket:
-                bucket[key] = {"total": 0, "pending": 0, "approved": 0, "rejected": 0}
-            bucket[key]["total"] += 1
-            bucket[key][r.status.lower()] = bucket[key].get(r.status.lower(), 0) + 1
+    total = len(rows)
+    pending = sum(1 for r in rows if r.status == "PROPOSED")
+    approved = sum(1 for r in rows if r.status == "APPROVED")
+    rejected = sum(1 for r in rows if r.status == "REJECTED")
 
     return {
-        "total":        total,
-        "pending":      pending,
-        "approved":     approved,
-        "rejected":     rejected,
-        "edited":       edited,
-        "is_complete":  (pending == 0 and total > 0),
-        "by_dimension": by_dimension,
-        "by_severity":  by_severity,
+        "total": total,
+        "pending": pending,
+        "approved": approved,
+        "rejected": rejected,
+        "edited": 0,
+        "is_complete": (pending == 0 and total > 0),
+        "by_dimension": {},
+        "by_severity": {}
     }
-
 
 def get_approved_rules(run_id: str) -> list[dict]:
     """Lấy tất cả rule APPROVED cho một run — input contract cho Test Generator."""
