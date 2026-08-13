@@ -11,7 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src.api.routes import router
+from src.api.routes import router, dq_router
 from src.config import get_settings
 from src.services.rule_store import get_engine, init_db
 
@@ -112,6 +112,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 app.include_router(router, prefix="/api/v1")
+app.include_router(dq_router, prefix="/api/v1")
 
 @app.get("/health", tags=["System"])
 async def health():
@@ -124,7 +125,8 @@ async def ready():
             session.execute(text("SELECT 1"))
         return {"status": "ready", "database": "connected"}
     except Exception as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Service unavailable: Database connection failed. {str(e)}"
-        )
+        logger.error("Ready check database connection failed: %s", e, exc_info=True)
+        detail = "Service unavailable: Database connection failed."
+        if settings.app_env == "local":
+            detail += f" {str(e)}"
+        raise HTTPException(status_code=503, detail=detail)

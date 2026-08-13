@@ -21,6 +21,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ridepulse-worker")
 
+def to_float(val):
+    if val is None or val == '':
+        return None
+    try:
+        return float(val)
+    except Exception:
+        return None
+
+def to_int(val):
+    if val is None or val == '':
+        return None
+    try:
+        return int(float(val))
+    except Exception:
+        return None
+
+def to_str(val):
+    if val is None:
+        return None
+    return str(val)
+
 def run_ingest_profile(job_id: str, dataset_id: str):
     """
     Worker handler for INGEST_PROFILE job type.
@@ -62,30 +83,6 @@ def run_ingest_profile(job_id: str, dataset_id: str):
 
         batch = []
         for r in rows:
-            # Map string/numeric fields safely
-            # Note: 50k parquet files might have some string fields and some numeric fields.
-            # We convert types to match database trips_raw schema
-            def to_float(val):
-                if val is None or val == '':
-                    return None
-                try:
-                    return float(val)
-                except Exception:
-                    return None
-
-            def to_int(val):
-                if val is None or val == '':
-                    return None
-                try:
-                    return int(float(val))
-                except Exception:
-                    return None
-
-            def to_str(val):
-                if val is None:
-                    return None
-                return str(val)
-
             # In the 50k parquet/CSV, some categories like vendor_id are strings like "Curb Mobility, LLC".
             # The trips_raw schema in 001_schema.sql has vendor_id as INT.
             # Let's map strings back to integers if needed to prevent insertion errors, or use strings.
@@ -234,12 +231,15 @@ async def main():
     init_db()
 
     engine = get_engine()
+    linked_entity = "yellow_tripdata"
     with Session(engine) as session:
         # Fetch the job
         job = session.query(JobModel).filter_by(id=job_id).first()
         if not job:
             logger.error(f"Job {job_id} not found in database.")
             sys.exit(1)
+        if job.linked_entity:
+            linked_entity = job.linked_entity
 
     # Try to claim the job
     if not claim_job(job_id):
@@ -251,12 +251,12 @@ async def main():
     try:
         if job_type == "INGEST_PROFILE":
             # Run ingestion and profiling synchronously
-            run_ingest_profile(job_id, job.linked_entity or "yellow_tripdata")
+            run_ingest_profile(job_id, linked_entity)
         elif job_type == "PROPOSE_RULES":
             # Run proposals using async graph
-            await run_propose_rules(job_id, job.linked_entity or "yellow_tripdata")
+            await run_propose_rules(job_id, linked_entity)
         elif job_type == "RUN_DQ":
-            run_dq(job_id, job.linked_entity or "yellow_tripdata")
+            run_dq(job_id, linked_entity)
         else:
             raise ValueError(f"Unknown job type: {job_type}")
 

@@ -10,6 +10,10 @@ from src.services.job_service import get_job, update_job_status
 async def test_job_dispatch_and_idempotency():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        # Login first to satisfy authentication
+        login_res = await client.post("/api/v1/session", json={"username": "steward", "password": "steward"})
+        assert login_res.status_code == 200
+
         ikey = "test-idem-key-12345"
 
         # 1. Test successful dispatch (202 Accepted)
@@ -43,5 +47,5 @@ async def test_job_dispatch_and_idempotency():
         # 4. Test GET poll endpoint
         res3 = await client.get(f"/api/v1/jobs/{job_id}")
         assert res3.status_code == 200
-        assert res3.json()["job_id"] == job_id
+        assert res3.json()["id"] == job_id
         assert res3.json()["status"] == "COMPLETED"
