@@ -256,6 +256,9 @@ nav { display: grid; gap: 3px; }
 :root[data-theme="dark"] .login-art::before { background: radial-gradient(circle at 70% 42%, rgb(59 130 246 / 24%), transparent 26rem), linear-gradient(135deg, transparent 52%, rgb(255 255 255 / 3%) 52%, transparent 52.15%); }
 :root[data-theme="dark"] input, :root[data-theme="dark"] select, :root[data-theme="dark"] textarea { border-color: var(--border); color: var(--ink); background: #0d172b; }
 :root[data-theme="dark"] .sidebar { border-color: var(--border); background: #101a2e; }
+:root[data-theme="dark"] .security-card { border-color: #304a76; background: #172744; }
+:root[data-theme="dark"] .security-card strong { color: #f3f6ff; }
+:root[data-theme="dark"] .security-card small { color: #c7d2e8; }
 :root[data-theme="dark"] .nav-item { color: #aab8d1; }
 :root[data-theme="dark"] .nav-item:hover { color: var(--ink); background: #1a2947; }
 :root[data-theme="dark"] .nav-item.active { border-color: #385889; color: #c8dcff; background: #172744; }
