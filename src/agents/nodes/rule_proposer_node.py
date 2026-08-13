@@ -20,7 +20,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -337,7 +337,7 @@ def _stamp_rule(
         "reviewer": None,
         "review_note": None,
         "reviewed_at": None,
-        "created_at": datetime.utcnow().isoformat() + "Z",
+        "created_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -436,7 +436,7 @@ async def rule_proposer_node(state: AgentState) -> dict:
         dump_file = rule_proposer_dir / f"debug_proposed_rules_{timestamp}_{run_id}.json"
         dump_payload = {
             "run_id": run_id,
-            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.now(UTC).isoformat(),
             "total_rules": len(flat_rules),
             "total_errors": len(errors),
             "proposed_rules": flat_rules,

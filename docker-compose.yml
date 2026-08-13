@@ -62,7 +62,7 @@ services:
     environment:
       - APP_ENV=local
       - DATABASE_URL=postgresql+psycopg2://postgres:localpassword@db:5432/ridepulse
-      - RUNNER_DATABASE_URL=postgresql+psycopg2://ridepulse_runner:YOUR_RUNNER_PASSWORD_HERE@db:5432/ridepulse
+      - RUNNER_DATABASE_URL=postgresql+psycopg2://ridepulse_runner:${RUNNER_DB_PASSWORD:-test_password}@db:5432/ridepulse
     depends_on:
       db:
         condition: service_healthy

@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from src.agents.state import AgentState
@@ -70,7 +70,7 @@ async def hitl_gate_node(state: AgentState) -> dict:
         trace_payload = {
             "run_id": run_id,
             "dataset_id": dataset_id,
-            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.now(UTC).isoformat(),
             "rules_count": n_saved,
             "proposed_rules": proposed_rules,
         }

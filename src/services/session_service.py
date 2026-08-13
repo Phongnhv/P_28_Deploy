@@ -1,4 +1,5 @@
 import logging
+import secrets
 import uuid
 from datetime import datetime, timedelta
 
@@ -38,7 +39,7 @@ def create_user_session(username: str, password: str, db: Session) -> SessionMod
         expected_password = getattr(settings, "demo_admin_password", "admin")
         role = "ADMIN"
 
-    if not expected_password or password != expected_password:
+    if not expected_password or not secrets.compare_digest(password, expected_password):
         raise HTTPException(
             status_code=401,
             detail={"code": "UNAUTHORIZED", "message": "Invalid username or password"}
@@ -89,8 +90,8 @@ def get_current_session(request: Request, db: Session) -> SessionModel:
         try:
             db.delete(session)
             db.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to delete expired session: %s", e)
         raise HTTPException(
             status_code=401,
             detail="Session has expired"

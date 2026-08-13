@@ -100,7 +100,10 @@ def _build_row_predicate(
             "!=": "!=",
             "<>": "!=",
         }
-        safe_op = op_whitelist.get(op, "<=")
+        safe_op = op_whitelist.get(op)
+        if safe_op is None:
+            logger.warning("Unknown operator %s in CROSS_FIELD_COMPARISON, falling back to <=", op)
+            safe_op = "<="
         quoted_target = _quote_ident(target_col, dialect_name)
         if not col or not target_col:
             return "1=0", binds
