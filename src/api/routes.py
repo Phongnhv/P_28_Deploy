@@ -1,63 +1,55 @@
+import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, UTC
-import asyncio
+from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Header, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from src.agents.graph import agent
 from src.models.database import (
-    SessionModel,
+    AuditEventModel,
+    ColumnProfileModel,
     DatasetModel,
+    DqResultModel,
+    DqRunModel,
     JobModel,
+    ProfileModel,
     RuleProposalModel,
     RuleVersionModel,
-    DqRunModel,
-    DqResultModel,
-    AuditEventModel,
-    ProfileModel,
-    ColumnProfileModel,
+    SessionModel,
 )
-from src.services.rule_store import get_engine
-from src.services.session_service import (
-    get_current_session,
-    verify_csrf,
-    enforce_role,
-    create_user_session,
-    SESSION_COOKIE_NAME,
-)
-from src.services.job_runner import (
-    run_ingest_profile,
-    run_propose_rules,
-    run_dq_checks,
-    add_audit_event,
-)
-from src.services.job_service import get_job
 from src.models.schemas import (
     ActiveRuleResponse,
     ActiveRulesListResponse,
     ApprovedRulesResponse,
     BulkReviewRequest,
     BulkReviewResponse,
-    ChatRequest,
-    ChatResponse,
     ExecuteActiveTestsRequest,
     ExecuteTestsResponse,
-    ProposeRequest,
-    ProposeResponse,
     PublishRulesResponse,
     ReviewSummaryResponse,
     RuleReviewResponse,
     RuleUpdateRequest,
-    RunStatusResponse,
     TestResultResponse,
     TestResultsListResponse,
     TestRunStatusResponse,
 )
-
+from src.services.job_runner import (
+    add_audit_event,
+    run_dq_checks,
+    run_ingest_profile,
+    run_propose_rules,
+)
+from src.services.rule_store import get_engine
+from src.services.session_service import (
+    SESSION_COOKIE_NAME,
+    create_user_session,
+    enforce_role,
+    get_current_session,
+    verify_csrf,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -836,17 +828,6 @@ def list_audit_logs(
 # ---------------------------------------------------------------------------
 # Agent Chat & Status Routes
 # ---------------------------------------------------------------------------
-@router.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(request: ChatRequest):
-    if not request.message:
-        raise HTTPException(status_code=422, detail="Message cannot be empty")
-    state = {"query": request.message}
-    result = await agent.ainvoke(state)
-    return ChatResponse(
-        response=result.get("response", ""),
-        analysis=result.get("analysis", "")
-    )
-
 @router.get("/status")
 async def status_endpoint():
     return {"status": "healthy", "agent": "ready"}
@@ -989,6 +970,8 @@ async def get_test_run_results(
     """Lấy danh sách kết quả kiểm thử của từng rule trong test run."""
     from src.services.rule_store import (
         get_test_results as store_get_results,
+    )
+    from src.services.rule_store import (
         get_test_run as store_get_test_run,
     )
 
@@ -1119,11 +1102,11 @@ async def list_proposal_rules(
     status: str | None = None,
     dimension: str | None = None,
 ) -> list[RuleReviewResponse]:
-    from src.services.rule_store import list_rules, get_run
+    from src.services.rule_store import get_run, list_rules
     run = await asyncio.to_thread(get_run, run_id)
     if not run:
         raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
-    
+
     rules = await asyncio.to_thread(list_rules, run_id=run_id, status=status, dimension=dimension)
     return [RuleReviewResponse(**r) for r in rules]
 
@@ -1137,11 +1120,11 @@ async def review_proposal_rule(
     rule_id: str,
     body: RuleUpdateRequest,
 ) -> RuleReviewResponse:
-    from src.services.rule_store import review_rule, get_run
+    from src.services.rule_store import get_run, review_rule
     run = await asyncio.to_thread(get_run, run_id)
     if not run:
         raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
-    
+
     res = await asyncio.to_thread(
         review_rule,
         run_id=run_id,
@@ -1169,7 +1152,7 @@ async def bulk_review_proposal_rules(
     run = await asyncio.to_thread(get_run, run_id)
     if not run:
         raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
-    
+
     decisions_dict = [
         {
             "rule_id": d.rule_id,
@@ -1197,7 +1180,7 @@ async def get_run_review_summary(run_id: str) -> ReviewSummaryResponse:
     run = await asyncio.to_thread(get_run, run_id)
     if not run:
         raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
-    
+
     res = await asyncio.to_thread(get_review_summary, run_id)
     return ReviewSummaryResponse(**res)
 
@@ -1211,7 +1194,7 @@ async def get_run_approved_rules(run_id: str) -> ApprovedRulesResponse:
     run = await asyncio.to_thread(get_run, run_id)
     if not run:
         raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
-    
+
     rules = await asyncio.to_thread(get_approved_rules, run_id)
     return ApprovedRulesResponse(
         run_id=run_id,

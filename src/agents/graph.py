@@ -1,33 +1,8 @@
+import logging
+
 from langgraph.graph import END, StateGraph
 
-from src.agents.nodes.example_node import analyze_node, respond_node
 from src.agents.state import AgentState
-
-
-def should_continue(state: AgentState) -> str:
-    """Route based on whether an error occurred during analysis."""
-    if state.get("error"):
-        return END
-    return "respond"
-
-
-def build_graph() -> StateGraph:
-    graph = StateGraph(AgentState)
-
-    # Add nodes
-    graph.add_node("analyze", analyze_node)
-    graph.add_node("respond", respond_node)
-
-    # Add edges
-    graph.set_entry_point("analyze")
-    graph.add_conditional_edges("analyze", should_continue)
-    graph.add_edge("respond", END)
-
-    return graph.compile()
-
-
-agent = build_graph()
-
 
 # ---------------------------------------------------------------------------
 # Run 1: Proposal Graph (profiler → digest → rule_proposer → persist_rules)
@@ -77,9 +52,8 @@ def build_proposal_graph() -> StateGraph:
     return graph.compile()
 
 
-
 # ---------------------------------------------------------------------------
-# Run 2: Execution Graph (Test Generator ➔ Validate ➔ Repair ➔ Run ➔ Anomaly)
+# Run 2: Execution Graph (Test Generator ➔ Validate ➔ Repair ➔ Run ➔ Anomaly ➔ Steward Insights ➔ Persist)
 # ---------------------------------------------------------------------------
 
 def _should_repair_or_run(state: AgentState) -> str:
@@ -95,11 +69,12 @@ def build_execution_graph() -> StateGraph:
     """Xây dựng graph cho Run 2 (Execution Graph).
 
     Luồng:
-      test_generator ➔ validate_sql ➔ (repair loop nếu lỗi) ➔ test_runner ➔ anomaly_detector ➔ persist_report ➔ END
+      test_generator ➔ validate_sql ➔ (repair loop nếu lỗi) ➔ test_runner ➔ anomaly_detector ➔ steward_insights ➔ persist_report ➔ END
     """
     from src.agents.nodes.anomaly_detector_node import anomaly_detector_node
     from src.agents.nodes.llm_repair_node import llm_repair_node
     from src.agents.nodes.persist_report_node import persist_report_node
+    from src.agents.nodes.steward_insights_node import steward_insights_node
     from src.agents.nodes.test_generator_node import test_generator_node
     from src.agents.nodes.test_runner_node import test_runner_node
     from src.agents.nodes.validate_sql_node import validate_sql_node
@@ -111,6 +86,7 @@ def build_execution_graph() -> StateGraph:
     graph.add_node("llm_repair", llm_repair_node)
     graph.add_node("test_runner", test_runner_node)
     graph.add_node("anomaly_detector", anomaly_detector_node)
+    graph.add_node("steward_insights", steward_insights_node)
     graph.add_node("persist_report", persist_report_node)
 
     graph.set_entry_point("test_generator")
@@ -128,9 +104,10 @@ def build_execution_graph() -> StateGraph:
     # llm_repair ➔ validate_sql (vòng lặp sửa lỗi)
     graph.add_edge("llm_repair", "validate_sql")
 
-    # test_runner ➔ anomaly_detector ➔ persist_report ➔ END
+    # test_runner ➔ anomaly_detector ➔ steward_insights ➔ persist_report ➔ END
     graph.add_edge("test_runner", "anomaly_detector")
-    graph.add_edge("anomaly_detector", "persist_report")
+    graph.add_edge("anomaly_detector", "steward_insights")
+    graph.add_edge("steward_insights", "persist_report")
     graph.add_edge("persist_report", END)
 
     return graph.compile()
@@ -140,7 +117,6 @@ def build_execution_graph() -> StateGraph:
 # Pipeline Runners (Run 1 & Run 2)
 # ---------------------------------------------------------------------------
 
-import logging
 logger = logging.getLogger("graph_runner")
 
 async def run_proposal_graph(
@@ -150,6 +126,7 @@ async def run_proposal_graph(
 ) -> dict:
     """Chạy toàn bộ pipeline Run 1 (Đề xuất Rules): Profiler -> Digest -> Proposer -> HITL Gate."""
     import uuid
+
     from src.config import get_settings
     from src.services.rule_store import create_run, get_review_summary, init_db, list_rules, update_run_status
 
@@ -210,8 +187,9 @@ async def run_execution_graph(
     dataset_id: str = "yellow_tripdata",
     proposal_run_id: str | None = None,
 ) -> dict:
-    """Chạy toàn bộ pipeline Run 2 (Thực thi Test): Active Rules -> Generator -> Validate -> Runner -> Anomaly -> Report."""
+    """Chạy toàn bộ pipeline Run 2 (Thực thi Test): Active Rules -> Generator -> Validate -> Runner -> Anomaly -> Steward Insights -> Report."""
     import uuid
+
     from src.services.rule_store import (
         create_test_run,
         get_active_rules,
@@ -246,9 +224,11 @@ async def run_execution_graph(
     try:
         final_state = await execution_graph.ainvoke(initial_state)
 
-        test_run_rec = get_test_run(test_run_id)
+        _test_run_rec = get_test_run(test_run_id)
         results = get_test_results(test_run_id)
         anomalies = final_state.get("anomalies", [])
+        dq_score = final_state.get("dq_score", 100.0)
+        dq_grade = final_state.get("dq_grade", "A")
 
         passed = sum(1 for r in results if r["status"] == "PASSED")
         failed = sum(1 for r in results if r["status"] == "FAILED")
@@ -257,10 +237,12 @@ async def run_execution_graph(
         print("\n" + "=" * 75)
         print(f"🎉 RUN 2 HOÀN THÀNH THÀNH CÔNG (test_run_id: {test_run_id})")
         print("=" * 75)
+        print(f"• DQ Health Score       : {dq_score}/100 (Grade {dq_grade})")
         print(f"• Tổng số rules đã test : {len(results)}")
         print(f"• Kết quả               : {passed} PASSED | {failed} FAILED | {errors} ERROR")
         print(f"• Số điểm dị thường     : {len(anomalies)}")
-        print(f"• File báo cáo          : {final_state.get('metadata', {}).get('report_file_path', 'data/results/')}")
+        print(f"• File báo cáo JSON     : {final_state.get('metadata', {}).get('report_file_path', 'data/results/')}")
+        print(f"• File báo cáo Markdown : {final_state.get('metadata', {}).get('steward_report_path', 'N/A')}")
 
         if anomalies:
             print("\n🚨 CÁC ĐIỂM DỊ THƯỜNG PHÁT HIỆN ĐƯỢC:")
@@ -269,7 +251,7 @@ async def run_execution_graph(
                 print(f"       Lý do: {anom.get('reason')}")
 
         print("\n" + "=" * 75 + "\n")
-        return {"test_run_id": test_run_id, "results": results, "anomalies": anomalies}
+        return {"test_run_id": test_run_id, "results": results, "anomalies": anomalies, "dq_score": dq_score}
 
     except Exception as exc:
         logger.error("Run 2 thất bại: %s", exc, exc_info=True)

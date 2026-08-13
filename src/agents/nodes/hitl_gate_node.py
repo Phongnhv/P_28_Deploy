@@ -59,13 +59,14 @@ async def hitl_gate_node(state: AgentState) -> dict:
 
     # 2. Ghi trace JSON — lỗi chỉ log warning, không fail run
     trace_path: str | None = None
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     try:
         out_dir = getattr(settings, "output_dir", None)
         res_dir = getattr(settings, "results_dir", None)
         base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
         hitl_dir = Path(base_dir) / "hitl"
         hitl_dir.mkdir(parents=True, exist_ok=True)
-        out_path = hitl_dir / f"proposed_rules_{run_id}.json"
+        out_path = hitl_dir / f"proposed_rules_{timestamp}_{run_id}.json"
         trace_payload = {
             "run_id": run_id,
             "dataset_id": dataset_id,
@@ -101,9 +102,9 @@ async def main():
 
     Run: python -m src.agents.nodes.hitl_gate_node
     """
-    import asyncio
     import glob
     import os
+
     from src.services.rule_store import create_run, get_run, init_db
 
     logging.basicConfig(
@@ -127,7 +128,7 @@ async def main():
     latest_file = sorted(files, key=os.path.getmtime)[-1]
     print(f"📖 Đọc proposed rules từ: {latest_file}")
 
-    with open(latest_file, "r", encoding="utf-8") as f:
+    with open(latest_file, encoding="utf-8") as f:
         data = json.load(f)
 
     run_id = data.get("run_id", "test_hitl_run")
@@ -148,12 +149,12 @@ async def main():
     res = await hitl_gate_node(state)
     meta = res.get("metadata", {})
 
-    print(f"\n📊 Kết quả hitl_gate_node:")
+    print("\n📊 Kết quả hitl_gate_node:")
     print(f"    Run ID       : {run_id}")
     print(f"    Rules Saved  : {meta.get('rules_saved')} rules")
     print(f"    HITL Status  : {meta.get('hitl_status')}")
     print(f"    Trace Path   : {meta.get('trace_path')}")
-    print(f"    Database     : Đã lưu vào bảng 'proposed_rules' với status = 'PENDING'")
+    print("    Database     : Đã lưu vào bảng 'proposed_rules' với status = 'PENDING'")
 
     print("\n" + "=" * 75 + "\n")
 

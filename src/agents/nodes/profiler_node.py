@@ -77,7 +77,7 @@ async def raw_profiler_node(state: AgentState) -> dict:
         connection_string = connection_string.replace("postgresql://", "postgresql+psycopg2://", 1)
 
     # Danh sách các bảng hệ thống/metadata của RidePulse DQ cần bỏ qua
-    SYSTEM_TABLES = {
+    system_tables = {
         "proposal_runs",
         "proposed_rules",
         "active_rules",
@@ -94,14 +94,14 @@ async def raw_profiler_node(state: AgentState) -> dict:
             engine = get_engine()
             inspector = inspect(engine)
             all_tables = inspector.get_table_names()
-            tables = [t for t in all_tables if t.lower() not in SYSTEM_TABLES]
+            tables = [t for t in all_tables if t.lower() not in system_tables]
         else:
             engine = create_engine(connection_string)
             try:
                 with engine.connect():
                     inspector = inspect(engine)
                     all_tables = inspector.get_table_names()
-                    tables = [t for t in all_tables if t.lower() not in SYSTEM_TABLES]
+                    tables = [t for t in all_tables if t.lower() not in system_tables]
             finally:
                 engine.dispose()
     except Exception as e:
@@ -109,14 +109,15 @@ async def raw_profiler_node(state: AgentState) -> dict:
         return {"error": f"Lỗi khi kết nối database hoặc lấy danh sách bảng: {str(e)}"}
 
     if not tables:
-        logger.warning("Không tìm thấy bảng nghiệp vụ nào trong database (đã bỏ qua bảng hệ thống: %s).", SYSTEM_TABLES)
+        logger.warning("Không tìm thấy bảng nghiệp vụ nào trong database (đã bỏ qua bảng hệ thống: %s).", system_tables)
         return {"dataset_profile": {}}
 
     # 2. Profile song song (có giới hạn concurrency) và tổng hợp
     aggregated_profile = await _profile_all_tables(connection_string, tables, sampling_rate, max_concurrent_tables)
 
     # Xuất trace JSON sau khi profile xong
-    run_id = state.get("rule_run_id") or datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = state.get("rule_run_id") or "test_run"
     try:
         settings = get_settings()
         out_dir = getattr(settings, "output_dir", None)
@@ -124,7 +125,7 @@ async def raw_profiler_node(state: AgentState) -> dict:
         base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
         profiler_dir = Path(base_dir) / "profiler"
         profiler_dir.mkdir(parents=True, exist_ok=True)
-        dump_file = profiler_dir / f"debug_raw_profile_{run_id}.json"
+        dump_file = profiler_dir / f"debug_raw_profile_{timestamp}_{run_id}.json"
         dump_file.write_text(json.dumps(aggregated_profile, ensure_ascii=False, indent=2), encoding="utf-8")
         logger.info(f"Đã xuất trace raw profile ra {dump_file}")
     except Exception as e:
@@ -161,7 +162,8 @@ async def profiler_digest_node(state: AgentState) -> dict:
     digest = generate_profile_digest(dataset_profile)
 
     # Xuất trace JSON sau khi sinh digest xong
-    run_id = state.get("rule_run_id") or datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = state.get("rule_run_id") or "test_run"
     try:
         settings = get_settings()
         out_dir = getattr(settings, "output_dir", None)
@@ -169,7 +171,7 @@ async def profiler_digest_node(state: AgentState) -> dict:
         base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
         profiler_dir = Path(base_dir) / "profiler"
         profiler_dir.mkdir(parents=True, exist_ok=True)
-        dump_file = profiler_dir / f"debug_profile_digest_{run_id}.json"
+        dump_file = profiler_dir / f"debug_profile_digest_{timestamp}_{run_id}.json"
         dump_file.write_text(json.dumps(digest, ensure_ascii=False, indent=2), encoding="utf-8")
         logger.info(f"Đã xuất trace profile digest ra {dump_file}")
     except Exception as e:

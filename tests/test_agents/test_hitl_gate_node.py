@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -83,7 +84,7 @@ def _make_rule_dict(
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_rule_proposer_keeps_run_id_from_state():
+async def test_rule_proposer_keeps_run_id_from_state(tmp_path):
     """rule_proposer_node phải dùng state['rule_run_id'] thay vì sinh mới."""
     from src.agents.nodes.rule_proposer_node import rule_proposer_node
 
@@ -101,6 +102,8 @@ async def test_rule_proposer_keeps_run_id_from_state():
         mock_settings.return_value.rule_proposer_max_retries = 1
         mock_settings.return_value.debug_dump_table_digests = False
         mock_settings.return_value.llm_provider = "openai"
+        mock_settings.return_value.output_dir = str(tmp_path)
+        mock_settings.return_value.results_dir = str(tmp_path)
 
         state = {
             "dataset_profile_digest": {"tables": {"t1": {}}},
@@ -112,7 +115,7 @@ async def test_rule_proposer_keeps_run_id_from_state():
 
 
 @pytest.mark.asyncio
-async def test_rule_proposer_generates_run_id_when_missing():
+async def test_rule_proposer_generates_run_id_when_missing(tmp_path):
     """rule_proposer_node phải tự sinh run_id khi state không có."""
     from src.agents.nodes.rule_proposer_node import rule_proposer_node
 
@@ -129,6 +132,8 @@ async def test_rule_proposer_generates_run_id_when_missing():
         mock_settings.return_value.rule_proposer_max_retries = 1
         mock_settings.return_value.debug_dump_table_digests = False
         mock_settings.return_value.llm_provider = "openai"
+        mock_settings.return_value.output_dir = str(tmp_path)
+        mock_settings.return_value.results_dir = str(tmp_path)
 
         state = {"dataset_profile_digest": {"tables": {"t1": {}}}}
         result = await rule_proposer_node(state)
@@ -277,8 +282,10 @@ async def test_hitl_gate_node_returns_rules_saved(in_memory_engine, tmp_path):
 
     assert result["metadata"]["rules_saved"] == 2
     assert result["metadata"]["hitl_status"] == "AWAITING_REVIEW"
-    assert (tmp_path / "hitl" / f"proposed_rules_{run_id}.json").exists()
-    assert result["metadata"]["trace_path"] == str(tmp_path / "hitl" / f"proposed_rules_{run_id}.json")
+    trace_path = result["metadata"]["trace_path"]
+    assert trace_path is not None
+    assert Path(trace_path).exists()
+    assert trace_path.endswith(f"_{run_id}.json")
 
 
 @pytest.mark.asyncio

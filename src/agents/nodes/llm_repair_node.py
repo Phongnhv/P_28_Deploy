@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime
+
 from sqlalchemy import inspect
 
 from src.agents.nodes.templates import sql_repair_prompt
@@ -115,13 +117,16 @@ async def llm_repair_node(state: AgentState) -> dict:
         updated_tests.append(test_copy)
 
     run_id = state.get("rule_run_id") or state.get("test_run_id") or "test_run"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Xuất trace file
     try:
         from pathlib import Path
-        out_dir = Path("output/llm_repair")
+        settings = get_settings()
+        base_dir = getattr(settings, "output_dir", None) or "./output"
+        out_dir = Path(base_dir) / "llm_repair"
         out_dir.mkdir(parents=True, exist_ok=True)
-        dump_file = out_dir / f"debug_repaired_tests_{run_id}.json"
+        dump_file = out_dir / f"debug_repaired_tests_{timestamp}_{run_id}.json"
         dump_file.write_text(
             json.dumps(updated_tests, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -145,11 +150,9 @@ async def main():
 
     Run: python -m src.agents.nodes.llm_repair_node
     """
-    import asyncio
     import glob
     import os
-    from pathlib import Path
-    from sqlalchemy import text
+
     from src.services.rule_store import init_db
 
     logging.basicConfig(
@@ -168,7 +171,7 @@ async def main():
     bad_tests = []
     if files:
         latest_file = sorted(files, key=os.path.getmtime)[-1]
-        with open(latest_file, "r", encoding="utf-8") as f:
+        with open(latest_file, encoding="utf-8") as f:
             all_tests = json.load(f)
         bad_tests = [t for t in all_tests if not t.get("valid") and t.get("attempts", 0) < 3]
 

@@ -51,3 +51,27 @@ def mock_llm():
     mock = AsyncMock()
     mock.ainvoke.return_value = AsyncMock(content="Mocked LLM response")
     return mock
+
+
+@pytest.fixture(autouse=True)
+def isolate_output_dir(monkeypatch):
+    """Tự động chuyển hướng output_dir và results_dir vào thư mục output_pytest/ trong repo khi chạy pytest.
+
+    Giúp thư mục output/ trên workspace luôn sạch sẽ (chỉ chứa file chạy thật), còn file do pytest sinh ra gom vào output_pytest/.
+    """
+    from pathlib import Path
+
+    from src.config import get_settings
+
+    repo_root = Path(__file__).resolve().parent.parent
+    test_output = repo_root / "output_pytest"
+    test_output.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setenv("OUTPUT_DIR", str(test_output))
+    monkeypatch.setenv("RESULTS_DIR", str(test_output))
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "output_dir", str(test_output))
+    monkeypatch.setattr(settings, "results_dir", str(test_output))
+
+    yield test_output
