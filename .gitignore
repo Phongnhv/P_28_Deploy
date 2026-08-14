@@ -73,3 +73,19 @@ data/
 docs_kien-01033/
 output/
 output_pytest/
+
+# dbt generated artifacts
+dbt_project/target/
+dbt_project/dbt_packages/
+dbt_project/dbt_modules/
+dbt_project/logs/
+dbt_project/models/generated_dq_tests.yml
+
+# Ignore all markdown and docs files from future git tracking (only source code files allowed)
+*.md
+docs/
+/docs/
+/PR12_Report.md
+/agent_Workflow.md
+presentation/VIDEO_REHEARSAL.md
+

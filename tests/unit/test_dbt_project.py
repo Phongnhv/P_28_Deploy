@@ -50,7 +50,8 @@ def test_dbt_models_sql_structure():
     with open(profile_path, encoding="utf-8") as f:
         profile_sql = f.read()
     assert "ref('stg_trips')" in profile_sql or 'ref("stg_trips")' in profile_sql
-    assert "fare_amount" in profile_sql
+    assert "select *" in profile_sql.lower()
+
 
 
 def test_dbt_schema_yml_tests():

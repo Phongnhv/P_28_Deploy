@@ -6,8 +6,9 @@ ridepulse:
       host: "{{ env_var('DBT_HOST', 'localhost') }}"
       port: "{{ env_var('DBT_PORT', '5432') | int }}"
       user: "{{ env_var('DBT_USER', 'ridepulse_dbt') }}"
-      pass: "{{ env_var('DBT_PASSWORD') }}"
+      pass: "{{ env_var('DBT_PASSWORD', 'postgres') }}"
       dbname: "{{ env_var('DBT_DBNAME', 'ridepulse') }}"
       schema: "{{ env_var('DBT_SCHEMA', 'analytics') }}"
       threads: 4
       keepalives_idle: 0
+

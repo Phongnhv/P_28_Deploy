@@ -77,7 +77,6 @@ def _recover_pending_files() -> None:
     for pf in pending_files:
         _restore_pending(pf)
 
-
 def _sanitize_text(s: str) -> str:
     if not isinstance(s, str):
         return ""
