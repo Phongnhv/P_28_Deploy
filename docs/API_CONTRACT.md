@@ -1,9 +1,10 @@
 # RidePulse DQ — API contract
 
 > **Status:** The local MVP implements the dashboard endpoints below with FastAPI,
-> SQLite and a fixed server-side NYC artifact. Proposal generation is deliberately a
-> deterministic mock adapter while the frontend/backend workflow is being verified;
-> the guarded real-LLM adapter remains a separate increment.
+> SQLite and a fixed server-side NYC artifact. The dashboard contract is the only
+> product-facing API. Proposal generation is routed through a dashboard-to-agent
+> adapter: `AGENT_MODE=mock` supplies deterministic local fixtures; `AGENT_MODE=graph`
+> invokes the structured LangGraph proposer with persisted aggregate evidence only.
 
 ## Common rules
 
@@ -11,6 +12,8 @@
 - JSON errors use `{ "code": "STABLE_CODE", "message": "safe message", "request_id": "uuid" }`.
 - State-changing calls require the demo session and CSRF header. Browser never submits
   a filesystem path, URL, artifact content, SQL text or LLM prompt.
+- The agent receives only allow-listed aggregate profile evidence. It cannot receive
+  raw rows, sample values, source identifiers, connection strings or browser text.
 - Create-work endpoints return `202` with `{ "job_id": "uuid", "status": "PENDING" }`.
 - Poll `GET /api/v1/jobs/{job_id}`; active duplicate work returns `409`, quota `429`,
   invalid input `422` and missing/unauthenticated session `401`.
@@ -46,6 +49,9 @@ Proposals (including manual rules) start `PROPOSED`; they may be approved, edite
 rejected only through the review state machine. Approval creates an active manual
 configuration. Paused rules cannot be included in a DQ run. Only the resulting approved
 typed rule version can be included in a DQ run. The compiled SQL is not a public API field.
+Dashboard DQ execution uses the fixed typed-rule compiler, not the legacy graph's
+free-form SQL repair loop. Legacy `/api/v1/dq/*` endpoints remain compatibility/internal
+routes and are not consumed by `frontend/src/api/client.ts`.
 
 Before implementing an endpoint, add its Pydantic request/response schemas, happy-path
 and failure-path API tests, and any newly public error code to this document.

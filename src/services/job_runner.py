@@ -10,6 +10,7 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from src.config import get_settings
 from src.models.database import (
     AuditEventModel,
     ColumnProfileModel,
@@ -18,10 +19,12 @@ from src.models.database import (
     DqRunModel,
     JobModel,
     ProfileModel,
+    RuleConfigurationModel,
     RuleProposalModel,
     RuleVersionModel,
     SourceRowModel,
 )
+from src.services.dashboard_agent_workflow import generate_dashboard_proposals
 from src.services.rule_store import get_engine
 
 logger = logging.getLogger(__name__)
@@ -146,10 +149,15 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
                     sample_val = str(non_null_data.iloc[0])
 
                 data_type = "string"
+                min_value = None
+                max_value = None
                 if pd.api.types.is_integer_dtype(col_data):
                     data_type = "integer"
                 elif pd.api.types.is_float_dtype(col_data):
                     data_type = "float"
+                if pd.api.types.is_numeric_dtype(col_data) and not non_null_data.empty:
+                    min_value = float(non_null_data.min())
+                    max_value = float(non_null_data.max())
 
                 columns_profiles.append(
                     ColumnProfileModel(
@@ -158,6 +166,8 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
                         data_type=data_type,
                         null_rate=null_rate,
                         distinct_count=distinct_cnt,
+                        min_value=min_value,
+                        max_value=max_value,
                         sample_value=sample_val
                     )
                 )
@@ -181,12 +191,7 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
                 completeness_score=round(completeness_score, 2),
                 validity_score=round(validity_score, 2),
                 duplicate_rate=round(duplicate_rate, 2),
-                evidence_keys=json.dumps([
-                    "profile.row_count",
-                    "profile.trip_distance.negative_rate",
-                    "profile.payment_type.invalid_rate",
-                    "profile.duplicate_fingerprint_rate"
-                ]),
+                evidence_keys=json.dumps(["profile.row_count", "profile.completeness_score", "profile.validity_score", "profile.duplicate_rate"]),
                 generated_at=datetime.utcnow()
             )
             db.add(profile)
@@ -250,87 +255,35 @@ def run_propose_rules(job_id: str, dataset_id: str, session_id: str | None = Non
         db.commit()
 
         try:
-            # Deterministically create 5 proposals matching the 5 templates
-            proposals = [
-                {
-                    "id": "proposal-not-null",
-                    "title": "Vendor ID must not be null",
-                    "description": "Ensure the vendor_id column contains no null values. The profile showed zero nulls.",
-                    "severity": "HIGH",
-                    "rule_type": "not_null",
-                    "rule_spec": {"type": "not_null", "column": "vendor_id"},
-                    "evidence_refs": ["profile.row_count"],
-                    "evidence_summary": "vendor_id has a 100% completeness rate.",
-                    "confidence": 1.0,
-                },
-                {
-                    "id": "proposal-range",
-                    "title": "Trip distance must be non-negative",
-                    "description": "Flag trips where trip_distance is below zero. The aggregate profile shows negative distance values.",
-                    "severity": "HIGH",
-                    "rule_type": "numeric_range",
-                    "rule_spec": {"type": "numeric_range", "column": "trip_distance", "min_value": 0.0},
-                    "evidence_refs": ["profile.trip_distance.negative_rate"],
-                    "evidence_summary": "0.5% of 50,000 rows have trip_distance < 0.",
-                    "confidence": 0.95,
-                },
-                {
-                    "id": "proposal-accepted-values",
-                    "title": "Payment type must be valid enum values",
-                    "description": "Enforce valid payment_type values (1: Credit, 2: Cash, etc.).",
-                    "severity": "MEDIUM",
-                    "rule_type": "accepted_values",
-                    "rule_spec": {"type": "accepted_values", "column": "payment_type", "allowed_values": ["1", "2", "3", "4", "5", "6"]},
-                    "evidence_refs": ["profile.payment_type.invalid_rate"],
-                    "evidence_summary": "0.5% of rows have invalid payment_type values.",
-                    "confidence": 0.9,
-                },
-                {
-                    "id": "proposal-cross-field",
-                    "title": "Pickup time must be before dropoff time",
-                    "description": "Ensure that pickup_at is logically before or equal to dropoff_at.",
-                    "severity": "CRITICAL",
-                    "rule_type": "cross_field_comparison",
-                    "rule_spec": {"type": "cross_field_comparison", "columns": ["pickup_at", "dropoff_at"], "operator": "<="},
-                    "evidence_refs": ["profile.row_count"],
-                    "evidence_summary": "pickup and dropoff timestamps are aligned.",
-                    "confidence": 0.98,
-                },
-                {
-                    "id": "proposal-duplicate-fingerprint",
-                    "title": "Duplicate fingerprint detection",
-                    "description": "Verify unique combination of vendor_id, pickup_at, passenger_count.",
-                    "severity": "MEDIUM",
-                    "rule_type": "duplicate_fingerprint",
-                    "rule_spec": {"type": "duplicate_fingerprint", "fingerprint_columns": ["vendor_id", "pickup_at", "passenger_count"]},
-                    "evidence_refs": ["profile.duplicate_fingerprint_rate"],
-                    "evidence_summary": "0.5% duplicate rate detected.",
-                    "confidence": 0.85,
-                }
-            ]
+            proposals = generate_dashboard_proposals(db, dataset_id)
 
             job.progress = 60.0
             job.message = "Validating and persisting proposals..."
             db.commit()
 
-            # Clean existing rule proposals for this dataset
-            db.query(RuleProposalModel).filter(RuleProposalModel.dataset_id == dataset_id).delete()
+            # Replace only previous agent drafts. Manual and approved stewardship
+            # decisions remain immutable dashboard records.
+            db.query(RuleProposalModel).filter(
+                RuleProposalModel.dataset_id == dataset_id,
+                RuleProposalModel.model_name.like("agent-%"),
+                RuleProposalModel.status.in_(["PROPOSED", "REJECTED"]),
+            ).delete(synchronize_session=False)
             db.commit()
 
             for p in proposals:
                 prop = RuleProposalModel(
-                    id=p["id"],
+                    id=p.id,
                     dataset_id=dataset_id,
-                    title=p["title"],
-                    description=p["description"],
-                    severity=p["severity"],
+                    title=p.title,
+                    description=p.description,
+                    severity=p.severity,
                     status="PROPOSED",
-                    rule_type=p["rule_type"],
-                    rule_spec=json.dumps(p["rule_spec"]),
-                    evidence_refs=json.dumps(p["evidence_refs"]),
-                    evidence_summary=p["evidence_summary"],
-                    confidence=p["confidence"],
-                    model_name="deterministic-proposer-v1",
+                    rule_type=p.rule_type,
+                    rule_spec=json.dumps(p.rule_spec),
+                    evidence_refs=json.dumps(p.evidence_refs),
+                    evidence_summary=p.evidence_summary,
+                    confidence=p.confidence,
+                    model_name=p.model_name,
                     created_at=datetime.utcnow(),
                     updated_at=datetime.utcnow()
                 )
@@ -348,7 +301,7 @@ def run_propose_rules(job_id: str, dataset_id: str, session_id: str | None = Non
                 action_code="PROPOSALS_CREATED",
                 entity_type="dataset",
                 entity_id=dataset_id,
-                detail={"job_id": job_id, "message": "Rule proposals generated successfully."}
+                detail={"job_id": job_id, "message": "Rule proposals generated successfully.", "agent_mode": get_settings().agent_mode}
             )
 
         except Exception as e:
@@ -444,7 +397,11 @@ def compile_rule_to_sql(rule_type: str, spec: dict, columns_allowlist: set[str])
 
 def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor_role: str = "STEWARD"):
     """
-    Step 7: Compiles, validates and executes DQ queries on the database.
+    Dashboard execution adapter.
+
+    Approved dashboard rule versions are the only input. The SQL comes from fixed
+    ``compile_rule_to_sql`` templates; the legacy execution graph and its LLM repair
+    loop are intentionally not a source of executable SQL in this product flow.
     """
     engine = get_engine()
     with Session(engine) as db:
@@ -572,6 +529,10 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
             job.status = "SUCCEEDED"
             job.progress = 100.0
             job.message = "Completed"
+            completed_at = datetime.utcnow()
+            db.query(RuleConfigurationModel).filter(
+                RuleConfigurationModel.rule_proposal_id.in_([rule.rule_proposal_id for rule in rule_versions])
+            ).update({RuleConfigurationModel.last_run_at: completed_at}, synchronize_session=False)
             db.commit()
 
             add_audit_event(
@@ -581,7 +542,11 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
                 action_code="DQ_RUN_COMPLETE",
                 entity_type="dq_run",
                 entity_id=run_id,
-                detail={"total_failed": total_failed, "total_checked": total_checked}
+                detail={
+                    "total_failed": total_failed,
+                    "total_checked": total_checked,
+                    "execution_engine": "typed-compiler-v1",
+                }
             )
 
         except Exception as e:

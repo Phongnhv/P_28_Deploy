@@ -136,6 +136,8 @@ class ColumnProfileModel(Base):
     data_type: Mapped[str] = mapped_column(String(64), nullable=False)
     null_rate: Mapped[float] = mapped_column(Float, nullable=False)
     distinct_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    min_value: Mapped[float | None] = mapped_column(Float)
+    max_value: Mapped[float | None] = mapped_column(Float)
     sample_value: Mapped[str] = mapped_column(Text, nullable=False)
 
     profile: Mapped["ProfileModel"] = relationship(back_populates="columns")

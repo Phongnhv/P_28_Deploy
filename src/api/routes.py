@@ -8,6 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, 
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from src.config import get_settings
 from src.models.database import (
     AuditEventModel,
     ColumnProfileModel,
@@ -982,6 +983,11 @@ def start_dq_run(
 
     if len(approved_rules) != len(body.rule_ids):
         raise HTTPException(status_code=400, detail="Some selected rules are not approved or do not exist")
+    if {rule.dataset_id for rule in approved_rules} != {dataset_id}:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "MIXED_DATASET_RULES", "message": "All selected rules must belong to the same dataset."},
+        )
 
     selected_proposal_ids = [rule.rule_proposal_id for rule in approved_rules]
     paused_count = (
@@ -1349,18 +1355,9 @@ def list_audit_logs(
 # ---------------------------------------------------------------------------
 # Agent Chat & Status Routes
 # ---------------------------------------------------------------------------
-@router.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(request: ChatRequest):
-    if not request.message:
-        raise HTTPException(status_code=422, detail="Message cannot be empty")
-    state = {"query": request.message}
-    result = await agent.ainvoke(state)
-    return ChatResponse(response=result.get("response", ""), analysis=result.get("analysis", ""))
-
-
 @router.get("/status")
 async def status_endpoint():
-    return {"status": "healthy", "agent": "ready"}
+    return {"status": "healthy", "agent_mode": get_settings().agent_mode}
 
 
 # ---------------------------------------------------------------------------

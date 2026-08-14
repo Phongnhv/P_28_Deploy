@@ -3,7 +3,7 @@ import json
 import pytest
 from sqlalchemy.orm import Session
 
-from src.models.database import RuleProposalModel, RuleVersionModel
+from src.models.database import RuleConfigurationModel, RuleProposalModel, RuleVersionModel
 from src.services.job_runner import compile_rule_to_sql, run_dq_checks, run_ingest_profile
 from src.services.rule_store import get_engine
 
@@ -83,6 +83,14 @@ async def test_dq_run_and_failed_ids_capped_at_20(client):
             version=1
         )
         session.add(rv)
+        session.add(
+            RuleConfigurationModel(
+                rule_proposal_id=prop.id,
+                execution_status="ACTIVE",
+                schedule_frequency="MANUAL",
+                timezone="UTC",
+            )
+        )
         session.commit()
 
     # 3. Trigger DQ Run
@@ -108,6 +116,10 @@ async def test_dq_run_and_failed_ids_capped_at_20(client):
     assert res["status"] == "FAIL"
     assert len(res["failed_row_ids"]) <= 20
     assert res["failed_count"] > 20 # there are many trips with distance < 50
+    with Session(get_engine()) as session:
+        configuration = session.get(RuleConfigurationModel, "test-run-cap")
+        assert configuration is not None
+        assert configuration.last_run_at is not None
 
 def db_create_proposal(session: Session, dataset_id: str) -> RuleProposalModel:
     prop = RuleProposalModel(

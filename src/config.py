@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     google_model_name: str = os.getenv("GOOGLE_MODEL") or "gemini-3.1-flash-lite"
 
     # Rule Proposer tunables
+    agent_mode: Literal["mock", "graph"] = os.getenv("AGENT_MODE") or "mock"
     rule_proposer_concurrency: int = 10
     rule_proposer_max_retries: int = 2
     debug_dump_table_digests: bool = False

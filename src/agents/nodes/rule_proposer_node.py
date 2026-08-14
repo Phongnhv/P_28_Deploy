@@ -352,6 +352,8 @@ async def rule_proposer_node(state: AgentState) -> dict:
     trả về proposed_rules, rule_proposal_errors, rule_run_id.
     """
     settings = get_settings()
+    metadata = state.get("metadata", {})
+    max_retries = metadata.get("max_retries", settings.rule_proposer_max_retries)
 
     digest = state.get("dataset_profile_digest", {})
     if not digest:
@@ -397,7 +399,7 @@ async def rule_proposer_node(state: AgentState) -> dict:
                 table_digest=per_table[t],
                 structured_llm=structured_llm,
                 semaphore=semaphore,
-                max_retries=settings.rule_proposer_max_retries,
+                max_retries=max_retries,
             )
             for t in table_names
         ],

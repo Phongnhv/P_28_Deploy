@@ -18,23 +18,17 @@ session -> dataset -> ingest/profile job -> proposal job -> HITL review
 The browser must never supply a file path, URL, SQL statement, artifact content or
 LLM prompt. Raw source rows remain immutable.
 
-## 2. Current implementation split
+## 2. Current integration
 
-`main` contains the newer DQ implementation: proposal/review APIs under `/api/v1/dq`,
-an execution graph, a local worker, rule publishing and test-run persistence. Its
-public API is not the API consumed by the dashboard.
-
-`codex/personal-local-testing` contains the better dashboard-shaped local API:
-session/CSRF, datasets, profile, proposals, DQ runs, audit, and a frontend workflow
-test. Its local proposal and runner adapters are deterministic and simpler than the
-newer implementation on `main`.
-
-The work below should create one implementation, rather than expose both API families
-or keep two independent persistence models.
+The public dashboard API owns `RuleProposalModel`, `RuleVersionModel`, `DqRunModel`
+and `DqResultModel`. Proposal graph output is mapped into those models by the dashboard
+agent adapter; the dashboard's existing typed-rule compiler writes the DQ models
+directly. The legacy `/api/v1/dq/*` and `rule_store` run/test-run models remain
+compatibility/agent-internal and are not read by the frontend.
 
 ## 3. P0: required for an end-to-end local MVP
 
-### 3.1 Adopt one public API contract
+### 3.1 Adopt one public API contract — implemented
 
 Use the product API consumed by `frontend/src/api/client.ts` as the local MVP boundary:
 
@@ -51,7 +45,7 @@ Do not require the frontend to call the current `/api/v1/dq/*` proposal/test-run
 endpoints directly. Those routes may become internal services or compatibility
 adapters, but the dashboard must have one contract.
 
-### 3.2 Implement a single local state model
+### 3.2 Implement a single local state model — public workflow implemented; legacy cleanup remains
 
 Choose one persistence layer and migrate all workflow operations to it. Required
 local records are:
@@ -102,7 +96,7 @@ Use a fixed server-side NYC artifact. Ingestion must:
 dbt and cloud artifact storage may be omitted in this local phase, but the boundary
 must allow the later pipeline stage to replace the adapter without changing the API.
 
-### 3.6 Connect HITL and execution to the dashboard
+### 3.6 Connect HITL and execution to the dashboard — implemented
 
 The new proposal/execution services on `main` need adapters behind the dashboard API:
 

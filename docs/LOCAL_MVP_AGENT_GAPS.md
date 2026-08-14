@@ -21,7 +21,7 @@ persisted aggregate profile
 It recommends rules only. It never edits raw rows, self-approves a rule, accepts a
 browser prompt, or executes SQL written by an LLM.
 
-## 2. Current implementation split
+## 2. Current integration
 
 `main` already has two LangGraph shapes:
 
@@ -29,14 +29,19 @@ browser prompt, or executes SQL written by an LLM.
 - Execution graph: `test_generator -> validate_sql -> repair loop -> test_runner ->
   anomaly_detector -> persist_report`.
 
-The local testing branch demonstrates how proposal, review and DQ results should be
-presented to the dashboard, but it uses deterministic local proposal generation.
-The missing work is to make the `main` graphs safe, persistent and reachable through
-that product flow.
+The dashboard now remains the public workflow owner. `dashboard_agent_workflow.py`
+creates an aggregate-only `ProposalEvidence` payload, invokes the structured proposal
+graph in `AGENT_MODE=graph`, validates/maps its output and persists it in
+`RuleProposalModel`, which is what the UI reads. `AGENT_MODE=mock` keeps the same
+endpoint deterministic for offline UI and automated testing.
+
+Dashboard DQ execution intentionally uses its typed-rule compiler and persists
+`DqRunModel`/`DqResultModel`; it does not execute free-form SQL returned by the legacy
+execution graph or its LLM repair loop.
 
 ## 3. P0: required agent behaviour
 
-### 3.1 Enter the proposal graph only from a completed profile
+### 3.1 Enter the proposal graph only from a completed profile — implemented
 
 The public backend should request proposals only for a dataset with a persisted,
 completed profile. The graph input must contain a dataset ID and approved aggregate
@@ -45,7 +50,7 @@ evidence, not a user prompt or direct connection details supplied by the browser
 Reject requests when the dataset has not completed ingestion/profile, and create a
 safe failed job/audit event rather than attempting a partial proposal.
 
-### 3.2 Define and enforce the evidence allow-list
+### 3.2 Define and enforce the evidence allow-list — implemented
 
 Create one explicit `ProposalEvidence` model used to build every LLM request. It may
 contain, for example:
@@ -60,9 +65,11 @@ tuples, artifact paths/URLs, credentials, full manifest content and free-form br
 text. Add a test that serializes the actual LLM payload and proves excluded fields are
 absent.
 
-### 3.3 Use a real structured-output adapter with a mock test mode
+### 3.3 Use a real structured-output adapter with a mock test mode — partially implemented
 
-The default local MVP path should invoke the configured backend-only OpenAI adapter.
+`AGENT_MODE=graph` invokes the configured backend-only structured provider, and
+`AGENT_MODE=mock` is deterministic. Remaining: provider timeout/request-size limits
+and a manually recorded redacted graph-mode smoke run.
 The response must be parsed into Pydantic models, not accepted as arbitrary JSON or
 SQL. For tests and offline UI development, retain an explicit `LLM_MODE=mock` adapter
 that returns deterministic, valid typed rules.
@@ -74,7 +81,7 @@ The adapter needs:
 - safe handling of provider timeout, malformed output and refusal;
 - recorded model metadata without logging secrets or raw evidence.
 
-### 3.4 Validate proposal semantics before persistence
+### 3.4 Validate proposal semantics before persistence — implemented for the five dashboard templates
 
 Accept only two to five rules from the five supported types:
 
@@ -90,14 +97,14 @@ unknown fields, unsupported types, missing evidence, duplicate rule identities a
 oversized descriptions. Persist rejected model output only as a redacted safe error,
 not as an executable proposal.
 
-### 3.5 Make HITL the only promotion path
+### 3.5 Make HITL the only promotion path — implemented
 
 Every valid agent proposal starts `PROPOSED`. Only a Steward action can create the
 approved immutable rule version. Editing must produce a clear steward-owned rule
 specification while retaining an audit link to the original proposal. Rejected and
 pending rules must be impossible to compile or run.
 
-### 3.6 Replace agent-generated SQL with a deterministic compiler
+### 3.6 Replace agent-generated SQL with a deterministic compiler — implemented for dashboard execution
 
 `test_generator` must be treated as a compiler over `RuleSpec`, not an agent that is
 free to compose queries. Generated SQL must come from fixed templates with:
@@ -109,7 +116,7 @@ free to compose queries. Generated SQL must come from fixed templates with:
 
 This compiler, rather than LLM repair, is the execution source of truth for local MVP.
 
-### 3.7 Enforce execution boundary before the runner
+### 3.7 Enforce execution boundary before the runner — implemented for dashboard execution
 
 Validation must reject anything outside the compiler output contract: non-`SELECT`,
 comments, multi-statements, DDL/DML, unapproved identifiers or disallowed functions.

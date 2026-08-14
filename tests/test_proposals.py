@@ -1,9 +1,46 @@
 import pytest
 from sqlalchemy.orm import Session
 
-from src.models.database import RuleVersionModel
+from src.models.database import ColumnProfileModel, DatasetModel, ProfileModel, RuleVersionModel
 from src.services.job_runner import run_propose_rules
 from src.services.rule_store import get_engine
+
+
+def seed_completed_profile(session: Session, dataset_id: str) -> None:
+    dataset = session.query(DatasetModel).filter(DatasetModel.id == dataset_id).first()
+    assert dataset is not None
+    dataset.status = "PROFILE_READY"
+    session.add(
+        ProfileModel(
+            dataset_id=dataset_id,
+            row_count=50_000,
+            completeness_score=99.5,
+            validity_score=98.0,
+            duplicate_rate=0.5,
+            evidence_keys='["profile.row_count"]',
+        )
+    )
+    for name, data_type, minimum, maximum in [
+        ("vendor_id", "string", None, None),
+        ("trip_distance", "float", -1.0, 100.0),
+        ("payment_type", "string", None, None),
+        ("pickup_at", "string", None, None),
+        ("dropoff_at", "string", None, None),
+        ("passenger_count", "integer", 0.0, 8.0),
+    ]:
+        session.add(
+            ColumnProfileModel(
+                profile_dataset_id=dataset_id,
+                name=name,
+                data_type=data_type,
+                null_rate=0.0,
+                distinct_count=50_000 if name == "vendor_id" else 6,
+                min_value=minimum,
+                max_value=maximum,
+                sample_value="not-used-by-agent",
+            )
+        )
+    session.commit()
 
 
 @pytest.mark.asyncio
@@ -18,11 +55,7 @@ async def test_proposal_review_transitions(client):
     job_headers = {"X-CSRF-Token": csrf_token, "Idempotency-Key": "proposals-key"}
     # Force profile status ready in DB first
     with Session(get_engine()) as session:
-        from src.models.database import DatasetModel
-
-        d = session.query(DatasetModel).filter(DatasetModel.id == "dataset-nyc-yellow-taxi-50k").first()
-        d.status = "PROFILE_READY"
-        session.commit()
+        seed_completed_profile(session, "dataset-nyc-yellow-taxi-50k")
 
     job_res = await client.post("/api/v1/datasets/dataset-nyc-yellow-taxi-50k/rule-proposals", headers=job_headers)
     assert job_res.status_code == 202

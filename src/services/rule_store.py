@@ -13,6 +13,7 @@ from sqlalchemy import (
     Text,
     create_engine,
     event,
+    inspect,
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
@@ -273,6 +274,7 @@ def init_db() -> None:
     """Tạo tất cả bảng nếu chưa tồn tại. Tự động đồng bộ legacy approved rules vào active_rules."""
     engine = get_engine()
     Base.metadata.create_all(engine)
+    _migrate_local_profile_columns(engine)
     logger.info("Database đã được khởi tạo tại: %s", get_settings().database_url)
 
     # Seed default demo dataset if not present
@@ -343,6 +345,18 @@ def init_db() -> None:
                     logger.info("Đã tự động migrate %d legacy approved rules sang active_rules.", len(legacy_approved))
     except Exception as exc:
         logger.warning("Không thể chạy migration helper cho active_rules: %s", exc)
+
+
+def _migrate_local_profile_columns(engine) -> None:
+    """Add aggregate numeric evidence columns to pre-existing local SQLite files."""
+    if engine.dialect.name != "sqlite":
+        return
+    existing_columns = {column["name"] for column in inspect(engine).get_columns("column_profiles")}
+    with engine.begin() as connection:
+        if "min_value" not in existing_columns:
+            connection.exec_driver_sql("ALTER TABLE column_profiles ADD COLUMN min_value FLOAT")
+        if "max_value" not in existing_columns:
+            connection.exec_driver_sql("ALTER TABLE column_profiles ADD COLUMN max_value FLOAT")
 
 
 # ---------------------------------------------------------------------------

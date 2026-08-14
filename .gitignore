@@ -34,6 +34,7 @@ data/
 # *.db
 # *.sqlite3
 ui_local_mvp.db*
+agent_integration_smoke.db*
 
 # Logs
 logs/
