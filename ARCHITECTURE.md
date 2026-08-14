@@ -1,39 +1,110 @@
-# Gate 2 architecture document
+# Architecture Document
 
 ## System Overview
 
-RidePulse DQ is an autonomous Data Quality & Anomaly Intelligence platform connecting Vercel React UI, FastAPI on Google Cloud Run, Supabase PostgreSQL, dbt Core, and OpenAI LLM Agent.
+[Tóm tắt 2-3 câu về kiến trúc hệ thống]
 
 ## Architecture Diagram
 
 ```mermaid
-flowchart TB
-    Browser["Data Steward browser"] -->|"HTTPS + credentials"| Vercel["Vercel\nReact/Vite UI"]
-    Vercel -->|"HTTPS /api/v1\nexact CORS origin"| API["Google Cloud Run Service\nFastAPI"]
-    API -->|"write/read"| PG[("Supabase PostgreSQL")]
-    API -->|"invoke persisted job ID"| Worker["Google Cloud Run Job\nPython worker + dbt Core"]
-    Worker -->|"claim/update job, profile, rules, results"| PG
-    Worker -->|"read approved artifact"| Bucket["Supabase Storage\nprivate bucket"]
-    Worker -->|"dbt build"| DBT["analytics schema\nstaging + profile input + tests"]
-    DBT --> PG
-    Worker -->|"aggregate evidence only"| OpenAI["OpenAI"]
-    API -->|"Secret Manager references"| Secrets["Google Secret Manager"]
-    Worker -->|"Secret Manager references"| Secrets
+graph TB
+    subgraph Frontend
+        UI[React/Next.js UI]
+    end
+
+    subgraph Backend[FastAPI Backend]
+        API[API Routes]
+        Agent[LangGraph Agent]
+        LLM[LLM Service]
+        Tools[Agent Tools]
+    end
+
+    subgraph Data[Data Layer]
+        DB[(Database)]
+        Vector[Vector Store]
+    end
+
+    UI -->|HTTP/REST| API
+    API --> Agent
+    Agent --> LLM
+    Agent --> Tools
+    Agent --> Vector
+    Tools --> DB
+    API --> DB
 ```
 
-## Data flow
+## Components
 
-1. Team generates and checks the private 50k Parquet artifact once.
-2. Steward starts a persisted `INGEST_PROFILE` job via the UI.
-3. Cloud Run Job validates and ingests data, runs dbt, and stores profile evidence.
-4. A separate proposal job sends only aggregate evidence to OpenAI.
-5. Human approval creates a typed rule; a run job evaluates it through the read-only runner and stores bounded results.
+### 1. Frontend (React/Next.js)
+- **Purpose:** [mô tả]
+- **Key Features:** [danh sách]
+- **State Management:** [approach]
 
-## Trust boundaries
+### 2. Backend (FastAPI)
+- **Purpose:** [mô tả]
+- **API Design:** RESTful
+- **Authentication:** [JWT/None]
 
-- Browser: only Vercel UI and Cloud Run API; no direct provider credentials.
-- API: validates session/CSRF/quota and dispatches only known job types.
-- Worker: accesses private artifact, dbt and OpenAI; it never trusts browser SQL/path.
-- Database: distinct migration, application, dbt and read-only runner roles.
-- Secrets: only Secret Manager and local ignored `.env`; Vercel gets public API URL only.
+### 3. AI Agent (LangGraph)
+- **Agent Type:** [ReAct / Plan-and-Execute / Custom]
+- **State:** [mô tả state schema]
+- **Nodes:** [danh sách nodes]
+- **Tools:** [danh sách tools]
+- **Flow:**
 
+```mermaid
+graph LR
+    START --> A[Node A]
+    A --> B{Decision}
+    B -->|Yes| C[Node C]
+    B -->|No| D[Node D]
+    C --> E[END]
+    D --> E
+```
+
+### 4. Database
+- **Type:** [PostgreSQL / SQLite]
+- **Tables:** [danh sách]
+- **Migrations:** Alembic
+
+### 5. Vector Store
+- **Type:** [ChromaDB / FAISS / Pinecone]
+- **Embeddings:** [model]
+- **Purpose:** [RAG / similarity search]
+
+## Data Flow
+
+1. User gửi request từ Frontend
+2. API route nhận và validate input
+3. Agent xử lý qua LangGraph pipeline
+4. LLM generate response
+5. Tools thực thi actions (nếu cần)
+6. Response trả về Frontend
+
+## Deployment Architecture
+
+```mermaid
+graph LR
+    subgraph Docker
+        FE[Frontend Container]
+        BE[Backend Container]
+        DB_C[Database Container]
+    end
+    FE --> BE --> DB_C
+```
+
+## Security
+
+- API keys stored in `.env` (never commit)
+- Input validation via Pydantic
+- Rate limiting on API endpoints
+- CORS configured for frontend domain
+
+## Design Decisions
+
+| Decision | Choice | Reason |
+|----------|--------|--------|
+| Framework | FastAPI | Async, auto-docs, type-safe |
+| Agent | LangGraph | Flexible state management |
+| Database | [choice] | [reason] |
+| Frontend | Next.js | [reason] |

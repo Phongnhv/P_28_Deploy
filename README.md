@@ -41,6 +41,6 @@ POST /api/v1/dq-runs
 GET  /api/v1/dq-runs/{run_id}/results
 ```
 
-See [API contract](./docs/API_CONTRACT.md), [setup plan](./docs/gate2-mvp/SETUP.md), [team plan](./docs/gate2-mvp/TEAM_PLAN.md) and [E1-E5 Evaluation Report](./eval/results/E1_E5_EVALUATION.md). Current starter endpoints are documented
+See [API contract](./docs/API_CONTRACT.md), [setup plan](./docs/gate2-mvp/SETUP.md)
+and [team plan](./docs/gate2-mvp/TEAM_PLAN.md). Current starter endpoints are documented
 separately in the API contract and must not be used as evidence for Gate 2 completion.
-

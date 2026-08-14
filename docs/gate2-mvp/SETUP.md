@@ -1,5 +1,3 @@
-h P
-
 # Gate 2 setup and hosting plan
 
 This is a course-project deployment checklist, not a production runbook. One teammate
@@ -8,12 +6,12 @@ controls; credentials are never committed or pasted into chat.
 
 ## 1. Accounts to create
 
-| Provider     | Used for                                                                | Owner must configure                                                   |
-| ------------ | ----------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Vercel       | React/Vite frontend and preview URLs                                    | Git repository, production branch and`VITE_API_BASE_URL`             |
-| Google Cloud | Artifact Registry, Cloud Run API service, Cloud Run Job, Secret Manager | Billing account, project, region and least-privilege service accounts  |
-| Supabase     | PostgreSQL and private artifact bucket                                  | Database project,`ridepulse-gate2` private bucket and database roles |
-| OpenAI       | Live proposal generation                                                | Valid project API key and a small spend cap                            |
+| Provider | Used for | Owner must configure |
+|---|---|---|
+| Vercel | React/Vite frontend and preview URLs | Git repository, production branch and `VITE_API_BASE_URL` |
+| Google Cloud | Artifact Registry, Cloud Run API service, Cloud Run Job, Secret Manager | Billing account, project, region and least-privilege service accounts |
+| Supabase | PostgreSQL and private artifact bucket | Database project, `ridepulse-gate2` private bucket and database roles |
+| OpenAI | Live proposal generation | Valid project API key and a small spend cap |
 
 Google Cloud billing must be enabled before Cloud Run can be used. The team sets a
 budget alert and keeps one region for the API and Job. Vercel and Supabase use their
