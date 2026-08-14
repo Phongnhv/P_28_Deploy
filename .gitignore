@@ -79,10 +79,11 @@ dbt_project/dbt_modules/
 dbt_project/logs/
 dbt_project/models/generated_dq_tests.yml
 
-# Temporary personal doc files (kept locally, ignored from git push)
+# Ignore all markdown and docs files from future git tracking (only source code files allowed)
+*.md
+docs/
+/docs/
 /PR12_Report.md
 /agent_Workflow.md
-docs/gate2-mvp/RESTRUCTURING_REPORT.md
-docs/gate2-mvp/VIDEO_REHEARSAL.md
 presentation/VIDEO_REHEARSAL.md
 
