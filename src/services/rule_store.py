@@ -348,15 +348,31 @@ def init_db() -> None:
 
 
 def _migrate_local_profile_columns(engine) -> None:
-    """Add aggregate numeric evidence columns to pre-existing local SQLite files."""
+    """Add aggregate profile evidence columns to pre-existing local SQLite files."""
     if engine.dialect.name != "sqlite":
         return
-    existing_columns = {column["name"] for column in inspect(engine).get_columns("column_profiles")}
+    inspector = inspect(engine)
+    column_profile_columns = {column["name"] for column in inspector.get_columns("column_profiles")}
+    profile_columns = {column["name"] for column in inspector.get_columns("profiles")}
     with engine.begin() as connection:
-        if "min_value" not in existing_columns:
+        if "min_value" not in column_profile_columns:
             connection.exec_driver_sql("ALTER TABLE column_profiles ADD COLUMN min_value FLOAT")
-        if "max_value" not in existing_columns:
+        if "max_value" not in column_profile_columns:
             connection.exec_driver_sql("ALTER TABLE column_profiles ADD COLUMN max_value FLOAT")
+        additions = {
+            "non_null_count": "INTEGER",
+            "negative_rate": "FLOAT",
+            "quantiles_json": "TEXT",
+            "out_of_domain_rate": "FLOAT",
+            "full_distinct_count": "INTEGER",
+            "uniqueness_rate": "FLOAT",
+            "is_unique_full_table": "BOOLEAN",
+        }
+        for name, sql_type in additions.items():
+            if name not in column_profile_columns:
+                connection.exec_driver_sql(f"ALTER TABLE column_profiles ADD COLUMN {name} {sql_type}")
+        if "cross_field_metrics_json" not in profile_columns:
+            connection.exec_driver_sql("ALTER TABLE profiles ADD COLUMN cross_field_metrics_json TEXT")
 
 
 # ---------------------------------------------------------------------------

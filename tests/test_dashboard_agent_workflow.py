@@ -29,6 +29,18 @@ def seed_completed_profile() -> None:
                 completeness_score=99.0,
                 validity_score=98.0,
                 duplicate_rate=1.0,
+                cross_field_metrics_json=json.dumps(
+                    [
+                        {
+                            "left_column": "pickup_at",
+                            "operator": "<=",
+                            "right_column": "dropoff_at",
+                            "checked_count": 100,
+                            "violation_count": 3,
+                            "violation_rate": 0.03,
+                        }
+                    ]
+                ),
                 evidence_keys=json.dumps(["profile.row_count"]),
             )
         )
@@ -48,6 +60,17 @@ def seed_completed_profile() -> None:
                     data_type=data_type,
                     null_rate=null_rate,
                     distinct_count=distinct_count,
+                    non_null_count=round(100 * (1 - null_rate)),
+                    negative_rate=0.01 if name == "trip_distance" else (0.0 if data_type in {"integer", "float"} else None),
+                    quantiles_json=(
+                        json.dumps({"p05": 0.1, "p25": 1.0, "p50": 2.5, "p75": 5.0, "p95": 12.0})
+                        if data_type in {"integer", "float"}
+                        else "{}"
+                    ),
+                    out_of_domain_rate=0.02 if name == "payment_type" else None,
+                    full_distinct_count=distinct_count,
+                    uniqueness_rate=distinct_count / max(1, round(100 * (1 - null_rate))),
+                    is_unique_full_table=null_rate == 0.0 and distinct_count == 100,
                     min_value=min_value,
                     max_value=max_value,
                     sample_value=sample_value,
@@ -68,6 +91,13 @@ def test_evidence_allow_list_excludes_raw_samples_and_identifiers():
     assert "2025-01-01T01:02:03" not in serialized
     assert "source_row_id" not in serialized
     assert all("sample" not in column for column in evidence.model_dump()["columns"])
+    by_name = {column.name: column for column in evidence.columns}
+    assert by_name["trip_distance"].negative_rate == 0.01
+    assert by_name["trip_distance"].quantiles["p50"] == 2.5
+    assert by_name["payment_type"].out_of_domain_rate == 0.02
+    assert by_name["vendor_id"].full_distinct_count == 100
+    assert by_name["vendor_id"].is_unique_full_table is True
+    assert evidence.cross_field_metrics[0].violation_rate == 0.03
 
     digest = evidence.to_agent_digest()["source_rows"]
     assert digest["dashboard_candidate_mode"] is True
@@ -78,6 +108,11 @@ def test_evidence_allow_list_excludes_raw_samples_and_identifiers():
         "ACCEPTED_VALUES",
         "CROSS_FIELD_COMPARISON",
     }
+    digest_columns = {column["name"]: column for column in digest["columns"]}
+    assert digest_columns["trip_distance"]["negative_pct"] == 1.0
+    assert digest_columns["trip_distance"]["typical_range"] == [0.1, 12.0]
+    assert digest_columns["payment_type"]["out_of_domain_pct"] == 2.0
+    assert digest["cross_column_hints"][0]["violation_rate"] == 0.03
 
 
 def test_dashboard_candidates_are_diverse_and_use_only_aggregate_evidence():
@@ -87,10 +122,10 @@ def test_dashboard_candidates_are_diverse_and_use_only_aggregate_evidence():
 
     candidates = _build_dashboard_rule_candidates(evidence)
     assert [candidate.dashboard_rule_type for candidate in candidates] == [
-        "not_null",
         "numeric_range",
-        "accepted_values",
         "cross_field_comparison",
+        "not_null",
+        "accepted_values",
     ]
     assert len({candidate.dashboard_rule_type for candidate in candidates}) == len(candidates)
     assert all(set(candidate.evidence_refs).issubset(evidence.evidence_keys) for candidate in candidates)
@@ -103,26 +138,31 @@ def test_graph_normalizer_rejects_parameter_drift_and_duplicate_categories():
 
     raw = [
         {
+            "candidate_id": "not-null:vendor_id",
             "rule_type": "NOT_NULL", "column": "vendor_id", "parameters": {},
             "confidence_score": 0.95, "severity": "HIGH",
             "rule_description": "Vendor ID must be populated.", "ai_reasoning": "Aggregate completeness is stable.",
         },
         {
+            "candidate_id": "not-null:vendor_id",
             "rule_type": "NOT_NULL", "column": "vendor_id", "parameters": {},
             "confidence_score": 0.90, "severity": "HIGH",
             "rule_description": "Duplicate not-null proposal.", "ai_reasoning": "Must be deduplicated.",
         },
         {
+            "candidate_id": "nonnegative:trip_distance",
             "rule_type": "RANGE", "column": "trip_distance", "parameters": {"min": -10.0},
             "confidence_score": 0.99, "severity": "HIGH",
             "rule_description": "Invented threshold.", "ai_reasoning": "Must be rejected.",
         },
         {
+            "candidate_id": "nonnegative:trip_distance",
             "rule_type": "RANGE", "column": "trip_distance", "parameters": {"min": 0.0, "max": 80.0},
             "confidence_score": 0.85, "severity": "HIGH",
             "rule_description": "Trip distance must be non-negative.", "ai_reasoning": "Aggregate minimum is negative.",
         },
         {
+            "candidate_id": "governed-enum:payment_type",
             "rule_type": "ACCEPTED_VALUES", "column": "payment_type",
             "parameters": {"accepted_values": ["1", "2", "3", "4", "5", "6"]},
             "confidence_score": 0.80, "severity": "MEDIUM",
@@ -132,10 +172,63 @@ def test_graph_normalizer_rejects_parameter_drift_and_duplicate_categories():
 
     proposals = _normalise_graph_rules(raw, evidence)
     assert [proposal.rule_type for proposal in proposals] == [
-        "not_null",
         "numeric_range",
+        "not_null",
         "accepted_values",
     ]
+
+
+def test_graph_normalizer_uses_canonical_text_spec_and_confidence_ceiling():
+    seed_completed_profile()
+    with Session(get_engine()) as session:
+        evidence = build_proposal_evidence(session, DATASET_ID)
+
+    proposals = _normalise_graph_rules(
+        [
+            {
+                "candidate_id": "nonnegative:trip_distance",
+                "rule_type": "RANGE",
+                "column": "trip_distance",
+                "parameters": {"min": 0.0, "max": 80.0},
+                "confidence_score": 1.0,
+                "severity": "CRITICAL",
+                "rule_description": "Trip distance must be between 0 and 80 miles.",
+                "ai_reasoning": "The aggregate maximum is 80.",
+            }
+        ],
+        evidence,
+    )
+
+    assert len(proposals) == 1
+    proposal = proposals[0]
+    assert proposal.title == "trip_distance must be non-negative"
+    assert "80" not in proposal.description
+    assert proposal.rule_spec == {"type": "numeric_range", "column": "trip_distance", "min_value": 0.0}
+    assert proposal.severity == "HIGH"
+    assert proposal.confidence == 0.9
+
+
+def test_graph_normalizer_rejects_mismatched_candidate_id():
+    seed_completed_profile()
+    with Session(get_engine()) as session:
+        evidence = build_proposal_evidence(session, DATASET_ID)
+
+    proposals = _normalise_graph_rules(
+        [
+            {
+                "candidate_id": "governed-enum:payment_type",
+                "rule_type": "RANGE",
+                "column": "trip_distance",
+                "parameters": {"min": 0.0},
+                "confidence_score": 0.9,
+                "severity": "HIGH",
+                "rule_description": "Mismatched candidate.",
+                "ai_reasoning": "This must be rejected.",
+            }
+        ],
+        evidence,
+    )
+    assert proposals == []
 
 
 def test_mock_mode_returns_dashboard_supported_proposals():
@@ -164,6 +257,7 @@ def test_graph_mode_normalizes_only_evidence_backed_dashboard_rules(monkeypatch)
         "src.services.dashboard_agent_workflow._invoke_dashboard_proposal_graph",
         lambda _evidence: [
             {
+                "candidate_id": "nonnegative:trip_distance",
                 "rule_type": "RANGE",
                 "column": "trip_distance",
                 "parameters": {"min": 0.0},
@@ -173,6 +267,7 @@ def test_graph_mode_normalizes_only_evidence_backed_dashboard_rules(monkeypatch)
                 "ai_reasoning": "Aggregate minimum is negative.",
             },
             {
+                "candidate_id": "cross-field:pickup_at:<=:dropoff_at",
                 "rule_type": "CROSS_FIELD_COMPARISON",
                 "column": "pickup_at",
                 "parameters": {"target_column": "dropoff_at", "operator": "<="},
@@ -182,6 +277,7 @@ def test_graph_mode_normalizes_only_evidence_backed_dashboard_rules(monkeypatch)
                 "ai_reasoning": "Both values are aggregate datetime fields.",
             },
             {
+                "candidate_id": "unsupported:vendor_id",
                 "rule_type": "REGEX_FORMAT",
                 "column": "vendor_id",
                 "parameters": {"regex": ".*"},
@@ -198,14 +294,10 @@ def test_graph_mode_normalizes_only_evidence_backed_dashboard_rules(monkeypatch)
     assert [proposal.rule_type for proposal in proposals] == [
         "numeric_range",
         "cross_field_comparison",
-        "not_null",
-        "accepted_values",
     ]
     assert [proposal.model_name for proposal in proposals] == [
         "langgraph-openai",
         "langgraph-openai",
-        "agent-policy-fallback-v1",
-        "agent-policy-fallback-v1",
     ]
 
 
@@ -229,6 +321,7 @@ def test_graph_mode_uses_dashboard_graph_with_aggregate_digest(monkeypatch):
         return {
             "proposed_rules": [
                 {
+                    "candidate_id": "not-null:vendor_id",
                     "rule_type": "NOT_NULL",
                     "column": "vendor_id",
                     "parameters": {},
@@ -238,6 +331,7 @@ def test_graph_mode_uses_dashboard_graph_with_aggregate_digest(monkeypatch):
                     "ai_reasoning": "Aggregate null rate is zero.",
                 },
                 {
+                    "candidate_id": "cross-field:pickup_at:<=:dropoff_at",
                     "rule_type": "CROSS_FIELD_COMPARISON",
                     "column": "pickup_at",
                     "parameters": {"target_column": "dropoff_at", "operator": "<="},
@@ -255,10 +349,8 @@ def test_graph_mode_uses_dashboard_graph_with_aggregate_digest(monkeypatch):
         proposals = generate_dashboard_proposals(session, DATASET_ID)
 
     assert [proposal.rule_type for proposal in proposals] == [
-        "not_null",
         "cross_field_comparison",
-        "numeric_range",
-        "accepted_values",
+        "not_null",
     ]
 
 
@@ -272,6 +364,7 @@ def test_proposal_job_persists_graph_adapter_output(monkeypatch):
         "src.services.dashboard_agent_workflow._invoke_dashboard_proposal_graph",
         lambda _evidence: [
             {
+                "candidate_id": "not-null:vendor_id",
                 "rule_type": "NOT_NULL",
                 "column": "vendor_id",
                 "parameters": {},
@@ -281,6 +374,7 @@ def test_proposal_job_persists_graph_adapter_output(monkeypatch):
                 "ai_reasoning": "Aggregate null rate is zero.",
             },
             {
+                "candidate_id": "cross-field:pickup_at:<=:dropoff_at",
                 "rule_type": "CROSS_FIELD_COMPARISON",
                 "column": "pickup_at",
                 "parameters": {"target_column": "dropoff_at", "operator": "<="},
@@ -310,11 +404,40 @@ def test_proposal_job_persists_graph_adapter_output(monkeypatch):
         job = session.get(JobModel, "proposal-job")
         proposals = session.query(RuleProposalModel).filter(RuleProposalModel.dataset_id == DATASET_ID).all()
     assert job is not None and job.status == "SUCCEEDED"
-    assert len(proposals) == 4
-    assert {proposal.model_name for proposal in proposals} == {
-        "langgraph-openai",
+    assert len(proposals) == 2
+    assert {proposal.model_name for proposal in proposals} == {"langgraph-openai"}
+
+
+def test_graph_mode_fallback_only_reaches_minimum_rule_count(monkeypatch):
+    seed_completed_profile()
+    from src.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "agent_mode", "graph")
+    monkeypatch.setattr(
+        "src.services.dashboard_agent_workflow._invoke_dashboard_proposal_graph",
+        lambda _evidence: [
+            {
+                "candidate_id": "not-null:vendor_id",
+                "rule_type": "NOT_NULL",
+                "column": "vendor_id",
+                "parameters": {},
+                "confidence_score": 0.9,
+                "severity": "HIGH",
+                "rule_description": "Vendor ID is required.",
+                "ai_reasoning": "The dataset policy marks it as required.",
+            }
+        ],
+    )
+    with Session(get_engine()) as session:
+        proposals = generate_dashboard_proposals(session, DATASET_ID)
+
+    assert len(proposals) == 2
+    assert [proposal.rule_type for proposal in proposals] == ["numeric_range", "not_null"]
+    assert [proposal.model_name for proposal in proposals] == [
         "agent-policy-fallback-v1",
-    }
+        "langgraph-openai",
+    ]
 
 
 def test_graph_mode_rejects_fabricated_or_unsupported_rules(monkeypatch):
@@ -327,6 +450,7 @@ def test_graph_mode_rejects_fabricated_or_unsupported_rules(monkeypatch):
         "src.services.dashboard_agent_workflow._invoke_dashboard_proposal_graph",
         lambda _evidence: [
             {
+                "candidate_id": "nonnegative:trip_distance",
                 "rule_type": "RANGE",
                 "column": "unknown_column",
                 "parameters": {"min": 0},

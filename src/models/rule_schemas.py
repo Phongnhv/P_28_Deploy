@@ -78,6 +78,10 @@ class RuleParameters(BaseModel):
 class ProposedRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    candidate_id: str | None = Field(
+        None,
+        description="Opaque candidate identifier supplied by the dashboard policy checklist.",
+    )
     column: str | None = Field(
         None,
         description="None cho rule cấp bảng (ROW_COUNT). Phải khớp tên cột trong digest.",

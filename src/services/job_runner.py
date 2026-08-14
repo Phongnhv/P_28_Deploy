@@ -24,10 +24,65 @@ from src.models.database import (
     RuleVersionModel,
     SourceRowModel,
 )
-from src.services.dashboard_agent_workflow import generate_dashboard_proposals
+from src.services.dashboard_agent_workflow import generate_dashboard_proposals, get_dataset_rule_policy
 from src.services.rule_store import get_engine
 
 logger = logging.getLogger(__name__)
+
+
+def _rate(count: int, denominator: int) -> float:
+    return float(count / denominator) if denominator > 0 else 0.0
+
+
+def _numeric_quantiles(values: pd.Series) -> dict[str, float]:
+    """Return deterministic full-table quantiles for a non-null numeric series."""
+    if values.empty:
+        return {}
+    quantiles = values.quantile([0.05, 0.25, 0.5, 0.75, 0.95])
+    return {
+        "p05": float(quantiles.loc[0.05]),
+        "p25": float(quantiles.loc[0.25]),
+        "p50": float(quantiles.loc[0.5]),
+        "p75": float(quantiles.loc[0.75]),
+        "p95": float(quantiles.loc[0.95]),
+    }
+
+
+def _cross_field_metrics(df: pd.DataFrame, dataset_id: str) -> list[dict]:
+    """Evaluate configured cross-field relationships without exposing row values."""
+    policy = get_dataset_rule_policy(dataset_id)
+    if not policy:
+        return []
+    operators = {
+        "<": lambda left, right: left < right,
+        "<=": lambda left, right: left <= right,
+        ">": lambda left, right: left > right,
+        ">=": lambda left, right: left >= right,
+        "==": lambda left, right: left == right,
+        "!=": lambda left, right: left != right,
+    }
+    metrics: list[dict] = []
+    for rule in policy.cross_field_rules:
+        if rule.left_column not in df.columns or rule.right_column not in df.columns:
+            continue
+        comparable = df[[rule.left_column, rule.right_column]].dropna()
+        checked_count = int(len(comparable))
+        if checked_count:
+            passes = operators[rule.operator](comparable[rule.left_column], comparable[rule.right_column])
+            violation_count = int((~passes).sum())
+        else:
+            violation_count = 0
+        metrics.append(
+            {
+                "left_column": rule.left_column,
+                "operator": rule.operator,
+                "right_column": rule.right_column,
+                "checked_count": checked_count,
+                "violation_count": violation_count,
+                "violation_rate": _rate(violation_count, checked_count),
+            }
+        )
+    return metrics
 
 def add_audit_event(db: Session, session_id: str | None, actor_role: str, action_code: str, entity_type: str, entity_id: str, detail: dict):
     """
@@ -87,10 +142,11 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
             db.commit()
 
             df = pd.read_parquet(parquet_path)
+            row_count = int(len(df))
 
             # Verify row count and schema
-            if len(df) != 50000:
-                raise ValueError(f"Expected 50000 rows, found {len(df)}")
+            if row_count != 50000:
+                raise ValueError(f"Expected 50000 rows, found {row_count}")
 
             expected_columns = [
                 'source_row_id', 'vendor_id', 'pickup_at', 'dropoff_at', 'passenger_count',
@@ -127,6 +183,8 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
 
             total_null_cells = 0
             columns_profiles = []
+            policy = get_dataset_rule_policy(dataset_id)
+            governed_code_sets = policy.governed_code_sets if policy else {}
 
             # Clean existing profile
             db.query(ColumnProfileModel).filter(ColumnProfileModel.profile_dataset_id == dataset_id).delete()
@@ -137,11 +195,14 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
                 col_data = df[col]
                 null_count = int(col_data.isnull().sum())
                 total_null_cells += null_count
-                null_rate = float(null_count / 50000.0)
+                null_rate = _rate(null_count, row_count)
 
-                # Exclude null values for distinct counts and min/max/mean
+                # All persisted dashboard aggregates are computed over the full table.
                 non_null_data = col_data.dropna()
+                non_null_count = int(len(non_null_data))
                 distinct_cnt = int(non_null_data.nunique())
+                uniqueness_rate = _rate(distinct_cnt, non_null_count)
+                is_unique_full_table = bool(row_count > 0 and null_count == 0 and distinct_cnt == row_count)
 
                 # sample value
                 sample_val = ""
@@ -151,6 +212,8 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
                 data_type = "string"
                 min_value = None
                 max_value = None
+                negative_rate = None
+                quantiles: dict[str, float] = {}
                 if pd.api.types.is_integer_dtype(col_data):
                     data_type = "integer"
                 elif pd.api.types.is_float_dtype(col_data):
@@ -158,6 +221,15 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
                 if pd.api.types.is_numeric_dtype(col_data) and not non_null_data.empty:
                     min_value = float(non_null_data.min())
                     max_value = float(non_null_data.max())
+                    negative_rate = _rate(int((non_null_data < 0).sum()), non_null_count)
+                    quantiles = _numeric_quantiles(non_null_data)
+
+                out_of_domain_rate = None
+                allowed_values = governed_code_sets.get(col)
+                if allowed_values is not None:
+                    normalized = non_null_data.astype(str)
+                    invalid_count = int((~normalized.isin(allowed_values)).sum())
+                    out_of_domain_rate = _rate(invalid_count, non_null_count)
 
                 columns_profiles.append(
                     ColumnProfileModel(
@@ -166,32 +238,85 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
                         data_type=data_type,
                         null_rate=null_rate,
                         distinct_count=distinct_cnt,
+                        non_null_count=non_null_count,
+                        negative_rate=negative_rate,
+                        quantiles_json=json.dumps(quantiles),
+                        out_of_domain_rate=out_of_domain_rate,
+                        full_distinct_count=distinct_cnt,
+                        uniqueness_rate=uniqueness_rate,
+                        is_unique_full_table=is_unique_full_table,
                         min_value=min_value,
                         max_value=max_value,
                         sample_value=sample_val
                     )
                 )
 
-            # Validity score components
-            neg_fare = (df['fare_amount'] < 0).sum()
-            neg_dist = (df['trip_distance'] < 0).sum()
-            null_vendor = df['vendor_id'].isnull().sum()
-            invalid_pay = (~df['payment_type'].isin(['1', '2', '3', '4', '5', '6']) & df['payment_type'].notnull()).sum()
-            dup_fingerprint = df.duplicated(subset=['vendor_id', 'pickup_at', 'passenger_count']).sum()
+            # Validity score uses the same versioned policy as profiling and proposals.
+            cross_field_metrics = _cross_field_metrics(df, dataset_id)
+            fingerprint_columns = policy.duplicate_fingerprint_columns if policy else []
+            dup_fingerprint = (
+                int(df.duplicated(subset=fingerprint_columns).sum())
+                if fingerprint_columns and set(fingerprint_columns).issubset(df.columns)
+                else 0
+            )
+            total_defects = dup_fingerprint
+            if policy:
+                total_defects += sum(
+                    int(df[column].isnull().sum())
+                    for column in policy.required_identifiers
+                    if column in df.columns
+                )
+                total_defects += sum(
+                    int((df[column].dropna() < 0).sum())
+                    for column in policy.nonnegative_columns
+                    if column in df.columns and pd.api.types.is_numeric_dtype(df[column])
+                )
+                for column, allowed_values in policy.governed_code_sets.items():
+                    if column not in df.columns:
+                        continue
+                    non_null_values = df[column].dropna().astype(str)
+                    total_defects += int((~non_null_values.isin(allowed_values)).sum())
+            total_defects += sum(metric["violation_count"] for metric in cross_field_metrics)
+            validity_score = float(max(0.0, 100.0 - _rate(int(total_defects), row_count) * 100.0))
 
-            total_defects = neg_fare + neg_dist + null_vendor + invalid_pay + dup_fingerprint
-            validity_score = float(max(0.0, 100.0 - (total_defects / 50000.0) * 100.0))
-
-            completeness_score = float((1.0 - (total_null_cells / (50000.0 * len(expected_columns)))) * 100.0)
-            duplicate_rate = float((dup_fingerprint / 50000.0) * 100.0)
+            completeness_score = float(
+                (1.0 - _rate(total_null_cells, row_count * len(expected_columns))) * 100.0
+            )
+            duplicate_rate = float(_rate(int(dup_fingerprint), row_count) * 100.0)
+            evidence_keys = [
+                "profile.row_count",
+                "profile.completeness_score",
+                "profile.validity_score",
+                "profile.duplicate_rate",
+            ]
+            for column in columns_profiles:
+                prefix = f"profile.column.{column.name}"
+                evidence_keys.extend(
+                    [
+                        f"{prefix}.non_null_count",
+                        f"{prefix}.full_distinct_count",
+                        f"{prefix}.uniqueness_rate",
+                        f"{prefix}.is_unique_full_table",
+                    ]
+                )
+                if column.negative_rate is not None:
+                    evidence_keys.append(f"{prefix}.negative_rate")
+                    evidence_keys.extend(f"{prefix}.quantile.{name}" for name in json.loads(column.quantiles_json or "{}"))
+                if column.out_of_domain_rate is not None:
+                    evidence_keys.append(f"{prefix}.out_of_domain_rate")
+            evidence_keys.extend(
+                f"profile.cross_field.{metric['left_column']}.{metric['operator']}.{metric['right_column']}.violation_rate"
+                for metric in cross_field_metrics
+            )
 
             profile = ProfileModel(
                 dataset_id=dataset_id,
-                row_count=50000,
+                row_count=row_count,
                 completeness_score=round(completeness_score, 2),
                 validity_score=round(validity_score, 2),
                 duplicate_rate=round(duplicate_rate, 2),
-                evidence_keys=json.dumps(["profile.row_count", "profile.completeness_score", "profile.validity_score", "profile.duplicate_rate"]),
+                cross_field_metrics_json=json.dumps(cross_field_metrics),
+                evidence_keys=json.dumps(evidence_keys),
                 generated_at=datetime.utcnow()
             )
             db.add(profile)
@@ -205,7 +330,7 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
             dataset = db.query(DatasetModel).filter(DatasetModel.id == dataset_id).first()
             if dataset:
                 dataset.status = "PROFILE_READY"
-                dataset.row_count = 50000
+                dataset.row_count = row_count
                 dataset.updated_at = datetime.utcnow()
                 db.commit()
 

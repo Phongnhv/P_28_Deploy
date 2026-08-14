@@ -227,6 +227,32 @@ rule_proposer_prompt = ChatPromptTemplate.from_messages(
 )
 
 
+dashboard_rule_proposer_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """You are a constrained data-quality candidate selector. The server has already built an allow-listed, evidence-backed candidate checklist. Select between 2 and 5 candidates; do not create rules or parameters. For every selected candidate, copy candidate_id, column, rule_type, and parameters exactly. Return at most one candidate per rule_type. Write a concise steward-facing description and a short rationale using only the supplied aggregate evidence. Do not mention a threshold, enum value, or relationship that is absent from the selected candidate. Use the structured output schema exactly.""",
+        ),
+        (
+            "user",
+            """Table: {table_name}
+
+Aggregate-only digest:
+```json
+{table_digest}
+```
+
+Allowed candidate checklist:
+```json
+{coverage_requirements}
+```
+
+Return the strongest diverse candidates in checklist order. Set table to {table_name}.""",
+        ),
+    ]
+)
+
+
 # ---------------------------------------------------------------------------
 # SQL Repair Prompt (Agentic Repair Loop)
 # ---------------------------------------------------------------------------

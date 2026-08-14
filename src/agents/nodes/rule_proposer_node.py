@@ -25,7 +25,11 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from src.agents.nodes.templates import _RULE_PROPOSER_FEW_SHOT, rule_proposer_prompt
+from src.agents.nodes.templates import (
+    _RULE_PROPOSER_FEW_SHOT,
+    dashboard_rule_proposer_prompt,
+    rule_proposer_prompt,
+)
 from src.agents.state import AgentState
 from src.agents.tools.chroma_rag_tool import query_historical_rules
 from src.agents.tools.profile_digest import (
@@ -224,7 +228,8 @@ async def _propose_for_table(
 ) -> TableRuleProposal:
     """Gọi LLM một lần cho một bảng, bảo vệ bằng semaphore + retry."""
     columns = [col["name"] for col in table_digest.get("columns", [])]
-    historical = query_historical_rules(table_name, columns)
+    dashboard_mode = bool(table_digest.get("dashboard_candidate_mode"))
+    historical = [] if dashboard_mode else query_historical_rules(table_name, columns)
 
     async with semaphore:
         last_exc: Exception | None = None
@@ -238,18 +243,26 @@ async def _propose_for_table(
                     max_retries + 1,
                     entry_ts.isoformat(),
                 )
-                messages = rule_proposer_prompt.format_messages(
-                    table_name=table_name,
-                    table_digest=json.dumps(table_digest, ensure_ascii=False),
-                    domain_context=DOMAIN_CONTEXT,
-                    data_dictionary=_load_data_dictionary(),
-                    historical_rules=json.dumps(historical, ensure_ascii=False),
-                    coverage_requirements=json.dumps(
-                        _build_coverage_requirements(table_digest),
-                        ensure_ascii=False,
-                    ),
-                    few_shot_examples=_RULE_PROPOSER_FEW_SHOT,
+                coverage_requirements = json.dumps(
+                    _build_coverage_requirements(table_digest),
+                    ensure_ascii=False,
                 )
+                if dashboard_mode:
+                    messages = dashboard_rule_proposer_prompt.format_messages(
+                        table_name=table_name,
+                        table_digest=json.dumps(table_digest, ensure_ascii=False),
+                        coverage_requirements=coverage_requirements,
+                    )
+                else:
+                    messages = rule_proposer_prompt.format_messages(
+                        table_name=table_name,
+                        table_digest=json.dumps(table_digest, ensure_ascii=False),
+                        domain_context=DOMAIN_CONTEXT,
+                        data_dictionary=_load_data_dictionary(),
+                        historical_rules=json.dumps(historical, ensure_ascii=False),
+                        coverage_requirements=coverage_requirements,
+                        few_shot_examples=_RULE_PROPOSER_FEW_SHOT,
+                    )
                 result: TableRuleProposal = await structured_llm.ainvoke(messages)
                 exit_ts = datetime.now()
                 logger.info(
@@ -329,6 +342,7 @@ def _stamp_rule(
         return {}  # sentinel
 
     return {
+        "candidate_id": rule.candidate_id,
         "rule_id": rule_id,
         "run_id": run_id,
         "table_name": table_name,

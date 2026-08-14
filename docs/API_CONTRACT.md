@@ -14,6 +14,10 @@
   a filesystem path, URL, artifact content, SQL text or LLM prompt.
 - The agent receives only allow-listed aggregate profile evidence. It cannot receive
   raw rows, sample values, source identifiers, connection strings or browser text.
+  The allow-list includes full-table negative rates, numeric quantiles, governed-domain
+  violation rates, configured cross-field violation rates and verified uniqueness
+  aggregates. Metric definitions and the live eval record are documented in
+  [AGENT_IMPROVEMENTS_AND_EVAL.md](./AGENT_IMPROVEMENTS_AND_EVAL.md).
   For `AGENT_MODE=graph`, the backend first creates a small deterministic candidate
   set (required identifier, evidence-backed non-negative measure, governed enum and
   pickup/dropoff ordering when present). The model returns one steward-facing explanation

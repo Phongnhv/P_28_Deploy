@@ -1,5 +1,8 @@
 # Local MVP Agent — remaining work
 
+> Implementation details and the bounded live-evaluation protocol are maintained in
+> [AGENT_IMPROVEMENTS_AND_EVAL.md](./AGENT_IMPROVEMENTS_AND_EVAL.md).
+
 > **Scope:** Gate 2 MVP running locally. The Agent must safely propose and execute
 > typed data-quality checks against the fixed registered dataset. Cloud hosting,
 > production monitoring, RAG and ML-based anomaly detection are deferred.
@@ -68,11 +71,12 @@ tuples, artifact paths/URLs, credentials, full manifest content and free-form br
 text. Add a test that serializes the actual LLM payload and proves excluded fields are
 absent.
 
-### 3.3 Use a real structured-output adapter with a mock test mode — partially implemented
+### 3.3 Use a real structured-output adapter with a mock test mode — implemented for local MVP
 
 `AGENT_MODE=graph` invokes the configured backend-only structured provider, and
-`AGENT_MODE=mock` is deterministic. Remaining: provider timeout/request-size limits
-and a manually recorded redacted graph-mode smoke run.
+`AGENT_MODE=mock` is deterministic. The dashboard adapter makes one structured call
+with paid retries disabled. A bounded redacted live evaluation is recorded in the
+implementation/evaluation document.
 The response must be parsed into Pydantic models, not accepted as arbitrary JSON or
 SQL. For tests and offline UI development, retain an explicit `LLM_MODE=mock` adapter
 that returns deterministic, valid typed rules.
