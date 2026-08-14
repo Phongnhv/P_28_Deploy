@@ -931,3 +931,20 @@ def deactivate_rule(rule_id: str) -> bool:
         return False
 
 
+def save_generated_dbt_yaml(run_id: str, yaml_content: str) -> bool:
+    """Lưu vết tệp dbt test YAML đã sinh vào nhật ký Audit / Job metadata trong Database."""
+    try:
+        record_audit_event(
+            action="GENERATE_DBT_YAML_TESTS",
+            entity_type="job",
+            entity_id=run_id,
+            details={"run_id": run_id, "dbt_yaml": yaml_content},
+            actor="test_generator_node",
+        )
+        return True
+    except Exception as exc:
+        logger.warning("save_generated_dbt_yaml failed: %s", exc)
+        return False
+
+
+

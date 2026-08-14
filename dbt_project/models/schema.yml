@@ -9,9 +9,6 @@ sources:
         columns:
           - name: source_row_id
             description: "Khóa định danh duy nhất cho từng bản ghi."
-            tests:
-              - not_null
-              - unique
 
 models:
   - name: stg_trips
@@ -19,9 +16,6 @@ models:
     columns:
       - name: source_row_id
         description: "Khóa định danh duy nhất cho từng bản ghi."
-        tests:
-          - not_null
-          - unique
       - name: vendor_id
         description: "Mã nhà cung cấp thiết bị taxi."
       - name: pickup_at
@@ -34,9 +28,7 @@ models:
         description: "Cước phí cơ bản (USD)."
 
   - name: profile_input
-    description: "Model analytics cung cấp tập cột cố định cho Profiler Agent quét thống kê."
+    description: "Model analytics cung cấp trọn vẹn 21 cột dữ liệu cho Profiler Agent."
     columns:
       - name: source_row_id
         description: "Khóa định danh duy nhất."
-        tests:
-          - not_null

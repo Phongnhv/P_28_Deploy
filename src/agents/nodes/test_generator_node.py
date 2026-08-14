@@ -234,9 +234,57 @@ def generate_tests_for_table(
     return generated
 
 
+import yaml
+
+
+def generate_dbt_test_yaml(approved_rules: list[dict]) -> str:
+    """Biên dịch danh sách approved rules thành định dạng tệp dbt test YAML chuẩn (generated_dq_tests.yml)."""
+    tables_map: dict[str, dict[str, list[dict]]] = {}
+    for r in approved_rules:
+        t_name = r.get("table_name") or "profile_input"
+        c_name = r.get("column") or "source_row_id"
+        tables_map.setdefault(t_name, {}).setdefault(c_name, []).append(r)
+
+    models_list = []
+    for t_name, cols in tables_map.items():
+        columns_list = []
+        for c_name, rules in cols.items():
+            tests_list = []
+            for rule in rules:
+                r_type = (rule.get("rule_type") or "").upper()
+                params = rule.get("effective_parameters") or rule.get("parameters") or {}
+                if r_type == "NOT_NULL":
+                    tests_list.append("not_null")
+                elif r_type == "UNIQUE":
+                    tests_list.append("unique")
+                elif r_type == "ACCEPTED_VALUES":
+                    vals = params.get("accepted_values") or []
+                    tests_list.append({"accepted_values": {"values": vals}})
+                elif r_type == "RANGE":
+                    conds = []
+                    if params.get("min") is not None:
+                        conds.append(f">= {params['min']}")
+                    if params.get("max") is not None:
+                        conds.append(f"<= {params['max']}")
+                    expr = " AND ".join(conds) if conds else ">= 0"
+                    tests_list.append({"dbt_utils.expression_is_true": {"expression": expr}})
+                elif r_type == "CROSS_FIELD_COMPARISON":
+                    target_col = params.get("target_column") or ""
+                    op = params.get("operator") or "<="
+                    expr = f"{op} {target_col}"
+                    tests_list.append({"dbt_utils.expression_is_true": {"expression": expr}})
+                else:
+                    tests_list.append("not_null")
+            columns_list.append({"name": c_name, "tests": tests_list})
+        models_list.append({"name": t_name, "columns": columns_list})
+
+    yaml_dict = {"version": 2, "models": models_list}
+    return yaml.dump(yaml_dict, sort_keys=False, allow_unicode=True)
+
+
 async def test_generator_node(state: AgentState) -> dict:
-    """LangGraph Node: Sinh danh sách test queries từ approved rules hoặc active rules."""
-    from src.services.rule_store import get_active_rules
+    """LangGraph Node: Sinh tệp dbt test YML từ approved rules, lưu DB, lưu vết local và chuẩn bị cho runner."""
+    from src.services.rule_store import get_active_rules, save_generated_dbt_yaml
 
     run_id = state.get("rule_run_id") or state.get("test_run_id") or "test_run"
     approved_rules = state.get("approved_rules")
@@ -254,6 +302,7 @@ async def test_generator_node(state: AgentState) -> dict:
         return {
             "generated_tests": [],
             "approved_rules": [],
+            "generated_dbt_yaml": "",
             "test_generation_errors": ["Không tìm thấy approved hoặc active rules nào."],
         }
 
@@ -271,35 +320,44 @@ async def test_generator_node(state: AgentState) -> dict:
         tests = generate_tests_for_table(table_name, table_rules, dialect_name)
         all_generated.extend(tests)
 
-    logger.info(
-        "Đã sinh %d test queries cho %d bảng từ %d rules (run_id=%s)",
-        len(all_generated),
-        len(by_table),
-        len(approved_rules),
-        run_id,
-    )
+    # 2. Sinh tệp dbt test YAML
+    dbt_yaml_content = generate_dbt_test_yaml(approved_rules)
 
-    # Xuất trace file
+    # 3. Ghi tệp dbt test YML vào thư mục models của dbt_project
+    root_dir = Path(__file__).resolve().parent.parent.parent.parent
+    dbt_models_dir = root_dir / "dbt_project" / "models"
+    dbt_models_dir.mkdir(parents=True, exist_ok=True)
+    dbt_yml_file = dbt_models_dir / "generated_dq_tests.yml"
+    try:
+        dbt_yml_file.write_text(dbt_yaml_content, encoding="utf-8")
+        logger.info("Đã tạo tệp dbt test YML tại: %s", dbt_yml_file)
+    except Exception as exc:
+        logger.warning("Không thể ghi tệp dbt_project/models/generated_dq_tests.yml: %s", exc)
+
+    # 4. Xuất local trace file (output/test_generator/)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     try:
         settings = get_settings()
         base_dir = getattr(settings, "output_dir", None) or "./output"
         out_dir = Path(base_dir) / "test_generator"
         out_dir.mkdir(parents=True, exist_ok=True)
-        dump_file = out_dir / f"debug_generated_tests_{timestamp}_{run_id}.json"
-        dump_file.write_text(
-            json.dumps(all_generated, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        logger.info("Đã xuất trace generated tests ra: %s", dump_file)
+        dump_file = out_dir / f"debug_generated_dbt_tests_{timestamp}_{run_id}.yml"
+        dump_file.write_text(dbt_yaml_content, encoding="utf-8")
+        logger.info("Đã xuất trace generated dbt YML tests ra: %s", dump_file)
     except Exception as exc:
-        logger.warning("Không thể ghi file trace generated tests: %s", exc)
+        logger.warning("Không thể ghi file trace generated dbt tests: %s", exc)
+
+    # 5. Lưu tệp YML vào Database (Audit Log & Metadata)
+    save_generated_dbt_yaml(run_id, dbt_yaml_content)
 
     return {
         "approved_rules": approved_rules,
         "generated_tests": all_generated,
+        "generated_dbt_yaml": dbt_yaml_content,
+        "dbt_yaml_file_path": str(dbt_yml_file),
         "test_generation_errors": [],
     }
+
 
 
 # ---------------------------------------------------------------------------

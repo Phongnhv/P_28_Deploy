@@ -319,11 +319,41 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
     return results
 
 
+import shutil
+import subprocess
+
+
+def _run_dbt_cli_test(dbt_dir: Path) -> bool:
+    """Thực thi lệnh CLI dbt test đối với dự án dbt_project chứa file YML đã sinh."""
+    dbt_cmd = shutil.which("dbt")
+    if not dbt_cmd:
+        return False
+    try:
+        res = subprocess.run(
+            [dbt_cmd, "test", "--project-dir", str(dbt_dir), "--profiles-dir", str(dbt_dir), "--select", "generated_dq_tests"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        logger.info("Chạy dbt test CLI thành công (returncode=%d): %s", res.returncode, res.stdout[:200])
+        return res.returncode == 0
+    except Exception as exc:
+        logger.warning("Thực thi dbt test CLI gặp sự cố, chuyển sang fallback: %s", exc)
+        return False
+
+
 async def test_runner_node(state: AgentState) -> dict:
-    """LangGraph Node: Thực thi song song tất cả các test queries đã validated."""
+    """LangGraph Node: Thực thi dbt test CLI (nếu có) hoặc fallback thực thi các test queries đã sinh."""
     tests = state.get("generated_tests", [])
     engine = get_engine()
     dialect_name = engine.dialect.name
+
+    root_dir = Path(__file__).resolve().parent.parent.parent.parent
+    dbt_dir = root_dir / "dbt_project"
+
+    # Thử chạy dbt test CLI đối với tệp dbt YML vừa sinh
+    if (dbt_dir / "models" / "generated_dq_tests.yml").exists():
+        _run_dbt_cli_test(dbt_dir)
 
     all_results: list[dict] = []
 
@@ -341,8 +371,6 @@ async def test_runner_node(state: AgentState) -> dict:
 
     # Xuất trace file
     try:
-        from pathlib import Path
-
         from src.config import get_settings
         settings = get_settings()
         base_dir = getattr(settings, "output_dir", None) or "./output"
@@ -360,6 +388,7 @@ async def test_runner_node(state: AgentState) -> dict:
     return {
         "test_results": all_results,
     }
+
 
 
 # ---------------------------------------------------------------------------
