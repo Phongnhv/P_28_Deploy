@@ -18,6 +18,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from src.agents.state import AgentState
 from src.config import get_settings
 from src.models.rule_schemas import RuleType
@@ -234,10 +236,9 @@ def generate_tests_for_table(
     return generated
 
 
-import yaml
-
 
 def generate_dbt_test_yaml(approved_rules: list[dict]) -> str:
+
     """Biên dịch danh sách approved rules thành định dạng tệp dbt test YAML chuẩn (generated_dq_tests.yml)."""
     tables_map: dict[str, dict[str, list[dict]]] = {}
     for r in approved_rules:

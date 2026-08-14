@@ -12,8 +12,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
+import subprocess
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from sqlalchemy import text
 
@@ -319,11 +322,9 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
     return results
 
 
-import shutil
-import subprocess
-
 
 def _run_dbt_cli_test(dbt_dir: Path) -> bool:
+
     """Thực thi lệnh CLI dbt test đối với dự án dbt_project chứa file YML đã sinh."""
     dbt_cmd = shutil.which("dbt")
     if not dbt_cmd:

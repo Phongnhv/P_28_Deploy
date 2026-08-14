@@ -17,8 +17,14 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from src.config import get_settings
-from src.models.database import AuditEventModel, Base, DatasetModel, JobModel, RuleProposalModel, RuleVersionModel
-
+from src.models.database import (
+    AuditEventModel,
+    Base,
+    DatasetModel,
+    JobModel,
+    RuleProposalModel,
+    RuleVersionModel,
+)
 from src.models.rule_schemas import RuleStatus
 
 logger = logging.getLogger(__name__)
