@@ -3,6 +3,8 @@ from datetime import datetime
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from src.time_utils import utc_now
+
 
 class Base(DeclarativeBase):
     pass
@@ -16,7 +18,7 @@ class SessionModel(Base):
     role: Mapped[str] = mapped_column(String(64), nullable=False)
     csrf_token: Mapped[str] = mapped_column(String(256), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
 
 
 class UserAccountModel(Base):
@@ -30,9 +32,9 @@ class UserAccountModel(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
     created_by: Mapped[str | None] = mapped_column(String(100))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, nullable=False, default=utc_now, onupdate=utc_now
     )
 
 
@@ -50,7 +52,7 @@ class DatasetModel(Base):
     manifest_version: Mapped[str] = mapped_column(String(64), nullable=False)
     checksum: Mapped[str] = mapped_column(String(256), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, nullable=False, default=utc_now, onupdate=utc_now
     )
 
 
@@ -62,7 +64,7 @@ class DatasetAccessModel(Base):
     username: Mapped[str] = mapped_column(String(100), ForeignKey("user_accounts.username"), nullable=False, index=True)
     access_level: Mapped[str] = mapped_column(String(16), nullable=False)
     granted_by: Mapped[str] = mapped_column(String(100), nullable=False)
-    granted_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    granted_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
 
 
 class SourceRowModel(Base):
@@ -107,9 +109,9 @@ class JobModel(Base):
     correlation_id: Mapped[str | None] = mapped_column(String(64))
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, nullable=False, default=utc_now, onupdate=utc_now
     )
 
 
@@ -123,7 +125,7 @@ class ProfileModel(Base):
     duplicate_rate: Mapped[float] = mapped_column(Float, nullable=False)
     cross_field_metrics_json: Mapped[str | None] = mapped_column(Text)
     evidence_keys: Mapped[str] = mapped_column(Text, nullable=False)  # JSON list
-    generated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
 
     columns: Mapped[list["ColumnProfileModel"]] = relationship(back_populates="profile", cascade="all, delete-orphan")
 
@@ -168,9 +170,9 @@ class RuleProposalModel(Base):
     evidence_summary: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, nullable=False, default=utc_now, onupdate=utc_now
     )
 
 
@@ -183,7 +185,7 @@ class RuleVersionModel(Base):
     rule_spec: Mapped[str] = mapped_column(Text, nullable=False)  # JSON
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="APPROVED")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
 
 
 class RuleConfigurationModel(Base):
@@ -196,7 +198,7 @@ class RuleConfigurationModel(Base):
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, nullable=False, default=utc_now, onupdate=utc_now
     )
 
 
@@ -210,7 +212,7 @@ class DqRunModel(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
     total_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_checked: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
@@ -237,4 +239,4 @@ class AuditEventModel(Base):
     entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
     entity_id: Mapped[str] = mapped_column(String(256), nullable=False)
     detail_json: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)

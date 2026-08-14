@@ -6,6 +6,10 @@ import type {
   DatasetProfile,
   DqRunCreateResponse,
   DqResult,
+  DqAnomaly,
+  DatasetRowQuery,
+  DatasetRowsResponse,
+  QualityTrendPoint,
   DqRun,
   Job,
   ManualRuleInput,
@@ -21,7 +25,23 @@ import type {
   UserUpdateInput,
 } from "../types";
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+function resolveApiBaseUrl(configuredValue: string) {
+  const configured = configuredValue.replace(/\/$/, "");
+  if (!configured || typeof window === "undefined") return configured;
+  try {
+    const url = new URL(configured);
+    const loopbackHosts = new Set(["localhost", "127.0.0.1"]);
+    if (loopbackHosts.has(url.hostname) && loopbackHosts.has(window.location.hostname)) {
+      url.hostname = window.location.hostname;
+      return url.toString().replace(/\/$/, "");
+    }
+  } catch {
+    return configured;
+  }
+  return configured;
+}
+
+const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL ?? "");
 const csrfStorageKey = "ridepulse.csrf";
 let csrfToken = typeof window === "undefined" ? "" : window.sessionStorage.getItem(csrfStorageKey) ?? "";
 
@@ -150,6 +170,24 @@ export const realApiClient: ApiClient = {
   },
   getDqResults(runId) {
     return request<DqResult[]>(`/api/v1/dq-runs/${runId}/results`);
+  },
+  getDqAnomalies(runId) {
+    return request<DqAnomaly[]>(`/api/v1/dq-runs/${runId}/anomalies`);
+  },
+  getLatestDqRun(datasetId) {
+    return request<DqRun | null>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/dq-runs/latest`);
+  },
+  getQualityTrends(datasetId) {
+    return request<QualityTrendPoint[]>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/quality-trends`);
+  },
+  queryDatasetRows(datasetId, query: DatasetRowQuery) {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== "") params.set(key, String(value));
+    });
+    return request<DatasetRowsResponse>(
+      `/api/v1/datasets/${encodeURIComponent(datasetId)}/rows?${params.toString()}`,
+    );
   },
   listAuditLogs() {
     return request<AuditLog[]>("/api/v1/audit-logs?limit=50");

@@ -247,6 +247,16 @@ def test_mock_mode_returns_dashboard_supported_proposals():
         "duplicate_fingerprint",
     }
     assert all(proposal.model_name == "agent-mock-v1" for proposal in proposals)
+    payment_rule = next(proposal for proposal in proposals if proposal.rule_type == "accepted_values")
+    assert payment_rule.rule_spec["allowed_values"] == [
+        "Flex Fare trip",
+        "Credit card",
+        "Cash",
+        "No charge",
+        "Dispute",
+        "Unknown",
+        "Voided trip",
+    ]
 
 
 def test_graph_mode_normalizes_only_evidence_backed_dashboard_rules(monkeypatch):

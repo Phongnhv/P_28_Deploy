@@ -2,10 +2,10 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request, Response
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from src.config import get_settings
@@ -22,6 +22,7 @@ from src.models.database import (
     RuleProposalModel,
     RuleVersionModel,
     SessionModel,
+    SourceRowModel,
     UserAccountModel,
 )
 from src.models.schemas import (
@@ -55,6 +56,7 @@ from src.services.session_service import (
     hash_password,
     verify_csrf,
 )
+from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -234,6 +236,50 @@ class DqResultSchema(BaseModel):
     checked_count: int
     failed_count: int
     failed_row_ids: list[str]
+
+
+class DqAnomalySchema(BaseModel):
+    rule_id: str
+    rule_title: str
+    anomaly_type: str
+    current_rate: float
+    historical_mean: float | None
+    z_score: float | None
+    history_size: int
+    detection_mode: str
+    checked_count: int
+    failed_count: int
+    reason: str
+
+
+class DatasetRowSchema(BaseModel):
+    source_row_id: str
+    vendor_id: str | None
+    pickup_at: str | None
+    dropoff_at: str | None
+    passenger_count: int | None
+    trip_distance: float | None
+    payment_type: str | None
+    fare_amount: float | None
+    total_amount: float | None
+
+
+class DatasetRowsResponse(BaseModel):
+    dataset_id: str
+    total: int
+    limit: int
+    offset: int
+    rows: list[DatasetRowSchema]
+
+
+class QualityTrendPointSchema(BaseModel):
+    run_id: str
+    created_at: str
+    quality_score: float
+    failure_rate: float
+    total_checked: int
+    total_failed: int
+    rule_count: int
 
 
 class AuditLogSchema(BaseModel):
@@ -474,8 +520,8 @@ def start_ingestion(
         linked_entity=id,
         correlation_id=str(uuid.uuid4()),
         attempt_count=1,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=utc_now(),
+        updated_at=utc_now(),
     )
     db.add(job)
     db.commit()
@@ -568,6 +614,154 @@ def get_dataset_profile(
     )
 
 
+@router.get("/datasets/{id}/rows", response_model=DatasetRowsResponse)
+def query_dataset_rows(
+    id: str,
+    vendor_id: str | None = None,
+    payment_type: str | None = None,
+    min_distance: float | None = None,
+    max_distance: float | None = None,
+    quality_status: str = Query("ALL", pattern="^(ALL|VALID|ISSUE)$"),
+    sort_by: str = Query("pickup_at", pattern="^(pickup_at|trip_distance|fare_amount|total_amount)$"),
+    sort_direction: str = Query("desc", pattern="^(asc|desc)$"),
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """Query a bounded, allow-listed projection of the registered dataset."""
+    from src.services.dashboard_agent_workflow import get_dataset_rule_policy
+
+    dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    require_dataset_access(db, session, id)
+
+    query = db.query(SourceRowModel).filter(SourceRowModel.dataset_id == id)
+    if vendor_id:
+        query = query.filter(SourceRowModel.vendor_id == vendor_id)
+    if payment_type:
+        query = query.filter(SourceRowModel.payment_type == payment_type)
+    if min_distance is not None:
+        query = query.filter(SourceRowModel.trip_distance >= min_distance)
+    if max_distance is not None:
+        query = query.filter(SourceRowModel.trip_distance <= max_distance)
+
+    policy = get_dataset_rule_policy(id)
+    allowed_payments = policy.governed_value_sets.get("payment_type", []) if policy else []
+    issue_predicate = or_(
+        SourceRowModel.vendor_id.is_(None),
+        SourceRowModel.trip_distance < 0,
+        SourceRowModel.fare_amount < 0,
+        (
+            SourceRowModel.pickup_at.is_not(None)
+            & SourceRowModel.dropoff_at.is_not(None)
+            & (SourceRowModel.pickup_at > SourceRowModel.dropoff_at)
+        ),
+        (
+            SourceRowModel.payment_type.is_not(None)
+            & SourceRowModel.payment_type.notin_(allowed_payments)
+        )
+        if allowed_payments
+        else SourceRowModel.payment_type.is_(None),
+    )
+    if quality_status == "ISSUE":
+        query = query.filter(issue_predicate)
+    elif quality_status == "VALID":
+        query = query.filter(~issue_predicate)
+
+    total = query.count()
+    sort_columns = {
+        "pickup_at": SourceRowModel.pickup_at,
+        "trip_distance": SourceRowModel.trip_distance,
+        "fare_amount": SourceRowModel.fare_amount,
+        "total_amount": SourceRowModel.total_amount,
+    }
+    sort_column = sort_columns[sort_by]
+    ordering = sort_column.asc() if sort_direction == "asc" else sort_column.desc()
+    rows = query.order_by(ordering, SourceRowModel.source_row_id.asc()).offset(offset).limit(limit).all()
+    return DatasetRowsResponse(
+        dataset_id=id,
+        total=total,
+        limit=limit,
+        offset=offset,
+        rows=[
+            DatasetRowSchema(
+                source_row_id=row.source_row_id,
+                vendor_id=row.vendor_id,
+                pickup_at=row.pickup_at,
+                dropoff_at=row.dropoff_at,
+                passenger_count=row.passenger_count,
+                trip_distance=row.trip_distance,
+                payment_type=row.payment_type,
+                fare_amount=row.fare_amount,
+                total_amount=row.total_amount,
+            )
+            for row in rows
+        ],
+    )
+
+
+@router.get("/datasets/{id}/dq-runs/latest", response_model=DqRunSchema | None)
+def get_latest_dq_run(
+    id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    require_dataset_access(db, session, id)
+    run = (
+        db.query(DqRunModel)
+        .filter(DqRunModel.dataset_id == id)
+        .order_by(DqRunModel.created_at.desc())
+        .first()
+    )
+    if not run:
+        return None
+    return DqRunSchema(
+        id=run.id,
+        job_id=run.job_id,
+        dataset_id=run.dataset_id,
+        rule_ids=json.loads(run.rule_ids),
+        status=run.status,
+        total_failed=run.total_failed,
+        total_checked=run.total_checked,
+        created_at=run.created_at.isoformat(),
+        completed_at=run.completed_at.isoformat() if run.completed_at else None,
+    )
+
+
+@router.get("/datasets/{id}/quality-trends", response_model=list[QualityTrendPointSchema])
+def get_quality_trends(
+    id: str,
+    limit: int = Query(12, ge=1, le=30),
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    require_dataset_access(db, session, id)
+    runs = (
+        db.query(DqRunModel)
+        .filter(DqRunModel.dataset_id == id, DqRunModel.status == "SUCCEEDED")
+        .order_by(DqRunModel.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    points = []
+    for run in reversed(runs):
+        failure_rate = run.total_failed / run.total_checked if run.total_checked else 0.0
+        points.append(
+            QualityTrendPointSchema(
+                run_id=run.id,
+                created_at=run.created_at.isoformat(),
+                quality_score=round(max(0.0, 100.0 * (1.0 - failure_rate)), 2),
+                failure_rate=round(failure_rate, 6),
+                total_checked=run.total_checked,
+                total_failed=run.total_failed,
+                rule_count=len(json.loads(run.rule_ids)),
+            )
+        )
+    return points
+
+
 @router.post("/datasets/{id}/rule-proposals", status_code=202, response_model=CreateJobResponse)
 def start_rule_proposals(
     id: str,
@@ -603,8 +797,8 @@ def start_rule_proposals(
         linked_entity=id,
         correlation_id=str(uuid.uuid4()),
         attempt_count=1,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=utc_now(),
+        updated_at=utc_now(),
     )
     db.add(job)
     db.commit()
@@ -683,8 +877,8 @@ def create_manual_rule(
         evidence_summary="Manually added by data steward",
         confidence=1.0,
         model_name="data-steward",
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=utc_now(),
+        updated_at=utc_now(),
     )
     db.add(prop)
     db.commit()
@@ -746,7 +940,7 @@ def review_proposal(
                 rule_spec=prop.rule_spec,
                 status="APPROVED",
                 version=1,
-                created_at=datetime.utcnow(),
+                created_at=utc_now(),
             )
             db.add(rv)
         else:
@@ -809,7 +1003,7 @@ def review_proposal(
         existing_rv = db.query(RuleVersionModel).filter(RuleVersionModel.id == rv_id).first()
         if existing_rv:
             existing_rv.rule_spec = prop.rule_spec
-            existing_rv.created_at = datetime.utcnow()
+            existing_rv.created_at = utc_now()
         else:
             rv = RuleVersionModel(
                 id=rv_id,
@@ -818,7 +1012,7 @@ def review_proposal(
                 rule_spec=prop.rule_spec,
                 status="APPROVED",
                 version=1,
-                created_at=datetime.utcnow(),
+                created_at=utc_now(),
             )
             db.add(rv)
         configuration = (
@@ -848,7 +1042,7 @@ def review_proposal(
     else:
         raise HTTPException(status_code=400, detail="Invalid review action")
 
-    prop.updated_at = datetime.utcnow()
+    prop.updated_at = utc_now()
     db.commit()
 
     return RuleProposalSchema(
@@ -1046,8 +1240,8 @@ def start_dq_run(
         linked_entity=run_id,
         correlation_id=str(uuid.uuid4()),
         attempt_count=1,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=utc_now(),
+        updated_at=utc_now(),
     )
     db.add(job)
 
@@ -1059,7 +1253,7 @@ def start_dq_run(
         status="PENDING",
         total_failed=0,
         total_checked=0,
-        created_at=datetime.utcnow(),
+        created_at=utc_now(),
     )
     db.add(dq_run)
     db.commit()
@@ -1127,6 +1321,22 @@ def get_dq_results(
         )
         for r in results
     ]
+
+
+@router.get("/dq-runs/{id}/anomalies", response_model=list[DqAnomalySchema])
+def get_dq_anomalies(
+    id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """Return aggregate anomaly signals without exposing raw dataset values."""
+    from src.services.dashboard_anomaly import detect_dashboard_anomalies
+
+    run = db.query(DqRunModel).filter(DqRunModel.id == id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="DQ run not found")
+    require_dataset_access(db, session, run.dataset_id)
+    return [DqAnomalySchema(**anomaly.__dict__) for anomaly in detect_dashboard_anomalies(db, id)]
 
 
 @router.get("/admin/users", response_model=list[UserAccountSchema])
@@ -1302,7 +1512,7 @@ def grant_dataset_access(
     else:
         access.access_level = body.access_level
         access.granted_by = session.username
-        access.granted_at = datetime.utcnow()
+        access.granted_at = utc_now()
     db.commit()
     add_audit_event(
         db,
@@ -1424,8 +1634,8 @@ def compatibility_trigger_job(
         linked_entity=request.linked_entity,
         correlation_id=str(uuid.uuid4()),
         attempt_count=1,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=utc_now(),
+        updated_at=utc_now(),
     )
     db.add(job)
     db.commit()

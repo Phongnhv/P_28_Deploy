@@ -1,13 +1,14 @@
 import logging
 import secrets
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 from hashlib import pbkdf2_hmac
 
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
 from src.models.database import SessionModel, UserAccountModel
+from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -68,11 +69,11 @@ def create_user_session(username: str, password: str, db: Session) -> SessionMod
         username=normalized_username,
         role=account.role,
         csrf_token=str(uuid.uuid4()),
-        expires_at=datetime.utcnow() + timedelta(hours=SESSION_DURATION_HOURS),
-        created_at=datetime.utcnow(),
+        expires_at=utc_now() + timedelta(hours=SESSION_DURATION_HOURS),
+        created_at=utc_now(),
     )
     db.add(session)
-    account.last_login_at = datetime.utcnow()
+    account.last_login_at = utc_now()
     db.commit()
     return session
 
@@ -85,7 +86,7 @@ def get_current_session(request: Request, db: Session) -> SessionModel:
     session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
     if not session:
         raise HTTPException(status_code=401, detail={"code": "SESSION_REQUIRED", "message": "A session is required."})
-    if session.expires_at < datetime.utcnow():
+    if session.expires_at < utc_now():
         db.delete(session)
         db.commit()
         raise HTTPException(status_code=401, detail={"code": "SESSION_REQUIRED", "message": "The session has expired."})

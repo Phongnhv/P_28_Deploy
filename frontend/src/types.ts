@@ -176,6 +176,62 @@ export interface DqResult {
   failed_row_ids: string[];
 }
 
+export interface DqAnomaly {
+  rule_id: string;
+  rule_title: string;
+  anomaly_type: "HIGH_VIOLATION_RATE" | "Z_SCORE_SPIKE";
+  current_rate: number;
+  historical_mean?: number;
+  z_score?: number;
+  history_size: number;
+  detection_mode: "COLD_START" | "HISTORICAL";
+  checked_count: number;
+  failed_count: number;
+  reason: string;
+}
+
+export interface DatasetRow {
+  source_row_id: string;
+  vendor_id?: string;
+  pickup_at?: string;
+  dropoff_at?: string;
+  passenger_count?: number;
+  trip_distance?: number;
+  payment_type?: string;
+  fare_amount?: number;
+  total_amount?: number;
+}
+
+export interface DatasetRowsResponse {
+  dataset_id: string;
+  total: number;
+  limit: number;
+  offset: number;
+  rows: DatasetRow[];
+}
+
+export interface DatasetRowQuery {
+  vendor_id?: string;
+  payment_type?: string;
+  min_distance?: number;
+  max_distance?: number;
+  quality_status?: "ALL" | "VALID" | "ISSUE";
+  sort_by?: "pickup_at" | "trip_distance" | "fare_amount" | "total_amount";
+  sort_direction?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+}
+
+export interface QualityTrendPoint {
+  run_id: string;
+  created_at: string;
+  quality_score: number;
+  failure_rate: number;
+  total_checked: number;
+  total_failed: number;
+  rule_count: number;
+}
+
 export interface AuditLog {
   id: string;
   action: string;
@@ -218,6 +274,10 @@ export interface ApiClient {
   startDqRun(ruleIds: string[], idempotencyKey: string): Promise<DqRunCreateResponse>;
   getDqRun(runId: string): Promise<DqRun>;
   getDqResults(runId: string): Promise<DqResult[]>;
+  getDqAnomalies(runId: string): Promise<DqAnomaly[]>;
+  getLatestDqRun(datasetId: string): Promise<DqRun | null>;
+  getQualityTrends(datasetId: string): Promise<QualityTrendPoint[]>;
+  queryDatasetRows(datasetId: string, query: DatasetRowQuery): Promise<DatasetRowsResponse>;
   listAuditLogs(): Promise<AuditLog[]>;
   listUsers(): Promise<UserAccount[]>;
   createUser(input: UserCreateInput): Promise<UserAccount>;

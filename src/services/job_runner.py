@@ -3,7 +3,6 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -26,6 +25,7 @@ from src.models.database import (
 )
 from src.services.dashboard_agent_workflow import generate_dashboard_proposals, get_dataset_rule_policy
 from src.services.rule_store import get_engine
+from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ def add_audit_event(db: Session, session_id: str | None, actor_role: str, action
         entity_type=entity_type,
         entity_id=entity_id,
         detail_json=json.dumps(detail, ensure_ascii=False),
-        created_at=datetime.utcnow()
+        created_at=utc_now()
     )
     db.add(evt)
     db.commit()
@@ -317,7 +317,7 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
                 duplicate_rate=round(duplicate_rate, 2),
                 cross_field_metrics_json=json.dumps(cross_field_metrics),
                 evidence_keys=json.dumps(evidence_keys),
-                generated_at=datetime.utcnow()
+                generated_at=utc_now()
             )
             db.add(profile)
             db.commit()
@@ -331,7 +331,7 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
             if dataset:
                 dataset.status = "PROFILE_READY"
                 dataset.row_count = row_count
-                dataset.updated_at = datetime.utcnow()
+                dataset.updated_at = utc_now()
                 db.commit()
 
             job.status = "SUCCEEDED"
@@ -412,8 +412,8 @@ def run_propose_rules(job_id: str, dataset_id: str, session_id: str | None = Non
                     evidence_summary=p.evidence_summary,
                     confidence=p.confidence,
                     model_name=p.model_name,
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow()
+                    created_at=utc_now(),
+                    updated_at=utc_now()
                 )
                 db.add(prop)
 
@@ -652,12 +652,12 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
             dq_run.status = "SUCCEEDED"
             dq_run.total_failed = total_failed
             dq_run.total_checked = total_checked
-            dq_run.completed_at = datetime.utcnow()
+            dq_run.completed_at = utc_now()
 
             job.status = "SUCCEEDED"
             job.progress = 100.0
             job.message = "Completed"
-            completed_at = datetime.utcnow()
+            completed_at = utc_now()
             db.query(RuleConfigurationModel).filter(
                 RuleConfigurationModel.rule_proposal_id.in_([rule.rule_proposal_id for rule in rule_versions])
             ).update({RuleConfigurationModel.last_run_at: completed_at}, synchronize_session=False)

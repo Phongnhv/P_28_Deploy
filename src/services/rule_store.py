@@ -21,6 +21,7 @@ from src.config import get_settings
 from src.models.database import Base, DatasetAccessModel, DatasetModel, JobModel, RuleProposalModel, RuleVersionModel
 from src.models.rule_schemas import RuleStatus
 from src.services.session_service import ensure_default_users
+from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -393,8 +394,8 @@ def create_run(run_id: str, dataset_id: str) -> dict:
             attempt_count=0,
             linked_entity=dataset_id,
             idempotency_key=f"propose-run-{run_id}",
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=utc_now(),
+            updated_at=utc_now(),
         )
         session.add(job)
         session.commit()
@@ -415,7 +416,7 @@ def update_run_status(run_id: str, status: str, error: str | None = None) -> Non
             job.status = "RUNNING" if status == "RUNNING" else ("SUCCEEDED" if status == "DONE" else status)
             if error is not None:
                 job.error = error
-            job.updated_at = datetime.utcnow()
+            job.updated_at = utc_now()
             session.commit()
 
 
@@ -480,8 +481,8 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
                 evidence_summary=rule.get("ai_reasoning", ""),
                 confidence=rule.get("confidence_score", 1.0),
                 model_name="agent-proposer",
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                created_at=utc_now(),
+                updated_at=utc_now(),
             )
             session.add(row)
 
@@ -592,7 +593,7 @@ def review_rule(
 
         db_status = "APPROVED" if status == "APPROVED" else "REJECTED"
         row.status = db_status
-        row.updated_at = datetime.utcnow()
+        row.updated_at = utc_now()
         if severity:
             row.severity = severity.upper()
 
@@ -644,7 +645,7 @@ def review_rule(
             existing_rv = session.query(RuleVersionModel).filter(RuleVersionModel.id == rv_id).first()
             if existing_rv:
                 existing_rv.rule_spec = json.dumps(spec)
-                existing_rv.created_at = datetime.utcnow()
+                existing_rv.created_at = utc_now()
             else:
                 rv = RuleVersionModel(
                     id=rv_id,
@@ -653,7 +654,7 @@ def review_rule(
                     rule_spec=json.dumps(spec),
                     status="APPROVED",
                     version=1,
-                    created_at=datetime.utcnow(),
+                    created_at=utc_now(),
                 )
                 session.add(rv)
             session.commit()
