@@ -44,7 +44,7 @@ def test_dbt_models_sql_structure():
 
     with open(stg_path, encoding="utf-8") as f:
         stg_sql = f.read()
-    assert "source('public', 'trips_raw')" in stg_sql or 'source("public", "trips_raw")' in stg_sql
+    assert "source('public', 'trips_canonical')" in stg_sql or 'source("public", "trips_canonical")' in stg_sql
     assert "source_row_id" in stg_sql
 
     with open(profile_path, encoding="utf-8") as f:
@@ -63,7 +63,7 @@ def test_dbt_schema_yml_tests():
 
     assert "sources" in schema
     assert schema["sources"][0]["name"] == "public"
-    assert schema["sources"][0]["tables"][0]["name"] == "trips_raw"
+    assert schema["sources"][0]["tables"][0]["name"] == "trips_canonical"
 
     models_map = {m["name"]: m for m in schema.get("models", [])}
     assert "stg_trips" in models_map

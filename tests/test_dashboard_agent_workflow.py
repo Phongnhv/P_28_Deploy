@@ -164,9 +164,11 @@ def test_graph_normalizer_rejects_parameter_drift_and_duplicate_categories():
         {
             "candidate_id": "governed-enum:payment_type",
             "rule_type": "ACCEPTED_VALUES", "column": "payment_type",
-            "parameters": {"accepted_values": ["1", "2", "3", "4", "5", "6"]},
+            "parameters": {"accepted_values": [
+                "Flex Fare trip", "Credit card", "Cash", "No charge", "Dispute", "Unknown", "Voided trip"
+            ]},
             "confidence_score": 0.80, "severity": "MEDIUM",
-            "rule_description": "Payment code must be governed.", "ai_reasoning": "The governed code set has six values.",
+            "rule_description": "Payment type must be governed.", "ai_reasoning": "Use the governed semantic value set.",
         },
     ]
 

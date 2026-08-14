@@ -4,8 +4,8 @@ sources:
   - name: public
     schema: public
     tables:
-      - name: trips_raw
-        description: "Bảng dữ liệu 50k chuyến xe taxi NYC Yellow thô nhập từ tệp Parquet."
+      - name: trips_canonical
+        description: "View typed/null-safe từ trips_raw JSON; contract chung cho dbt, profiler và DQ runner."
         columns:
           - name: source_row_id
             description: "Khóa định danh duy nhất cho từng bản ghi."

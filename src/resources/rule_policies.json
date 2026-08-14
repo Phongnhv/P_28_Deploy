@@ -8,14 +8,15 @@
         "trip_distance",
         "fare_amount"
       ],
-      "governed_code_sets": {
+      "governed_value_sets": {
         "payment_type": [
-          "1",
-          "2",
-          "3",
-          "4",
-          "5",
-          "6"
+          "Flex Fare trip",
+          "Credit card",
+          "Cash",
+          "No charge",
+          "Dispute",
+          "Unknown",
+          "Voided trip"
         ]
       },
       "cross_field_rules": [

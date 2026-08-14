@@ -53,7 +53,7 @@ class DatasetRulePolicy(BaseModel):
 
     required_identifiers: list[str] = Field(default_factory=list)
     nonnegative_columns: list[str] = Field(default_factory=list)
-    governed_code_sets: dict[str, list[str]] = Field(default_factory=dict)
+    governed_value_sets: dict[str, list[str]] = Field(default_factory=dict)
     cross_field_rules: list[CrossFieldRulePolicy] = Field(default_factory=list)
     duplicate_fingerprint_columns: list[str] = Field(default_factory=list)
 
@@ -313,7 +313,9 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
     if policy:
         evidence_keys.extend(f"policy.required_identifier.{column}" for column in policy.required_identifiers)
         evidence_keys.extend(f"policy.nonnegative_column.{column}" for column in policy.nonnegative_columns)
-        evidence_keys.extend(f"policy.governed_code_set.{column}" for column in policy.governed_code_sets)
+        evidence_keys.extend(
+            f"policy.governed_value_set.{column}" for column in policy.governed_value_sets
+        )
         evidence_keys.extend(
             f"policy.cross_field.{rule.left_column}.{rule.operator}.{rule.right_column}"
             for rule in policy.cross_field_rules
@@ -536,11 +538,11 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
         )
         break
 
-    for column, allowed_values in policy.governed_code_sets.items():
+    for column, allowed_values in policy.governed_value_sets.items():
         profile = columns.get(column)
         if profile and allowed_values:
             evidence_refs = [
-                f"policy.governed_code_set.{column}",
+                f"policy.governed_value_set.{column}",
                 f"profile.column.{column}.distinct_count",
             ]
             if profile.out_of_domain_rate is not None:

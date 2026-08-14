@@ -184,7 +184,7 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
             total_null_cells = 0
             columns_profiles = []
             policy = get_dataset_rule_policy(dataset_id)
-            governed_code_sets = policy.governed_code_sets if policy else {}
+            governed_value_sets = policy.governed_value_sets if policy else {}
 
             # Clean existing profile
             db.query(ColumnProfileModel).filter(ColumnProfileModel.profile_dataset_id == dataset_id).delete()
@@ -225,7 +225,7 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
                     quantiles = _numeric_quantiles(non_null_data)
 
                 out_of_domain_rate = None
-                allowed_values = governed_code_sets.get(col)
+                allowed_values = governed_value_sets.get(col)
                 if allowed_values is not None:
                     normalized = non_null_data.astype(str)
                     invalid_count = int((~normalized.isin(allowed_values)).sum())
@@ -271,7 +271,7 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
                     for column in policy.nonnegative_columns
                     if column in df.columns and pd.api.types.is_numeric_dtype(df[column])
                 )
-                for column, allowed_values in policy.governed_code_sets.items():
+                for column, allowed_values in policy.governed_value_sets.items():
                     if column not in df.columns:
                         continue
                     non_null_values = df[column].dropna().astype(str)
