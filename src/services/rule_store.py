@@ -41,20 +41,22 @@ def get_engine():
         @event.listens_for(_engine, "connect")
         def _set_sqlite_pragma(dbapi_conn, _connection_record):
             if "sqlite" in db_url:
-                cursor = dbapi_conn.cursor()
-                cursor.execute("PRAGMA journal_mode=WAL")
-                # journal_mode returns one row. Consume it before registering the
-                # UDF; otherwise SQLite can report a busy statement on startup.
-                cursor.fetchone()
-
                 # Hỗ trợ hàm REGEXP trong SQLite cho rule REGEX_FORMAT
+                # Đăng ký trước khi thực thi PRAGMA để tránh lỗi OperationalError trên Windows
                 def _sqlite_regexp(expr, item):
                     if item is None:
                         return False
                     return re.search(expr, str(item)) is not None
 
                 dbapi_conn.create_function("REGEXP", 2, _sqlite_regexp)
+
+                cursor = dbapi_conn.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL")
+                # journal_mode returns one row; consume it before closing the
+                # cursor so SQLite does not retain a busy statement on startup.
+                cursor.fetchone()
                 cursor.close()
+
 
     return _engine
 
