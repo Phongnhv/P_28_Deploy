@@ -80,7 +80,6 @@ dbt_project/logs/
 dbt_project/models/generated_dq_tests.yml
 
 # Temporary personal doc files (kept locally, ignored from git push)
-/docs
 /PR12_Report.md
 /agent_Workflow.md
 docs/gate2-mvp/RESTRUCTURING_REPORT.md
