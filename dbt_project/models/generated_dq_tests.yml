@@ -1,0 +1,36 @@
+version: 2
+models:
+- name: jobs
+  columns:
+  - name: id
+    tests:
+    - not_null
+    - unique
+  - name: source_row_id
+    tests:
+    - not_null
+- name: yellow_tripdata
+  columns:
+  - name: pickup_at
+    tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        expression: <= dropoff_at
+  - name: dropoff_at
+    tests:
+    - not_null
+  - name: passenger_count
+    tests:
+    - not_null
+  - name: trip_distance
+    tests:
+    - dbt_utils.expression_is_true:
+        expression: '>= 0.396 AND <= 12.804'
+  - name: fare_amount
+    tests:
+    - dbt_utils.expression_is_true:
+        expression: '>= 0.0 AND <= 63.0'
+  - name: total_amount
+    tests:
+    - dbt_utils.expression_is_true:
+        expression: '>= 0.0 AND <= 74.03'

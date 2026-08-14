@@ -17,7 +17,8 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from src.config import get_settings
-from src.models.database import Base, DatasetModel, JobModel, RuleProposalModel, RuleVersionModel
+from src.models.database import AuditEventModel, Base, DatasetModel, JobModel, RuleProposalModel, RuleVersionModel
+
 from src.models.rule_schemas import RuleStatus
 
 logger = logging.getLogger(__name__)
@@ -934,17 +935,25 @@ def deactivate_rule(rule_id: str) -> bool:
 def save_generated_dbt_yaml(run_id: str, yaml_content: str) -> bool:
     """Lưu vết tệp dbt test YAML đã sinh vào nhật ký Audit / Job metadata trong Database."""
     try:
-        record_audit_event(
-            action="GENERATE_DBT_YAML_TESTS",
-            entity_type="job",
-            entity_id=run_id,
-            details={"run_id": run_id, "dbt_yaml": yaml_content},
-            actor="test_generator_node",
-        )
+        with Session(get_engine()) as session:
+            audit = AuditEventModel(
+                id=f"audit-{uuid.uuid4().hex[:8]}",
+                actor_role="SYSTEM",
+                action_code="GENERATE_DBT_YAML_TESTS",
+                entity_type="job",
+                entity_id=run_id,
+                detail_json=json.dumps({"run_id": run_id, "dbt_yaml": yaml_content}, ensure_ascii=False),
+                created_at=datetime.now(UTC),
+            )
+            session.add(audit)
+            session.commit()
+            logger.info("Đã lưu tệp dbt YML vào nhật ký Audit CSDL cho run_id=%s", run_id)
         return True
     except Exception as exc:
         logger.warning("save_generated_dbt_yaml failed: %s", exc)
         return False
+
+
 
 
 

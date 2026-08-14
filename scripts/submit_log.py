@@ -68,7 +68,7 @@ def _restore_pending(pending: Path) -> None:
         pending.rename(LOG_FILE)
 
 
-<<<<<<< HEAD
+
 def _recover_pending_files() -> None:
     """Find any leftover session.pending.*.jsonl files from crashed/interrupted runs
     and merge them back into LOG_FILE."""
@@ -77,7 +77,7 @@ def _recover_pending_files() -> None:
     pending_files = sorted(LOG_DIR.glob("session.pending.*.jsonl"))
     for pf in pending_files:
         _restore_pending(pf)
-=======
+
 def _sanitize_text(s: str) -> str:
     if not isinstance(s, str):
         return ""
@@ -97,7 +97,6 @@ def _sanitize_entry(entry: dict) -> dict:
         else:
             cleaned[k] = v
     return cleaned
->>>>>>> origin/main
 
 
 def main():
