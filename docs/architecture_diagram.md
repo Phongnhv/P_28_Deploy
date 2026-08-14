@@ -143,48 +143,46 @@ flowchart TD
 ```mermaid
 flowchart TD
     START([🚀 Bắt đầu: Chọn Dataset]) --> ProfilerNode[1. Profiler Agent]
-    
+  
     %% 1. Profiler
     ProfilerNode -->|Đọc Metadata & Quét SQL| ProfileStats[Bảng thống kê Dữ liệu & Metadata JSON]
-    
+  
     %% 2. Rule Proposer (LLM Reasoning)
     ProfileStats --> RuleProposerNode[2. LLM Rule Proposer]
     RuleProposerNode -->|LLM Reasoning & Suggest Rules| ProposedRules[Đề xuất bộ Rule Chất lượng]
-    
+  
     %% 3. HITL (Human-In-The-Loop)
     ProposedRules --> HITLNode["⏸️ Human-In-The-Loop (HITL)"]
     subgraph HITL_Section ["Vai trò Data Steward"]
         HITLNode -->|Duyệt / Từ chối / Chỉnh sửa| ApprovedRules[Bộ Rule đã phê duyệt]
     end
-    
+  
     %% 4. Test Generator
     ApprovedRules --> TestGenNode[3. Test Generator Agent]
     TestGenNode -->|Sinh mã kiểm thử dbt / GX| TestScripts[Bài test sinh tự động]
-    
+  
     %% 5. Test Runner & Anomaly Detector
     TestScripts --> TestRunnerNode[4. Thực thi kiểm thử]
     TestRunnerNode -->|Chạy test trên Database| TestResults[Kết quả kiểm thử]
     TestResults --> AnomalyCheckNode{5. Phát hiện Bất thường Anomaly?}
-    
+  
     %% 6. Diagnostic & Report
     AnomalyCheckNode -->|Có lỗi / Bất thường| DiagnoseAnomaly[Chẩn đoán nguyên nhân & Phân tích]
     AnomalyCheckNode -->|Bình thường| DashboardNode[6. Dashboard & Báo cáo]
     DiagnoseAnomaly --> DashboardNode
-    
+  
     DashboardNode --> END([🏁 Kết thúc: Gửi thông báo tới Data Steward])
 ```
 
 ## 3. Component Details
 
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| Frontend | React / Next.js + Ant Design 5.0 | User interface for Data Steward (HITL) and Viewer |
-| Backend | FastAPI | REST API Server, RBAC, Gateway & Agent integration |
-| Agent Engine | LangGraph | AI Agent Orchestration (Profiler, Proposer, Generator, Anomaly Detector) |
-| Scheduler / Runner | Dagster | Automated pipeline execution, scheduled test execution |
-| Application DB | PostgreSQL | Primary storage for metadata, rules status, test logs, user roles |
-| Vector Store | ChromaDB | Embeddings, rule history & diagnosis RAG context |
-| Target Data | Snowflake / BigQuery / Postgres | Operational databases (`dich_vu_xe_trips`, etc.) |
-| LLM Service | OpenAI / Gemini | Reasoning engine for rule generation & root cause diagnosis |
-
-
+| Component          | Technology                       | Purpose                                                                  |
+| ------------------ | -------------------------------- | ------------------------------------------------------------------------ |
+| Frontend           | React / Next.js + Ant Design 5.0 | User interface for Data Steward (HITL) and Viewer                        |
+| Backend            | FastAPI                          | REST API Server, RBAC, Gateway & Agent integration                       |
+| Agent Engine       | LangGraph                        | AI Agent Orchestration (Profiler, Proposer, Generator, Anomaly Detector) |
+| Scheduler / Runner | Dagster                          | Automated pipeline execution, scheduled test execution                   |
+| Application DB     | PostgreSQL                       | Primary storage for metadata, rules status, test logs, user roles        |
+| Vector Store       | ChromaDB                         | Embeddings, rule history & diagnosis RAG context                         |
+| Target Data        | Snowflake / BigQuery / Postgres  | Operational databases (`dich_vu_xe_trips`, etc.)                       |
+| LLM Service        | OpenAI / Gemini                  | Reasoning engine for rule generation & root cause diagnosis              |

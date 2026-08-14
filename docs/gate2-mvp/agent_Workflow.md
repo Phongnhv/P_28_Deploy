@@ -1,7 +1,9 @@
+anPh
+
 # RidePulse DQ — Agent Workflow & Dual dbt Layers Integration
 
-> **Dự án:** RidePulse DQ (Autonomous Data Quality & Anomaly Intelligence Platform)  
-> **Tài liệu:** Sơ đồ Quy trình Agent Workflow & Chi tiết 2 Lớp dbt (PR #4 & PR #8)  
+> **Dự án:** RidePulse DQ (Autonomous Data Quality & Anomaly Intelligence Platform)
+> **Tài liệu:** Sơ đồ Quy trình Agent Workflow & Chi tiết 2 Lớp dbt (PR #4 & PR #8)
 > **Mục đích:** Thể hiện rõ nét 2 lớp vị trí của dbt Core trong pipeline: **Lớp 1 (Data Transformation Baseline - Pre-Profiling)** và **Lớp 2 (Rule Test Code Generation & Execution - Post-HITL Approval)**.
 
 ---
@@ -85,24 +87,24 @@ flowchart TD
 
 ## 🔍 2. SO SÁNH NỔI BẬT HAI LỚP DBT TRONG DỰ ÁN
 
-| Tiêu Chí Phân Biệt | 🔵 LỚP 1 DBT: Transformation Baseline (PR #4) | 🟢 LỚP 2 DBT: Rule Test Compiler & Execution (PR #8) |
-|:---|:---|:---|
-| **Mục đích chính** | Biến đổi dữ liệu thô (`trips_raw`) sang view chuẩn hóa (`stg_trips`, `profile_input`) và chạy dbt schema tests (`schema.yml`). | Biên dịch các `dq_rule` đã được Steward phê duyệt trên UI thành mã SQL/dbt test query để thực thi kiểm thử. |
-| **Vị trí trong Workflow** | **Giai đoạn 2 (Pre-Profiling):** Diễn ra ngay sau khi Ingest thô và TRƯỚC KHI Profiler Agent quét thống kê. | **Giai đoạn 6 (Post-HITL Approval):** Diễn ra SAU KHI Data Steward bấm `APPROVE` / `EDIT` trên giao diện HITL Review UI. |
-| **Đầu vào (Input)** | Bảng dữ liệu thô `public.trips_raw` từ file Parquet 50k. | Danh sách các quy tắc đã được duyệt `dq_rules` lưu trong Database. |
-| **Đầu ra (Output)** | View chuẩn hóa `analytics.profile_input` (12 cột) + Kết quả dbt schema tests (`not_null`, `unique`). | Mã Parameterized SQL query + Kết quả kiểm thử vi phạm (giới hạn tối đa 20 sample violation IDs). |
-| **Thành phần phụ trách** | Dự án `ridepulse_dbt` (`dbt_project.yml`, `profiles.yml`, models SQL). | AI Agent Node `test_generator_node` & `test_runner_node` (`RUNNER_DATABASE_URL`). |
+| Tiêu Chí Phân Biệt             | 🔵 LỚP 1 DBT: Transformation Baseline (PR#4)                                                                                                    | 🟢 LỚP 2 DBT: Rule Test Compiler & Execution (PR#8)                                                                                     |
+| :--------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------- |
+| **Mục đích chính**       | Biến đổi dữ liệu thô (`trips_raw`) sang view chuẩn hóa (`stg_trips`, `profile_input`) và chạy dbt schema tests (`schema.yml`). | Biên dịch các`dq_rule` đã được Steward phê duyệt trên UI thành mã SQL/dbt test query để thực thi kiểm thử.           |
+| **Vị trí trong Workflow**  | **Giai đoạn 2 (Pre-Profiling):** Diễn ra ngay sau khi Ingest thô và TRƯỚC KHI Profiler Agent quét thống kê.                      | **Giai đoạn 6 (Post-HITL Approval):** Diễn ra SAU KHI Data Steward bấm `APPROVE` / `EDIT` trên giao diện HITL Review UI. |
+| **Đầu vào (Input)**       | Bảng dữ liệu thô`public.trips_raw` từ file Parquet 50k.                                                                                   | Danh sách các quy tắc đã được duyệt`dq_rules` lưu trong Database.                                                            |
+| **Đầu ra (Output)**        | View chuẩn hóa`analytics.profile_input` (12 cột) + Kết quả dbt schema tests (`not_null`, `unique`).                                   | Mã Parameterized SQL query + Kết quả kiểm thử vi phạm (giới hạn tối đa 20 sample violation IDs).                               |
+| **Thành phần phụ trách** | Dự án`ridepulse_dbt` (`dbt_project.yml`, `profiles.yml`, models SQL).                                                                    | AI Agent Node`test_generator_node` & `test_runner_node` (`RUNNER_DATABASE_URL`).                                                   |
 
 ---
 
 ## 📊 3. BẢNG TỔNG HỢP TOÀN BỘ WORKFLOW 7 GIAI ĐOẠN
 
-| Bước | Tên Giai Đoạn | Thành Phần Phụ Trách | Nhiệm Vụ Kỹ Thuật Chi Tiết |
-|:---:|:---|:---|:---|
-| **1** | Raw Ingestion Layer | `dataset_loader.py` & Worker | Verify mã hash SHA-256 tệp Parquet và nạp dữ liệu thô vào `public.trips_raw`. |
-| **2** | **🔵 Lớp 1 dbt (PR #4)** | **`ridepulse_dbt` (`stg_trips`, `profile_input`)** | **Ép kiểu 21 cột, tạo view `analytics.profile_input` 12 cột, và chạy dbt schema tests (`schema.yml`).** |
-| **3** | Profiler Agent Stage | `raw_profiler_node` & `db_profiler_tool` | Quét các chỉ số nén (`null_count`, `min`, `max`, `distinct`) trên view `analytics.profile_input` do dbt Lớp 1 sinh ra. |
-| **4** | AI Guarded Rule Proposer | `rule_proposer_node` & OpenAI GPT-4o-mini | Gửi Aggregate Evidence (không gửi raw data) để AI đề xuất 5 loại rules dạng Pydantic Structured Output. |
-| **5** | HITL Review Stage | `rule_store.py` & Steward UI | Steward kiểm duyệt `APPROVE`, `EDIT`, `REJECT` các đề xuất của AI trên giao diện HITL. |
-| **6** | **🟢 Lớp 2 dbt (PR #8)** | **`test_generator_node` & `test_runner_node`** | **Biên dịch rule đã duyệt thành SQL/dbt query, chạy qua role Read-Only `RUNNER_DATABASE_URL`, giới hạn max 20 failure IDs.** |
-| **7** | Persistence & Audit Layer | DB tables (`dq_runs`, `dq_results`, `audit_logs`) | Lưu kết quả vi phạm tổng hợp và ghi nhật ký audit log bất biến. |
+|   Bước   | Tên Giai Đoạn                | Thành Phần Phụ Trách                                       | Nhiệm Vụ Kỹ Thuật Chi Tiết                                                                                                               |
+| :---------: | :------------------------------ | :------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1** | Raw Ingestion Layer             | `dataset_loader.py` & Worker                                 | Verify mã hash SHA-256 tệp Parquet và nạp dữ liệu thô vào`public.trips_raw`.                                                        |
+| **2** | **🔵 Lớp 1 dbt (PR #4)** | **`ridepulse_dbt` (`stg_trips`, `profile_input`)** | **Ép kiểu 21 cột, tạo view `analytics.profile_input` 12 cột, và chạy dbt schema tests (`schema.yml`).**                      |
+| **3** | Profiler Agent Stage            | `raw_profiler_node` & `db_profiler_tool`                   | Quét các chỉ số nén (`null_count`, `min`, `max`, `distinct`) trên view `analytics.profile_input` do dbt Lớp 1 sinh ra.       |
+| **4** | AI Guarded Rule Proposer        | `rule_proposer_node` & OpenAI GPT-4o-mini                    | Gửi Aggregate Evidence (không gửi raw data) để AI đề xuất 5 loại rules dạng Pydantic Structured Output.                             |
+| **5** | HITL Review Stage               | `rule_store.py` & Steward UI                                 | Steward kiểm duyệt`APPROVE`, `EDIT`, `REJECT` các đề xuất của AI trên giao diện HITL.                                          |
+| **6** | **🟢 Lớp 2 dbt (PR #8)** | **`test_generator_node` & `test_runner_node`**       | **Biên dịch rule đã duyệt thành SQL/dbt query, chạy qua role Read-Only `RUNNER_DATABASE_URL`, giới hạn max 20 failure IDs.** |
+| **7** | Persistence & Audit Layer       | DB tables (`dq_runs`, `dq_results`, `audit_logs`)        | Lưu kết quả vi phạm tổng hợp và ghi nhật ký audit log bất biến.                                                                    |
