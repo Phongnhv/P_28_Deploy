@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
-from sqlalchemy import text
+from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
 from src.config import get_settings
@@ -265,7 +265,10 @@ def run_propose_rules(job_id: str, dataset_id: str, session_id: str | None = Non
             # decisions remain immutable dashboard records.
             db.query(RuleProposalModel).filter(
                 RuleProposalModel.dataset_id == dataset_id,
-                RuleProposalModel.model_name.like("agent-%"),
+                or_(
+                    RuleProposalModel.model_name.like("agent-%"),
+                    RuleProposalModel.model_name.like("langgraph-%"),
+                ),
                 RuleProposalModel.status.in_(["PROPOSED", "REJECTED"]),
             ).delete(synchronize_session=False)
             db.commit()

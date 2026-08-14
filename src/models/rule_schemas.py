@@ -105,13 +105,8 @@ class ProposedRule(BaseModel):
     ai_reasoning: str = Field(
         ...,
         description=(
-            "Suy luận logic của AI (tiếng Việt), giải thích TẠI SAO rule này được đề xuất. "
-            "Cần thể hiện quá trình suy nghĩ: quan sát từ dữ liệu → diễn giải nghiệp vụ → kết luận về ngưỡng. "
-            "Phải dẫn chứng số liệu cụ thể từ digest VÀ kết nối với ý nghĩa thực tế của cột theo Data Dictionary. "
-            "Ví dụ: 'Profiler ghi nhận fare_amount có negative_pct = 4.7%, nghĩa là gần 5% chuyến đi có cước phí âm — "
-            "điều này không hợp lý về mặt nghiệp vụ vì fare_amount là cước phí tính theo thời gian và quãng đường, "
-            "không thể nhỏ hơn 0. Các giá trị âm nhiều khả năng là lỗi hệ thống hoặc bản ghi hoàn tiền bị ghi sai trường. "
-            "Tôi chọn min = 0 thay vì min > 0 để vẫn cho phép chuyến đi miễn phí hợp lệ.'"
+            "Rationale ngắn gọn bằng tiếng Việt, giải thích TẠI SAO rule được đề xuất bằng evidence aggregate "
+            "và ngữ cảnh nghiệp vụ từ Data Dictionary. Không yêu cầu hoặc tiết lộ chuỗi suy luận nội bộ."
         ),
     )
 

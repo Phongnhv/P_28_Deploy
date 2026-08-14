@@ -57,6 +57,14 @@ def _build_coverage_requirements(table_digest: dict) -> list[dict]:
     Checklist hướng LLM phủ hết tín hiệu có căn cứ thay vì chỉ trả một nhóm rule
     đại diện. Đây không phải rule output và không tự đặt threshold thay cho LLM.
     """
+    dashboard_candidates = table_digest.get("dashboard_rule_candidates")
+    if table_digest.get("dashboard_candidate_mode") and isinstance(dashboard_candidates, list):
+        # The public dashboard workflow has already transformed persisted aggregate
+        # profile evidence into a small policy-approved candidate set.  Do not add
+        # legacy heuristic candidates here: doing so lets a model spend all five
+        # slots on repeated NOT_NULL rules and weakens the product contract.
+        return [candidate for candidate in dashboard_candidates if isinstance(candidate, dict)]
+
     requirements: list[dict] = []
     digest_columns = table_digest.get("columns") or []
     available_columns = {
@@ -431,23 +439,25 @@ async def rule_proposer_node(state: AgentState) -> dict:
         len(errors),
     )
 
-    # Xuất trace JSON sau khi đề xuất rules xong
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    try:
-        rule_proposer_dir.mkdir(parents=True, exist_ok=True)
-        dump_file = rule_proposer_dir / f"debug_proposed_rules_{timestamp}_{run_id}.json"
-        dump_payload = {
-            "run_id": run_id,
-            "generated_at": datetime.now(UTC).isoformat(),
-            "total_rules": len(flat_rules),
-            "total_errors": len(errors),
-            "proposed_rules": flat_rules,
-            "errors": errors,
-        }
-        dump_file.write_text(json.dumps(dump_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        logger.info(f"Đã xuất trace proposed rules ra {dump_file}")
-    except Exception as e:
-        logger.warning(f"Không thể ghi file trace proposed rules: {e}")
+    # Store free-form model output only when a developer has explicitly enabled
+    # debug artifacts.  Dashboard persistence keeps the validated typed proposal.
+    if settings.debug_dump_table_digests:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        try:
+            rule_proposer_dir.mkdir(parents=True, exist_ok=True)
+            dump_file = rule_proposer_dir / f"debug_proposed_rules_{timestamp}_{run_id}.json"
+            dump_payload = {
+                "run_id": run_id,
+                "generated_at": datetime.now(UTC).isoformat(),
+                "total_rules": len(flat_rules),
+                "total_errors": len(errors),
+                "proposed_rules": flat_rules,
+                "errors": errors,
+            }
+            dump_file.write_text(json.dumps(dump_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.info("Đã xuất trace proposed rules ra %s", dump_file)
+        except Exception as exc:
+            logger.warning("Không thể ghi file trace proposed rules: %s", exc)
 
     return {
         "proposed_rules": flat_rules,

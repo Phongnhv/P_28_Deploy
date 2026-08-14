@@ -32,7 +32,10 @@ browser prompt, or executes SQL written by an LLM.
 The dashboard now remains the public workflow owner. `dashboard_agent_workflow.py`
 creates an aggregate-only `ProposalEvidence` payload, invokes the structured proposal
 graph in `AGENT_MODE=graph`, validates/maps its output and persists it in
-`RuleProposalModel`, which is what the UI reads. `AGENT_MODE=mock` keeps the same
+`RuleProposalModel`, which is what the UI reads. In graph mode the adapter now forms
+a conservative, aggregate-backed candidate set before calling the model and enforces
+one proposal per dashboard rule type, preventing repeated `NOT_NULL` suggestions.
+`AGENT_MODE=mock` keeps the same
 endpoint deterministic for offline UI and automated testing.
 
 Dashboard DQ execution intentionally uses its typed-rule compiler and persists

@@ -31,10 +31,51 @@ SUPPORTED_RULE_TYPES = {
 }
 SAFE_OPERATORS = {"<", "<=", ">", ">=", "==", "!="}
 PAYMENT_TYPE_VALUES = ["1", "2", "3", "4", "5", "6"]
+GOVERNED_CODE_SETS = {"payment_type": PAYMENT_TYPE_VALUES}
+NONNEGATIVE_FIELD_TOKENS = (
+    "amount",
+    "count",
+    "distance",
+    "fare",
+    "fee",
+    "passenger",
+    "surcharge",
+    "tax",
+    "tip",
+    "toll",
+)
+IDENTIFIER_PREFERENCE = ("trip_id", "record_id", "vendor_id", "id")
 
 
 class AgentWorkflowError(ValueError):
     """An expected, redacted failure returned by the product workflow."""
+
+
+@dataclass(frozen=True)
+class DashboardRuleCandidate:
+    """A deterministic, evidence-backed rule that the dashboard agent may select."""
+
+    id: str
+    rule_type: str
+    column: str
+    parameters: dict[str, Any]
+    dashboard_rule_type: str
+    rule_spec: dict[str, Any]
+    evidence_refs: list[str]
+    selection_reason: str
+    priority: int
+
+    def to_prompt_requirement(self) -> dict[str, Any]:
+        """Render only policy and aggregate evidence for the structured proposer."""
+        return {
+            "candidate_id": self.id,
+            "column": self.column,
+            "rule_type": self.rule_type,
+            "parameters": self.parameters,
+            "dimension": _dimension_for_rule_type(self.rule_type),
+            "evidence": self.evidence_refs,
+            "selection_reason": self.selection_reason,
+        }
 
 
 class ProposalColumnEvidence(BaseModel):
@@ -87,6 +128,8 @@ class ProposalEvidence(BaseModel):
         if {"pickup_at", "dropoff_at"}.issubset(column_names):
             hints.append({"type": "datetime_order", "columns": ["pickup_at", "dropoff_at"]})
 
+        candidates = _build_dashboard_rule_candidates(self)
+
         return {
             "source_rows": {
                 "table": "source_rows",
@@ -94,6 +137,10 @@ class ProposalEvidence(BaseModel):
                 "sample": {"rate": 0.0, "n": 0},
                 "columns": digest_columns,
                 "cross_column_hints": hints,
+                # This switches the legacy proposer into the public dashboard
+                # contract: choose and explain candidates, never invent a rule.
+                "dashboard_candidate_mode": True,
+                "dashboard_rule_candidates": [candidate.to_prompt_requirement() for candidate in candidates],
             }
         }
 
@@ -168,10 +215,16 @@ def generate_dashboard_proposals(db: Session, dataset_id: str) -> list[Dashboard
     if settings.agent_mode == "mock":
         return _mock_proposals(evidence)
 
+    if len(_build_dashboard_rule_candidates(evidence)) < 2:
+        raise AgentWorkflowError("The aggregate profile has fewer than two evidence-backed dashboard candidates.")
+
     raw_rules = _invoke_dashboard_proposal_graph(evidence)
     proposals = _normalise_graph_rules(raw_rules, evidence)
-    if not 2 <= len(proposals) <= 5:
+    if not proposals:
         raise AgentWorkflowError("The proposal agent did not return enough valid, evidence-backed rules.")
+    proposals = _complete_with_policy_candidates(proposals, evidence)
+    if not 2 <= len(proposals) <= 5:
+        raise AgentWorkflowError("The proposal workflow could not form a valid dashboard rule set.")
     return proposals
 
 
@@ -225,32 +278,34 @@ def _run_coroutine_safely(coroutine):
 
 
 def _normalise_graph_rules(raw_rules: list[dict[str, Any]], evidence: ProposalEvidence) -> list[DashboardProposal]:
-    allowed_columns = {column.name: column for column in evidence.columns}
-    accepted: list[DashboardProposal] = []
-    identities: set[str] = set()
+    candidates = _build_dashboard_rule_candidates(evidence)
+    accepted: list[tuple[DashboardProposal, DashboardRuleCandidate]] = []
+    candidate_ids: set[str] = set()
+    rule_types: set[str] = set()
 
     for raw in raw_rules:
-        proposal = _normalise_graph_rule(raw, evidence, allowed_columns)
+        matched_candidate = _match_dashboard_candidate(raw, candidates, evidence)
+        if not matched_candidate:
+            continue
+        proposal = _normalise_graph_rule(raw, evidence, matched_candidate)
         if not proposal:
             continue
-        identity = f"{proposal.rule_type}:{proposal.rule_spec}"
-        if identity in identities:
+        if matched_candidate.id in candidate_ids or proposal.rule_type in rule_types:
             continue
-        identities.add(identity)
-        accepted.append(proposal)
+        candidate_ids.add(matched_candidate.id)
+        rule_types.add(proposal.rule_type)
+        accepted.append((proposal, matched_candidate))
         if len(accepted) == 5:
             break
-    return accepted
+    # A small, deterministic policy weight breaks confidence ties while the model
+    # still chooses which candidates to return and supplies the steward-facing text.
+    accepted.sort(key=lambda item: (item[0].confidence, item[1].priority), reverse=True)
+    return [proposal for proposal, _candidate in accepted]
 
 
 def _normalise_graph_rule(
-    raw: dict[str, Any], evidence: ProposalEvidence, allowed_columns: dict[str, ProposalColumnEvidence]
+    raw: dict[str, Any], evidence: ProposalEvidence, candidate: DashboardRuleCandidate
 ) -> DashboardProposal | None:
-    rule_type = str(raw.get("rule_type", "")).upper()
-    column = raw.get("column")
-    parameters = raw.get("parameters") or {}
-    if not isinstance(column, str) or column not in allowed_columns:
-        return None
     confidence = _finite_float(raw.get("confidence_score"))
     if confidence is None or not 0.0 <= confidence <= 1.0:
         return None
@@ -262,76 +317,202 @@ def _normalise_graph_rule(
     if not 1 <= len(description) <= 500 or len(reasoning) > 1_000:
         return None
 
-    profile_key = f"profile.column.{column}"
     title = description[:120]
     model_name = f"langgraph-{get_settings().llm_provider}"
-
-    if rule_type == "NOT_NULL":
-        spec = {"type": "not_null", "column": column}
-        refs = [f"{profile_key}.null_rate"]
-    elif rule_type == "RANGE":
-        spec = _normalise_range(column, parameters, allowed_columns[column])
-        if not spec:
-            return None
-        refs = [f"{profile_key}.min_value", f"{profile_key}.max_value"]
-    elif rule_type == "ACCEPTED_VALUES":
-        values = parameters.get("accepted_values")
-        if column != "payment_type" or values != PAYMENT_TYPE_VALUES:
-            return None
-        spec = {"type": "accepted_values", "column": column, "allowed_values": PAYMENT_TYPE_VALUES}
-        refs = [f"{profile_key}.distinct_count"]
-    elif rule_type == "CROSS_FIELD_COMPARISON":
-        target = parameters.get("target_column")
-        operator = parameters.get("operator")
-        if not isinstance(target, str) or target not in allowed_columns or operator not in SAFE_OPERATORS:
-            return None
-        spec = {"type": "cross_field_comparison", "columns": [column, target], "operator": operator}
-        refs = [f"{profile_key}.data_type", f"profile.column.{target}.data_type"]
-    elif rule_type == "UNIQUE":
-        if allowed_columns[column].distinct_count != evidence.row_count:
-            return None
-        spec = {"type": "duplicate_fingerprint", "fingerprint_columns": [column]}
-        refs = ["profile.row_count", f"{profile_key}.distinct_count"]
-    else:
-        return None
-
-    if not set(refs).issubset(evidence.evidence_keys):
+    if not set(candidate.evidence_refs).issubset(evidence.evidence_keys):
         return None
     return DashboardProposal(
         id=f"proposal-{uuid.uuid4().hex}",
         title=title,
         description=description,
         severity=severity,
-        rule_type=spec["type"],
-        rule_spec=spec,
-        evidence_refs=refs,
-        evidence_summary=_safe_evidence_summary(evidence, refs),
+        rule_type=candidate.dashboard_rule_type,
+        rule_spec=candidate.rule_spec,
+        evidence_refs=candidate.evidence_refs,
+        evidence_summary=_safe_evidence_summary(evidence, candidate.evidence_refs),
         confidence=confidence,
         model_name=model_name,
     )
 
 
-def _normalise_range(
-    column: str, parameters: dict[str, Any], evidence: ProposalColumnEvidence
-) -> dict[str, Any] | None:
-    if evidence.min_value is None or evidence.max_value is None:
+def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[DashboardRuleCandidate]:
+    """Create a small, diverse candidate set from safe aggregate evidence.
+
+    This is deliberately conservative: it does not infer business constraints from
+    a zero null rate alone, and it does not permit the model to invent thresholds.
+    """
+    columns = {column.name: column for column in evidence.columns}
+    candidates: list[DashboardRuleCandidate] = []
+
+    identifier_names = sorted(
+        (
+            name
+            for name, column in columns.items()
+            if column.null_rate <= 0.01 and (name == "id" or name.endswith("_id"))
+        ),
+        key=lambda name: (
+            IDENTIFIER_PREFERENCE.index(name) if name in IDENTIFIER_PREFERENCE else len(IDENTIFIER_PREFERENCE),
+            name,
+        ),
+    )
+    if identifier_names:
+        column = identifier_names[0]
+        candidates.append(
+            DashboardRuleCandidate(
+                id=f"not-null:{column}", rule_type="NOT_NULL", column=column, parameters={},
+                dashboard_rule_type="not_null", rule_spec={"type": "not_null", "column": column},
+                evidence_refs=[f"profile.column.{column}.null_rate"],
+                selection_reason="A required identifier has a stable complete aggregate profile.", priority=90,
+            )
+        )
+
+    for column in sorted(columns.values(), key=lambda item: item.name):
+        if (
+            column.min_value is not None
+            and column.min_value < 0
+            and any(token in column.name.lower() for token in NONNEGATIVE_FIELD_TOKENS)
+        ):
+            candidates.append(
+                DashboardRuleCandidate(
+                    id=f"nonnegative:{column.name}", rule_type="RANGE", column=column.name,
+                    parameters={"min": 0.0}, dashboard_rule_type="numeric_range",
+                    rule_spec={"type": "numeric_range", "column": column.name, "min_value": 0.0},
+                    evidence_refs=[f"profile.column.{column.name}.min_value", f"profile.column.{column.name}.max_value"],
+                    selection_reason="The aggregate minimum is negative for a semantically non-negative measure.", priority=100,
+                )
+            )
+            break
+
+    for column, allowed_values in GOVERNED_CODE_SETS.items():
+        profile = columns.get(column)
+        if profile and 0 < profile.distinct_count <= len(allowed_values):
+            candidates.append(
+                DashboardRuleCandidate(
+                    id=f"governed-enum:{column}", rule_type="ACCEPTED_VALUES", column=column,
+                    parameters={"accepted_values": allowed_values}, dashboard_rule_type="accepted_values",
+                    rule_spec={"type": "accepted_values", "column": column, "allowed_values": allowed_values},
+                    evidence_refs=[f"profile.column.{column}.distinct_count"],
+                    selection_reason="A governed code set is available and the aggregate cardinality is compatible with it.", priority=80,
+                )
+            )
+
+    if {"pickup_at", "dropoff_at"}.issubset(columns):
+        candidates.append(
+            DashboardRuleCandidate(
+                id="datetime-order:pickup_at:dropoff_at", rule_type="CROSS_FIELD_COMPARISON", column="pickup_at",
+                parameters={"target_column": "dropoff_at", "operator": "<="},
+                dashboard_rule_type="cross_field_comparison",
+                rule_spec={"type": "cross_field_comparison", "columns": ["pickup_at", "dropoff_at"], "operator": "<="},
+                evidence_refs=["profile.column.pickup_at.data_type", "profile.column.dropoff_at.data_type"],
+                selection_reason="The dashboard has an explicit pickup-to-dropoff temporal ordering relationship.", priority=95,
+            )
+        )
+    return candidates
+
+
+def _match_dashboard_candidate(
+    raw: dict[str, Any], candidates: list[DashboardRuleCandidate], evidence: ProposalEvidence
+) -> DashboardRuleCandidate | None:
+    """Return the exact deterministic candidate represented by a structured LLM rule."""
+    rule_type = str(raw.get("rule_type", "")).upper()
+    column = raw.get("column")
+    parameters = raw.get("parameters") or {}
+    if not isinstance(column, str) or not isinstance(parameters, dict):
         return None
-    minimum = _finite_float(parameters.get("min"))
-    maximum = _finite_float(parameters.get("max"))
-    if minimum is None and maximum is None:
-        return None
-    if minimum is not None and minimum > evidence.max_value:
-        return None
-    if maximum is not None and maximum < evidence.min_value:
-        return None
-    if minimum is not None and maximum is not None and minimum > maximum:
-        return None
-    spec: dict[str, Any] = {"type": "numeric_range", "column": column}
-    if minimum is not None:
-        spec["min_value"] = minimum
-    if maximum is not None:
-        spec["max_value"] = maximum
-    return spec
+    for candidate in candidates:
+        if (
+            candidate.rule_type == rule_type
+            and candidate.column == column
+            and _candidate_parameters_match(parameters, candidate, evidence)
+        ):
+            return candidate
+    return None
+
+
+def _candidate_parameters_match(
+    parameters: dict[str, Any], candidate: DashboardRuleCandidate, evidence: ProposalEvidence
+) -> bool:
+    if parameters == candidate.parameters:
+        return True
+    # Some models repeat the observed maximum when asked for a non-negative rule.
+    # Accept that faithful restatement only, then persist the canonical lower-bound
+    # policy from the candidate.  Any padded or invented upper bound stays rejected.
+    if candidate.rule_type != "RANGE" or set(parameters) - {"min", "max"}:
+        return False
+    if _finite_float(parameters.get("min")) != _finite_float(candidate.parameters.get("min")):
+        return False
+    observed_max = next((column.max_value for column in evidence.columns if column.name == candidate.column), None)
+    return observed_max is not None and _finite_float(parameters.get("max")) == observed_max
+
+
+def _dimension_for_rule_type(rule_type: str) -> str:
+    return {
+        "NOT_NULL": "COMPLETENESS",
+        "RANGE": "VALIDITY",
+        "ACCEPTED_VALUES": "VALIDITY",
+        "CROSS_FIELD_COMPARISON": "CONSISTENCY",
+    }.get(rule_type, "VALIDITY")
+
+
+def _complete_with_policy_candidates(
+    proposals: list[DashboardProposal], evidence: ProposalEvidence
+) -> list[DashboardProposal]:
+    """Fill omissions from a verified candidate set without inventing a rule.
+
+    Small structured-output models can occasionally omit a checklist item despite a
+    valid schema.  The fallback is deliberately unavailable when *no* model rule
+    validates, which keeps provider/schema failures visible instead of masking them.
+    """
+    completed = list(proposals)
+    present_types = {proposal.rule_type for proposal in proposals}
+    for candidate in _build_dashboard_rule_candidates(evidence):
+        if candidate.dashboard_rule_type in present_types:
+            continue
+        completed.append(
+            DashboardProposal(
+                id=f"proposal-{uuid.uuid4().hex}",
+                title=_policy_title(candidate),
+                description=_policy_description(candidate),
+                severity=_policy_severity(candidate),
+                rule_type=candidate.dashboard_rule_type,
+                rule_spec=candidate.rule_spec,
+                evidence_refs=candidate.evidence_refs,
+                evidence_summary=_safe_evidence_summary(evidence, candidate.evidence_refs),
+                confidence=0.75,
+                model_name="agent-policy-fallback-v1",
+            )
+        )
+        present_types.add(candidate.dashboard_rule_type)
+    return completed
+
+
+def _policy_title(candidate: DashboardRuleCandidate) -> str:
+    titles = {
+        "NOT_NULL": f"{candidate.column} must be populated",
+        "RANGE": f"{candidate.column} must be non-negative",
+        "ACCEPTED_VALUES": f"{candidate.column} must use governed values",
+        "CROSS_FIELD_COMPARISON": "Pickup time must not follow dropoff time",
+    }
+    return titles[candidate.rule_type]
+
+
+def _policy_description(candidate: DashboardRuleCandidate) -> str:
+    descriptions = {
+        "NOT_NULL": f"Require a value for the required identifier {candidate.column}.",
+        "RANGE": f"Reject negative values in the non-negative measure {candidate.column}.",
+        "ACCEPTED_VALUES": f"Validate {candidate.column} against its governed code set.",
+        "CROSS_FIELD_COMPARISON": "Require pickup_at to be earlier than or equal to dropoff_at.",
+    }
+    return descriptions[candidate.rule_type]
+
+
+def _policy_severity(candidate: DashboardRuleCandidate) -> str:
+    return {
+        "NOT_NULL": "HIGH",
+        "RANGE": "HIGH",
+        "ACCEPTED_VALUES": "MEDIUM",
+        "CROSS_FIELD_COMPARISON": "CRITICAL",
+    }[candidate.rule_type]
 
 
 def _mock_proposals(evidence: ProposalEvidence) -> list[DashboardProposal]:

@@ -100,6 +100,11 @@ và Từ điển dữ liệu (Data Dictionary) được cung cấp.
 11. Với `CROSS_FIELD_COMPARISON`, sao chép nguyên vẹn `parameters.target_column` và \
     `parameters.operator` từ checklist vào field `parameters` của structured output. \
     Không đặt `target_column` hoặc `operator` ở cấp ngoài của rule và không tự thay đổi toán tử.
+12. Khi digest có `dashboard_candidate_mode = true`, đây là product workflow có guardrail nghiêm ngặt: \
+    checklist chỉ gồm candidate đã qua evidence/policy filter. Phải trả về MỖI candidate đúng một lần, \
+    theo đúng thứ tự checklist, tối đa một rule cho mỗi `rule_type`, và phải sao chép nguyên vẹn `parameters` \
+    cho cả RANGE, ACCEPTED_VALUES lẫn CROSS_FIELD_COMPARISON. Không tự tạo threshold, enum, cột hoặc \
+    rule_type mới; chỉ viết severity, mô tả và rationale cho Data Steward.
 
 **⚠️ NHẮC LẠI:** Trường `rule_type` CHỈ được nhận 9 giá trị sau, không hơn không kém: \
 NOT_NULL, UNIQUE, RANGE, ACCEPTED_VALUES, REGEX_FORMAT, FRESHNESS, ROW_COUNT, NULL_RATE, CROSS_FIELD_COMPARISON.
@@ -210,7 +215,7 @@ Hãy trả về JSON structured output theo schema TableRuleProposal. \
 Điền trường "table" = "{table_name}". \
 Điền trường "dimension" theo bảng phân loại DQ dimension đã hướng dẫn. \
 Điền trường "rule_description": một câu tiếng Việt tự nhiên, có ngữ cảnh nghiệp vụ, tránh template máy móc. \
-Điền trường "ai_reasoning": suy luận logic mạch lạc, nêu rõ quá trình suy nghĩ từ dữ liệu → nghiệp vụ → quyết định threshold. \
+Điền trường "ai_reasoning": rationale ngắn gọn, nêu evidence aggregate và lý do nghiệp vụ mà không trình bày chuỗi suy luận nội bộ. \
 Đề xuất đầy đủ và chính xác.
 """
 

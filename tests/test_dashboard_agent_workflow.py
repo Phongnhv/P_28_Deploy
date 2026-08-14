@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from src.models.database import ColumnProfileModel, DatasetModel, JobModel, ProfileModel, RuleProposalModel
 from src.services.dashboard_agent_workflow import (
     AgentWorkflowError,
+    _build_dashboard_rule_candidates,
+    _normalise_graph_rules,
     build_proposal_evidence,
     generate_dashboard_proposals,
 )
@@ -67,6 +69,74 @@ def test_evidence_allow_list_excludes_raw_samples_and_identifiers():
     assert "source_row_id" not in serialized
     assert all("sample" not in column for column in evidence.model_dump()["columns"])
 
+    digest = evidence.to_agent_digest()["source_rows"]
+    assert digest["dashboard_candidate_mode"] is True
+    assert "private-vendor" not in json.dumps(digest)
+    assert {candidate["rule_type"] for candidate in digest["dashboard_rule_candidates"]} == {
+        "NOT_NULL",
+        "RANGE",
+        "ACCEPTED_VALUES",
+        "CROSS_FIELD_COMPARISON",
+    }
+
+
+def test_dashboard_candidates_are_diverse_and_use_only_aggregate_evidence():
+    seed_completed_profile()
+    with Session(get_engine()) as session:
+        evidence = build_proposal_evidence(session, DATASET_ID)
+
+    candidates = _build_dashboard_rule_candidates(evidence)
+    assert [candidate.dashboard_rule_type for candidate in candidates] == [
+        "not_null",
+        "numeric_range",
+        "accepted_values",
+        "cross_field_comparison",
+    ]
+    assert len({candidate.dashboard_rule_type for candidate in candidates}) == len(candidates)
+    assert all(set(candidate.evidence_refs).issubset(evidence.evidence_keys) for candidate in candidates)
+
+
+def test_graph_normalizer_rejects_parameter_drift_and_duplicate_categories():
+    seed_completed_profile()
+    with Session(get_engine()) as session:
+        evidence = build_proposal_evidence(session, DATASET_ID)
+
+    raw = [
+        {
+            "rule_type": "NOT_NULL", "column": "vendor_id", "parameters": {},
+            "confidence_score": 0.95, "severity": "HIGH",
+            "rule_description": "Vendor ID must be populated.", "ai_reasoning": "Aggregate completeness is stable.",
+        },
+        {
+            "rule_type": "NOT_NULL", "column": "vendor_id", "parameters": {},
+            "confidence_score": 0.90, "severity": "HIGH",
+            "rule_description": "Duplicate not-null proposal.", "ai_reasoning": "Must be deduplicated.",
+        },
+        {
+            "rule_type": "RANGE", "column": "trip_distance", "parameters": {"min": -10.0},
+            "confidence_score": 0.99, "severity": "HIGH",
+            "rule_description": "Invented threshold.", "ai_reasoning": "Must be rejected.",
+        },
+        {
+            "rule_type": "RANGE", "column": "trip_distance", "parameters": {"min": 0.0, "max": 80.0},
+            "confidence_score": 0.85, "severity": "HIGH",
+            "rule_description": "Trip distance must be non-negative.", "ai_reasoning": "Aggregate minimum is negative.",
+        },
+        {
+            "rule_type": "ACCEPTED_VALUES", "column": "payment_type",
+            "parameters": {"accepted_values": ["1", "2", "3", "4", "5", "6"]},
+            "confidence_score": 0.80, "severity": "MEDIUM",
+            "rule_description": "Payment code must be governed.", "ai_reasoning": "The governed code set has six values.",
+        },
+    ]
+
+    proposals = _normalise_graph_rules(raw, evidence)
+    assert [proposal.rule_type for proposal in proposals] == [
+        "not_null",
+        "numeric_range",
+        "accepted_values",
+    ]
+
 
 def test_mock_mode_returns_dashboard_supported_proposals():
     seed_completed_profile()
@@ -125,8 +195,18 @@ def test_graph_mode_normalizes_only_evidence_backed_dashboard_rules(monkeypatch)
     with Session(get_engine()) as session:
         proposals = generate_dashboard_proposals(session, DATASET_ID)
 
-    assert [proposal.rule_type for proposal in proposals] == ["numeric_range", "cross_field_comparison"]
-    assert all(proposal.model_name.startswith("langgraph-") for proposal in proposals)
+    assert [proposal.rule_type for proposal in proposals] == [
+        "numeric_range",
+        "cross_field_comparison",
+        "not_null",
+        "accepted_values",
+    ]
+    assert [proposal.model_name for proposal in proposals] == [
+        "langgraph-openai",
+        "langgraph-openai",
+        "agent-policy-fallback-v1",
+        "agent-policy-fallback-v1",
+    ]
 
 
 def test_graph_mode_uses_dashboard_graph_with_aggregate_digest(monkeypatch):
@@ -143,6 +223,9 @@ def test_graph_mode_uses_dashboard_graph_with_aggregate_digest(monkeypatch):
         assert "secret-payment" not in serialized_digest
         assert "source_row_id" not in serialized_digest
         assert state["metadata"]["max_retries"] == 0
+        dashboard_digest = digest["source_rows"]
+        assert dashboard_digest["dashboard_candidate_mode"] is True
+        assert len(dashboard_digest["dashboard_rule_candidates"]) == 4
         return {
             "proposed_rules": [
                 {
@@ -171,7 +254,12 @@ def test_graph_mode_uses_dashboard_graph_with_aggregate_digest(monkeypatch):
     with Session(get_engine()) as session:
         proposals = generate_dashboard_proposals(session, DATASET_ID)
 
-    assert [proposal.rule_type for proposal in proposals] == ["not_null", "cross_field_comparison"]
+    assert [proposal.rule_type for proposal in proposals] == [
+        "not_null",
+        "cross_field_comparison",
+        "numeric_range",
+        "accepted_values",
+    ]
 
 
 def test_proposal_job_persists_graph_adapter_output(monkeypatch):
@@ -222,8 +310,11 @@ def test_proposal_job_persists_graph_adapter_output(monkeypatch):
         job = session.get(JobModel, "proposal-job")
         proposals = session.query(RuleProposalModel).filter(RuleProposalModel.dataset_id == DATASET_ID).all()
     assert job is not None and job.status == "SUCCEEDED"
-    assert len(proposals) == 2
-    assert all(proposal.model_name.startswith("langgraph-") for proposal in proposals)
+    assert len(proposals) == 4
+    assert {proposal.model_name for proposal in proposals} == {
+        "langgraph-openai",
+        "agent-policy-fallback-v1",
+    }
 
 
 def test_graph_mode_rejects_fabricated_or_unsupported_rules(monkeypatch):
