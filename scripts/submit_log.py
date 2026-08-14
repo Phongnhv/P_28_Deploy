@@ -68,7 +68,6 @@ def _restore_pending(pending: Path) -> None:
         pending.rename(LOG_FILE)
 
 
-
 def _recover_pending_files() -> None:
     """Find any leftover session.pending.*.jsonl files from crashed/interrupted runs
     and merge them back into LOG_FILE."""

@@ -1,5 +1,24 @@
 # Architecture Document
 
+## Gate 2 MVP implementation
+
+The current MVP runs a React/Vite workspace with FastAPI, role/session checks,
+aggregate profiling, human-approved rule versions, and a bounded DQ runner. It
+can evaluate the canonical raw-row contract in Supabase PostgreSQL; SQLite remains
+the local UI/demo store. Google Cloud Run is the deployment target, not a claimed
+requirement for the local acceptance path.
+
+```mermaid
+flowchart TB
+    Browser["Data Steward Browser"] --> UI["React/Vite workspace"]
+    UI --> API["FastAPI API"]
+    API --> HITL["Profile → agent proposal → steward approval"]
+    HITL --> Runner["Fixed-template read-only DQ runner"]
+    Runner --> Local[("SQLite local MVP")]
+    Runner --> Supabase[("Supabase PostgreSQL\ntrips_raw → trips_canonical")]
+    API -. deployment target .-> CloudRun["Google Cloud Run"]
+```
+
 ## System Overview
 
 [Tóm tắt 2-3 câu về kiến trúc hệ thống]

@@ -10,7 +10,11 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173` and use the local demo password `demo`.
+Open `http://localhost:5173` and sign in with one of the seeded local accounts:
+
+- `user` / `user` — read-only dataset access
+- `steward` / `steward` — profile, proposal review, and rule configuration
+- `admin` / `admin` — user provisioning and dataset-access administration
 
 The default local mode uses `src/api/mockApi.ts`. It makes the complete UI flow
 testable before the backend exists and is clearly marked in the interface as a
@@ -28,6 +32,11 @@ VITE_USE_MOCK_API=false
 
 The real client sends session cookies, the CSRF header, idempotency keys and the
 endpoint shapes defined in `docs/API_CONTRACT.md`.
+
+For the localhost API started from the repository root, set
+`FRONTEND_ORIGIN=http://localhost:5173` (or include that origin in the comma-separated
+value). The API's deterministic local proposer supplies testable proposal data; it
+does not make an LLM call.
 
 ## Verification
 
