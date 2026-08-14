@@ -61,11 +61,14 @@ def normalize(data: dict, tool: str) -> dict | None:
     # tied back to a team on the server and would just clutter the pending
     # queue forever.
     origin = git("git remote get-url origin")
-    if not origin:
-        return None
-    repo = origin.rstrip("/").split("/")[-1]
-    if repo.endswith(".git"):
-        repo = repo[:-4]
+    repo = ""
+    if origin:
+        repo = origin.rstrip("/").split("/")[-1]
+        if repo.endswith(".git"):
+            repo = repo[:-4]
+    if not repo:
+        toplevel = git("git rev-parse --show-toplevel")
+        repo = Path(toplevel).name if toplevel else "P-028"
 
     base = {
         "ts": ts,
@@ -122,9 +125,26 @@ def normalize(data: dict, tool: str) -> dict | None:
             base.update({"prompt": prompt, "response_summary": answer})
 
     elif tool == "codex":
+        # Extract prompt from various possible payload fields in Codex CLI
+        raw_prompt = (
+            data.get("prompt") or
+            data.get("user_prompt") or
+            data.get("content") or
+            data.get("input") or
+            data.get("text") or
+            data.get("user_message") or ""
+        )
+        if not raw_prompt and isinstance(data.get("messages"), list):
+            for msg in reversed(data["messages"]):
+                if isinstance(msg, dict) and msg.get("role") == "user":
+                    raw_prompt = msg.get("content") or msg.get("text") or ""
+                    if raw_prompt:
+                        break
+        if isinstance(raw_prompt, dict):
+            raw_prompt = raw_prompt.get("text") or raw_prompt.get("content") or str(raw_prompt)
         base.update({
-            "prompt": data.get("prompt", "")[:1000],
-            "turn_id": data.get("turn_id", ""),
+            "prompt": str(raw_prompt)[:1000],
+            "turn_id": data.get("turn_id") or data.get("turn") or "",
             "transcript_path": data.get("transcript_path", ""),
         })
 
@@ -182,8 +202,8 @@ def main():
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     # Output valid JSON (required by some tools like Gemini)
-    print(json.dumps({"status": "logged"}))
-
+    if tool != "codex":
+        print(json.dumps({"status": "logged"}))
 
 if __name__ == "__main__":
     main()

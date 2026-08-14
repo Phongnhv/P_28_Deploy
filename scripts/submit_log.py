@@ -68,6 +68,16 @@ def _restore_pending(pending: Path) -> None:
         pending.rename(LOG_FILE)
 
 
+<<<<<<< HEAD
+def _recover_pending_files() -> None:
+    """Find any leftover session.pending.*.jsonl files from crashed/interrupted runs
+    and merge them back into LOG_FILE."""
+    if not LOG_DIR.exists():
+        return
+    pending_files = sorted(LOG_DIR.glob("session.pending.*.jsonl"))
+    for pf in pending_files:
+        _restore_pending(pf)
+=======
 def _sanitize_text(s: str) -> str:
     if not isinstance(s, str):
         return ""
@@ -87,12 +97,15 @@ def _sanitize_entry(entry: dict) -> dict:
         else:
             cleaned[k] = v
     return cleaned
+>>>>>>> origin/main
 
 
 def main():
     if not SERVER_URL:
         print("[ai-log] AI_LOG_SERVER not set — skipping submission.", file=sys.stderr)
         sys.exit(0)
+
+    _recover_pending_files()
 
     if not LOG_FILE.exists() or LOG_FILE.stat().st_size == 0:
         print("[ai-log] No logs to submit.", file=sys.stderr)
