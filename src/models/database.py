@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -121,6 +121,7 @@ class ProfileModel(Base):
     completeness_score: Mapped[float] = mapped_column(Float, nullable=False)
     validity_score: Mapped[float] = mapped_column(Float, nullable=False)
     duplicate_rate: Mapped[float] = mapped_column(Float, nullable=False)
+    cross_field_metrics_json: Mapped[str | None] = mapped_column(Text)
     evidence_keys: Mapped[str] = mapped_column(Text, nullable=False)  # JSON list
     generated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
@@ -136,6 +137,13 @@ class ColumnProfileModel(Base):
     data_type: Mapped[str] = mapped_column(String(64), nullable=False)
     null_rate: Mapped[float] = mapped_column(Float, nullable=False)
     distinct_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    non_null_count: Mapped[int | None] = mapped_column(Integer)
+    negative_rate: Mapped[float | None] = mapped_column(Float)
+    quantiles_json: Mapped[str | None] = mapped_column(Text)
+    out_of_domain_rate: Mapped[float | None] = mapped_column(Float)
+    full_distinct_count: Mapped[int | None] = mapped_column(Integer)
+    uniqueness_rate: Mapped[float | None] = mapped_column(Float)
+    is_unique_full_table: Mapped[bool | None] = mapped_column(Boolean)
     min_value: Mapped[float | None] = mapped_column(Float)
     max_value: Mapped[float | None] = mapped_column(Float)
     sample_value: Mapped[str] = mapped_column(Text, nullable=False)

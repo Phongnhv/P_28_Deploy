@@ -14,6 +14,17 @@
   a filesystem path, URL, artifact content, SQL text or LLM prompt.
 - The agent receives only allow-listed aggregate profile evidence. It cannot receive
   raw rows, sample values, source identifiers, connection strings or browser text.
+  The allow-list includes full-table negative rates, numeric quantiles, governed-domain
+  violation rates, configured cross-field violation rates and verified uniqueness
+  aggregates. Metric definitions and the live eval record are documented in
+  [AGENT_IMPROVEMENTS_AND_EVAL.md](./AGENT_IMPROVEMENTS_AND_EVAL.md).
+  For `AGENT_MODE=graph`, the backend first creates a small deterministic candidate
+  set (required identifier, evidence-backed non-negative measure, governed enum and
+  pickup/dropoff ordering when present). The model returns one steward-facing explanation
+  for each curated candidate but cannot invent thresholds, values, columns or dashboard
+  rule types; normalisation permits at most one proposal per dashboard rule type. If the
+  model omits a candidate but returns at least one valid candidate, a deterministic policy
+  fallback completes only the already verified missing candidate(s).
 - Create-work endpoints return `202` with `{ "job_id": "uuid", "status": "PENDING" }`.
 - Poll `GET /api/v1/jobs/{job_id}`; active duplicate work returns `409`, quota `429`,
   invalid input `422` and missing/unauthenticated session `401`.

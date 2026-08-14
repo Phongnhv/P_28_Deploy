@@ -130,7 +130,25 @@ class ColumnProfileSchema(BaseModel):
     data_type: str
     null_rate: float
     distinct_count: int
+    non_null_count: int | None = None
+    negative_rate: float | None = None
+    quantiles: dict[str, float]
+    out_of_domain_rate: float | None = None
+    full_distinct_count: int | None = None
+    uniqueness_rate: float | None = None
+    is_unique_full_table: bool | None = None
+    min_value: float | None = None
+    max_value: float | None = None
     sample_value: str
+
+
+class CrossFieldProfileSchema(BaseModel):
+    left_column: str
+    operator: str
+    right_column: str
+    checked_count: int
+    violation_count: int
+    violation_rate: float
 
 
 class DatasetProfileSchema(BaseModel):
@@ -140,6 +158,7 @@ class DatasetProfileSchema(BaseModel):
     validity_score: float
     duplicate_rate: float
     columns: list[ColumnProfileSchema]
+    cross_field_metrics: list[CrossFieldProfileSchema]
     evidence_keys: list[str]
     generated_at: str
 
@@ -522,6 +541,15 @@ def get_dataset_profile(
             data_type=c.data_type,
             null_rate=c.null_rate,
             distinct_count=c.distinct_count,
+            non_null_count=c.non_null_count,
+            negative_rate=c.negative_rate,
+            quantiles=json.loads(c.quantiles_json or "{}"),
+            out_of_domain_rate=c.out_of_domain_rate,
+            full_distinct_count=c.full_distinct_count,
+            uniqueness_rate=c.uniqueness_rate,
+            is_unique_full_table=c.is_unique_full_table,
+            min_value=c.min_value,
+            max_value=c.max_value,
             sample_value=c.sample_value,
         )
         for c in cols
@@ -534,6 +562,7 @@ def get_dataset_profile(
         validity_score=profile.validity_score,
         duplicate_rate=profile.duplicate_rate,
         columns=columns_list,
+        cross_field_metrics=json.loads(profile.cross_field_metrics_json or "[]"),
         evidence_keys=json.loads(profile.evidence_keys),
         generated_at=profile.generated_at.isoformat(),
     )

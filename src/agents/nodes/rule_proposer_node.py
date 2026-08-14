@@ -25,7 +25,11 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from src.agents.nodes.templates import _RULE_PROPOSER_FEW_SHOT, rule_proposer_prompt
+from src.agents.nodes.templates import (
+    _RULE_PROPOSER_FEW_SHOT,
+    dashboard_rule_proposer_prompt,
+    rule_proposer_prompt,
+)
 from src.agents.state import AgentState
 from src.agents.tools.chroma_rag_tool import query_historical_rules
 from src.agents.tools.profile_digest import (
@@ -57,6 +61,14 @@ def _build_coverage_requirements(table_digest: dict) -> list[dict]:
     Checklist hướng LLM phủ hết tín hiệu có căn cứ thay vì chỉ trả một nhóm rule
     đại diện. Đây không phải rule output và không tự đặt threshold thay cho LLM.
     """
+    dashboard_candidates = table_digest.get("dashboard_rule_candidates")
+    if table_digest.get("dashboard_candidate_mode") and isinstance(dashboard_candidates, list):
+        # The public dashboard workflow has already transformed persisted aggregate
+        # profile evidence into a small policy-approved candidate set.  Do not add
+        # legacy heuristic candidates here: doing so lets a model spend all five
+        # slots on repeated NOT_NULL rules and weakens the product contract.
+        return [candidate for candidate in dashboard_candidates if isinstance(candidate, dict)]
+
     requirements: list[dict] = []
     digest_columns = table_digest.get("columns") or []
     available_columns = {
@@ -216,7 +228,8 @@ async def _propose_for_table(
 ) -> TableRuleProposal:
     """Gọi LLM một lần cho một bảng, bảo vệ bằng semaphore + retry."""
     columns = [col["name"] for col in table_digest.get("columns", [])]
-    historical = query_historical_rules(table_name, columns)
+    dashboard_mode = bool(table_digest.get("dashboard_candidate_mode"))
+    historical = [] if dashboard_mode else query_historical_rules(table_name, columns)
 
     async with semaphore:
         last_exc: Exception | None = None
@@ -230,18 +243,26 @@ async def _propose_for_table(
                     max_retries + 1,
                     entry_ts.isoformat(),
                 )
-                messages = rule_proposer_prompt.format_messages(
-                    table_name=table_name,
-                    table_digest=json.dumps(table_digest, ensure_ascii=False),
-                    domain_context=DOMAIN_CONTEXT,
-                    data_dictionary=_load_data_dictionary(),
-                    historical_rules=json.dumps(historical, ensure_ascii=False),
-                    coverage_requirements=json.dumps(
-                        _build_coverage_requirements(table_digest),
-                        ensure_ascii=False,
-                    ),
-                    few_shot_examples=_RULE_PROPOSER_FEW_SHOT,
+                coverage_requirements = json.dumps(
+                    _build_coverage_requirements(table_digest),
+                    ensure_ascii=False,
                 )
+                if dashboard_mode:
+                    messages = dashboard_rule_proposer_prompt.format_messages(
+                        table_name=table_name,
+                        table_digest=json.dumps(table_digest, ensure_ascii=False),
+                        coverage_requirements=coverage_requirements,
+                    )
+                else:
+                    messages = rule_proposer_prompt.format_messages(
+                        table_name=table_name,
+                        table_digest=json.dumps(table_digest, ensure_ascii=False),
+                        domain_context=DOMAIN_CONTEXT,
+                        data_dictionary=_load_data_dictionary(),
+                        historical_rules=json.dumps(historical, ensure_ascii=False),
+                        coverage_requirements=coverage_requirements,
+                        few_shot_examples=_RULE_PROPOSER_FEW_SHOT,
+                    )
                 result: TableRuleProposal = await structured_llm.ainvoke(messages)
                 exit_ts = datetime.now()
                 logger.info(
@@ -321,6 +342,7 @@ def _stamp_rule(
         return {}  # sentinel
 
     return {
+        "candidate_id": rule.candidate_id,
         "rule_id": rule_id,
         "run_id": run_id,
         "table_name": table_name,
@@ -431,23 +453,25 @@ async def rule_proposer_node(state: AgentState) -> dict:
         len(errors),
     )
 
-    # Xuất trace JSON sau khi đề xuất rules xong
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    try:
-        rule_proposer_dir.mkdir(parents=True, exist_ok=True)
-        dump_file = rule_proposer_dir / f"debug_proposed_rules_{timestamp}_{run_id}.json"
-        dump_payload = {
-            "run_id": run_id,
-            "generated_at": datetime.now(UTC).isoformat(),
-            "total_rules": len(flat_rules),
-            "total_errors": len(errors),
-            "proposed_rules": flat_rules,
-            "errors": errors,
-        }
-        dump_file.write_text(json.dumps(dump_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        logger.info(f"Đã xuất trace proposed rules ra {dump_file}")
-    except Exception as e:
-        logger.warning(f"Không thể ghi file trace proposed rules: {e}")
+    # Store free-form model output only when a developer has explicitly enabled
+    # debug artifacts.  Dashboard persistence keeps the validated typed proposal.
+    if settings.debug_dump_table_digests:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        try:
+            rule_proposer_dir.mkdir(parents=True, exist_ok=True)
+            dump_file = rule_proposer_dir / f"debug_proposed_rules_{timestamp}_{run_id}.json"
+            dump_payload = {
+                "run_id": run_id,
+                "generated_at": datetime.now(UTC).isoformat(),
+                "total_rules": len(flat_rules),
+                "total_errors": len(errors),
+                "proposed_rules": flat_rules,
+                "errors": errors,
+            }
+            dump_file.write_text(json.dumps(dump_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.info("Đã xuất trace proposed rules ra %s", dump_file)
+        except Exception as exc:
+            logger.warning("Không thể ghi file trace proposed rules: %s", exc)
 
     return {
         "proposed_rules": flat_rules,
