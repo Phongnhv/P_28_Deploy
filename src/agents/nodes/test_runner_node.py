@@ -13,7 +13,6 @@ import asyncio
 import json
 import logging
 import shutil
-import shutil as file_shutil
 import subprocess
 import tempfile
 import time
@@ -25,7 +24,7 @@ from sqlalchemy import text
 from src.agents.state import AgentState
 from src.config import get_settings
 from src.models.rule_schemas import RuleType
-from src.services.dbt_artifact_store import artifact_sha256, get_dbt_artifact_store
+from src.agents.nodes.dbt_validation import get_state_dbt_yaml, materialize_dbt_project, validate_dbt_yaml_structure
 from src.services.rule_store import get_engine
 
 logger = logging.getLogger(__name__)
@@ -331,8 +330,12 @@ def _run_dbt_cli_test(dbt_dir: Path) -> bool:
 
     """Thực thi lệnh CLI dbt test đối với dự án dbt_project chứa file YML đã sinh."""
     dbt_cmd = shutil.which("dbt")
+    settings = get_settings()
     if not dbt_cmd:
-        return False
+        if settings.app_env in ("local", "development", "test"):
+            logger.warning("dbt executable unavailable; using legacy SQL result fallback")
+            return False
+        raise RuntimeError("dbt executable is required in production")
     try:
         res = subprocess.run(
             [dbt_cmd, "test", "--project-dir", str(dbt_dir), "--profiles-dir", str(dbt_dir), "--select", "generated_dq_tests"],
@@ -340,16 +343,22 @@ def _run_dbt_cli_test(dbt_dir: Path) -> bool:
             text=True,
             timeout=60,
         )
-        logger.info("Chạy dbt test CLI thành công (returncode=%d): %s", res.returncode, res.stdout[:200])
-        return res.returncode == 0
+        output = "\n".join(part.strip() for part in (res.stdout, res.stderr) if part.strip())
+        if res.returncode != 0:
+            raise RuntimeError(f"dbt test failed (returncode={res.returncode}): {output}")
+        logger.info("Chạy dbt test CLI thành công (returncode=%d): %s", res.returncode, output[:200])
+        return True
     except Exception as exc:
-        logger.warning("Thực thi dbt test CLI gặp sự cố, chuyển sang fallback: %s", exc)
-        return False
+        raise
 
 
 async def test_runner_node(state: AgentState) -> dict:
     """LangGraph Node: Thực thi dbt test CLI (nếu có) hoặc fallback thực thi các test queries đã sinh."""
-    tests = state.get("generated_tests", [])
+    # These deterministic SQL queries remain the compatibility metrics source.
+    # The dbt artifact quality gate, rather than per-query EXPLAIN, authorizes execution.
+    tests = [{**test, "valid": True, "error": None} for test in state.get("generated_tests", [])]
+    if state.get("dbt_validation_valid") is not True:
+        raise RuntimeError("test_runner requires a successfully validated dbt artifact")
     engine = get_engine()
     dialect_name = engine.dialect.name
 
@@ -359,48 +368,10 @@ async def test_runner_node(state: AgentState) -> dict:
     # Materialize the immutable project template and this run's YAML in an isolated workspace.
     # The direct SQL checks below remain the persisted result source for the existing pipeline.
     with tempfile.TemporaryDirectory(prefix=f"dbt-{state.get('test_run_id', 'run')}-") as workspace:
-        dbt_dir = Path(workspace) / "dbt_project"
-        file_shutil.copytree(
-            dbt_template_dir,
-            dbt_dir,
-            ignore=file_shutil.ignore_patterns("target", "logs", "dbt_packages", "dbt_modules", "generated_dq_tests.yml"),
-        )
-        artifact_ref = state.get("dbt_artifact_ref")
-        content = None
-        if artifact_ref:
-            try:
-                content = get_dbt_artifact_store().download_yaml(artifact_ref)
-            except Exception as exc:
-                settings = get_settings()
-                trace_path = Path(state.get("dbt_trace_file_path") or "")
-                if settings.app_env not in ("local", "development", "test") or not trace_path.is_file():
-                    raise RuntimeError("Unable to download generated dbt artifact") from exc
-                content = trace_path.read_bytes()
-                if artifact_sha256(content) != artifact_ref.get("sha256"):
-                    raise RuntimeError("Local dbt artifact fallback checksum mismatch") from exc
-                logger.warning("Using local trace fallback for dbt artifact run %s", state.get("test_run_id"))
-        else:
-            settings = get_settings()
-            trace_path = Path(state.get("dbt_trace_file_path") or "")
-            if settings.app_env not in ("local", "development", "test") or not trace_path.is_file():
-                raise RuntimeError("No generated dbt artifact reference is available")
-            content = trace_path.read_bytes()
-        if content is not None:
-            # Validate the YAML content structure to prevent injection of malicious projects/templates
-            try:
-                import yaml
-                parsed = yaml.safe_load(content)
-                if not isinstance(parsed, dict) or "models" not in parsed:
-                    raise ValueError("Root of dbt test YAML must be a dictionary containing 'models'")
-            except Exception as exc:
-                raise RuntimeError(f"YAML safety validation failed for dbt artifact: {exc}")
-
-            generated_file = dbt_dir / "models" / "generated_dq_tests.yml"
-            generated_file.parent.mkdir(parents=True, exist_ok=True)
-            temp_file = generated_file.with_suffix(".tmp")
-            temp_file.write_bytes(content)
-            temp_file.replace(generated_file)
-            _run_dbt_cli_test(dbt_dir)
+        content = get_state_dbt_yaml(state)
+        validate_dbt_yaml_structure(content)
+        dbt_dir = materialize_dbt_project(dbt_template_dir, Path(workspace), content)
+        dbt_executed = _run_dbt_cli_test(dbt_dir)
 
         all_results: list[dict] = []
 
@@ -433,6 +404,7 @@ async def test_runner_node(state: AgentState) -> dict:
 
     return {
         "test_results": all_results,
+        "metadata": {**state.get("metadata", {}), "dbt_execution_mode": "dbt" if dbt_executed else "legacy_sql_fallback"},
     }
 
 

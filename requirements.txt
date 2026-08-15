@@ -35,3 +35,9 @@ pytest-asyncio>=0.24.0
 httpx>=0.28.0
 pyarrow>=13.0.0
 pandas
+
+# AI Observability & Tracing (Phoenix / Arize)
+# arize-phoenix>=4.0.0
+# openinference-instrumentation-langchain>=0.1.0
+# opentelemetry-sdk>=1.20.0
+# opentelemetry-exporter-otlp>=1.20.0

@@ -69,6 +69,10 @@ services:
       - OBJECT_STORAGE_ENDPOINT_URL=http://minio:9000
       - OBJECT_STORAGE_ACCESS_KEY_ID=minioadmin
       - OBJECT_STORAGE_SECRET_ACCESS_KEY=miniopassword
+      - LANGCHAIN_TRACING_V2
+      - LANGCHAIN_API_KEY
+      - LANGCHAIN_PROJECT
+      - PHOENIX_COLLECTOR_ENDPOINT
     depends_on:
       db:
         condition: service_healthy
@@ -91,6 +95,10 @@ services:
       - OBJECT_STORAGE_ENDPOINT_URL=http://minio:9000
       - OBJECT_STORAGE_ACCESS_KEY_ID=minioadmin
       - OBJECT_STORAGE_SECRET_ACCESS_KEY=miniopassword
+      - LANGCHAIN_TRACING_V2
+      - LANGCHAIN_API_KEY
+      - LANGCHAIN_PROJECT
+      - PHOENIX_COLLECTOR_ENDPOINT
     depends_on:
       db:
         condition: service_healthy
