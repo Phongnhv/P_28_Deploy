@@ -116,11 +116,11 @@ flowchart TD
 
     %% 4. Test Generator Flow
     Orchestrator -->|3. Route to Test Generator| TestGenNode[3. Test Generator Sub-Agent]
-    TestGenNode --> GenCodeTool["Tool: Render dbt Core / Great Expectations Test Code"]
-    GenCodeTool --> SyntaxCheck{Syntax Valid?}
-    SyntaxCheck -->|No - Syntax Error| TestRetryLoop["🤖 Agentic Loop: LLM Fixes Code Syntax"]
-    TestRetryLoop --> GenCodeTool
-    SyntaxCheck -->|Yes - Valid| DeployDagster["Tool: Push Test Suite to Dagster Orchestrator"]
+    TestGenNode --> GenCodeTool["Tool: Render generated_dq_tests.yml"]
+    GenCodeTool --> SyntaxCheck{YAML Structure + dbt parse Valid?}
+    SyntaxCheck -->|No - Parse Error| TestRetryLoop["Agentic Loop: LLM Repairs dbt YAML"]
+    TestRetryLoop --> SyntaxCheck
+    SyntaxCheck -->|Yes - Valid| DeployDagster["Tool: Push Validated dbt Test Suite"]
     DeployDagster --> ExecPipeline["Run Scheduled dbt Test Pipeline"]
     ExecPipeline --> StateUpdate4["Update State: test_results"]
     StateUpdate4 --> Orchestrator

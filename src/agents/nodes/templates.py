@@ -305,6 +305,37 @@ sql_repair_prompt = ChatPromptTemplate.from_messages(
 )
 
 
+_DBT_REPAIR_SYSTEM = """\
+You repair a generated dbt schema YAML file. Return only the complete repaired YAML.
+Do not use Markdown fences or explanations. Preserve the approved models, columns, and
+test intent. Do not add hooks, vars, exposures, sources, macros, SQL, or arbitrary project
+configuration. The root document must contain only `version` and `models`.
+"""
+
+_DBT_REPAIR_USER = """\
+Approved rules (source of truth):
+```json
+{approved_rules_json}
+```
+
+Generated dbt YAML:
+```yaml
+{dbt_yaml}
+```
+
+Validation error:
+```
+{validation_error}
+```
+
+Return the complete corrected dbt schema YAML and nothing else.
+"""
+
+dbt_repair_prompt = ChatPromptTemplate.from_messages(
+    [("system", _DBT_REPAIR_SYSTEM), ("user", _DBT_REPAIR_USER)]
+)
+
+
 # ---------------------------------------------------------------------------
 # Steward Insights Prompt (DQ Advisor & Executive Summary)
 # ---------------------------------------------------------------------------

@@ -35,6 +35,11 @@ class AgentState(TypedDict, total=False):
     generated_dbt_yaml: str      # YAML content retained in state for observability only
     dbt_artifact_ref: dict       # Run-scoped object-storage reference for the dbt YAML
     dbt_trace_file_path: str     # Exact local/test fallback path for this run
+    dbt_validation_valid: bool   # Whether the generated dbt project passed the quality gate
+    dbt_validation_error: str | None
+    dbt_validation_attempts: int
+    dbt_validation_trace_path: str
+    dbt_repair_history: list
     test_results: list           # Danh sách kết quả thực thi từng rule
     test_generation_errors: list # Danh sách lỗi phát sinh trong quá trình sinh/sửa/chạy test
 

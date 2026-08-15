@@ -385,6 +385,10 @@ async def test_generator_node(state: AgentState) -> dict:
         "generated_dbt_yaml": dbt_yaml_content,
         "dbt_artifact_ref": artifact_ref.to_dict() if artifact_ref else None,
         "dbt_trace_file_path": str(trace_file),
+        "dbt_validation_valid": False,
+        "dbt_validation_error": None,
+        "dbt_validation_attempts": 0,
+        "dbt_repair_history": [],
         "test_generation_errors": [],
     }
 

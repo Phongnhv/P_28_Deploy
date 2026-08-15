@@ -7,7 +7,6 @@ from src.agents.state import AgentState
 # ---------------------------------------------------------------------------
 # Run 1: Proposal Graph (profiler → digest → rule_proposer → persist_rules)
 # ---------------------------------------------------------------------------
-
 def build_proposal_graph() -> StateGraph:
     """Xây dựng graph cho Run 1 — kết thúc sau khi persist rules vào DB và ghi trace.
 
@@ -74,33 +73,47 @@ def build_dashboard_proposal_graph() -> StateGraph:
 # ---------------------------------------------------------------------------
 
 def _should_repair_or_run(state: AgentState) -> str:
-    """Kiểm tra xem có query nào invalid và còn lượt retry để gửi sang LLM repair không."""
-    tests = state.get("generated_tests", [])
-    for t in tests:
-        if not t.get("valid") and t.get("attempts", 0) < 3:
-            return "repair"
-    return "run"
+    """Route the dbt artifact to execution, repair, or terminal failure."""
+    if state.get("dbt_validation_valid") is True:
+        return "run"
+    if int(state.get("dbt_validation_attempts", 0)) < 3:
+        return "repair"
+    return "fail"
+
+
+async def _fail_dbt_validation_node(state: AgentState) -> dict:
+    from src.services.rule_store import update_test_run_status
+
+    error = state.get("dbt_validation_error") or "dbt project validation failed after 3 repair attempts"
+    run_id = state.get("test_run_id") or state.get("rule_run_id")
+    if run_id:
+        update_test_run_status(str(run_id), "FAILED", error=error)
+    errors = list(state.get("test_generation_errors", []))
+    if error not in errors:
+        errors.append(error)
+    return {"error": error, "test_generation_errors": errors}
 
 
 def build_execution_graph() -> StateGraph:
     """Xây dựng graph cho Run 2 (Execution Graph).
 
     Luồng:
-      test_generator ➔ validate_sql ➔ (repair loop nếu lỗi) ➔ test_runner ➔ anomaly_detector ➔ steward_insights ➔ persist_report ➔ END
+      test_generator ➔ validate_dbt_project ➔ (repair loop nếu lỗi) ➔ test_runner ➔ anomaly_detector ➔ steward_insights ➔ persist_report ➔ END
     """
     from src.agents.nodes.anomaly_detector_node import anomaly_detector_node
-    from src.agents.nodes.llm_repair_node import llm_repair_node
+    from src.agents.nodes.llm_dbt_repair_node import llm_dbt_repair_node
     from src.agents.nodes.persist_report_node import persist_report_node
     from src.agents.nodes.steward_insights_node import steward_insights_node
     from src.agents.nodes.test_generator_node import test_generator_node
     from src.agents.nodes.test_runner_node import test_runner_node
-    from src.agents.nodes.validate_sql_node import validate_sql_node
+    from src.agents.nodes.validate_dbt_project_node import validate_dbt_project_node
 
     graph = StateGraph(AgentState)
 
     graph.add_node("test_generator", test_generator_node)
-    graph.add_node("validate_sql", validate_sql_node)
-    graph.add_node("llm_repair", llm_repair_node)
+    graph.add_node("validate_dbt_project", validate_dbt_project_node)
+    graph.add_node("llm_dbt_repair", llm_dbt_repair_node)
+    graph.add_node("dbt_validation_failed", _fail_dbt_validation_node)
     graph.add_node("test_runner", test_runner_node)
     graph.add_node("anomaly_detector", anomaly_detector_node)
     graph.add_node("steward_insights", steward_insights_node)
@@ -108,18 +121,19 @@ def build_execution_graph() -> StateGraph:
 
     graph.set_entry_point("test_generator")
 
-    # test_generator ➔ validate_sql
-    graph.add_edge("test_generator", "validate_sql")
+    # test_generator -> validate the generated dbt project
+    graph.add_edge("test_generator", "validate_dbt_project")
 
-    # validate_sql ➔ llm_repair (nếu có lỗi & attempts < 3) hoặc test_runner
+    # Invalid projects are repaired at most three times; exhausted runs fail before execution.
     graph.add_conditional_edges(
-        "validate_sql",
+        "validate_dbt_project",
         _should_repair_or_run,
-        {"repair": "llm_repair", "run": "test_runner"},
+        {"repair": "llm_dbt_repair", "run": "test_runner", "fail": "dbt_validation_failed"},
     )
 
-    # llm_repair ➔ validate_sql (vòng lặp sửa lỗi)
-    graph.add_edge("llm_repair", "validate_sql")
+    # Repair updates YAML in state and routes back through the same dbt quality gate.
+    graph.add_edge("llm_dbt_repair", "validate_dbt_project")
+    graph.add_edge("dbt_validation_failed", END)
 
     # test_runner ➔ anomaly_detector ➔ steward_insights ➔ persist_report ➔ END
     graph.add_edge("test_runner", "anomaly_detector")
