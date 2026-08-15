@@ -448,19 +448,37 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
     """Lưu danh sách rule vào DB với status=PROPOSED."""
     saved = 0
     with Session(get_engine()) as session:
-        # Clear child/referencing tables first to prevent foreign key violations
         from src.models.database import RuleConfigurationModel
 
-        session.query(RuleConfigurationModel).filter(
-            RuleConfigurationModel.rule_proposal_id.in_(
-                session.query(RuleProposalModel.id).filter(RuleProposalModel.dataset_id == dataset_id)
-            )
+        # 1. Clean pending proposals that have not been approved/merged yet (they have no versions/configs)
+        session.query(RuleProposalModel).filter(
+            RuleProposalModel.dataset_id == dataset_id,
+            RuleProposalModel.status.in_(["PROPOSED", "PENDING"])
         ).delete(synchronize_session=False)
 
-        session.query(RuleVersionModel).filter(RuleVersionModel.dataset_id == dataset_id).delete(synchronize_session=False)
+        # 2. Identify the specific rule IDs being proposed in this run
+        new_rule_ids = []
+        for r in rules:
+            r_id = r.get("rule_id", f"rule_{uuid.uuid4().hex}")
+            new_rule_ids.append(r_id)
 
-        # Idempotency: delete old proposals for this dataset (RuleProposalModel) and current run (ProposedRuleModel)
-        session.query(RuleProposalModel).filter(RuleProposalModel.dataset_id == dataset_id).delete(synchronize_session=False)
+        # 3. For these specific rule IDs, clean up their versions/configs and the proposals themselves
+        # if they exist (e.g. from previous approved/merged states) to avoid duplicates and FK violations.
+        # This keeps all OTHER historical approved rules completely intact.
+        if new_rule_ids:
+            session.query(RuleConfigurationModel).filter(
+                RuleConfigurationModel.rule_proposal_id.in_(new_rule_ids)
+            ).delete(synchronize_session=False)
+
+            session.query(RuleVersionModel).filter(
+                RuleVersionModel.rule_proposal_id.in_(new_rule_ids)
+            ).delete(synchronize_session=False)
+
+            session.query(RuleProposalModel).filter(
+                RuleProposalModel.id.in_(new_rule_ids)
+            ).delete(synchronize_session=False)
+
+        # 4. Clean proposed rules run logs for idempotency
         session.query(ProposedRuleModel).filter(ProposedRuleModel.run_id == run_id).delete(synchronize_session=False)
         session.commit()
 

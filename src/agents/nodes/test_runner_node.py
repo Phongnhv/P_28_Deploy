@@ -386,6 +386,15 @@ async def test_runner_node(state: AgentState) -> dict:
                 raise RuntimeError("No generated dbt artifact reference is available")
             content = trace_path.read_bytes()
         if content is not None:
+            # Validate the YAML content structure to prevent injection of malicious projects/templates
+            try:
+                import yaml
+                parsed = yaml.safe_load(content)
+                if not isinstance(parsed, dict) or "models" not in parsed:
+                    raise ValueError("Root of dbt test YAML must be a dictionary containing 'models'")
+            except Exception as exc:
+                raise RuntimeError(f"YAML safety validation failed for dbt artifact: {exc}")
+
             generated_file = dbt_dir / "models" / "generated_dq_tests.yml"
             generated_file.parent.mkdir(parents=True, exist_ok=True)
             temp_file = generated_file.with_suffix(".tmp")
