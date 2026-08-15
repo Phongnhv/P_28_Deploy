@@ -3,9 +3,23 @@ import json
 import pytest
 from sqlalchemy.orm import Session
 
-from src.models.database import RuleProposalModel, RuleVersionModel
+from src.models.database import RuleConfigurationModel, RuleProposalModel, RuleVersionModel
 from src.services.job_runner import compile_rule_to_sql, run_dq_checks, run_ingest_profile
 from src.services.rule_store import get_engine
+
+
+@pytest.mark.asyncio
+async def test_loopback_cors_accepts_127_origin(client):
+    response = await client.options(
+        "/api/v1/session",
+        headers={
+            "Origin": "http://127.0.0.1:5173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
 
 
 @pytest.fixture
@@ -83,6 +97,14 @@ async def test_dq_run_and_failed_ids_capped_at_20(client):
             version=1
         )
         session.add(rv)
+        session.add(
+            RuleConfigurationModel(
+                rule_proposal_id=prop.id,
+                execution_status="ACTIVE",
+                schedule_frequency="MANUAL",
+                timezone="UTC",
+            )
+        )
         session.commit()
 
     # 3. Trigger DQ Run
@@ -108,6 +130,42 @@ async def test_dq_run_and_failed_ids_capped_at_20(client):
     assert res["status"] == "FAIL"
     assert len(res["failed_row_ids"]) <= 20
     assert res["failed_count"] > 20 # there are many trips with distance < 50
+
+    anomaly_res = await client.get(f"/api/v1/dq-runs/{run_id}/anomalies")
+    assert anomaly_res.status_code == 200
+    anomalies = anomaly_res.json()
+    assert len(anomalies) == 1
+    assert anomalies[0]["rule_id"] == "rv_test-run-cap"
+    assert anomalies[0]["anomaly_type"] == "HIGH_VIOLATION_RATE"
+    assert anomalies[0]["current_rate"] > 0.05
+    assert anomalies[0]["history_size"] == 0
+    assert anomalies[0]["detection_mode"] == "COLD_START"
+    assert anomalies[0]["checked_count"] == res["checked_count"]
+
+    latest_res = await client.get("/api/v1/datasets/dataset-nyc-yellow-taxi-50k/dq-runs/latest")
+    assert latest_res.status_code == 200
+    assert latest_res.json()["id"] == run_id
+
+    trend_res = await client.get("/api/v1/datasets/dataset-nyc-yellow-taxi-50k/quality-trends")
+    assert trend_res.status_code == 200
+    assert trend_res.json()[-1]["run_id"] == run_id
+
+    rows_res = await client.get(
+        "/api/v1/datasets/dataset-nyc-yellow-taxi-50k/rows",
+        params={"quality_status": "ISSUE", "sort_by": "trip_distance", "sort_direction": "asc", "limit": 5},
+    )
+    assert rows_res.status_code == 200
+    row_payload = rows_res.json()
+    assert row_payload["total"] > 0
+    assert 0 < len(row_payload["rows"]) <= 5
+    assert set(row_payload["rows"][0]) == {
+        "source_row_id", "vendor_id", "pickup_at", "dropoff_at", "passenger_count",
+        "trip_distance", "payment_type", "fare_amount", "total_amount",
+    }
+    with Session(get_engine()) as session:
+        configuration = session.get(RuleConfigurationModel, "test-run-cap")
+        assert configuration is not None
+        assert configuration.last_run_at is not None
 
 def db_create_proposal(session: Session, dataset_id: str) -> RuleProposalModel:
     prop = RuleProposalModel(

@@ -1,8 +1,8 @@
 """Integration tests for LangGraph workflows (Proposal Graph & Execution Graph)."""
 
 import uuid
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy import create_engine, text
 
 import src.services.rule_store as rule_store_module
@@ -16,15 +16,12 @@ from src.agents.graph import (
 from src.services.rule_store import (
     create_run,
     create_test_run,
-    get_active_rules,
-    get_approved_rules,
     get_run,
     get_test_results,
     get_test_run,
     init_db,
     publish_approved_rules,
     review_rule,
-    save_proposed_rules,
 )
 
 
@@ -38,6 +35,9 @@ def setup_test_db(tmp_path, monkeypatch):
         connect_args={"check_same_thread": False},
     )
     monkeypatch.setattr(rule_store_module, "_engine", test_engine)
+    # The graph tests exercise the legacy SQL metrics fallback; dbt CLI integration
+    # is covered by the dedicated validation/runner integration tests.
+    monkeypatch.setattr("src.agents.nodes.test_runner_node._run_dbt_cli_test", lambda _dbt_dir: False)
     init_db()
 
     with test_engine.connect() as conn:
@@ -75,32 +75,15 @@ def test_build_graphs():
 
 
 def test_conditional_edges_routing():
-    """Kiểm tra hàm điều hướng rẽ nhánh _should_repair_or_run."""
-    # 1. Tất cả test hợp lệ -> run
-    state_valid = {
-        "generated_tests": [
-            {"test_id": "t1", "valid": True, "attempts": 0},
-            {"test_id": "t2", "valid": True, "attempts": 0},
-        ]
-    }
+    """The execution graph routes on dbt artifact validation state."""
+    state_valid = {"dbt_validation_valid": True, "dbt_validation_attempts": 0}
     assert _should_repair_or_run(state_valid) == "run"
 
-    # 2. Có test không hợp lệ và attempts < 3 -> repair
-    state_repair = {
-        "generated_tests": [
-            {"test_id": "t1", "valid": True, "attempts": 0},
-            {"test_id": "t2", "valid": False, "attempts": 1},
-        ]
-    }
+    state_repair = {"dbt_validation_valid": False, "dbt_validation_attempts": 1}
     assert _should_repair_or_run(state_repair) == "repair"
 
-    # 3. Có test không hợp lệ nhưng attempts >= 3 -> run (bỏ qua/fail-safe)
-    state_max_attempts = {
-        "generated_tests": [
-            {"test_id": "t2", "valid": False, "attempts": 3},
-        ]
-    }
-    assert _should_repair_or_run(state_max_attempts) == "run"
+    state_max_attempts = {"dbt_validation_valid": False, "dbt_validation_attempts": 3}
+    assert _should_repair_or_run(state_max_attempts) == "fail"
 
 
 @pytest.mark.asyncio

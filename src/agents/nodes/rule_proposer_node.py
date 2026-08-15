@@ -25,7 +25,11 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from src.agents.nodes.templates import _RULE_PROPOSER_FEW_SHOT, rule_proposer_prompt
+from src.agents.nodes.templates import (
+    _RULE_PROPOSER_FEW_SHOT,
+    dashboard_rule_proposer_prompt,
+    rule_proposer_prompt,
+)
 from src.agents.state import AgentState
 from src.agents.tools.chroma_rag_tool import query_historical_rules
 from src.agents.tools.profile_digest import (
@@ -49,6 +53,150 @@ số lượng hành khách, khoảng cách di chuyển, các khoản cước ph�
 """
 
 DATA_DICTIONARY_PATH = Path(__file__).resolve().parents[3] / "data" / "data_dictionary_trip_records_yellow.json"
+
+
+def _build_coverage_requirements(table_digest: dict) -> list[dict]:
+    """Sinh checklist rule ứng viên hoàn toàn từ evidence trong digest.
+
+    Checklist hướng LLM phủ hết tín hiệu có căn cứ thay vì chỉ trả một nhóm rule
+    đại diện. Đây không phải rule output và không tự đặt threshold thay cho LLM.
+    """
+    dashboard_candidates = table_digest.get("dashboard_rule_candidates")
+    if table_digest.get("dashboard_candidate_mode") and isinstance(dashboard_candidates, list):
+        # The public dashboard workflow has already transformed persisted aggregate
+        # profile evidence into a small policy-approved candidate set.  Do not add
+        # legacy heuristic candidates here: doing so lets a model spend all five
+        # slots on repeated NOT_NULL rules and weakens the product contract.
+        return [candidate for candidate in dashboard_candidates if isinstance(candidate, dict)]
+
+    requirements: list[dict] = []
+    digest_columns = table_digest.get("columns") or []
+    available_columns = {
+        column.get("name")
+        for column in digest_columns
+        if isinstance(column, dict) and column.get("name")
+    }
+
+    for column in digest_columns:
+        if not isinstance(column, dict):
+            continue
+        name = column.get("name")
+        if not name:
+            continue
+
+        role = column.get("role")
+        signals = set(column.get("signals", []))
+        null_pct = column.get("null_pct", 0.0) or 0.0
+
+        if "no_nulls" in signals and (
+            role in {"id", "datetime"}
+            or name in {"vendor_id", "rate_code_id", "payment_type"}
+        ):
+            requirements.append({
+                "column": name,
+                "rule_type": "NOT_NULL",
+                "evidence": ["no_nulls", f"role={role}"],
+            })
+
+        if signals.intersection({"has_pk_constraint", "has_unique_constraint", "unique_full_table"}):
+            requirements.append({
+                "column": name,
+                "rule_type": "UNIQUE",
+                "evidence": sorted(signals.intersection({
+                    "has_pk_constraint", "has_unique_constraint", "unique_full_table"
+                })),
+            })
+
+        if role == "numeric" and signals.intersection({
+            "has_extreme_outliers", "has_negative_values", "has_zero_values"
+        }):
+            requirements.append({
+                "column": name,
+                "rule_type": "RANGE",
+                "evidence": sorted(signals.intersection({
+                    "has_extreme_outliers", "has_negative_values", "has_zero_values"
+                })),
+            })
+
+        values = [value for value in column.get("values", []) if value is not None]
+        if role == "categorical" and values:
+            requirements.append({
+                "column": name,
+                "rule_type": "ACCEPTED_VALUES",
+                "evidence": {"values": values},
+            })
+
+        if role == "datetime":
+            requirements.append({
+                "column": name,
+                "rule_type": "FRESHNESS",
+                "evidence": {"range": column.get("range")},
+            })
+
+        if null_pct > 5.0 and name not in {
+            "congestion_surcharge", "airport_fee", "cbd_congestion_fee"
+        }:
+            requirements.append({
+                "column": name,
+                "rule_type": "NULL_RATE",
+                "evidence": {"null_pct": null_pct},
+            })
+
+        if "fixed_length" in signals:
+            requirements.append({
+                "column": name,
+                "rule_type": "REGEX_FORMAT",
+                "evidence": {"length_stats": column.get("length_stats")},
+            })
+
+    cross_field_operators = {
+        "datetime_order": "<=",
+    }
+    for hint in table_digest.get("cross_column_hints") or []:
+        if not isinstance(hint, dict):
+            continue
+
+        columns = hint.get("columns")
+        if not isinstance(columns, list) or len(columns) < 2:
+            continue
+
+        source_column, target_column = columns[0], columns[1]
+        if (
+            not isinstance(source_column, str)
+            or not isinstance(target_column, str)
+            or source_column not in available_columns
+            or target_column not in available_columns
+        ):
+            logger.warning(
+                "Bỏ qua cross-column hint có cột không hợp lệ: %s",
+                hint,
+            )
+            continue
+
+        operator = cross_field_operators.get(hint.get("type"))
+        if operator is None:
+            logger.warning(
+                "Bỏ qua cross-column hint chưa hỗ trợ type=%r",
+                hint.get("type"),
+            )
+            continue
+
+        requirements.append({
+            "column": source_column,
+            "rule_type": "CROSS_FIELD_COMPARISON",
+            "parameters": {
+                "target_column": target_column,
+                "operator": operator,
+            },
+            "evidence": hint,
+        })
+
+    requirements.append({
+        "column": None,
+        "rule_type": "ROW_COUNT",
+        "evidence": {"rows": table_digest.get("rows", 0)},
+    })
+    return requirements
 
 
 def _load_data_dictionary() -> str:
@@ -80,7 +228,8 @@ async def _propose_for_table(
 ) -> TableRuleProposal:
     """Gọi LLM một lần cho một bảng, bảo vệ bằng semaphore + retry."""
     columns = [col["name"] for col in table_digest.get("columns", [])]
-    historical = query_historical_rules(table_name, columns)
+    dashboard_mode = bool(table_digest.get("dashboard_candidate_mode"))
+    historical = [] if dashboard_mode else query_historical_rules(table_name, columns)
 
     async with semaphore:
         last_exc: Exception | None = None
@@ -94,14 +243,26 @@ async def _propose_for_table(
                     max_retries + 1,
                     entry_ts.isoformat(),
                 )
-                messages = rule_proposer_prompt.format_messages(
-                    table_name=table_name,
-                    table_digest=json.dumps(table_digest, ensure_ascii=False),
-                    domain_context=DOMAIN_CONTEXT,
-                    data_dictionary=_load_data_dictionary(),
-                    historical_rules=json.dumps(historical, ensure_ascii=False),
-                    few_shot_examples=_RULE_PROPOSER_FEW_SHOT,
+                coverage_requirements = json.dumps(
+                    _build_coverage_requirements(table_digest),
+                    ensure_ascii=False,
                 )
+                if dashboard_mode:
+                    messages = dashboard_rule_proposer_prompt.format_messages(
+                        table_name=table_name,
+                        table_digest=json.dumps(table_digest, ensure_ascii=False),
+                        coverage_requirements=coverage_requirements,
+                    )
+                else:
+                    messages = rule_proposer_prompt.format_messages(
+                        table_name=table_name,
+                        table_digest=json.dumps(table_digest, ensure_ascii=False),
+                        domain_context=DOMAIN_CONTEXT,
+                        data_dictionary=_load_data_dictionary(),
+                        historical_rules=json.dumps(historical, ensure_ascii=False),
+                        coverage_requirements=coverage_requirements,
+                        few_shot_examples=_RULE_PROPOSER_FEW_SHOT,
+                    )
                 result: TableRuleProposal = await structured_llm.ainvoke(messages)
                 exit_ts = datetime.now()
                 logger.info(
@@ -181,6 +342,7 @@ def _stamp_rule(
         return {}  # sentinel
 
     return {
+        "candidate_id": rule.candidate_id,
         "rule_id": rule_id,
         "run_id": run_id,
         "table_name": table_name,
@@ -212,6 +374,8 @@ async def rule_proposer_node(state: AgentState) -> dict:
     trả về proposed_rules, rule_proposal_errors, rule_run_id.
     """
     settings = get_settings()
+    metadata = state.get("metadata", {})
+    max_retries = metadata.get("max_retries", settings.rule_proposer_max_retries)
 
     digest = state.get("dataset_profile_digest", {})
     if not digest:
@@ -257,7 +421,7 @@ async def rule_proposer_node(state: AgentState) -> dict:
                 table_digest=per_table[t],
                 structured_llm=structured_llm,
                 semaphore=semaphore,
-                max_retries=settings.rule_proposer_max_retries,
+                max_retries=max_retries,
             )
             for t in table_names
         ],
@@ -289,22 +453,25 @@ async def rule_proposer_node(state: AgentState) -> dict:
         len(errors),
     )
 
-    # Xuất trace JSON sau khi đề xuất rules xong
-    try:
-        rule_proposer_dir.mkdir(parents=True, exist_ok=True)
-        dump_file = rule_proposer_dir / f"debug_proposed_rules_{run_id}.json"
-        dump_payload = {
-            "run_id": run_id,
-            "generated_at": datetime.now(UTC).isoformat(),
-            "total_rules": len(flat_rules),
-            "total_errors": len(errors),
-            "proposed_rules": flat_rules,
-            "errors": errors,
-        }
-        dump_file.write_text(json.dumps(dump_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        logger.info(f"Đã xuất trace proposed rules ra {dump_file}")
-    except Exception as e:
-        logger.warning(f"Không thể ghi file trace proposed rules: {e}")
+    # Store free-form model output only when a developer has explicitly enabled
+    # debug artifacts.  Dashboard persistence keeps the validated typed proposal.
+    if settings.debug_dump_table_digests:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        try:
+            rule_proposer_dir.mkdir(parents=True, exist_ok=True)
+            dump_file = rule_proposer_dir / f"debug_proposed_rules_{timestamp}_{run_id}.json"
+            dump_payload = {
+                "run_id": run_id,
+                "generated_at": datetime.now(UTC).isoformat(),
+                "total_rules": len(flat_rules),
+                "total_errors": len(errors),
+                "proposed_rules": flat_rules,
+                "errors": errors,
+            }
+            dump_file.write_text(json.dumps(dump_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.info("Đã xuất trace proposed rules ra %s", dump_file)
+        except Exception as exc:
+            logger.warning("Không thể ghi file trace proposed rules: %s", exc)
 
     return {
         "proposed_rules": flat_rules,

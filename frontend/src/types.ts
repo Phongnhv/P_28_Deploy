@@ -2,6 +2,10 @@ export type JobStatus = "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED_RETRYABLE"
 export type JobType = "INGEST_PROFILE" | "PROPOSE_RULES" | "RUN_DQ";
 export type ProposalStatus = "PROPOSED" | "APPROVED" | "EDITED" | "REJECTED";
 export type UserRole = "USER" | "STEWARD" | "ADMIN";
+export type AccountStatus = "ACTIVE" | "SUSPENDED" | "DISABLED";
+export type DatasetAccessLevel = "READ" | "MANAGE";
+export type RuleExecutionStatus = "ACTIVE" | "PAUSED";
+export type RuleScheduleFrequency = "MANUAL" | "HOURLY" | "DAILY";
 export type RuleType =
   | "not_null"
   | "numeric_range"
@@ -14,6 +18,43 @@ export interface SessionResponse {
   role: UserRole;
   csrf_token: string;
   expires_at: string;
+}
+
+export interface UserAccount {
+  id: string;
+  username: string;
+  display_name: string;
+  role: UserRole;
+  status: AccountStatus;
+  created_by?: string;
+  last_login_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserCreateInput {
+  username: string;
+  display_name: string;
+  password: string;
+  role: UserRole;
+}
+
+export interface UserUpdateInput {
+  display_name?: string;
+  password?: string;
+  role?: UserRole;
+  status?: AccountStatus;
+}
+
+export interface DatasetAccess {
+  id: string;
+  dataset_id: string;
+  username: string;
+  display_name: string;
+  role: UserRole;
+  access_level: DatasetAccessLevel;
+  granted_by: string;
+  granted_at: string;
 }
 
 export interface Dataset {
@@ -91,6 +132,22 @@ export interface RuleProposal {
   updated_at: string;
 }
 
+export interface RuleConfiguration {
+  rule_id: string;
+  execution_status: RuleExecutionStatus;
+  schedule_frequency: RuleScheduleFrequency;
+  timezone: string;
+  last_run_at?: string;
+  next_run_at?: string;
+  updated_at: string;
+}
+
+export interface RuleConfigurationInput {
+  execution_status: RuleExecutionStatus;
+  schedule_frequency: RuleScheduleFrequency;
+  timezone: string;
+}
+
 export interface DqRun {
   id: string;
   job_id: string;
@@ -117,6 +174,62 @@ export interface DqResult {
   checked_count: number;
   failed_count: number;
   failed_row_ids: string[];
+}
+
+export interface DqAnomaly {
+  rule_id: string;
+  rule_title: string;
+  anomaly_type: "HIGH_VIOLATION_RATE" | "Z_SCORE_SPIKE";
+  current_rate: number;
+  historical_mean?: number;
+  z_score?: number;
+  history_size: number;
+  detection_mode: "COLD_START" | "HISTORICAL";
+  checked_count: number;
+  failed_count: number;
+  reason: string;
+}
+
+export interface DatasetRow {
+  source_row_id: string;
+  vendor_id?: string;
+  pickup_at?: string;
+  dropoff_at?: string;
+  passenger_count?: number;
+  trip_distance?: number;
+  payment_type?: string;
+  fare_amount?: number;
+  total_amount?: number;
+}
+
+export interface DatasetRowsResponse {
+  dataset_id: string;
+  total: number;
+  limit: number;
+  offset: number;
+  rows: DatasetRow[];
+}
+
+export interface DatasetRowQuery {
+  vendor_id?: string;
+  payment_type?: string;
+  min_distance?: number;
+  max_distance?: number;
+  quality_status?: "ALL" | "VALID" | "ISSUE";
+  sort_by?: "pickup_at" | "trip_distance" | "fare_amount" | "total_amount";
+  sort_direction?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+}
+
+export interface QualityTrendPoint {
+  run_id: string;
+  created_at: string;
+  quality_score: number;
+  failure_rate: number;
+  total_checked: number;
+  total_failed: number;
+  rule_count: number;
 }
 
 export interface AuditLog {
@@ -155,8 +268,21 @@ export interface ApiClient {
   listProposals(datasetId: string): Promise<RuleProposal[]>;
   createManualRule(datasetId: string, input: ManualRuleInput): Promise<RuleProposal>;
   reviewProposal(proposalId: string, input: ReviewInput): Promise<RuleProposal>;
+  deleteProposal(proposalId: string): Promise<void>;
+  listRuleConfigurations(datasetId: string): Promise<RuleConfiguration[]>;
+  updateRuleConfiguration(proposalId: string, input: RuleConfigurationInput): Promise<RuleConfiguration>;
   startDqRun(ruleIds: string[], idempotencyKey: string): Promise<DqRunCreateResponse>;
   getDqRun(runId: string): Promise<DqRun>;
   getDqResults(runId: string): Promise<DqResult[]>;
+  getDqAnomalies(runId: string): Promise<DqAnomaly[]>;
+  getLatestDqRun(datasetId: string): Promise<DqRun | null>;
+  getQualityTrends(datasetId: string): Promise<QualityTrendPoint[]>;
+  queryDatasetRows(datasetId: string, query: DatasetRowQuery): Promise<DatasetRowsResponse>;
   listAuditLogs(): Promise<AuditLog[]>;
+  listUsers(): Promise<UserAccount[]>;
+  createUser(input: UserCreateInput): Promise<UserAccount>;
+  updateUser(username: string, input: UserUpdateInput): Promise<UserAccount>;
+  listDatasetAccess(datasetId: string): Promise<DatasetAccess[]>;
+  grantDatasetAccess(datasetId: string, username: string, accessLevel: DatasetAccessLevel): Promise<DatasetAccess>;
+  revokeDatasetAccess(datasetId: string, username: string): Promise<void>;
 }

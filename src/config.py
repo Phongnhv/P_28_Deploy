@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     app_port: int = Field(default=8000, ge=1, le=65535)
     app_host: str = "0.0.0.0"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
-    cors_origins: str = "http://localhost:3000"
+    cors_origins: str = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173"
 
     # LLM
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
@@ -42,12 +42,18 @@ class Settings(BaseSettings):
     google_model_name: str = os.getenv("GOOGLE_MODEL") or "gemini-3.1-flash-lite"
 
     # Rule Proposer tunables
+    agent_mode: Literal["mock", "graph"] = os.getenv("AGENT_MODE") or "mock"
     rule_proposer_concurrency: int = 10
     rule_proposer_max_retries: int = 2
     debug_dump_table_digests: bool = False
 
     # Database
     database_url: str = Field(default="sqlite:///steward_local.db")
+    # Canonical source data can be separate from the local dashboard metadata
+    # store. In auto mode (the default), a PostgreSQL DATABASE_URL is treated as
+    # the Supabase execution surface; SQLite retains the local-MVP fallback.
+    supabase_database_url: str | None = os.getenv("SUPABASE_DATABASE_URL")
+    dq_execution_backend: Literal["auto", "local", "supabase"] = os.getenv("DQ_EXECUTION_BACKEND") or "auto"
 
     # Vector Store
     chroma_persist_dir: str = "./data/chroma" # Change to .env later
@@ -55,6 +61,17 @@ class Settings(BaseSettings):
     # Output
     output_dir: str = "./output"
     results_dir: str = "./output" # Backwards-compatible alias
+
+    # Generated dbt artifacts (AWS S3 in production, MinIO locally)
+    object_storage_bucket: str = "ridepulse-dbt-artifacts"
+    object_storage_prefix: str = "dbt-tests"
+    object_storage_region: str = "us-east-1"
+    object_storage_endpoint_url: str | None = None
+    object_storage_access_key_id: str | None = None
+    object_storage_secret_access_key: str | None = None
+    object_storage_max_attempts: int = Field(default=3, ge=1, le=10)
+    object_storage_connect_timeout_seconds: int = Field(default=3, ge=1, le=30)
+    object_storage_read_timeout_seconds: int = Field(default=10, ge=1, le=120)
 
 
 @lru_cache

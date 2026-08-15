@@ -11,6 +11,7 @@ If the POST fails, the pending file is restored so nothing is lost.
 """
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -67,10 +68,42 @@ def _restore_pending(pending: Path) -> None:
         pending.rename(LOG_FILE)
 
 
+def _recover_pending_files() -> None:
+    """Find any leftover session.pending.*.jsonl files from crashed/interrupted runs
+    and merge them back into LOG_FILE."""
+    if not LOG_DIR.exists():
+        return
+    pending_files = sorted(LOG_DIR.glob("session.pending.*.jsonl"))
+    for pf in pending_files:
+        _restore_pending(pf)
+
+def _sanitize_text(s: str) -> str:
+    if not isinstance(s, str):
+        return ""
+    # Strip null bytes and non-printable control characters except \n, \r, \t
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "", s).strip()
+
+
+def _sanitize_entry(entry: dict) -> dict:
+    cleaned = {}
+    for k, v in entry.items():
+        if isinstance(v, str):
+            cleaned[k] = _sanitize_text(v)
+        elif isinstance(v, dict):
+            cleaned[k] = {ik: _sanitize_text(iv) if isinstance(iv, str) else iv for ik, iv in v.items()}
+        elif isinstance(v, list):
+            cleaned[k] = [_sanitize_text(item) if isinstance(item, str) else item for item in v]
+        else:
+            cleaned[k] = v
+    return cleaned
+
+
 def main():
     if not SERVER_URL:
         print("[ai-log] AI_LOG_SERVER not set — skipping submission.", file=sys.stderr)
         sys.exit(0)
+
+    _recover_pending_files()
 
     if not LOG_FILE.exists() or LOG_FILE.stat().st_size == 0:
         print("[ai-log] No logs to submit.", file=sys.stderr)
@@ -96,7 +129,8 @@ def main():
                 leftover_lines.append(line)
                 continue
             try:
-                entries.append(json.loads(stripped))
+                raw_entry = json.loads(stripped)
+                entries.append(_sanitize_entry(raw_entry))
             except json.JSONDecodeError:
                 pass  # drop unparseable line
 
@@ -121,6 +155,14 @@ def main():
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             print(f"[ai-log] Submitted {len(entries)} entries → {resp.status}", file=sys.stderr)
+    except urllib.error.HTTPError as e:
+        _restore_pending(pending)
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")
+            print(f"[ai-log] Submit failed: HTTP Error {e.code}: {e.reason} ({err_body}) — logs kept locally.", file=sys.stderr)
+        except Exception:
+            print(f"[ai-log] Submit failed: {e} — logs kept locally.", file=sys.stderr)
+        sys.exit(0)  # Don't block push on server error
     except urllib.error.URLError as e:
         # Failure: restore the whole pending (including leftover) for next push.
         _restore_pending(pending)

@@ -6,15 +6,42 @@ import type {
   DatasetProfile,
   DqRunCreateResponse,
   DqResult,
+  DqAnomaly,
+  DatasetRowQuery,
+  DatasetRowsResponse,
+  QualityTrendPoint,
   DqRun,
   Job,
   ManualRuleInput,
   ReviewInput,
   RuleProposal,
   SessionResponse,
+  DatasetAccess,
+  DatasetAccessLevel,
+  RuleConfiguration,
+  RuleConfigurationInput,
+  UserAccount,
+  UserCreateInput,
+  UserUpdateInput,
 } from "../types";
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+function resolveApiBaseUrl(configuredValue: string) {
+  const configured = configuredValue.replace(/\/$/, "");
+  if (!configured || typeof window === "undefined") return configured;
+  try {
+    const url = new URL(configured);
+    const loopbackHosts = new Set(["localhost", "127.0.0.1"]);
+    if (loopbackHosts.has(url.hostname) && loopbackHosts.has(window.location.hostname)) {
+      url.hostname = window.location.hostname;
+      return url.toString().replace(/\/$/, "");
+    }
+  } catch {
+    return configured;
+  }
+  return configured;
+}
+
+const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL ?? "");
 const csrfStorageKey = "ridepulse.csrf";
 let csrfToken = typeof window === "undefined" ? "" : window.sessionStorage.getItem(csrfStorageKey) ?? "";
 
@@ -120,6 +147,17 @@ export const realApiClient: ApiClient = {
       body: JSON.stringify(input),
     });
   },
+  deleteProposal(proposalId) {
+    return request<void>(`/api/v1/rule-proposals/${encodeURIComponent(proposalId)}`, { method: "DELETE" });
+  },
+  listRuleConfigurations(datasetId) {
+    return request<RuleConfiguration[]>(`/api/v1/rule-configurations?dataset_id=${encodeURIComponent(datasetId)}`);
+  },
+  updateRuleConfiguration(proposalId, input: RuleConfigurationInput) {
+    return request<RuleConfiguration>(`/api/v1/rule-proposals/${encodeURIComponent(proposalId)}/configuration`, {
+      method: "PATCH", body: JSON.stringify(input),
+    });
+  },
   async startDqRun(ruleIds, idempotencyKey) {
     return request<DqRunCreateResponse>("/api/v1/dq-runs", {
       method: "POST",
@@ -133,7 +171,45 @@ export const realApiClient: ApiClient = {
   getDqResults(runId) {
     return request<DqResult[]>(`/api/v1/dq-runs/${runId}/results`);
   },
+  getDqAnomalies(runId) {
+    return request<DqAnomaly[]>(`/api/v1/dq-runs/${runId}/anomalies`);
+  },
+  getLatestDqRun(datasetId) {
+    return request<DqRun | null>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/dq-runs/latest`);
+  },
+  getQualityTrends(datasetId) {
+    return request<QualityTrendPoint[]>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/quality-trends`);
+  },
+  queryDatasetRows(datasetId, query: DatasetRowQuery) {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== "") params.set(key, String(value));
+    });
+    return request<DatasetRowsResponse>(
+      `/api/v1/datasets/${encodeURIComponent(datasetId)}/rows?${params.toString()}`,
+    );
+  },
   listAuditLogs() {
     return request<AuditLog[]>("/api/v1/audit-logs?limit=50");
+  },
+  listUsers() {
+    return request<UserAccount[]>("/api/v1/admin/users");
+  },
+  createUser(input: UserCreateInput) {
+    return request<UserAccount>("/api/v1/admin/users", { method: "POST", body: JSON.stringify(input) });
+  },
+  updateUser(username: string, input: UserUpdateInput) {
+    return request<UserAccount>(`/api/v1/admin/users/${encodeURIComponent(username)}`, { method: "PATCH", body: JSON.stringify(input) });
+  },
+  listDatasetAccess(datasetId: string) {
+    return request<DatasetAccess[]>(`/api/v1/admin/datasets/${encodeURIComponent(datasetId)}/access`);
+  },
+  grantDatasetAccess(datasetId: string, username: string, accessLevel: DatasetAccessLevel) {
+    return request<DatasetAccess>(`/api/v1/admin/datasets/${encodeURIComponent(datasetId)}/access/${encodeURIComponent(username)}`, {
+      method: "PUT", body: JSON.stringify({ access_level: accessLevel }),
+    });
+  },
+  revokeDatasetAccess(datasetId: string, username: string) {
+    return request<void>(`/api/v1/admin/datasets/${encodeURIComponent(datasetId)}/access/${encodeURIComponent(username)}`, { method: "DELETE" });
   },
 };

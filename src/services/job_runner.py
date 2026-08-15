@@ -3,13 +3,13 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
-from sqlalchemy import text
+from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
+from src.config import get_settings
 from src.models.database import (
     AuditEventModel,
     ColumnProfileModel,
@@ -18,13 +18,179 @@ from src.models.database import (
     DqRunModel,
     JobModel,
     ProfileModel,
+    RuleConfigurationModel,
     RuleProposalModel,
     RuleVersionModel,
     SourceRowModel,
 )
+from src.services.dashboard_agent_workflow import generate_dashboard_proposals, get_dataset_rule_policy
 from src.services.rule_store import get_engine
+from src.services.supabase_dataset import (
+    NUMERIC_COLUMNS,
+    create_supabase_engine,
+    is_postgres_database_url,
+)
+from src.services.supabase_dataset import (
+    execute_rule as execute_supabase_rule,
+)
+from src.services.supabase_dataset import (
+    persist_profile as persist_supabase_profile,
+)
+from src.services.supabase_dataset import (
+    profile_dataset as profile_supabase_dataset,
+)
+from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
+
+
+def _rate(count: int, denominator: int) -> float:
+    return float(count / denominator) if denominator > 0 else 0.0
+
+
+def _supabase_source_url() -> str | None:
+    """Select Supabase for a PostgreSQL source unless local mode is explicit."""
+    settings = get_settings()
+    if settings.dq_execution_backend == "local":
+        return None
+    source_url = settings.supabase_database_url or settings.database_url
+    if settings.dq_execution_backend == "supabase":
+        if not is_postgres_database_url(source_url):
+            raise ValueError("Supabase execution requires a PostgreSQL SUPABASE_DATABASE_URL or DATABASE_URL")
+        return source_url
+    return source_url if is_postgres_database_url(source_url) else None
+
+
+def _profile_supabase_into_dashboard(db: Session, dataset_id: str) -> dict:
+    """Profile canonical Supabase rows and persist only aggregate dashboard evidence."""
+    policy = get_dataset_rule_policy(dataset_id)
+    governed_values = policy.governed_value_sets if policy else {}
+    source_engine = create_supabase_engine(_supabase_source_url() or "")
+    try:
+        with source_engine.begin() as connection:
+            profile_payload = profile_supabase_dataset(connection, dataset_id, governed_values)
+            persist_supabase_profile(connection, profile_payload)
+    finally:
+        source_engine.dispose()
+
+    db.query(ColumnProfileModel).filter(ColumnProfileModel.profile_dataset_id == dataset_id).delete()
+    db.query(ProfileModel).filter(ProfileModel.dataset_id == dataset_id).delete()
+    db.flush()
+
+    columns = []
+    evidence_keys = [
+        "profile.row_count", "profile.completeness_score", "profile.validity_score", "profile.duplicate_rate",
+    ]
+    for item in profile_payload["columns"]:
+        name = item["name"]
+        quantiles = item.get("quantiles", {})
+        data_type = "float" if name in NUMERIC_COLUMNS else "timestamp" if name.endswith("_at") else "string"
+        columns.append(
+            ColumnProfileModel(
+                profile_dataset_id=dataset_id,
+                name=name,
+                data_type=data_type,
+                null_rate=float(item["null_rate"]),
+                distinct_count=int(item["full_distinct_count"]),
+                non_null_count=int(item["non_null_count"]),
+                negative_rate=float(item["negative_rate"]) if item.get("negative_rate") is not None else None,
+                quantiles_json=json.dumps(quantiles),
+                out_of_domain_rate=(
+                    float(item["out_of_domain_rate"]) if item.get("out_of_domain_rate") is not None else None
+                ),
+                full_distinct_count=int(item["full_distinct_count"]),
+                uniqueness_rate=float(item["uniqueness_rate"]),
+                is_unique_full_table=bool(item["is_unique_full_table"]),
+                min_value=float(item["min_value"]) if item.get("min_value") is not None else None,
+                max_value=float(item["max_value"]) if item.get("max_value") is not None else None,
+                sample_value="Aggregate profile only",
+            )
+        )
+        prefix = f"profile.column.{name}"
+        evidence_keys.extend([
+            f"{prefix}.non_null_count", f"{prefix}.full_distinct_count", f"{prefix}.uniqueness_rate",
+            f"{prefix}.is_unique_full_table",
+        ])
+        if item.get("negative_rate") is not None:
+            evidence_keys.append(f"{prefix}.negative_rate")
+            evidence_keys.extend(f"{prefix}.quantile.{key}" for key in quantiles)
+        if item.get("out_of_domain_rate") is not None:
+            evidence_keys.append(f"{prefix}.out_of_domain_rate")
+
+    cross_field_metrics = profile_payload["cross_field_metrics"]
+    evidence_keys.extend(
+        f"profile.cross_field.{metric['left_column']}.{metric['operator']}.{metric['right_column']}.violation_rate"
+        for metric in cross_field_metrics
+    )
+    db.add(ProfileModel(
+        dataset_id=dataset_id,
+        row_count=int(profile_payload["row_count"]),
+        completeness_score=float(profile_payload["completeness_score"]),
+        validity_score=float(profile_payload["validity_score"]),
+        duplicate_rate=float(profile_payload["duplicate_rate"]),
+        cross_field_metrics_json=json.dumps(cross_field_metrics),
+        evidence_keys=json.dumps(evidence_keys),
+        generated_at=utc_now(),
+    ))
+    db.add_all(columns)
+    dataset = db.query(DatasetModel).filter(DatasetModel.id == dataset_id).first()
+    if dataset:
+        dataset.status = "PROFILE_READY"
+        dataset.row_count = int(profile_payload["row_count"])
+        dataset.updated_at = utc_now()
+    db.commit()
+    return profile_payload
+
+
+def _numeric_quantiles(values: pd.Series) -> dict[str, float]:
+    """Return deterministic full-table quantiles for a non-null numeric series."""
+    if values.empty:
+        return {}
+    quantiles = values.quantile([0.05, 0.25, 0.5, 0.75, 0.95])
+    return {
+        "p05": float(quantiles.loc[0.05]),
+        "p25": float(quantiles.loc[0.25]),
+        "p50": float(quantiles.loc[0.5]),
+        "p75": float(quantiles.loc[0.75]),
+        "p95": float(quantiles.loc[0.95]),
+    }
+
+
+def _cross_field_metrics(df: pd.DataFrame, dataset_id: str) -> list[dict]:
+    """Evaluate configured cross-field relationships without exposing row values."""
+    policy = get_dataset_rule_policy(dataset_id)
+    if not policy:
+        return []
+    operators = {
+        "<": lambda left, right: left < right,
+        "<=": lambda left, right: left <= right,
+        ">": lambda left, right: left > right,
+        ">=": lambda left, right: left >= right,
+        "==": lambda left, right: left == right,
+        "!=": lambda left, right: left != right,
+    }
+    metrics: list[dict] = []
+    for rule in policy.cross_field_rules:
+        if rule.left_column not in df.columns or rule.right_column not in df.columns:
+            continue
+        comparable = df[[rule.left_column, rule.right_column]].dropna()
+        checked_count = int(len(comparable))
+        if checked_count:
+            passes = operators[rule.operator](comparable[rule.left_column], comparable[rule.right_column])
+            violation_count = int((~passes).sum())
+        else:
+            violation_count = 0
+        metrics.append(
+            {
+                "left_column": rule.left_column,
+                "operator": rule.operator,
+                "right_column": rule.right_column,
+                "checked_count": checked_count,
+                "violation_count": violation_count,
+                "violation_rate": _rate(violation_count, checked_count),
+            }
+        )
+    return metrics
 
 def add_audit_event(db: Session, session_id: str | None, actor_role: str, action_code: str, entity_type: str, entity_id: str, detail: dict):
     """
@@ -39,7 +205,7 @@ def add_audit_event(db: Session, session_id: str | None, actor_role: str, action
         entity_type=entity_type,
         entity_id=entity_id,
         detail_json=json.dumps(detail, ensure_ascii=False),
-        created_at=datetime.utcnow()
+        created_at=utc_now()
     )
     db.add(evt)
     db.commit()
@@ -60,6 +226,31 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
         db.commit()
 
         try:
+            if _supabase_source_url():
+                job.progress = 35.0
+                job.message = "Profiling canonical Supabase rows..."
+                db.commit()
+                profile_payload = _profile_supabase_into_dashboard(db, dataset_id)
+                job.status = "SUCCEEDED"
+                job.progress = 100.0
+                job.message = "Completed from Supabase canonical dataset"
+                db.commit()
+                add_audit_event(
+                    db,
+                    session_id=session_id,
+                    actor_role=actor_role,
+                    action_code="PROFILE_CREATED",
+                    entity_type="dataset",
+                    entity_id=dataset_id,
+                    detail={
+                        "job_id": job_id,
+                        "message": "Supabase canonical profile completed successfully.",
+                        "row_count": profile_payload["row_count"],
+                        "source": "supabase-canonical-v1",
+                    },
+                )
+                return
+
             # Check manifest and path
             parquet_path = Path("data/yellow_tripdata_2025/semantic_data/yellow_tripdata_2025_semantic_50k.parquet")
             if not parquet_path.exists():
@@ -84,10 +275,11 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
             db.commit()
 
             df = pd.read_parquet(parquet_path)
+            row_count = int(len(df))
 
             # Verify row count and schema
-            if len(df) != 50000:
-                raise ValueError(f"Expected 50000 rows, found {len(df)}")
+            if row_count != 50000:
+                raise ValueError(f"Expected 50000 rows, found {row_count}")
 
             expected_columns = [
                 'source_row_id', 'vendor_id', 'pickup_at', 'dropoff_at', 'passenger_count',
@@ -108,11 +300,10 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
             # Clean existing source rows for this dataset to remain idempotent
             db.query(SourceRowModel).filter(SourceRowModel.dataset_id == dataset_id).delete()
 
-            # Fast bulk insert
-            df_cleaned = df.where(df.notnull(), None)
-            rows_to_insert = df_cleaned.to_dict(orient="records")
-            for r in rows_to_insert:
-                r["dataset_id"] = dataset_id
+            # Fast bulk insert using vectorized pandas where mapping (object type conversion prevents float coercion of None)
+            df["dataset_id"] = dataset_id
+            insert_df = df.astype(object).where(pd.notnull(df), None)
+            rows_to_insert = insert_df.to_dict(orient="records")
 
             db.bulk_insert_mappings(SourceRowModel, rows_to_insert)
             db.commit()
@@ -124,6 +315,8 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
 
             total_null_cells = 0
             columns_profiles = []
+            policy = get_dataset_rule_policy(dataset_id)
+            governed_value_sets = policy.governed_value_sets if policy else {}
 
             # Clean existing profile
             db.query(ColumnProfileModel).filter(ColumnProfileModel.profile_dataset_id == dataset_id).delete()
@@ -134,11 +327,14 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
                 col_data = df[col]
                 null_count = int(col_data.isnull().sum())
                 total_null_cells += null_count
-                null_rate = float(null_count / 50000.0)
+                null_rate = _rate(null_count, row_count)
 
-                # Exclude null values for distinct counts and min/max/mean
+                # All persisted dashboard aggregates are computed over the full table.
                 non_null_data = col_data.dropna()
+                non_null_count = int(len(non_null_data))
                 distinct_cnt = int(non_null_data.nunique())
+                uniqueness_rate = _rate(distinct_cnt, non_null_count)
+                is_unique_full_table = bool(row_count > 0 and null_count == 0 and distinct_cnt == row_count)
 
                 # sample value
                 sample_val = ""
@@ -146,10 +342,26 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
                     sample_val = str(non_null_data.iloc[0])
 
                 data_type = "string"
+                min_value = None
+                max_value = None
+                negative_rate = None
+                quantiles: dict[str, float] = {}
                 if pd.api.types.is_integer_dtype(col_data):
                     data_type = "integer"
                 elif pd.api.types.is_float_dtype(col_data):
                     data_type = "float"
+                if pd.api.types.is_numeric_dtype(col_data) and not non_null_data.empty:
+                    min_value = float(non_null_data.min())
+                    max_value = float(non_null_data.max())
+                    negative_rate = _rate(int((non_null_data < 0).sum()), non_null_count)
+                    quantiles = _numeric_quantiles(non_null_data)
+
+                out_of_domain_rate = None
+                allowed_values = governed_value_sets.get(col)
+                if allowed_values is not None:
+                    normalized = non_null_data.astype(str)
+                    invalid_count = int((~normalized.isin(allowed_values)).sum())
+                    out_of_domain_rate = _rate(invalid_count, non_null_count)
 
                 columns_profiles.append(
                     ColumnProfileModel(
@@ -158,36 +370,86 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
                         data_type=data_type,
                         null_rate=null_rate,
                         distinct_count=distinct_cnt,
+                        non_null_count=non_null_count,
+                        negative_rate=negative_rate,
+                        quantiles_json=json.dumps(quantiles),
+                        out_of_domain_rate=out_of_domain_rate,
+                        full_distinct_count=distinct_cnt,
+                        uniqueness_rate=uniqueness_rate,
+                        is_unique_full_table=is_unique_full_table,
+                        min_value=min_value,
+                        max_value=max_value,
                         sample_value=sample_val
                     )
                 )
 
-            # Validity score components
-            neg_fare = (df['fare_amount'] < 0).sum()
-            neg_dist = (df['trip_distance'] < 0).sum()
-            null_vendor = df['vendor_id'].isnull().sum()
-            invalid_pay = (~df['payment_type'].isin(['1', '2', '3', '4', '5', '6']) & df['payment_type'].notnull()).sum()
-            dup_fingerprint = df.duplicated(subset=['vendor_id', 'pickup_at', 'passenger_count']).sum()
+            # Validity score uses the same versioned policy as profiling and proposals.
+            cross_field_metrics = _cross_field_metrics(df, dataset_id)
+            fingerprint_columns = policy.duplicate_fingerprint_columns if policy else []
+            dup_fingerprint = (
+                int(df.duplicated(subset=fingerprint_columns).sum())
+                if fingerprint_columns and set(fingerprint_columns).issubset(df.columns)
+                else 0
+            )
+            total_defects = dup_fingerprint
+            if policy:
+                total_defects += sum(
+                    int(df[column].isnull().sum())
+                    for column in policy.required_identifiers
+                    if column in df.columns
+                )
+                total_defects += sum(
+                    int((df[column].dropna() < 0).sum())
+                    for column in policy.nonnegative_columns
+                    if column in df.columns and pd.api.types.is_numeric_dtype(df[column])
+                )
+                for column, allowed_values in policy.governed_value_sets.items():
+                    if column not in df.columns:
+                        continue
+                    non_null_values = df[column].dropna().astype(str)
+                    total_defects += int((~non_null_values.isin(allowed_values)).sum())
+            total_defects += sum(metric["violation_count"] for metric in cross_field_metrics)
+            validity_score = float(max(0.0, 100.0 - _rate(int(total_defects), row_count) * 100.0))
 
-            total_defects = neg_fare + neg_dist + null_vendor + invalid_pay + dup_fingerprint
-            validity_score = float(max(0.0, 100.0 - (total_defects / 50000.0) * 100.0))
-
-            completeness_score = float((1.0 - (total_null_cells / (50000.0 * len(expected_columns)))) * 100.0)
-            duplicate_rate = float((dup_fingerprint / 50000.0) * 100.0)
+            completeness_score = float(
+                (1.0 - _rate(total_null_cells, row_count * len(expected_columns))) * 100.0
+            )
+            duplicate_rate = float(_rate(int(dup_fingerprint), row_count) * 100.0)
+            evidence_keys = [
+                "profile.row_count",
+                "profile.completeness_score",
+                "profile.validity_score",
+                "profile.duplicate_rate",
+            ]
+            for column in columns_profiles:
+                prefix = f"profile.column.{column.name}"
+                evidence_keys.extend(
+                    [
+                        f"{prefix}.non_null_count",
+                        f"{prefix}.full_distinct_count",
+                        f"{prefix}.uniqueness_rate",
+                        f"{prefix}.is_unique_full_table",
+                    ]
+                )
+                if column.negative_rate is not None:
+                    evidence_keys.append(f"{prefix}.negative_rate")
+                    evidence_keys.extend(f"{prefix}.quantile.{name}" for name in json.loads(column.quantiles_json or "{}"))
+                if column.out_of_domain_rate is not None:
+                    evidence_keys.append(f"{prefix}.out_of_domain_rate")
+            evidence_keys.extend(
+                f"profile.cross_field.{metric['left_column']}.{metric['operator']}.{metric['right_column']}.violation_rate"
+                for metric in cross_field_metrics
+            )
 
             profile = ProfileModel(
                 dataset_id=dataset_id,
-                row_count=50000,
+                row_count=row_count,
                 completeness_score=round(completeness_score, 2),
                 validity_score=round(validity_score, 2),
                 duplicate_rate=round(duplicate_rate, 2),
-                evidence_keys=json.dumps([
-                    "profile.row_count",
-                    "profile.trip_distance.negative_rate",
-                    "profile.payment_type.invalid_rate",
-                    "profile.duplicate_fingerprint_rate"
-                ]),
-                generated_at=datetime.utcnow()
+                cross_field_metrics_json=json.dumps(cross_field_metrics),
+                evidence_keys=json.dumps(evidence_keys),
+                generated_at=utc_now()
             )
             db.add(profile)
             db.commit()
@@ -200,8 +462,8 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
             dataset = db.query(DatasetModel).filter(DatasetModel.id == dataset_id).first()
             if dataset:
                 dataset.status = "PROFILE_READY"
-                dataset.row_count = 50000
-                dataset.updated_at = datetime.utcnow()
+                dataset.row_count = row_count
+                dataset.updated_at = utc_now()
                 db.commit()
 
             job.status = "SUCCEEDED"
@@ -250,89 +512,40 @@ def run_propose_rules(job_id: str, dataset_id: str, session_id: str | None = Non
         db.commit()
 
         try:
-            # Deterministically create 5 proposals matching the 5 templates
-            proposals = [
-                {
-                    "id": "proposal-not-null",
-                    "title": "Vendor ID must not be null",
-                    "description": "Ensure the vendor_id column contains no null values. The profile showed zero nulls.",
-                    "severity": "HIGH",
-                    "rule_type": "not_null",
-                    "rule_spec": {"type": "not_null", "column": "vendor_id"},
-                    "evidence_refs": ["profile.row_count"],
-                    "evidence_summary": "vendor_id has a 100% completeness rate.",
-                    "confidence": 1.0,
-                },
-                {
-                    "id": "proposal-range",
-                    "title": "Trip distance must be non-negative",
-                    "description": "Flag trips where trip_distance is below zero. The aggregate profile shows negative distance values.",
-                    "severity": "HIGH",
-                    "rule_type": "numeric_range",
-                    "rule_spec": {"type": "numeric_range", "column": "trip_distance", "min_value": 0.0},
-                    "evidence_refs": ["profile.trip_distance.negative_rate"],
-                    "evidence_summary": "0.5% of 50,000 rows have trip_distance < 0.",
-                    "confidence": 0.95,
-                },
-                {
-                    "id": "proposal-accepted-values",
-                    "title": "Payment type must be valid enum values",
-                    "description": "Enforce valid payment_type values (1: Credit, 2: Cash, etc.).",
-                    "severity": "MEDIUM",
-                    "rule_type": "accepted_values",
-                    "rule_spec": {"type": "accepted_values", "column": "payment_type", "allowed_values": ["1", "2", "3", "4", "5", "6"]},
-                    "evidence_refs": ["profile.payment_type.invalid_rate"],
-                    "evidence_summary": "0.5% of rows have invalid payment_type values.",
-                    "confidence": 0.9,
-                },
-                {
-                    "id": "proposal-cross-field",
-                    "title": "Pickup time must be before dropoff time",
-                    "description": "Ensure that pickup_at is logically before or equal to dropoff_at.",
-                    "severity": "CRITICAL",
-                    "rule_type": "cross_field_comparison",
-                    "rule_spec": {"type": "cross_field_comparison", "columns": ["pickup_at", "dropoff_at"], "operator": "<="},
-                    "evidence_refs": ["profile.row_count"],
-                    "evidence_summary": "pickup and dropoff timestamps are aligned.",
-                    "confidence": 0.98,
-                },
-                {
-                    "id": "proposal-duplicate-fingerprint",
-                    "title": "Duplicate fingerprint detection",
-                    "description": "Verify unique combination of vendor_id, pickup_at, passenger_count.",
-                    "severity": "MEDIUM",
-                    "rule_type": "duplicate_fingerprint",
-                    "rule_spec": {"type": "duplicate_fingerprint", "fingerprint_columns": ["vendor_id", "pickup_at", "passenger_count"]},
-                    "evidence_refs": ["profile.duplicate_fingerprint_rate"],
-                    "evidence_summary": "0.5% duplicate rate detected.",
-                    "confidence": 0.85,
-                }
-            ]
+            proposals = generate_dashboard_proposals(db, dataset_id)
 
             job.progress = 60.0
             job.message = "Validating and persisting proposals..."
             db.commit()
 
-            # Clean existing rule proposals for this dataset
-            db.query(RuleProposalModel).filter(RuleProposalModel.dataset_id == dataset_id).delete()
+            # Replace only previous agent drafts. Manual and approved stewardship
+            # decisions remain immutable dashboard records.
+            db.query(RuleProposalModel).filter(
+                RuleProposalModel.dataset_id == dataset_id,
+                or_(
+                    RuleProposalModel.model_name.like("agent-%"),
+                    RuleProposalModel.model_name.like("langgraph-%"),
+                ),
+                RuleProposalModel.status.in_(["PROPOSED", "REJECTED"]),
+            ).delete(synchronize_session=False)
             db.commit()
 
             for p in proposals:
                 prop = RuleProposalModel(
-                    id=p["id"],
+                    id=p.id,
                     dataset_id=dataset_id,
-                    title=p["title"],
-                    description=p["description"],
-                    severity=p["severity"],
+                    title=p.title,
+                    description=p.description,
+                    severity=p.severity,
                     status="PROPOSED",
-                    rule_type=p["rule_type"],
-                    rule_spec=json.dumps(p["rule_spec"]),
-                    evidence_refs=json.dumps(p["evidence_refs"]),
-                    evidence_summary=p["evidence_summary"],
-                    confidence=p["confidence"],
-                    model_name="deterministic-proposer-v1",
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow()
+                    rule_type=p.rule_type,
+                    rule_spec=json.dumps(p.rule_spec),
+                    evidence_refs=json.dumps(p.evidence_refs),
+                    evidence_summary=p.evidence_summary,
+                    confidence=p.confidence,
+                    model_name=p.model_name,
+                    created_at=utc_now(),
+                    updated_at=utc_now()
                 )
                 db.add(prop)
 
@@ -348,7 +561,7 @@ def run_propose_rules(job_id: str, dataset_id: str, session_id: str | None = Non
                 action_code="PROPOSALS_CREATED",
                 entity_type="dataset",
                 entity_id=dataset_id,
-                detail={"job_id": job_id, "message": "Rule proposals generated successfully."}
+                detail={"job_id": job_id, "message": "Rule proposals generated successfully.", "agent_mode": get_settings().agent_mode}
             )
 
         except Exception as e:
@@ -444,9 +657,15 @@ def compile_rule_to_sql(rule_type: str, spec: dict, columns_allowlist: set[str])
 
 def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor_role: str = "STEWARD"):
     """
-    Step 7: Compiles, validates and executes DQ queries on the database.
+    Dashboard execution adapter.
+
+    Approved dashboard rule versions are the only input. The SQL comes from fixed
+    ``compile_rule_to_sql`` templates; the legacy execution graph and its LLM repair
+    loop are intentionally not a source of executable SQL in this product flow.
     """
     engine = get_engine()
+    source_engine = None
+    source_connection = None
     with Session(engine) as db:
         job = db.query(JobModel).filter(JobModel.id == job_id).first()
         if not job:
@@ -463,6 +682,10 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
         db.commit()
 
         try:
+            source_url = _supabase_source_url()
+            if source_url:
+                source_engine = create_supabase_engine(source_url)
+                source_connection = source_engine.connect()
             dataset_id = dq_run.dataset_id
             rule_ids = json.loads(dq_run.rule_ids)
 
@@ -475,10 +698,10 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
             if not rule_versions:
                 raise ValueError("No approved rules found for execution.")
 
-            # Get allowed columns from profile of this dataset to prevent column SQL injection
+            # The local fallback needs a profile-derived allowlist. The Supabase
+            # adapter carries its own canonical-column allowlist.
             cols = db.query(ColumnProfileModel).filter(ColumnProfileModel.profile_dataset_id == dataset_id).all()
             columns_allowlist = {c.name for c in cols}
-            # Fallback if profile not populated yet
             if not columns_allowlist:
                 columns_allowlist = {
                     'source_row_id', 'vendor_id', 'pickup_at', 'dropoff_at', 'passenger_count',
@@ -500,52 +723,43 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
                 spec = json.loads(rv.rule_spec)
                 rule_type = spec.get("type", "")
 
-                # Compile to parameterized SQL
-                sql_query = compile_rule_to_sql(rule_type, spec, columns_allowlist)
-
-                # Sandbox guardrails check
-                sql_clean = sql_query.strip().upper()
-                if not sql_clean.startswith("SELECT"):
-                    raise ValueError("Runner only permits SELECT statements")
-                if ";" in sql_query or "--" in sql_query or "/*" in sql_query or "*/" in sql_query:
-                    raise ValueError("Runner rejects semicolons, multi-statements, and SQL comments")
-
-                # Fetch row count
-                total_rows = db.execute(
-                    text("SELECT COUNT(*) FROM source_rows WHERE dataset_id = :dataset_id"),
-                    {"dataset_id": dataset_id}
-                ).scalar() or 0
-
-                # Prepare query bind params
-                params = {"dataset_id": dataset_id}
-                if rule_type == "numeric_range":
-                    params["min_value"] = spec.get("min_value")
-                    params["max_value"] = spec.get("max_value")
-                elif rule_type == "accepted_values":
-                    allowed = spec.get("allowed_values", [])
-                    for i, val in enumerate(allowed):
-                        params[f"val_{i}"] = val
-
-                # Execute with 5-second timeout
-                # SQLite timeout is set at engine/connection level, but let's run securely
-                start_time = time.time()
-                failed_rows = db.execute(text(sql_query), params).all()
-                duration = time.time() - start_time
-                if duration > 5.0:
-                    raise TimeoutError("SQL query exceeded 5-second timeout")
-
-                failed_ids = [r[0] for r in failed_rows]
-                failed_count = len(failed_ids)
+                prop = db.query(RuleProposalModel).filter(RuleProposalModel.id == rv.rule_proposal_id).first()
+                title = prop.title if prop else f"Rule check {rv.id}"
+                if source_connection is not None:
+                    outcome = execute_supabase_rule(source_connection, dataset_id, title, spec)
+                    total_rows = outcome.checked_count
+                    failed_ids = outcome.failed_row_ids
+                    failed_count = outcome.failed_count
+                else:
+                    sql_query = compile_rule_to_sql(rule_type, spec, columns_allowlist)
+                    sql_clean = sql_query.strip().upper()
+                    if not sql_clean.startswith("SELECT"):
+                        raise ValueError("Runner only permits SELECT statements")
+                    if ";" in sql_query or "--" in sql_query or "/*" in sql_query or "*/" in sql_query:
+                        raise ValueError("Runner rejects semicolons, multi-statements, and SQL comments")
+                    total_rows = db.execute(
+                        text("SELECT COUNT(*) FROM source_rows WHERE dataset_id = :dataset_id"),
+                        {"dataset_id": dataset_id},
+                    ).scalar() or 0
+                    params = {"dataset_id": dataset_id}
+                    if rule_type == "numeric_range":
+                        params["min_value"] = spec.get("min_value")
+                        params["max_value"] = spec.get("max_value")
+                    elif rule_type == "accepted_values":
+                        for i, value in enumerate(spec.get("allowed_values", [])):
+                            params[f"val_{i}"] = value
+                    start_time = time.time()
+                    failed_rows = db.execute(text(sql_query), params).all()
+                    if time.time() - start_time > 5.0:
+                        raise TimeoutError("SQL query exceeded 5-second timeout")
+                    failed_ids = [row[0] for row in failed_rows]
+                    failed_count = len(failed_ids)
 
                 total_checked += total_rows
                 total_failed += failed_count
 
                 # Cap failed row IDs at 20 (privacy/security rule)
                 capped_failed_ids = failed_ids[:20]
-
-                # Get rule title from proposal
-                prop = db.query(RuleProposalModel).filter(RuleProposalModel.id == rv.rule_proposal_id).first()
-                title = prop.title if prop else f"Rule check {rv.id}"
 
                 res = DqResultModel(
                     run_id=run_id,
@@ -567,11 +781,15 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
             dq_run.status = "SUCCEEDED"
             dq_run.total_failed = total_failed
             dq_run.total_checked = total_checked
-            dq_run.completed_at = datetime.utcnow()
+            dq_run.completed_at = utc_now()
 
             job.status = "SUCCEEDED"
             job.progress = 100.0
             job.message = "Completed"
+            completed_at = utc_now()
+            db.query(RuleConfigurationModel).filter(
+                RuleConfigurationModel.rule_proposal_id.in_([rule.rule_proposal_id for rule in rule_versions])
+            ).update({RuleConfigurationModel.last_run_at: completed_at}, synchronize_session=False)
             db.commit()
 
             add_audit_event(
@@ -581,7 +799,11 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
                 action_code="DQ_RUN_COMPLETE",
                 entity_type="dq_run",
                 entity_id=run_id,
-                detail={"total_failed": total_failed, "total_checked": total_checked}
+                detail={
+                    "total_failed": total_failed,
+                    "total_checked": total_checked,
+                    "execution_engine": "supabase-canonical-v1" if source_connection is not None else "typed-compiler-v1",
+                }
             )
 
         except Exception as e:
@@ -599,3 +821,8 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
                 entity_id=job_id,
                 detail={"error": "DQ run failed."}
             )
+        finally:
+            if source_connection is not None:
+                source_connection.close()
+            if source_engine is not None:
+                source_engine.dispose()

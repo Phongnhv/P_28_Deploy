@@ -8,10 +8,17 @@ on:
 
 jobs:
   lint-and-test:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     steps:
+      # This is a self-hosted runner.  Remove files left behind by another
+      # branch so pytest cannot collect tests that are not in this revision.
       - uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Remove residual workspace files
+        run: git clean -ffdx
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -30,3 +37,7 @@ jobs:
         env:
           APP_ENV: test
           OPENAI_API_KEY: test-key
+          # dbt parse only needs a rendered profile; this is not a runtime
+          # credential and prevents an unrelated optional dbt test from
+          # depending on runner-local secrets.
+          DBT_PASSWORD: ci-placeholder-not-a-secret

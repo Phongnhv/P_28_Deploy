@@ -11,18 +11,21 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
-import json
+from datetime import datetime
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 from src.agents.state import AgentState
 from src.config import get_settings
-from src.models.rule_schemas import RuleStatus, RuleType
+from src.models.rule_schemas import RuleType
+from src.services.dbt_artifact_store import get_dbt_artifact_store, validate_run_id
 from src.services.rule_store import get_approved_rules, get_engine
-from pathlib import Path
-
-
 
 logger = logging.getLogger(__name__)
 
@@ -235,11 +238,58 @@ def generate_tests_for_table(
     return generated
 
 
-async def test_generator_node(state: AgentState) -> dict:
-    """LangGraph Node: Sinh danh sách test queries từ approved rules hoặc active rules."""
-    from src.services.rule_store import get_active_rules
 
-    run_id = state.get("rule_run_id") or state.get("test_run_id") or "test_run"
+def generate_dbt_test_yaml(approved_rules: list[dict]) -> str:
+
+    """Biên dịch danh sách approved rules thành định dạng tệp dbt test YAML chuẩn (generated_dq_tests.yml)."""
+    tables_map: dict[str, dict[str, list[dict]]] = {}
+    for r in approved_rules:
+        t_name = r.get("table_name") or "profile_input"
+        c_name = r.get("column") or "source_row_id"
+        tables_map.setdefault(t_name, {}).setdefault(c_name, []).append(r)
+
+    models_list = []
+    for t_name, cols in tables_map.items():
+        columns_list = []
+        for c_name, rules in cols.items():
+            tests_list = []
+            for rule in rules:
+                r_type = (rule.get("rule_type") or "").upper()
+                params = rule.get("effective_parameters") or rule.get("parameters") or {}
+                if r_type == "NOT_NULL":
+                    tests_list.append("not_null")
+                elif r_type == "UNIQUE":
+                    tests_list.append("unique")
+                elif r_type == "ACCEPTED_VALUES":
+                    vals = params.get("accepted_values") or []
+                    tests_list.append({"accepted_values": {"values": vals}})
+                elif r_type == "RANGE":
+                    conds = []
+                    if params.get("min") is not None:
+                        conds.append(f">= {params['min']}")
+                    if params.get("max") is not None:
+                        conds.append(f"<= {params['max']}")
+                    expr = " AND ".join(conds) if conds else ">= 0"
+                    tests_list.append({"dbt_utils.expression_is_true": {"expression": expr}})
+                elif r_type == "CROSS_FIELD_COMPARISON":
+                    target_col = params.get("target_column") or ""
+                    op = params.get("operator") or "<="
+                    expr = f"{op} {target_col}"
+                    tests_list.append({"dbt_utils.expression_is_true": {"expression": expr}})
+                else:
+                    tests_list.append("not_null")
+            columns_list.append({"name": c_name, "tests": tests_list})
+        models_list.append({"name": t_name, "columns": columns_list})
+
+    yaml_dict = {"version": 2, "models": models_list}
+    return yaml.dump(yaml_dict, sort_keys=False, allow_unicode=True)
+
+
+async def test_generator_node(state: AgentState) -> dict:
+    """LangGraph Node: Sinh tệp dbt test YML từ approved rules, lưu DB, lưu vết local và chuẩn bị cho runner."""
+    from src.services.rule_store import get_active_rules, save_generated_dbt_yaml
+
+    run_id = validate_run_id(str(state.get("test_run_id") or state.get("rule_run_id") or "test_run"))
     approved_rules = state.get("approved_rules")
 
     # 1. Nếu chưa có trong state, load từ DB
@@ -255,6 +305,7 @@ async def test_generator_node(state: AgentState) -> dict:
         return {
             "generated_tests": [],
             "approved_rules": [],
+            "generated_dbt_yaml": "",
             "test_generation_errors": ["Không tìm thấy approved hoặc active rules nào."],
         }
 
@@ -272,32 +323,75 @@ async def test_generator_node(state: AgentState) -> dict:
         tests = generate_tests_for_table(table_name, table_rules, dialect_name)
         all_generated.extend(tests)
 
-    logger.info(
-        "Đã sinh %d test queries cho %d bảng từ %d rules (run_id=%s)",
-        len(all_generated),
-        len(by_table),
-        len(approved_rules),
-        run_id,
-    )
+    # 2. Sinh tệp dbt test YAML
+    dbt_yaml_content = generate_dbt_test_yaml(approved_rules)
 
-    # Xuất trace file
+    # 3. Keep one deterministic trace per run; this is the local/test fallback only.
+    settings = get_settings()
+    base_dir = getattr(settings, "output_dir", None) or "./output"
+    trace_dir = Path(base_dir) / "test_generator" / str(run_id)
+    trace_file = trace_dir / "generated_dq_tests.yml"
+    yaml_bytes = dbt_yaml_content.encode("utf-8")
     try:
-        out_dir = Path("output/test_generator")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        dump_file = out_dir / f"debug_generated_tests_{run_id}.json"
-        dump_file.write_text(
-            json.dumps(all_generated, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        logger.info("Đã xuất trace generated tests ra: %s", dump_file)
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        trace_file.write_bytes(yaml_bytes)
+        logger.info("Đã xuất trace generated dbt YML ra: %s", trace_file)
     except Exception as exc:
-        logger.warning("Không thể ghi file trace generated tests: %s", exc)
+        logger.warning("Không thể ghi trace generated dbt tests: %s", exc)
+
+    # 4. Upload the run-scoped artifact. Local/test can use the exact trace if MinIO is unavailable.
+    artifact_ref = None
+    upload_error = None
+    try:
+        artifact_ref = get_dbt_artifact_store().upload_yaml(
+            str(run_id),
+            yaml_bytes,
+            dataset_id=state.get("dataset_id"),
+            rule_run_id=state.get("rule_run_id"),
+        )
+        logger.info("Uploaded dbt test artifact: s3://%s/%s", artifact_ref.bucket, artifact_ref.object_key)
+    except Exception as exc:
+        upload_error = str(exc)
+        if settings.app_env not in ("local", "development", "test") or not trace_file.exists():
+            raise RuntimeError(f"Unable to upload generated dbt artifact for run {run_id}") from exc
+        logger.warning("Object storage upload failed; using local trace fallback for run %s: %s", run_id, exc)
+
+    # 5. Preserve a timestamped trace for existing debugging workflows.
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    try:
+        out_dir = Path(base_dir) / "test_generator"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        dump_file = out_dir / f"debug_generated_dbt_tests_{timestamp}_{run_id}.yml"
+        dump_file.write_text(dbt_yaml_content, encoding="utf-8")
+        logger.info("Đã xuất trace generated dbt YML tests ra: %s", dump_file)
+    except Exception as exc:
+        logger.warning("Không thể ghi file trace generated dbt tests: %s", exc)
+
+    # 6. Store audit metadata; the object store (or exact local trace in local/test) holds content.
+    save_generated_dbt_yaml(
+        run_id,
+        dbt_yaml_content,
+        artifact_metadata=artifact_ref.to_dict() if artifact_ref else {
+            "local_trace_path": str(trace_file),
+            "sha256": hashlib.sha256(yaml_bytes).hexdigest(),
+            "size_bytes": len(yaml_bytes),
+            "upload_error": upload_error,
+        },
+    )
 
     return {
         "approved_rules": approved_rules,
         "generated_tests": all_generated,
+        "generated_dbt_yaml": dbt_yaml_content,
+        "dbt_artifact_ref": artifact_ref.to_dict() if artifact_ref else None,
+        "dbt_trace_file_path": str(trace_file),
+        "dbt_validation_valid": False,
+        "dbt_validation_error": None,
+        "dbt_validation_attempts": 0,
+        "dbt_repair_history": [],
         "test_generation_errors": [],
     }
+
 
 
 # ---------------------------------------------------------------------------
@@ -309,10 +403,11 @@ async def main():
 
     Run: python -m src.agents.nodes.test_generator_node
     """
-    import asyncio
     import glob
-    from src.services.rule_store import get_active_rules, get_engine, init_db
+
     from sqlalchemy import text
+
+    from src.services.rule_store import get_active_rules, get_engine, init_db
 
     logging.basicConfig(
         level=logging.INFO,
@@ -338,9 +433,8 @@ async def main():
         engine = get_engine()
         with engine.connect() as conn:
             query = text("""
-                SELECT run_id, rule_id, dataset_id, table_name, column_name, rule_type, 
-                       parameters, edited_parameters, severity, dimension, rule_description, status
-                FROM proposed_rules 
+                SELECT run_id, rule_id, dataset_id, table_name, column_name, rule_type, parameters, edited_parameters, severity, dimension, rule_description, status
+                FROM proposed_rules
                 WHERE status IN ('APPROVED', 'MERGED')
                 ORDER BY created_at DESC;
             """)
@@ -380,7 +474,7 @@ async def main():
                 return
 
             latest_file = sorted(files, key=os.path.getmtime)[-1]
-            with open(latest_file, "r", encoding="utf-8") as f:
+            with open(latest_file, encoding="utf-8") as f:
                 raw_data = json.load(f)
 
             rules = raw_data.get("proposed_rules", []) if isinstance(raw_data, dict) else raw_data

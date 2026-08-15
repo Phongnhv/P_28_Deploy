@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import logging
 from enum import StrEnum
+from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,8 @@ class RuleStatus(StrEnum):
 class RuleParameters(BaseModel):
     """Closed param bag — chỉ điền các field liên quan đến rule_type."""
 
+    model_config = ConfigDict(extra="forbid")
+
     min: float | None = None
     max: float | None = None
     accepted_values: list[str] | None = None
@@ -65,7 +68,7 @@ class RuleParameters(BaseModel):
     max_null_pct: float | None = None
     min_row_count: int | None = None
     target_column: str | None = None
-    operator: str | None = None
+    operator: Literal["<=", "<", ">=", ">", "=", "==", "!=", "<>"] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +76,12 @@ class RuleParameters(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ProposedRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str | None = Field(
+        None,
+        description="Opaque candidate identifier supplied by the dashboard policy checklist.",
+    )
     column: str | None = Field(
         None,
         description="None cho rule cấp bảng (ROW_COUNT). Phải khớp tên cột trong digest.",
@@ -100,13 +109,8 @@ class ProposedRule(BaseModel):
     ai_reasoning: str = Field(
         ...,
         description=(
-            "Suy luận logic của AI (tiếng Việt), giải thích TẠI SAO rule này được đề xuất. "
-            "Cần thể hiện quá trình suy nghĩ: quan sát từ dữ liệu → diễn giải nghiệp vụ → kết luận về ngưỡng. "
-            "Phải dẫn chứng số liệu cụ thể từ digest VÀ kết nối với ý nghĩa thực tế của cột theo Data Dictionary. "
-            "Ví dụ: 'Profiler ghi nhận fare_amount có negative_pct = 4.7%, nghĩa là gần 5% chuyến đi có cước phí âm — "
-            "điều này không hợp lý về mặt nghiệp vụ vì fare_amount là cước phí tính theo thời gian và quãng đường, "
-            "không thể nhỏ hơn 0. Các giá trị âm nhiều khả năng là lỗi hệ thống hoặc bản ghi hoàn tiền bị ghi sai trường. "
-            "Tôi chọn min = 0 thay vì min > 0 để vẫn cho phép chuyến đi miễn phí hợp lệ.'"
+            "Rationale ngắn gọn bằng tiếng Việt, giải thích TẠI SAO rule được đề xuất bằng evidence aggregate "
+            "và ngữ cảnh nghiệp vụ từ Data Dictionary. Không yêu cầu hoặc tiết lộ chuỗi suy luận nội bộ."
         ),
     )
 
@@ -147,6 +151,8 @@ class ProposedRule(BaseModel):
 
 class TableRuleProposal(BaseModel):
     """Schema LLM trả về cho một bảng — one call per table."""
+
+    model_config = ConfigDict(extra="forbid")
 
     table: str = Field(..., description="Tên bảng trong database.")
     rules: list[ProposedRule] = Field(

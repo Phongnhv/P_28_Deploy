@@ -60,3 +60,26 @@ async def test_profile_hidden_before_completion(client):
     col_names = [c["name"] for c in data["columns"]]
     assert "vendor_id" in col_names
     assert "fare_amount" in col_names
+
+    columns = {column["name"]: column for column in data["columns"]}
+    trip_distance = columns["trip_distance"]
+    assert trip_distance["negative_rate"] is None or 0.0 <= trip_distance["negative_rate"] <= 1.0
+    assert set(trip_distance["quantiles"]) == {"p05", "p25", "p50", "p75", "p95"}
+    assert trip_distance["quantiles"]["p05"] <= trip_distance["quantiles"]["p95"]
+
+    payment_type = columns["payment_type"]
+    assert payment_type["out_of_domain_rate"] is None or 0.0 <= payment_type["out_of_domain_rate"] <= 1.0
+    assert payment_type["full_distinct_count"] == payment_type["distinct_count"]
+
+    source_row_id = columns["source_row_id"]
+    assert source_row_id["full_distinct_count"] == 50000
+    assert source_row_id["uniqueness_rate"] == 1.0
+    assert source_row_id["is_unique_full_table"] is True
+
+    assert len(data["cross_field_metrics"]) == 1
+    cross_field = data["cross_field_metrics"][0]
+    assert cross_field["left_column"] == "pickup_at"
+    assert cross_field["operator"] == "<="
+    assert cross_field["right_column"] == "dropoff_at"
+    assert cross_field["checked_count"] > 0
+    assert 0.0 <= cross_field["violation_rate"] <= 1.0

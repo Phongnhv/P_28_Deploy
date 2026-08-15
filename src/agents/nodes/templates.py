@@ -94,6 +94,18 @@ và Từ điển dữ liệu (Data Dictionary) được cung cấp.
    sau đó mô tả điều kiện một cách có ngữ cảnh. \
    VD: "Cước phí cơ bản (fare_amount) không được mang giá trị âm, vì đây là tiền tính theo đồng hồ chứ không phải hoàn tiền." \
    KHÔNG viết kiểu template máy móc như "Cột X không được để trống." hay "Cột X phải có giá trị từ A đến B."
+10. **Đề xuất đầy đủ:** Không chỉ trả về vài rule đại diện. Hãy duyệt hết checklist evidence \
+    được cung cấp trong user message và tạo rule cho từng ứng viên đủ bằng chứng. \
+    Một cột có thể có nhiều rule khác loại; chỉ loại ứng viên khi thực sự mâu thuẫn với ý nghĩa nghiệp vụ. \
+    Với bảng dữ liệu giàu evidence, mục tiêu thông thường là 1-3 rule phù hợp cho mỗi cột.
+11. Với `CROSS_FIELD_COMPARISON`, sao chép nguyên vẹn `parameters.target_column` và \
+    `parameters.operator` từ checklist vào field `parameters` của structured output. \
+    Không đặt `target_column` hoặc `operator` ở cấp ngoài của rule và không tự thay đổi toán tử.
+12. Khi digest có `dashboard_candidate_mode = true`, đây là product workflow có guardrail nghiêm ngặt: \
+    checklist chỉ gồm candidate đã qua evidence/policy filter. Phải trả về MỖI candidate đúng một lần, \
+    theo đúng thứ tự checklist, tối đa một rule cho mỗi `rule_type`, và phải sao chép nguyên vẹn `parameters` \
+    cho cả RANGE, ACCEPTED_VALUES lẫn CROSS_FIELD_COMPARISON. Không tự tạo threshold, enum, cột hoặc \
+    rule_type mới; chỉ viết severity, mô tả và rationale cho Data Steward.
 
 **⚠️ NHẮC LẠI:** Trường `rule_type` CHỈ được nhận 9 giá trị sau, không hơn không kém: \
 NOT_NULL, UNIQUE, RANGE, ACCEPTED_VALUES, REGEX_FORMAT, FRESHNESS, ROW_COUNT, NULL_RATE, CROSS_FIELD_COMPARISON.
@@ -187,13 +199,24 @@ _RULE_PROPOSER_USER = """\
 {table_digest}
 ```
 
+## Checklist rule ứng viên sinh tự động từ evidence
+```json
+{coverage_requirements}
+```
+
+Checklist trên là danh sách cần đánh giá đầy đủ, không phải ví dụ. Sau khi đánh giá, đề xuất tất cả các \
+ứng viên có evidence mạnh và ý nghĩa để bảo vệ chất lượng dữ liệu (không giới hạn số lượng). Mỗi rule tạo ra phải giữ nguyên đúng tên `column` trong digest và phải \
+dẫn chứng evidence tương ứng trong `ai_reasoning`. Với `CROSS_FIELD_COMPARISON`, phải sao chép đúng object \
+`parameters` từ checklist vào structured output. Không tạo rule ngoài checklist trừ khi Data Dictionary \
+cung cấp bằng chứng nghiệp vụ rõ ràng.
+
 {few_shot_examples}
 
 Hãy trả về JSON structured output theo schema TableRuleProposal. \
 Điền trường "table" = "{table_name}". \
 Điền trường "dimension" theo bảng phân loại DQ dimension đã hướng dẫn. \
 Điền trường "rule_description": một câu tiếng Việt tự nhiên, có ngữ cảnh nghiệp vụ, tránh template máy móc. \
-Điền trường "ai_reasoning": suy luận logic mạch lạc, nêu rõ quá trình suy nghĩ từ dữ liệu → nghiệp vụ → quyết định threshold. \
+Điền trường "ai_reasoning": rationale ngắn gọn, nêu evidence aggregate và lý do nghiệp vụ mà không trình bày chuỗi suy luận nội bộ. \
 Đề xuất đầy đủ và chính xác.
 """
 
@@ -201,6 +224,32 @@ rule_proposer_prompt = ChatPromptTemplate.from_messages(
     [
         ("system", _RULE_PROPOSER_SYSTEM),
         ("user", _RULE_PROPOSER_USER),
+    ]
+)
+
+
+dashboard_rule_proposer_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """You are a constrained data-quality candidate selector. The server has already built an allow-listed, evidence-backed candidate checklist. Select all necessary candidates; do not create rules or parameters. For every selected candidate, copy candidate_id, column, rule_type, and parameters exactly. Return at most one candidate per rule_type. Write a concise steward-facing description and a short rationale using only the supplied aggregate evidence. Do not mention a threshold, enum value, or relationship that is absent from the selected candidate. Use the structured output schema exactly.""",
+        ),
+        (
+            "user",
+            """Table: {table_name}
+
+Aggregate-only digest:
+```json
+{table_digest}
+```
+
+Allowed candidate checklist:
+```json
+{coverage_requirements}
+```
+
+Return the strongest diverse candidates in checklist order. Set table to {table_name}.""",
+        ),
     ]
 )
 
@@ -252,6 +301,111 @@ sql_repair_prompt = ChatPromptTemplate.from_messages(
     [
         ("system", _SQL_REPAIR_SYSTEM),
         ("user", _SQL_REPAIR_USER),
+    ]
+)
+
+
+_DBT_REPAIR_SYSTEM = """\
+You repair a generated dbt schema YAML file. Return only the complete repaired YAML.
+Do not use Markdown fences or explanations. Preserve the approved models, columns, and
+test intent. Do not add hooks, vars, exposures, sources, macros, SQL, or arbitrary project
+configuration. The root document must contain only `version` and `models`.
+"""
+
+_DBT_REPAIR_USER = """\
+Approved rules (source of truth):
+```json
+{approved_rules_json}
+```
+
+Generated dbt YAML:
+```yaml
+{dbt_yaml}
+```
+
+Validation error:
+```
+{validation_error}
+```
+
+Return the complete corrected dbt schema YAML and nothing else.
+"""
+
+dbt_repair_prompt = ChatPromptTemplate.from_messages(
+    [("system", _DBT_REPAIR_SYSTEM), ("user", _DBT_REPAIR_USER)]
+)
+
+
+# ---------------------------------------------------------------------------
+# Steward Insights Prompt (DQ Advisor & Executive Summary)
+# ---------------------------------------------------------------------------
+# Input variables: dataset_id, dq_score, dq_grade, dq_dimensions_json,
+#                  test_summary_json, failed_rules_json, anomalies_json, profile_digest_json
+# ---------------------------------------------------------------------------
+
+_STEWARD_INSIGHTS_SYSTEM = """\
+Bạn là một AI Data Quality & Governance Advisor chuyên nghiệp dành riêng cho Data Steward và Data Management Team.
+Nhiệm vụ của bạn là phân tích kết quả kiểm thử chất lượng dữ liệu (DQ Test Run), các cảnh báo bất thường (Anomalies) và hồ sơ dữ liệu (Profile Digest) để tạo ra một bản Báo Cáo Tổng Kết (Steward Insights Report) sâu sắc, khách quan và có tính hành động cao.
+
+## Yêu cầu trình bày:
+Báo cáo phải được viết bằng tiếng Việt, định dạng Markdown rõ ràng, chuyên nghiệp với 4 phần chuẩn:
+
+### 1. 📊 Tổng Quan Sức Khỏe Dữ Liệu (Executive DQ Summary)
+- Tóm tắt điểm DQ Score, Grade (A/B/C/D) và đánh giá nhanh hiện trạng dữ liệu.
+- Phân tích ngắn gọn tình hình phân bổ chất lượng theo các chiều (Completeness, Validity, Uniqueness, Consistency, Freshness).
+
+### 2. 🚨 Phân Tích Lỗi & Cảnh Báo Bất Thường (Failure & Anomaly Drill-Down)
+- Đi sâu vào các rule bị FAILED hoặc có cảnh báo ANOMALY (đột biến Z-score).
+- Nêu giả thuyết nguyên nhân gốc rễ (Potential Root Cause) kết hợp với ngữ cảnh phân phối dữ liệu (ví dụ: null spike do thiết bị, giá trị âm do nghiệp vụ hoàn tiền, hay lỗi pipeline).
+- Đánh giá mức độ rủi ro đối với downstream reports / business metrics.
+
+### 3. 🎯 Đánh Giá & Gợi Ý Tinh Chỉnh Ruleset (Rule Tuning Recommendations)
+- Chỉ ra các rule có thể đang quá khắt khe (Overly strict / False positive) và gợi ý điều chỉnh ngưỡng (threshold) hoặc bộ lọc (WHERE condition).
+- Gợi ý bổ sung rule mới nếu phát hiện vùng dữ liệu quan trọng chưa được bảo vệ.
+
+### 4. 🛠️ Kế Hoạch Hành Động Đề Xuất (Actionable Next Steps)
+- Đưa ra danh sách hành động cụ thể dạng Markdown Checklist (`- [ ] ...`) phân rõ trách nhiệm:
+  - Cho Data Steward (Review, approve rule điều chỉnh, nghiệm thu dataset).
+  - Cho Data Engineering / Source Team (Kiểm tra pipeline, sửa source bug nếu có).
+"""
+
+_STEWARD_INSIGHTS_USER = """\
+Dưới đây là thông tin chi tiết của đợt kiểm thử chất lượng dữ liệu cho dataset `{dataset_id}`:
+
+### 1. Điểm số & Xếp hạng:
+- **DQ Score**: {dq_score}/100 (Xếp hạng: **{dq_grade}**)
+- **Điểm theo từng chiều DQ (Dimensions)**:
+```json
+{dq_dimensions_json}
+```
+
+### 2. Thống kê kết quả kiểm thử:
+```json
+{test_summary_json}
+```
+
+### 3. Chi tiết các Rule bị Vi Phạm hoặc Lỗi (Failed / Error Rules):
+```json
+{failed_rules_json}
+```
+
+### 4. Các cảnh báo bất thường (Anomalies & Z-Score spikes):
+```json
+{anomalies_json}
+```
+
+### 5. Profile Digest của Dataset:
+```json
+{profile_digest_json}
+```
+
+Hãy tạo bản Báo cáo Steward Insights hoàn chỉnh theo đúng cấu trúc 4 phần đã yêu cầu.
+"""
+
+steward_insights_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", _STEWARD_INSIGHTS_SYSTEM),
+        ("user", _STEWARD_INSIGHTS_USER),
     ]
 )
 
