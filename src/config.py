@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     app_port: int = Field(default=8000, ge=1, le=65535)
     app_host: str = "0.0.0.0"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
-    cors_origins: str = "http://localhost:3000"
+    cors_origins: str = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173"
 
     # LLM
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     google_model_name: str = os.getenv("GOOGLE_MODEL") or "gemini-3.1-flash-lite"
 
     # Rule Proposer tunables
+    agent_mode: Literal["mock", "graph"] = os.getenv("AGENT_MODE") or "mock"
     rule_proposer_concurrency: int = 10
     rule_proposer_max_retries: int = 2
     debug_dump_table_digests: bool = False

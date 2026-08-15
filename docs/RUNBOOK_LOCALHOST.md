@@ -4,114 +4,71 @@ This runbook provides step-by-step guidance for setting up, running, testing, an
 
 ---
 
-## 1. Prerequisites
+## 1. Scope and prerequisites
 
-Ensure you have the following installed on your host system:
-* **Docker** and **Docker Compose**
-* **Python 3.11** or **Python 3.12** (matching project venv)
-* **curl** (for running smoke tests)
+This runbook is for the Gate 2 **local UI MVP**. It starts FastAPI, React/Vite and a
+fresh SQLite database on the developer machine. It does not require Docker,
+PostgreSQL, MinIO, cloud deployment, or an LLM API key.
 
----
+Install Python 3.12, Node.js 20+ and npm. From the repository root, install the
+Python and frontend dependencies once:
 
-## 2. Environment Variables (.env)
-
-Create a `.env` file in the project root:
-```dotenv
-APP_ENV=local
-FRONTEND_ORIGIN=http://localhost:3000
-DATABASE_URL=postgresql+psycopg2://postgres:localpassword@localhost:5432/ridepulse
-RUNNER_DATABASE_URL=postgresql+psycopg2://ridepulse_runner:YOUR_RUNNER_PASSWORD_HERE@localhost:5432/ridepulse
-MINIO_URL=http://localhost:9000
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=miniopassword
-OPENAI_API_KEY=your-test-openai-key-here
-AI_LOG_SERVER=https://ai-logs.note.transformerlabs.ai/api/ingest
-AI_LOG_API_KEY=your-log-api-key-here
-AI_LOG_DIR=.ai-log
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+npm --prefix frontend install
 ```
 
 ---
 
-## 3. Starting the Services
+## 2. Start the local API
 
-Start all database, storage, api, and worker containers:
-```bash
-docker compose up -d
+Use a dedicated SQLite file for UI testing so no configured remote database is
+touched. The proposal endpoint uses deterministic mock logic and therefore never
+calls an LLM.
+
+```powershell
+$env:DATABASE_URL="sqlite:///ui_local_mvp.db"
+$env:FRONTEND_ORIGIN="http://localhost:5173,http://127.0.0.1:5173"
+.\.venv\Scripts\python.exe -m uvicorn src.main:app --host 127.0.0.1 --port 8000
 ```
 
-Verify that all services are healthy and running:
-```bash
-docker compose ps
-```
+Confirm the service in a second PowerShell window:
 
-Expected services:
-* `ridepulse-db` (PostgreSQL on port `5432`)
-* `ridepulse-minio` (MinIO on port `9000` & `9001`)
-* `ridepulse-api` (FastAPI on port `8000`)
-* `ridepulse-worker` (Local worker API on port `8001`)
-
----
-
-## 4. Running Schema Migrations
-
-Run migrations sequentially in the database container to set up schemas, roles, and tables:
-
-```bash
-# 1. Run core schema migration
-docker compose exec -T db psql -U postgres -d postgres -f /scripts/migrations/001_schema.sql
-
-# 2. Configure database roles and schemas
-docker compose exec -T db psql -U postgres -d postgres -f /scripts/migrations/002_roles.sql
-
-# 3. Create Gate 2 schemas, tables, and alter structures
-docker compose exec -T db psql -U postgres -d postgres -f /scripts/migrations/003_gate2_schema.sql
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
 ```
 
 ---
 
-## 5. Verification: Running Automated Tests
+## 3. Start the frontend against the API
 
-Run the full pytest suite from the host system using the local virtual environment:
+In a second PowerShell window, run:
 
-```bash
-.\venv\Scripts\python.exe -m pytest tests -v
+```powershell
+$env:VITE_API_BASE_URL="http://127.0.0.1:8000"
+$env:VITE_USE_MOCK_API="false"
+npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173 --strictPort
 ```
 
-All 60+ test cases should pass.
+Open `http://127.0.0.1:5173`. Seeded test accounts are:
+
+- `user` / `user`: read-only access.
+- `steward` / `steward`: profiling, proposal review and rule configuration.
+- `admin` / `admin`: create local users and grant/revoke dataset access.
+
+For a frontend-only demonstration, omit `VITE_USE_MOCK_API=false`; Vite then uses
+the in-memory adapter in `frontend/src/api/mockApi.ts`.
 
 ---
 
-## 6. Verification: Running local Smoke Test
+## 4. Verification
 
-Execute the updated Gate 2 smoke test script:
-
-```bash
-# On Windows, run in Git Bash or PowerShell:
-bash scripts/smoke-test-local.sh
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_session.py tests/test_proposals.py tests/test_runner.py tests/test_profile.py tests/test_jobs.py tests/test_audit.py tests/test_admin_config.py -v
+npm --prefix frontend run build
+ruff check src/api/routes.py src/models/database.py src/services/session_service.py src/services/rule_store.py tests/test_admin_config.py
 ```
 
-Expected output ends with:
-```text
-✅ ALL SMOKE TESTS PASSED SUCCESSFULLY!
-```
-
----
-
-## 7. Database Backup & Restore Rehearsal
-
-### 7.1. Backup (Export)
-Dump the current database schema and data to a backup SQL file:
-```bash
-docker compose exec db pg_dump -U postgres -d postgres > backup_local.sql
-```
-
-### 7.2. Recovery (Restore)
-To restore from the SQL backup file:
-```bash
-# Reset database
-docker compose exec db psql -U postgres -d postgres -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-# Reapply privileges
-docker compose exec db psql -U postgres -d postgres -c "GRANT ALL ON SCHEMA public TO postgres; GRANT ALL ON SCHEMA public TO public;"
-# Restore data
-docker compose exec -T db psql -U postgres -d postgres < backup_local.sql
-```
+The UI MVP has no migration command: FastAPI creates its local SQLite schema and
+seeds the three accounts and default dataset when it starts. Delete
+`ui_local_mvp.db` only after stopping the API when a fresh test database is needed.

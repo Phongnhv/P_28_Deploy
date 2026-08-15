@@ -1,0 +1,34 @@
+version: 2
+
+sources:
+  - name: public
+    schema: public
+    tables:
+      - name: trips_canonical
+        description: "View typed/null-safe từ trips_raw JSON; contract chung cho dbt, profiler và DQ runner."
+        columns:
+          - name: source_row_id
+            description: "Khóa định danh duy nhất cho từng bản ghi."
+
+models:
+  - name: stg_trips
+    description: "Model staging chuẩn hóa dữ liệu từ public.trips_raw vào schema analytics."
+    columns:
+      - name: source_row_id
+        description: "Khóa định danh duy nhất cho từng bản ghi."
+      - name: vendor_id
+        description: "Mã nhà cung cấp thiết bị taxi."
+      - name: pickup_at
+        description: "Thời điểm bắt đầu chuyến đi (UTC)."
+      - name: dropoff_at
+        description: "Thời điểm kết thúc chuyến đi (UTC)."
+      - name: trip_distance
+        description: "Khoảng cách chuyến đi (miles)."
+      - name: fare_amount
+        description: "Cước phí cơ bản (USD)."
+
+  - name: profile_input
+    description: "Model analytics cung cấp trọn vẹn 21 cột dữ liệu cho Profiler Agent."
+    columns:
+      - name: source_row_id
+        description: "Khóa định danh duy nhất."

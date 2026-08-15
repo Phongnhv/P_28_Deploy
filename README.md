@@ -5,6 +5,10 @@ data-quality workflow for a registered NYC Yellow Taxi dataset. The current repo
 is a starter template; the complete target and work sequence are in
 [docs/gate2-mvp/README.md](./docs/gate2-mvp/README.md).
 
+Local verification evidence is recorded in
+[E1_E5_EVALUATION.md](./eval/results/E1_E5_EVALUATION.md), with a concise
+recording walkthrough in [VIDEO_REHEARSAL.md](./presentation/VIDEO_REHEARSAL.md).
+
 ## Target hosted architecture
 
 ```text

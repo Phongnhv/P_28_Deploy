@@ -10,6 +10,8 @@ MANIFEST_ALLOW_LIST: dict[str, str] = {
 }
 
 
+
+
 def _get_project_root() -> Path:
     """Trả về đường dẫn tuyệt đối của gốc dự án."""
     return Path(__file__).resolve().parent.parent.parent

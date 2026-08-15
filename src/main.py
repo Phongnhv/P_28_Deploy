@@ -2,6 +2,7 @@ import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -41,7 +42,19 @@ origins = settings.cors_origins.split(",")
 if frontend_origin_env:
     origins.extend([o.strip() for o in frontend_origin_env.split(",") if o.strip()])
 
-allow_origins = list(set(origins))
+loopback_origins: set[str] = set()
+for origin in origins:
+    clean_origin = origin.strip()
+    if not clean_origin:
+        continue
+    loopback_origins.add(clean_origin)
+    parsed = urlsplit(clean_origin)
+    if parsed.hostname in {"localhost", "127.0.0.1"}:
+        twin_host = "127.0.0.1" if parsed.hostname == "localhost" else "localhost"
+        twin_netloc = f"{twin_host}:{parsed.port}" if parsed.port else twin_host
+        loopback_origins.add(urlunsplit((parsed.scheme, twin_netloc, parsed.path, "", "")))
+
+allow_origins = sorted(loopback_origins)
 
 app.add_middleware(
     CORSMiddleware,
