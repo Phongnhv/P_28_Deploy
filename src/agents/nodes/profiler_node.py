@@ -84,6 +84,19 @@ async def raw_profiler_node(state: AgentState) -> dict:
         "test_runs",
         "test_results",
         "alembic_version",
+        "sessions",
+        "audit_events",
+        "datasets",
+        "dataset_access",
+        "user_accounts",
+        "profiles",
+        "column_profiles",
+        "rule_proposals",
+        "rule_versions",
+        "rule_configurations",
+        "jobs",
+        "dq_runs",
+        "dq_results",
     }
 
     # 1. Quét danh sách các bảng trong database (lọc bỏ bảng hệ thống)

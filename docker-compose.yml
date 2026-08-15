@@ -31,6 +31,24 @@ services:
     command: server /data --console-address ":9001"
     volumes:
       - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio-init:
+    image: minio/mc
+    container_name: ridepulse-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin miniopassword;
+      mc mb --ignore-existing local/ridepulse-dbt-artifacts;
+      mc ilm rule add --expire-days 30 local/ridepulse-dbt-artifacts || true;
+      "
 
   api:
     build: 
@@ -47,9 +65,15 @@ services:
       - DATABASE_URL=postgresql+psycopg2://postgres:localpassword@db:5432/ridepulse
       - FRONTEND_ORIGIN=http://localhost:3000
       - LOCAL_WORKER_URL=http://worker:8001/run
+      - OBJECT_STORAGE_BUCKET=ridepulse-dbt-artifacts
+      - OBJECT_STORAGE_ENDPOINT_URL=http://minio:9000
+      - OBJECT_STORAGE_ACCESS_KEY_ID=minioadmin
+      - OBJECT_STORAGE_SECRET_ACCESS_KEY=miniopassword
     depends_on:
       db:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
 
   worker:
     build: 
@@ -63,9 +87,15 @@ services:
       - APP_ENV=local
       - DATABASE_URL=postgresql+psycopg2://postgres:localpassword@db:5432/ridepulse
       - RUNNER_DATABASE_URL=postgresql+psycopg2://ridepulse_runner:${RUNNER_DB_PASSWORD:-test_password}@db:5432/ridepulse
+      - OBJECT_STORAGE_BUCKET=ridepulse-dbt-artifacts
+      - OBJECT_STORAGE_ENDPOINT_URL=http://minio:9000
+      - OBJECT_STORAGE_ACCESS_KEY_ID=minioadmin
+      - OBJECT_STORAGE_SECRET_ACCESS_KEY=miniopassword
     depends_on:
       db:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:

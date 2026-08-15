@@ -32,6 +32,9 @@ class AgentState(TypedDict, total=False):
     # Run 2: Test Execution state fields
     test_run_id: str             # ID của phiên chạy test (Run 2)
     generated_tests: list        # Danh sách test queries được render và validated
+    generated_dbt_yaml: str      # YAML content retained in state for observability only
+    dbt_artifact_ref: dict       # Run-scoped object-storage reference for the dbt YAML
+    dbt_trace_file_path: str     # Exact local/test fallback path for this run
     test_results: list           # Danh sách kết quả thực thi từng rule
     test_generation_errors: list # Danh sách lỗi phát sinh trong quá trình sinh/sửa/chạy test
 

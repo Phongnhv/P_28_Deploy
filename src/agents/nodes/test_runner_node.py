@@ -13,7 +13,9 @@ import asyncio
 import json
 import logging
 import shutil
+import shutil as file_shutil
 import subprocess
+import tempfile
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -21,7 +23,9 @@ from pathlib import Path
 from sqlalchemy import text
 
 from src.agents.state import AgentState
+from src.config import get_settings
 from src.models.rule_schemas import RuleType
+from src.services.dbt_artifact_store import artifact_sha256, get_dbt_artifact_store
 from src.services.rule_store import get_engine
 
 logger = logging.getLogger(__name__)
@@ -350,29 +354,61 @@ async def test_runner_node(state: AgentState) -> dict:
     dialect_name = engine.dialect.name
 
     root_dir = Path(__file__).resolve().parent.parent.parent.parent
-    dbt_dir = root_dir / "dbt_project"
+    dbt_template_dir = root_dir / "dbt_project"
 
-    # Thử chạy dbt test CLI đối với tệp dbt YML vừa sinh
-    if (dbt_dir / "models" / "generated_dq_tests.yml").exists():
-        _run_dbt_cli_test(dbt_dir)
+    # Materialize the immutable project template and this run's YAML in an isolated workspace.
+    # The direct SQL checks below remain the persisted result source for the existing pipeline.
+    with tempfile.TemporaryDirectory(prefix=f"dbt-{state.get('test_run_id', 'run')}-") as workspace:
+        dbt_dir = Path(workspace) / "dbt_project"
+        file_shutil.copytree(
+            dbt_template_dir,
+            dbt_dir,
+            ignore=file_shutil.ignore_patterns("target", "logs", "dbt_packages", "dbt_modules", "generated_dq_tests.yml"),
+        )
+        artifact_ref = state.get("dbt_artifact_ref")
+        content = None
+        if artifact_ref:
+            try:
+                content = get_dbt_artifact_store().download_yaml(artifact_ref)
+            except Exception as exc:
+                settings = get_settings()
+                trace_path = Path(state.get("dbt_trace_file_path") or "")
+                if settings.app_env not in ("local", "development", "test") or not trace_path.is_file():
+                    raise RuntimeError("Unable to download generated dbt artifact") from exc
+                content = trace_path.read_bytes()
+                if artifact_sha256(content) != artifact_ref.get("sha256"):
+                    raise RuntimeError("Local dbt artifact fallback checksum mismatch") from exc
+                logger.warning("Using local trace fallback for dbt artifact run %s", state.get("test_run_id"))
+        else:
+            settings = get_settings()
+            trace_path = Path(state.get("dbt_trace_file_path") or "")
+            if settings.app_env not in ("local", "development", "test") or not trace_path.is_file():
+                raise RuntimeError("No generated dbt artifact reference is available")
+            content = trace_path.read_bytes()
+        if content is not None:
+            generated_file = dbt_dir / "models" / "generated_dq_tests.yml"
+            generated_file.parent.mkdir(parents=True, exist_ok=True)
+            temp_file = generated_file.with_suffix(".tmp")
+            temp_file.write_bytes(content)
+            temp_file.replace(generated_file)
+            _run_dbt_cli_test(dbt_dir)
 
-    all_results: list[dict] = []
+        all_results: list[dict] = []
 
-    # Chạy các test queries bất đồng bộ trong threadpool
-    tasks = [
-        asyncio.to_thread(_execute_single_test, test, dialect_name)
-        for test in tests
-    ]
-    outputs = await asyncio.gather(*tasks)
-    for res_list in outputs:
-        all_results.extend(res_list)
+        # Chạy các test queries bất đồng bộ trong threadpool
+        tasks = [
+            asyncio.to_thread(_execute_single_test, test, dialect_name)
+            for test in tests
+        ]
+        outputs = await asyncio.gather(*tasks)
+        for res_list in outputs:
+            all_results.extend(res_list)
 
     test_run_id = state.get("test_run_id") or state.get("rule_run_id") or "test_run"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Xuất trace file
     try:
-        from src.config import get_settings
         settings = get_settings()
         base_dir = getattr(settings, "output_dir", None) or "./output"
         out_dir = Path(base_dir) / "test_runner"

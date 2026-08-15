@@ -168,10 +168,13 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
             db.query(SourceRowModel).filter(SourceRowModel.dataset_id == dataset_id).delete()
 
             # Fast bulk insert
-            df_cleaned = df.where(df.notnull(), None)
-            rows_to_insert = df_cleaned.to_dict(orient="records")
+            rows_to_insert = df.to_dict(orient="records")
             for r in rows_to_insert:
                 r["dataset_id"] = dataset_id
+                # Replace float nan/NAT/None with actual Python None for db insertion
+                for k, v in r.items():
+                    if pd.isna(v):
+                        r[k] = None
 
             db.bulk_insert_mappings(SourceRowModel, rows_to_insert)
             db.commit()

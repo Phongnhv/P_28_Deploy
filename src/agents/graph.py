@@ -137,7 +137,7 @@ def build_execution_graph() -> StateGraph:
 logger = logging.getLogger("graph_runner")
 
 async def run_proposal_graph(
-    dataset_id: str = "yellow_tripdata",
+    dataset_id: str = "dataset-nyc-yellow-taxi-50k",
     connection_string: str | None = None,
     sampling_rate: float = 1.0,
 ) -> dict:
@@ -201,7 +201,7 @@ async def run_proposal_graph(
 
 
 async def run_execution_graph(
-    dataset_id: str = "yellow_tripdata",
+    dataset_id: str = "dataset-nyc-yellow-taxi-50k",
     proposal_run_id: str | None = None,
 ) -> dict:
     """Chạy toàn bộ pipeline Run 2 (Thực thi Test): Active Rules -> Generator -> Validate -> Runner -> Anomaly -> Steward Insights -> Report."""
@@ -288,19 +288,20 @@ async def main():
 
     args = sys.argv[1:]
     mode = args[0] if args else "all"
+    dataset_id = args[1] if len(args) > 1 else "dataset-nyc-yellow-taxi-50k"
 
     if mode == "1" or mode == "proposal":
-        print("🚀 Lựa chọn: CHẠY RUN 1 (Proposal Graph)")
-        await run_proposal_graph()
+        print(f"🚀 Lựa chọn: CHẠY RUN 1 (Proposal Graph) cho dataset {dataset_id}")
+        await run_proposal_graph(dataset_id=dataset_id)
     elif mode == "2" or mode == "execution":
-        print("🚀 Lựa chọn: CHẠY RUN 2 (Execution Graph trên Active Rules)")
-        await run_execution_graph()
+        print(f"🚀 Lựa chọn: CHẠY RUN 2 (Execution Graph trên Active Rules) cho dataset {dataset_id}")
+        await run_execution_graph(dataset_id=dataset_id)
     else:
-        print("🚀 Lựa chọn mặc định: CHẠY RUN 1 ➔ DUYỆT & PUBLISH ➔ CHẠY RUN 2")
+        print(f"🚀 Lựa chọn mặc định: CHẠY RUN 1 ➔ DUYỆT & PUBLISH ➔ CHẠY RUN 2 cho dataset {dataset_id}")
         from src.services.rule_store import publish_approved_rules, review_rule
 
         # 1. Chạy Run 1
-        prop_res = await run_proposal_graph()
+        prop_res = await run_proposal_graph(dataset_id=dataset_id)
         run_id = prop_res["run_id"]
         rules = prop_res["rules"]
 
@@ -311,7 +312,7 @@ async def main():
         publish_approved_rules(run_id=run_id)
 
         # 2. Chạy Run 2 trên Active Ruleset
-        await run_execution_graph()
+        await run_execution_graph(dataset_id=dataset_id)
 
 
 if __name__ == "__main__":
