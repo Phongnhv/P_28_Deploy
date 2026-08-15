@@ -302,8 +302,8 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
 
             # Fast bulk insert using vectorized pandas where mapping (object type conversion prevents float coercion of None)
             df["dataset_id"] = dataset_id
-            df = df.astype(object).where(pd.notnull(df), None)
-            rows_to_insert = df.to_dict(orient="records")
+            insert_df = df.astype(object).where(pd.notnull(df), None)
+            rows_to_insert = insert_df.to_dict(orient="records")
 
             db.bulk_insert_mappings(SourceRowModel, rows_to_insert)
             db.commit()
