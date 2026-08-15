@@ -49,6 +49,11 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = Field(default="sqlite:///steward_local.db")
+    # Canonical source data can be separate from the local dashboard metadata
+    # store. In auto mode (the default), a PostgreSQL DATABASE_URL is treated as
+    # the Supabase execution surface; SQLite retains the local-MVP fallback.
+    supabase_database_url: str | None = os.getenv("SUPABASE_DATABASE_URL")
+    dq_execution_backend: Literal["auto", "local", "supabase"] = os.getenv("DQ_EXECUTION_BACKEND") or "auto"
 
     # Vector Store
     chroma_persist_dir: str = "./data/chroma" # Change to .env later

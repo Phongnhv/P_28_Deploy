@@ -42,6 +42,7 @@ from src.models.schemas import (
     TestRunStatusResponse,
 )
 from src.services.job_runner import (
+    _supabase_source_url,
     add_audit_event,
     run_dq_checks,
     run_ingest_profile,
@@ -56,6 +57,8 @@ from src.services.session_service import (
     hash_password,
     verify_csrf,
 )
+from src.services.supabase_dataset import create_supabase_engine
+from src.services.supabase_dataset import query_dataset_rows as query_supabase_dataset_rows
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -637,6 +640,37 @@ def query_dataset_rows(
         raise HTTPException(status_code=404, detail="Dataset not found")
     require_dataset_access(db, session, id)
 
+    policy = get_dataset_rule_policy(id)
+    allowed_payments = policy.governed_value_sets.get("payment_type", []) if policy else []
+    source_url = _supabase_source_url()
+    if source_url:
+        source_engine = create_supabase_engine(source_url)
+        try:
+            with source_engine.connect() as connection:
+                total, rows = query_supabase_dataset_rows(
+                    connection,
+                    id,
+                    vendor_id=vendor_id,
+                    payment_type=payment_type,
+                    min_distance=min_distance,
+                    max_distance=max_distance,
+                    quality_status=quality_status,
+                    sort_by=sort_by,
+                    sort_direction=sort_direction,
+                    limit=limit,
+                    offset=offset,
+                    allowed_payments=allowed_payments,
+                )
+        finally:
+            source_engine.dispose()
+        return DatasetRowsResponse(
+            dataset_id=id,
+            total=total,
+            limit=limit,
+            offset=offset,
+            rows=[DatasetRowSchema(**row) for row in rows],
+        )
+
     query = db.query(SourceRowModel).filter(SourceRowModel.dataset_id == id)
     if vendor_id:
         query = query.filter(SourceRowModel.vendor_id == vendor_id)
@@ -647,8 +681,6 @@ def query_dataset_rows(
     if max_distance is not None:
         query = query.filter(SourceRowModel.trip_distance <= max_distance)
 
-    policy = get_dataset_rule_policy(id)
-    allowed_payments = policy.governed_value_sets.get("payment_type", []) if policy else []
     issue_predicate = or_(
         SourceRowModel.vendor_id.is_(None),
         SourceRowModel.trip_distance < 0,

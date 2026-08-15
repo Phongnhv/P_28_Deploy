@@ -28,6 +28,8 @@ calls an LLM.
 
 ```powershell
 $env:DATABASE_URL="sqlite:///ui_local_mvp.db"
+$env:SUPABASE_DATABASE_URL="postgresql://..." # optional: profile/run rules against Supabase canonical rows
+$env:DQ_EXECUTION_BACKEND="auto"
 $env:FRONTEND_ORIGIN="http://localhost:5173,http://127.0.0.1:5173"
 .\.venv\Scripts\python.exe -m uvicorn src.main:app --host 127.0.0.1 --port 8000
 ```
@@ -69,6 +71,8 @@ npm --prefix frontend run build
 ruff check src/api/routes.py src/models/database.py src/services/session_service.py src/services/rule_store.py tests/test_admin_config.py
 ```
 
-The UI MVP has no migration command: FastAPI creates its local SQLite schema and
-seeds the three accounts and default dataset when it starts. Delete
+With `SUPABASE_DATABASE_URL` set, the dashboard metadata remains in local SQLite
+while profile and approved-rule execution use Supabase `trips_canonical`. Without
+it, SQLite is the intentional offline fallback. The UI MVP has no migration command:
+FastAPI creates its local SQLite schema and seeds the three accounts and default dataset when it starts. Delete
 `ui_local_mvp.db` only after stopping the API when a fresh test database is needed.

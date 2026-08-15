@@ -25,6 +25,20 @@ from src.models.database import (
 )
 from src.services.dashboard_agent_workflow import generate_dashboard_proposals, get_dataset_rule_policy
 from src.services.rule_store import get_engine
+from src.services.supabase_dataset import (
+    NUMERIC_COLUMNS,
+    create_supabase_engine,
+    is_postgres_database_url,
+)
+from src.services.supabase_dataset import (
+    execute_rule as execute_supabase_rule,
+)
+from src.services.supabase_dataset import (
+    persist_profile as persist_supabase_profile,
+)
+from src.services.supabase_dataset import (
+    profile_dataset as profile_supabase_dataset,
+)
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -32,6 +46,100 @@ logger = logging.getLogger(__name__)
 
 def _rate(count: int, denominator: int) -> float:
     return float(count / denominator) if denominator > 0 else 0.0
+
+
+def _supabase_source_url() -> str | None:
+    """Select Supabase for a PostgreSQL source unless local mode is explicit."""
+    settings = get_settings()
+    if settings.dq_execution_backend == "local":
+        return None
+    source_url = settings.supabase_database_url or settings.database_url
+    if settings.dq_execution_backend == "supabase":
+        if not is_postgres_database_url(source_url):
+            raise ValueError("Supabase execution requires a PostgreSQL SUPABASE_DATABASE_URL or DATABASE_URL")
+        return source_url
+    return source_url if is_postgres_database_url(source_url) else None
+
+
+def _profile_supabase_into_dashboard(db: Session, dataset_id: str) -> dict:
+    """Profile canonical Supabase rows and persist only aggregate dashboard evidence."""
+    policy = get_dataset_rule_policy(dataset_id)
+    governed_values = policy.governed_value_sets if policy else {}
+    source_engine = create_supabase_engine(_supabase_source_url() or "")
+    try:
+        with source_engine.begin() as connection:
+            profile_payload = profile_supabase_dataset(connection, dataset_id, governed_values)
+            persist_supabase_profile(connection, profile_payload)
+    finally:
+        source_engine.dispose()
+
+    db.query(ColumnProfileModel).filter(ColumnProfileModel.profile_dataset_id == dataset_id).delete()
+    db.query(ProfileModel).filter(ProfileModel.dataset_id == dataset_id).delete()
+    db.flush()
+
+    columns = []
+    evidence_keys = [
+        "profile.row_count", "profile.completeness_score", "profile.validity_score", "profile.duplicate_rate",
+    ]
+    for item in profile_payload["columns"]:
+        name = item["name"]
+        quantiles = item.get("quantiles", {})
+        data_type = "float" if name in NUMERIC_COLUMNS else "timestamp" if name.endswith("_at") else "string"
+        columns.append(
+            ColumnProfileModel(
+                profile_dataset_id=dataset_id,
+                name=name,
+                data_type=data_type,
+                null_rate=float(item["null_rate"]),
+                distinct_count=int(item["full_distinct_count"]),
+                non_null_count=int(item["non_null_count"]),
+                negative_rate=float(item["negative_rate"]) if item.get("negative_rate") is not None else None,
+                quantiles_json=json.dumps(quantiles),
+                out_of_domain_rate=(
+                    float(item["out_of_domain_rate"]) if item.get("out_of_domain_rate") is not None else None
+                ),
+                full_distinct_count=int(item["full_distinct_count"]),
+                uniqueness_rate=float(item["uniqueness_rate"]),
+                is_unique_full_table=bool(item["is_unique_full_table"]),
+                min_value=float(item["min_value"]) if item.get("min_value") is not None else None,
+                max_value=float(item["max_value"]) if item.get("max_value") is not None else None,
+                sample_value="Aggregate profile only",
+            )
+        )
+        prefix = f"profile.column.{name}"
+        evidence_keys.extend([
+            f"{prefix}.non_null_count", f"{prefix}.full_distinct_count", f"{prefix}.uniqueness_rate",
+            f"{prefix}.is_unique_full_table",
+        ])
+        if item.get("negative_rate") is not None:
+            evidence_keys.append(f"{prefix}.negative_rate")
+            evidence_keys.extend(f"{prefix}.quantile.{key}" for key in quantiles)
+        if item.get("out_of_domain_rate") is not None:
+            evidence_keys.append(f"{prefix}.out_of_domain_rate")
+
+    cross_field_metrics = profile_payload["cross_field_metrics"]
+    evidence_keys.extend(
+        f"profile.cross_field.{metric['left_column']}.{metric['operator']}.{metric['right_column']}.violation_rate"
+        for metric in cross_field_metrics
+    )
+    db.add(ProfileModel(
+        dataset_id=dataset_id,
+        row_count=int(profile_payload["row_count"]),
+        completeness_score=float(profile_payload["completeness_score"]),
+        validity_score=float(profile_payload["validity_score"]),
+        duplicate_rate=float(profile_payload["duplicate_rate"]),
+        cross_field_metrics_json=json.dumps(cross_field_metrics),
+        evidence_keys=json.dumps(evidence_keys),
+        generated_at=utc_now(),
+    ))
+    db.add_all(columns)
+    dataset = db.query(DatasetModel).filter(DatasetModel.id == dataset_id).first()
+    if dataset:
+        dataset.status = "PROFILE_READY"
+        dataset.row_count = int(profile_payload["row_count"])
+        dataset.updated_at = utc_now()
+    db.commit()
+    return profile_payload
 
 
 def _numeric_quantiles(values: pd.Series) -> dict[str, float]:
@@ -118,6 +226,31 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
         db.commit()
 
         try:
+            if _supabase_source_url():
+                job.progress = 35.0
+                job.message = "Profiling canonical Supabase rows..."
+                db.commit()
+                profile_payload = _profile_supabase_into_dashboard(db, dataset_id)
+                job.status = "SUCCEEDED"
+                job.progress = 100.0
+                job.message = "Completed from Supabase canonical dataset"
+                db.commit()
+                add_audit_event(
+                    db,
+                    session_id=session_id,
+                    actor_role=actor_role,
+                    action_code="PROFILE_CREATED",
+                    entity_type="dataset",
+                    entity_id=dataset_id,
+                    detail={
+                        "job_id": job_id,
+                        "message": "Supabase canonical profile completed successfully.",
+                        "row_count": profile_payload["row_count"],
+                        "source": "supabase-canonical-v1",
+                    },
+                )
+                return
+
             # Check manifest and path
             parquet_path = Path("data/yellow_tripdata_2025/semantic_data/yellow_tripdata_2025_semantic_50k.parquet")
             if not parquet_path.exists():
@@ -532,6 +665,8 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
     loop are intentionally not a source of executable SQL in this product flow.
     """
     engine = get_engine()
+    source_engine = None
+    source_connection = None
     with Session(engine) as db:
         job = db.query(JobModel).filter(JobModel.id == job_id).first()
         if not job:
@@ -548,6 +683,10 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
         db.commit()
 
         try:
+            source_url = _supabase_source_url()
+            if source_url:
+                source_engine = create_supabase_engine(source_url)
+                source_connection = source_engine.connect()
             dataset_id = dq_run.dataset_id
             rule_ids = json.loads(dq_run.rule_ids)
 
@@ -560,10 +699,10 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
             if not rule_versions:
                 raise ValueError("No approved rules found for execution.")
 
-            # Get allowed columns from profile of this dataset to prevent column SQL injection
+            # The local fallback needs a profile-derived allowlist. The Supabase
+            # adapter carries its own canonical-column allowlist.
             cols = db.query(ColumnProfileModel).filter(ColumnProfileModel.profile_dataset_id == dataset_id).all()
             columns_allowlist = {c.name for c in cols}
-            # Fallback if profile not populated yet
             if not columns_allowlist:
                 columns_allowlist = {
                     'source_row_id', 'vendor_id', 'pickup_at', 'dropoff_at', 'passenger_count',
@@ -585,52 +724,43 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
                 spec = json.loads(rv.rule_spec)
                 rule_type = spec.get("type", "")
 
-                # Compile to parameterized SQL
-                sql_query = compile_rule_to_sql(rule_type, spec, columns_allowlist)
-
-                # Sandbox guardrails check
-                sql_clean = sql_query.strip().upper()
-                if not sql_clean.startswith("SELECT"):
-                    raise ValueError("Runner only permits SELECT statements")
-                if ";" in sql_query or "--" in sql_query or "/*" in sql_query or "*/" in sql_query:
-                    raise ValueError("Runner rejects semicolons, multi-statements, and SQL comments")
-
-                # Fetch row count
-                total_rows = db.execute(
-                    text("SELECT COUNT(*) FROM source_rows WHERE dataset_id = :dataset_id"),
-                    {"dataset_id": dataset_id}
-                ).scalar() or 0
-
-                # Prepare query bind params
-                params = {"dataset_id": dataset_id}
-                if rule_type == "numeric_range":
-                    params["min_value"] = spec.get("min_value")
-                    params["max_value"] = spec.get("max_value")
-                elif rule_type == "accepted_values":
-                    allowed = spec.get("allowed_values", [])
-                    for i, val in enumerate(allowed):
-                        params[f"val_{i}"] = val
-
-                # Execute with 5-second timeout
-                # SQLite timeout is set at engine/connection level, but let's run securely
-                start_time = time.time()
-                failed_rows = db.execute(text(sql_query), params).all()
-                duration = time.time() - start_time
-                if duration > 5.0:
-                    raise TimeoutError("SQL query exceeded 5-second timeout")
-
-                failed_ids = [r[0] for r in failed_rows]
-                failed_count = len(failed_ids)
+                prop = db.query(RuleProposalModel).filter(RuleProposalModel.id == rv.rule_proposal_id).first()
+                title = prop.title if prop else f"Rule check {rv.id}"
+                if source_connection is not None:
+                    outcome = execute_supabase_rule(source_connection, dataset_id, title, spec)
+                    total_rows = outcome.checked_count
+                    failed_ids = outcome.failed_row_ids
+                    failed_count = outcome.failed_count
+                else:
+                    sql_query = compile_rule_to_sql(rule_type, spec, columns_allowlist)
+                    sql_clean = sql_query.strip().upper()
+                    if not sql_clean.startswith("SELECT"):
+                        raise ValueError("Runner only permits SELECT statements")
+                    if ";" in sql_query or "--" in sql_query or "/*" in sql_query or "*/" in sql_query:
+                        raise ValueError("Runner rejects semicolons, multi-statements, and SQL comments")
+                    total_rows = db.execute(
+                        text("SELECT COUNT(*) FROM source_rows WHERE dataset_id = :dataset_id"),
+                        {"dataset_id": dataset_id},
+                    ).scalar() or 0
+                    params = {"dataset_id": dataset_id}
+                    if rule_type == "numeric_range":
+                        params["min_value"] = spec.get("min_value")
+                        params["max_value"] = spec.get("max_value")
+                    elif rule_type == "accepted_values":
+                        for i, value in enumerate(spec.get("allowed_values", [])):
+                            params[f"val_{i}"] = value
+                    start_time = time.time()
+                    failed_rows = db.execute(text(sql_query), params).all()
+                    if time.time() - start_time > 5.0:
+                        raise TimeoutError("SQL query exceeded 5-second timeout")
+                    failed_ids = [row[0] for row in failed_rows]
+                    failed_count = len(failed_ids)
 
                 total_checked += total_rows
                 total_failed += failed_count
 
                 # Cap failed row IDs at 20 (privacy/security rule)
                 capped_failed_ids = failed_ids[:20]
-
-                # Get rule title from proposal
-                prop = db.query(RuleProposalModel).filter(RuleProposalModel.id == rv.rule_proposal_id).first()
-                title = prop.title if prop else f"Rule check {rv.id}"
 
                 res = DqResultModel(
                     run_id=run_id,
@@ -673,7 +803,7 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
                 detail={
                     "total_failed": total_failed,
                     "total_checked": total_checked,
-                    "execution_engine": "typed-compiler-v1",
+                    "execution_engine": "supabase-canonical-v1" if source_connection is not None else "typed-compiler-v1",
                 }
             )
 
@@ -692,3 +822,8 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
                 entity_id=job_id,
                 detail={"error": "DQ run failed."}
             )
+        finally:
+            if source_connection is not None:
+                source_connection.close()
+            if source_engine is not None:
+                source_engine.dispose()
