@@ -54,6 +54,15 @@ NUMERIC_COLUMNS = {
     "airport_fee",
     "cbd_congestion_fee",
 }
+DATA_EXPLORER_COLUMNS = (
+    "source_row_id", "vendor_id", "pickup_at", "dropoff_at", "passenger_count",
+    "trip_distance", "payment_type", "fare_amount", "total_amount",
+)
+
+
+def is_postgres_database_url(database_url: str | None) -> bool:
+    """Return whether a configured URL can use the canonical Supabase adapter."""
+    return bool(database_url and database_url.startswith(("postgres://", "postgresql://")))
 
 
 @dataclass(frozen=True)
@@ -186,6 +195,85 @@ def execute_rule(
     )
 
 
+def query_dataset_rows(
+    connection,
+    dataset_id: str,
+    *,
+    vendor_id: str | None,
+    payment_type: str | None,
+    min_distance: float | None,
+    max_distance: float | None,
+    quality_status: str,
+    sort_by: str,
+    sort_direction: str,
+    limit: int,
+    offset: int,
+    allowed_payments: list[str],
+) -> tuple[int, list[dict[str, Any]]]:
+    """Return the Data Explorer's bounded projection from canonical Supabase rows."""
+    sort_columns = {"pickup_at", "trip_distance", "fare_amount", "total_amount"}
+    if sort_by not in sort_columns or sort_direction not in {"asc", "desc"}:
+        raise ValueError("Unsupported Data Explorer ordering")
+    clauses = ['"dataset_id" = :dataset_id']
+    params: dict[str, Any] = {"dataset_id": dataset_id, "limit": limit, "offset": offset}
+    if vendor_id:
+        clauses.append('"vendor_id" = :vendor_id')
+        params["vendor_id"] = vendor_id
+    if payment_type:
+        clauses.append('"payment_type" = :payment_type')
+        params["payment_type"] = payment_type
+    if min_distance is not None:
+        clauses.append('"trip_distance" >= :min_distance')
+        params["min_distance"] = min_distance
+    if max_distance is not None:
+        clauses.append('"trip_distance" <= :max_distance')
+        params["max_distance"] = max_distance
+
+    issue_clauses = [
+        '"vendor_id" IS NULL', '"trip_distance" < 0', '"fare_amount" < 0',
+        '("pickup_at" IS NOT NULL AND "dropoff_at" IS NOT NULL AND "pickup_at" > "dropoff_at")',
+    ]
+    if allowed_payments:
+        params["allowed_payments"] = json.dumps(allowed_payments)
+        issue_clauses.append(
+            '"payment_type" IS NOT NULL AND "payment_type" NOT IN '
+            '(SELECT jsonb_array_elements_text(CAST(:allowed_payments AS jsonb)))'
+        )
+    else:
+        issue_clauses.append('"payment_type" IS NULL')
+    issue_predicate = "(" + " OR ".join(issue_clauses) + ")"
+    if quality_status == "ISSUE":
+        clauses.append(issue_predicate)
+    elif quality_status == "VALID":
+        clauses.append("NOT " + issue_predicate)
+    where_sql = " AND ".join(clauses)
+    total = int(connection.execute(
+        text("SELECT COUNT(*) FROM public.trips_canonical WHERE " + where_sql), params
+    ).scalar_one())
+    selected = ", ".join(f'"{column}"' for column in DATA_EXPLORER_COLUMNS)
+    rows = connection.execute(
+        text(
+            f"SELECT {selected} FROM public.trips_canonical WHERE {where_sql} "
+            f'ORDER BY "{sort_by}" {sort_direction.upper()}, "source_row_id" ASC '
+            "LIMIT :limit OFFSET :offset"
+        ),
+        params,
+    ).mappings().all()
+    serialized = []
+    for row in rows:
+        item = dict(row)
+        for field in ("pickup_at", "dropoff_at"):
+            if item[field] is not None:
+                item[field] = item[field].isoformat()
+        if item["passenger_count"] is not None:
+            item["passenger_count"] = int(item["passenger_count"])
+        for field in ("trip_distance", "fare_amount", "total_amount"):
+            if item[field] is not None:
+                item[field] = float(item[field])
+        serialized.append(item)
+    return total, serialized
+
+
 def profile_dataset(connection, dataset_id: str, governed_values: dict[str, list[str]]) -> dict[str, Any]:
     """Compute full-table aggregates without returning raw values to the caller."""
     row_count = int(
@@ -247,6 +335,15 @@ def profile_dataset(connection, dataset_id: str, governed_values: dict[str, list
             item["out_of_domain_rate"] = invalid_count / non_null_count if non_null_count else 0.0
         columns.append(item)
 
+    cross_checked_count = int(
+        connection.execute(
+            text(
+                "SELECT COUNT(*) FROM public.trips_canonical WHERE dataset_id = :dataset_id "
+                "AND pickup_at IS NOT NULL AND dropoff_at IS NOT NULL"
+            ),
+            {"dataset_id": dataset_id},
+        ).scalar_one()
+    )
     cross_violations = int(
         connection.execute(
             text(
@@ -289,8 +386,9 @@ def profile_dataset(connection, dataset_id: str, governed_values: dict[str, list
             "left_column": "pickup_at",
             "operator": "<=",
             "right_column": "dropoff_at",
+            "checked_count": cross_checked_count,
             "violation_count": cross_violations,
-            "violation_rate": cross_violations / row_count if row_count else 0.0,
+            "violation_rate": cross_violations / cross_checked_count if cross_checked_count else 0.0,
         }],
         "generated_at": datetime.now(UTC).isoformat(),
     }
