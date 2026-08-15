@@ -1,33 +1,4 @@
 import logging
-import os
-import sys
-
-# Auto-initialize Phoenix tracing unless explicitly disabled
-if os.environ.get("DISABLE_TRACING") != "true" and "pytest" not in sys.modules:
-    try:
-        from openinference.instrumentation.langchain import LangChainInstrumentor
-        from opentelemetry import trace
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-
-        # Detect if running inside Docker to set appropriate default endpoint
-        if os.path.exists("/.dockerenv"):
-            default_endpoint = "http://host.docker.internal:6006/v1/traces"
-        else:
-            default_endpoint = "http://localhost:6006/v1/traces"
-
-        endpoint = os.environ.get("PHOENIX_COLLECTOR_ENDPOINT", default_endpoint)
-        
-        tracer_provider = TracerProvider()
-        tracer_provider.add_span_processor(
-            SimpleSpanProcessor(OTLPSpanExporter(endpoint=endpoint))
-        )
-        trace.set_tracer_provider(tracer_provider)
-        LangChainInstrumentor().instrument()
-        logging.info(f"📡 Phoenix tracing initialized at: {endpoint}")
-    except Exception as e:
-        logging.warning(f"⚠️ Could not initialize Phoenix tracing: {e}")
 
 from langgraph.graph import END, StateGraph
 
