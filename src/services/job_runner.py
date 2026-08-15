@@ -167,11 +167,10 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
             # Clean existing source rows for this dataset to remain idempotent
             db.query(SourceRowModel).filter(SourceRowModel.dataset_id == dataset_id).delete()
 
-            # Fast bulk insert
-            df_cleaned = df.where(df.notnull(), None)
-            rows_to_insert = df_cleaned.to_dict(orient="records")
-            for r in rows_to_insert:
-                r["dataset_id"] = dataset_id
+            # Fast bulk insert using vectorized pandas where mapping (object type conversion prevents float coercion of None)
+            df["dataset_id"] = dataset_id
+            df = df.astype(object).where(pd.notnull(df), None)
+            rows_to_insert = df.to_dict(orient="records")
 
             db.bulk_insert_mappings(SourceRowModel, rows_to_insert)
             db.commit()

@@ -448,9 +448,38 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
     """Lưu danh sách rule vào DB với status=PROPOSED."""
     saved = 0
     with Session(get_engine()) as session:
-        # Idempotency: delete old proposals for this dataset (RuleProposalModel) and current run (ProposedRuleModel)
-        session.query(RuleProposalModel).filter(RuleProposalModel.dataset_id == dataset_id).delete()
-        session.query(ProposedRuleModel).filter(ProposedRuleModel.run_id == run_id).delete()
+        from src.models.database import RuleConfigurationModel
+
+        # 1. Clean pending proposals that have not been approved/merged yet (they have no versions/configs)
+        session.query(RuleProposalModel).filter(
+            RuleProposalModel.dataset_id == dataset_id,
+            RuleProposalModel.status.in_(["PROPOSED", "PENDING"])
+        ).delete(synchronize_session=False)
+
+        # 2. Identify the specific rule IDs being proposed in this run
+        new_rule_ids = []
+        for r in rules:
+            r_id = r.get("rule_id", f"rule_{uuid.uuid4().hex}")
+            new_rule_ids.append(r_id)
+
+        # 3. For these specific rule IDs, clean up their versions/configs and the proposals themselves
+        # if they exist (e.g. from previous approved/merged states) to avoid duplicates and FK violations.
+        # This keeps all OTHER historical approved rules completely intact.
+        if new_rule_ids:
+            session.query(RuleConfigurationModel).filter(
+                RuleConfigurationModel.rule_proposal_id.in_(new_rule_ids)
+            ).delete(synchronize_session=False)
+
+            session.query(RuleVersionModel).filter(
+                RuleVersionModel.rule_proposal_id.in_(new_rule_ids)
+            ).delete(synchronize_session=False)
+
+            session.query(RuleProposalModel).filter(
+                RuleProposalModel.id.in_(new_rule_ids)
+            ).delete(synchronize_session=False)
+
+        # 4. Clean proposed rules run logs for idempotency
+        session.query(ProposedRuleModel).filter(ProposedRuleModel.run_id == run_id).delete(synchronize_session=False)
         session.commit()
 
         for rule in rules:
@@ -979,8 +1008,13 @@ def deactivate_rule(rule_id: str) -> bool:
         return False
 
 
-def save_generated_dbt_yaml(run_id: str, yaml_content: str) -> bool:
-    """Lưu vết tệp dbt test YAML đã sinh vào nhật ký Audit / Job metadata trong Database."""
+def save_generated_dbt_yaml(
+    run_id: str,
+    yaml_content: str | None = None,
+    *,
+    artifact_metadata: dict | None = None,
+) -> bool:
+    """Store dbt artifact metadata without duplicating the YAML in the database."""
     try:
         with Session(get_engine()) as session:
             audit = AuditEventModel(
@@ -989,7 +1023,10 @@ def save_generated_dbt_yaml(run_id: str, yaml_content: str) -> bool:
                 action_code="GENERATE_DBT_YAML_TESTS",
                 entity_type="job",
                 entity_id=run_id,
-                detail_json=json.dumps({"run_id": run_id, "dbt_yaml": yaml_content}, ensure_ascii=False),
+                detail_json=json.dumps(
+                    {"run_id": run_id, "artifact": artifact_metadata or {}},
+                    ensure_ascii=False,
+                ),
                 created_at=utc_now(),
             )
             session.add(audit)

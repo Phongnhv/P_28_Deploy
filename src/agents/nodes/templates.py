@@ -94,9 +94,10 @@ và Từ điển dữ liệu (Data Dictionary) được cung cấp.
    sau đó mô tả điều kiện một cách có ngữ cảnh. \
    VD: "Cước phí cơ bản (fare_amount) không được mang giá trị âm, vì đây là tiền tính theo đồng hồ chứ không phải hoàn tiền." \
    KHÔNG viết kiểu template máy móc như "Cột X không được để trống." hay "Cột X phải có giá trị từ A đến B."
-10. **Độ phủ có giới hạn:** Hãy đánh giá toàn bộ checklist evidence trước khi lựa chọn, \
-    sau đó chỉ trả về từ 2 đến 5 rule có bằng chứng mạnh và ý nghĩa nghiệp vụ rõ nhất. \
-    Một cột có thể có nhiều rule khác loại, nhưng tổng số rule trong response không được vượt quá 5.
+10. **Đề xuất đầy đủ:** Không chỉ trả về vài rule đại diện. Hãy duyệt hết checklist evidence \
+    được cung cấp trong user message và tạo rule cho từng ứng viên đủ bằng chứng. \
+    Một cột có thể có nhiều rule khác loại; chỉ loại ứng viên khi thực sự mâu thuẫn với ý nghĩa nghiệp vụ. \
+    Với bảng dữ liệu giàu evidence, mục tiêu thông thường là 1-3 rule phù hợp cho mỗi cột.
 11. Với `CROSS_FIELD_COMPARISON`, sao chép nguyên vẹn `parameters.target_column` và \
     `parameters.operator` từ checklist vào field `parameters` của structured output. \
     Không đặt `target_column` hoặc `operator` ở cấp ngoài của rule và không tự thay đổi toán tử.
@@ -203,8 +204,8 @@ _RULE_PROPOSER_USER = """\
 {coverage_requirements}
 ```
 
-Checklist trên là danh sách cần đánh giá đầy đủ, không phải ví dụ. Sau khi đánh giá, chọn từ 2 đến 5 \
-ứng viên có evidence mạnh nhất. Mỗi rule tạo ra phải giữ nguyên đúng tên `column` trong digest và phải \
+Checklist trên là danh sách cần đánh giá đầy đủ, không phải ví dụ. Sau khi đánh giá, đề xuất tất cả các \
+ứng viên có evidence mạnh và ý nghĩa để bảo vệ chất lượng dữ liệu (không giới hạn số lượng). Mỗi rule tạo ra phải giữ nguyên đúng tên `column` trong digest và phải \
 dẫn chứng evidence tương ứng trong `ai_reasoning`. Với `CROSS_FIELD_COMPARISON`, phải sao chép đúng object \
 `parameters` từ checklist vào structured output. Không tạo rule ngoài checklist trừ khi Data Dictionary \
 cung cấp bằng chứng nghiệp vụ rõ ràng.
@@ -231,7 +232,7 @@ dashboard_rule_proposer_prompt = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            """You are a constrained data-quality candidate selector. The server has already built an allow-listed, evidence-backed candidate checklist. Select between 2 and 5 candidates; do not create rules or parameters. For every selected candidate, copy candidate_id, column, rule_type, and parameters exactly. Return at most one candidate per rule_type. Write a concise steward-facing description and a short rationale using only the supplied aggregate evidence. Do not mention a threshold, enum value, or relationship that is absent from the selected candidate. Use the structured output schema exactly.""",
+            """You are a constrained data-quality candidate selector. The server has already built an allow-listed, evidence-backed candidate checklist. Select all necessary candidates; do not create rules or parameters. For every selected candidate, copy candidate_id, column, rule_type, and parameters exactly. Return at most one candidate per rule_type. Write a concise steward-facing description and a short rationale using only the supplied aggregate evidence. Do not mention a threshold, enum value, or relationship that is absent from the selected candidate. Use the structured output schema exactly.""",
         ),
         (
             "user",

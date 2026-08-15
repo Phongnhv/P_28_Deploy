@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -23,6 +24,7 @@ import yaml
 from src.agents.state import AgentState
 from src.config import get_settings
 from src.models.rule_schemas import RuleType
+from src.services.dbt_artifact_store import get_dbt_artifact_store, validate_run_id
 from src.services.rule_store import get_approved_rules, get_engine
 
 logger = logging.getLogger(__name__)
@@ -287,7 +289,7 @@ async def test_generator_node(state: AgentState) -> dict:
     """LangGraph Node: Sinh tệp dbt test YML từ approved rules, lưu DB, lưu vết local và chuẩn bị cho runner."""
     from src.services.rule_store import get_active_rules, save_generated_dbt_yaml
 
-    run_id = state.get("rule_run_id") or state.get("test_run_id") or "test_run"
+    run_id = validate_run_id(str(state.get("test_run_id") or state.get("rule_run_id") or "test_run"))
     approved_rules = state.get("approved_rules")
 
     # 1. Nếu chưa có trong state, load từ DB
@@ -324,22 +326,39 @@ async def test_generator_node(state: AgentState) -> dict:
     # 2. Sinh tệp dbt test YAML
     dbt_yaml_content = generate_dbt_test_yaml(approved_rules)
 
-    # 3. Ghi tệp dbt test YML vào thư mục models của dbt_project
-    root_dir = Path(__file__).resolve().parent.parent.parent.parent
-    dbt_models_dir = root_dir / "dbt_project" / "models"
-    dbt_models_dir.mkdir(parents=True, exist_ok=True)
-    dbt_yml_file = dbt_models_dir / "generated_dq_tests.yml"
+    # 3. Keep one deterministic trace per run; this is the local/test fallback only.
+    settings = get_settings()
+    base_dir = getattr(settings, "output_dir", None) or "./output"
+    trace_dir = Path(base_dir) / "test_generator" / str(run_id)
+    trace_file = trace_dir / "generated_dq_tests.yml"
+    yaml_bytes = dbt_yaml_content.encode("utf-8")
     try:
-        dbt_yml_file.write_text(dbt_yaml_content, encoding="utf-8")
-        logger.info("Đã tạo tệp dbt test YML tại: %s", dbt_yml_file)
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        trace_file.write_bytes(yaml_bytes)
+        logger.info("Đã xuất trace generated dbt YML ra: %s", trace_file)
     except Exception as exc:
-        logger.warning("Không thể ghi tệp dbt_project/models/generated_dq_tests.yml: %s", exc)
+        logger.warning("Không thể ghi trace generated dbt tests: %s", exc)
 
-    # 4. Xuất local trace file (output/test_generator/)
+    # 4. Upload the run-scoped artifact. Local/test can use the exact trace if MinIO is unavailable.
+    artifact_ref = None
+    upload_error = None
+    try:
+        artifact_ref = get_dbt_artifact_store().upload_yaml(
+            str(run_id),
+            yaml_bytes,
+            dataset_id=state.get("dataset_id"),
+            rule_run_id=state.get("rule_run_id"),
+        )
+        logger.info("Uploaded dbt test artifact: s3://%s/%s", artifact_ref.bucket, artifact_ref.object_key)
+    except Exception as exc:
+        upload_error = str(exc)
+        if settings.app_env not in ("local", "development", "test") or not trace_file.exists():
+            raise RuntimeError(f"Unable to upload generated dbt artifact for run {run_id}") from exc
+        logger.warning("Object storage upload failed; using local trace fallback for run %s: %s", run_id, exc)
+
+    # 5. Preserve a timestamped trace for existing debugging workflows.
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     try:
-        settings = get_settings()
-        base_dir = getattr(settings, "output_dir", None) or "./output"
         out_dir = Path(base_dir) / "test_generator"
         out_dir.mkdir(parents=True, exist_ok=True)
         dump_file = out_dir / f"debug_generated_dbt_tests_{timestamp}_{run_id}.yml"
@@ -348,14 +367,24 @@ async def test_generator_node(state: AgentState) -> dict:
     except Exception as exc:
         logger.warning("Không thể ghi file trace generated dbt tests: %s", exc)
 
-    # 5. Lưu tệp YML vào Database (Audit Log & Metadata)
-    save_generated_dbt_yaml(run_id, dbt_yaml_content)
+    # 6. Store audit metadata; the object store (or exact local trace in local/test) holds content.
+    save_generated_dbt_yaml(
+        run_id,
+        dbt_yaml_content,
+        artifact_metadata=artifact_ref.to_dict() if artifact_ref else {
+            "local_trace_path": str(trace_file),
+            "sha256": hashlib.sha256(yaml_bytes).hexdigest(),
+            "size_bytes": len(yaml_bytes),
+            "upload_error": upload_error,
+        },
+    )
 
     return {
         "approved_rules": approved_rules,
         "generated_tests": all_generated,
         "generated_dbt_yaml": dbt_yaml_content,
-        "dbt_yaml_file_path": str(dbt_yml_file),
+        "dbt_artifact_ref": artifact_ref.to_dict() if artifact_ref else None,
+        "dbt_trace_file_path": str(trace_file),
         "test_generation_errors": [],
     }
 

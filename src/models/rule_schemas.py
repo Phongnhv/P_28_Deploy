@@ -157,7 +157,5 @@ class TableRuleProposal(BaseModel):
     table: str = Field(..., description="Tên bảng trong database.")
     rules: list[ProposedRule] = Field(
         default_factory=list,
-        min_length=2,
-        max_length=5,
         description="Danh sách các rule đề xuất cho bảng này.",
     )

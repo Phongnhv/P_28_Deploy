@@ -57,6 +57,17 @@ class Settings(BaseSettings):
     output_dir: str = "./output"
     results_dir: str = "./output" # Backwards-compatible alias
 
+    # Generated dbt artifacts (AWS S3 in production, MinIO locally)
+    object_storage_bucket: str = "ridepulse-dbt-artifacts"
+    object_storage_prefix: str = "dbt-tests"
+    object_storage_region: str = "us-east-1"
+    object_storage_endpoint_url: str | None = None
+    object_storage_access_key_id: str | None = None
+    object_storage_secret_access_key: str | None = None
+    object_storage_max_attempts: int = Field(default=3, ge=1, le=10)
+    object_storage_connect_timeout_seconds: int = Field(default=3, ge=1, le=30)
+    object_storage_read_timeout_seconds: int = Field(default=10, ge=1, le=120)
+
 
 @lru_cache
 def get_settings() -> Settings:
