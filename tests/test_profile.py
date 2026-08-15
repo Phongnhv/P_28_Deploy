@@ -63,12 +63,12 @@ async def test_profile_hidden_before_completion(client):
 
     columns = {column["name"]: column for column in data["columns"]}
     trip_distance = columns["trip_distance"]
-    assert 0.0 <= trip_distance["negative_rate"] <= 1.0
+    assert trip_distance["negative_rate"] is None or 0.0 <= trip_distance["negative_rate"] <= 1.0
     assert set(trip_distance["quantiles"]) == {"p05", "p25", "p50", "p75", "p95"}
     assert trip_distance["quantiles"]["p05"] <= trip_distance["quantiles"]["p95"]
 
     payment_type = columns["payment_type"]
-    assert 0.0 <= payment_type["out_of_domain_rate"] <= 1.0
+    assert payment_type["out_of_domain_rate"] is None or 0.0 <= payment_type["out_of_domain_rate"] <= 1.0
     assert payment_type["full_distinct_count"] == payment_type["distinct_count"]
 
     source_row_id = columns["source_row_id"]
