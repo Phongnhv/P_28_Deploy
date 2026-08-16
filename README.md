@@ -60,19 +60,52 @@ graph TD
 
 ## 4. Environment Variables
 
-Hệ thống yêu cầu các biến môi trường sau để cấu hình kết nối, API key, và môi trường. Bạn có thể xem file `.env.example`.
+Hệ thống yêu cầu các biến môi trường sau. Tạo file `.env` bằng cách sao chép từ `.env.example` và điền đầy đủ giá trị.
 
-| Variable | Description | Example / Placeholder |
-|---|---|---|
-| `OPENAI_API_KEY` | API Key để gọi OpenAI LLMs | `sk-your-openai-api-key-here` |
-| `DATABASE_URL` | Chuỗi kết nối Database chính | `postgresql+psycopg2://user:pass@localhost:5432/dbname` |
-| `RUNNER_DATABASE_URL` | Chuỗi kết nối Database cho Worker runner | `postgresql+psycopg2://runner:pass@db:5432/dbname` |
-| `CHROMA_PERSIST_DIR` | Thư mục lưu trữ vector của ChromaDB | `./data/chroma` |
-| `APP_ENV` | Môi trường triển khai (local, dev, prod) | `local` |
-| `FRONTEND_ORIGIN` | Cấu hình CORS cho Frontend | `http://localhost:3000` |
-| `LANGCHAIN_API_KEY` | Key cho LangSmith tracing | `ls-your-langsmith-key-here` |
+### LLM Configuration
 
-*Lưu ý bảo mật: Tuyệt đối không commit file `.env` chứa token thực lên git.*
+| Variable | Required | Description | Example / Placeholder |
+|---|---|---|---|
+| `OPENAI_API_KEY` | ✅ (nếu dùng OpenAI) | API Key cho OpenAI LLMs | `sk-your-openai-api-key-here` |
+| `ANTHROPIC_API_KEY` | ⚪ (nếu dùng Anthropic) | API Key cho Claude | `sk-ant-your-key-here` |
+| `MISTRAL_API_KEY` | ⚪ (nếu dùng Mistral) | API Key cho MistralAI | `your-mistral-key-here` |
+| `GOOGLE_API_KEY` | ⚪ (nếu dùng Google) | API Key cho Google GenAI | `your-google-key-here` |
+| `PROVIDER` | ⚪ | LLM provider đang dùng (`openai`/`anthropic`/`mistral`/`google`) | `openai` |
+| `AGENT_MODE` | ⚪ | Chế độ chạy agent (`mock` để test, `graph` để chạy thật) | `graph` |
+
+### Database & Storage
+
+| Variable | Required | Description | Example / Placeholder |
+|---|---|---|---|
+| `DATABASE_URL` | ✅ | Kết nối Database chính (PostgreSQL hoặc SQLite) | `sqlite:///steward_local.db` |
+| `RUNNER_DATABASE_URL` | ⚪ | Kết nối DB cho Worker (tách biệt quyền truy cập) | `sqlite:///steward_local.db` |
+| `SUPABASE_DATABASE_URL` | ⚪ | URL Supabase DB (môi trường production) | `postgresql://user:pass@db.supabase.co:5432/postgres` |
+| `DQ_EXECUTION_BACKEND` | ⚪ | Backend thực thi DQ (`auto`/`local`/`supabase`) | `auto` |
+| `MINIO_URL` | ⚪ | Endpoint MinIO Object Storage | `http://localhost:9000` |
+| `MINIO_ACCESS_KEY` | ⚪ | Access key cho MinIO | `minioadmin` |
+| `MINIO_SECRET_KEY` | ⚪ | Secret key cho MinIO | `miniopassword` |
+
+### App & Networking
+
+| Variable | Required | Description | Example / Placeholder |
+|---|---|---|---|
+| `APP_ENV` | ✅ | Môi trường triển khai (`local`/`development`/`production`) | `local` |
+| `FRONTEND_ORIGIN` | ✅ | Danh sách domain cho phép CORS (phân tách bằng dấu phẩy) | `http://localhost:3000,http://localhost:5173` |
+| `LOCAL_WORKER_URL` | ⚪ | URL của Local Worker API (thay thế Cloud Run khi phát triển) | `http://localhost:8001/run` |
+
+### Observability & Logging
+
+| Variable | Required | Description | Example / Placeholder |
+|---|---|---|---|
+| `LANGCHAIN_API_KEY` | ⚪ | Key LangSmith tracing | `ls-your-langsmith-key-here` |
+| `LANGCHAIN_TRACING_V2` | ⚪ | Bật LangSmith tracing | `true` |
+| `LANGCHAIN_PROJECT` | ⚪ | Tên project trên LangSmith | `ridepulse-dq` |
+| `AI_LOG_SERVER` | ⚪ | Server nhận AI hook logs (do instructor cung cấp) | `https://ai-logs.example.com/api/ingest` |
+| `AI_LOG_API_KEY` | ⚪ | API key cho AI log server | `your-ai-log-key-here` |
+| `AI_LOG_DIR` | ⚪ | Thư mục lưu log file cục bộ | `.ai-log` |
+
+> [!CAUTION]
+> **Tuyệt đối không commit file `.env` hoặc để lộ bất kỳ token/key thực nào lên git.**
 
 ## 5. Setup & Installation Guide
 
