@@ -2,6 +2,13 @@
 .gitignore
 .env
 .venv
+venv/
+data/
+*.db
+*.db-shm
+*.db-wal
+*.parquet
+*.csv
 __pycache__
 *.pyc
 .pytest_cache
@@ -14,3 +21,4 @@ eval/
 .dockerignore
 Dockerfile
 docker-compose.yml
+
