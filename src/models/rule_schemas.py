@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -45,6 +45,21 @@ class Severity(StrEnum):
     MEDIUM = "MEDIUM"
     LOW = "LOW"
 
+class ProposalBasis(StrEnum):
+    SCHEMA_CONSTRAINT = "SCHEMA_CONSTRAINT"
+    DATA_PROFILE = "DATA_PROFILE"
+    DATA_DICTIONARY = "DATA_DICTIONARY"
+    HISTORICAL_RULE = "HISTORICAL_RULE"
+    POLICY = "POLICY"
+    MIXED = "MIXED"
+
+class EvidenceSourceType(StrEnum):
+    SCHEMA_CONSTRAINT = "SCHEMA_CONSTRAINT"
+    DATA_PROFILE = "DATA_PROFILE"
+    DATA_DICTIONARY = "DATA_DICTIONARY"
+    HISTORICAL_RULE = "HISTORICAL_RULE"
+    POLICY = "POLICY"
+
 class RuleStatus(StrEnum):
     PENDING = "PENDING"
     APPROVED = "APPROVED"
@@ -71,6 +86,46 @@ class RuleParameters(BaseModel):
     operator: Literal["<=", "<", ">=", ">", "=", "==", "!=", "<>"] | None = None
 
 
+class ParameterProvenance(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    parameter_name: str = Field(min_length=1)
+    source_type: EvidenceSourceType
+    source_ref: str = Field(min_length=1)
+    derivation_method: str = Field(min_length=1)
+
+
+class RuleConfidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    overall: float = Field(ge=0.0, le=1.0)
+    evidence_strength: float = Field(ge=0.0, le=1.0)
+    business_support: float = Field(ge=0.0, le=1.0)
+    sample_representativeness: float = Field(ge=0.0, le=1.0)
+    explanation: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_overall(self) -> RuleConfidence:
+        component_mean = (
+            self.evidence_strength + self.business_support + self.sample_representativeness
+        ) / 3
+        if abs(self.overall - component_mean) > 0.25:
+            raise ValueError("confidence.overall chênh quá 0.25 so với trung bình các thành phần")
+        return self
+
+
+class RuleEvidenceSnapshot(BaseModel):
+    """Evidence do node resolve từ digest; model không được tự tạo object này."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sample_row_count: int = Field(ge=0)
+    sample_rate: float = Field(ge=0.0, le=1.0)
+    sampling_caveat: str | None = None
+    observed_metrics: dict[str, Any] = Field(default_factory=dict)
+    source_refs: list[str] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Proposed rule (one row in the HITL review table)
 # ---------------------------------------------------------------------------
@@ -88,7 +143,13 @@ class ProposedRule(BaseModel):
     )
     rule_type: RuleType
     parameters: RuleParameters = Field(default_factory=RuleParameters)
-    confidence_score: float = Field(..., ge=0.0, le=1.0)
+    rule_name: str = Field(min_length=1)
+    business_rationale: str = Field(min_length=1)
+    proposal_basis: ProposalBasis
+    selected_evidence_refs: list[str] = Field(min_length=1)
+    parameter_provenance: list[ParameterProvenance] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    confidence: RuleConfidence
     severity: Severity
 
     dimension: DataQualityDimension = Field(
@@ -114,11 +175,65 @@ class ProposedRule(BaseModel):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _upgrade_legacy_payload(cls, value):
+        """Accept persisted/test payloads from the pre-core-evidence contract.
+
+        The generated JSON schema still requires the new fields; this adapter only
+        keeps old artifacts and fixtures readable during rollout.
+        """
+        if not isinstance(value, dict) or "confidence_score" not in value:
+            return value
+        upgraded = dict(value)
+        score = upgraded.pop("confidence_score")
+        description = str(upgraded.get("rule_description") or "Rule proposal")
+        params = upgraded.get("parameters") or {}
+        if isinstance(params, RuleParameters):
+            params = params.model_dump(exclude_none=True)
+        reference = "history:legacy:proposal"
+        upgraded.setdefault("rule_name", description)
+        upgraded.setdefault("business_rationale", str(upgraded.get("ai_reasoning") or description))
+        upgraded.setdefault("proposal_basis", ProposalBasis.HISTORICAL_RULE)
+        upgraded.setdefault("selected_evidence_refs", [reference])
+        upgraded.setdefault(
+            "parameter_provenance",
+            [
+                {
+                    "parameter_name": name,
+                    "source_type": EvidenceSourceType.HISTORICAL_RULE,
+                    "source_ref": reference,
+                    "derivation_method": "legacy proposal compatibility",
+                }
+                for name, parameter_value in params.items()
+                if parameter_value is not None
+            ],
+        )
+        upgraded.setdefault("assumptions", ["Upgraded from the legacy proposal schema."])
+        upgraded.setdefault(
+            "confidence",
+            {
+                "overall": score,
+                "evidence_strength": score,
+                "business_support": score,
+                "sample_representativeness": score,
+                "explanation": "Legacy confidence score",
+            },
+        )
+        return upgraded
+
     @model_validator(mode="after")
     def _validate_parameters(self) -> ProposedRule:
         """Guardrail: kiểm tra từng rule_type có đủ tham số bắt buộc không."""
         rt = self.rule_type
         p = self.parameters
+
+        if len(self.selected_evidence_refs) != len(set(self.selected_evidence_refs)):
+            raise ValueError("selected_evidence_refs không được trùng lặp")
+        if rt == RuleType.ROW_COUNT and self.column is not None:
+            raise ValueError("ROW_COUNT yêu cầu column=None")
+        if rt != RuleType.ROW_COUNT and not self.column:
+            raise ValueError(f"{rt.value} yêu cầu column")
 
         if rt == RuleType.RANGE and p.min is None and p.max is None:
             raise ValueError(
@@ -135,12 +250,27 @@ class ProposedRule(BaseModel):
                 f"Rule REGEX_FORMAT yêu cầu trường regex không rỗng "
                 f"(column={self.column!r})"
             )
+        if rt == RuleType.FRESHNESS and p.max_age_hours is None:
+            raise ValueError("FRESHNESS yêu cầu max_age_hours")
+        if rt == RuleType.ROW_COUNT and p.min_row_count is None:
+            raise ValueError("ROW_COUNT yêu cầu min_row_count")
+        if rt == RuleType.NULL_RATE and p.max_null_pct is None:
+            raise ValueError("NULL_RATE yêu cầu max_null_pct")
         if rt == RuleType.CROSS_FIELD_COMPARISON and (
             p.target_column is None or p.operator is None
         ):
             raise ValueError(
                 "Rule CROSS_FIELD_COMPARISON yêu cầu target_column và operator "
                 f"không được None (column={self.column!r})"
+            )
+
+        active_parameters = {
+            name for name, value in p.model_dump().items() if value is not None
+        }
+        provenance_parameters = {item.parameter_name for item in self.parameter_provenance}
+        if active_parameters != provenance_parameters:
+            raise ValueError(
+                "parameter_provenance phải chứa đúng một entry cho mỗi parameter đang sử dụng"
             )
         return self
 

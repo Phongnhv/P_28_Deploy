@@ -191,6 +191,13 @@ class RuleProposalSchema(BaseModel):
     evidence_summary: str
     confidence: float
     model_name: str
+    rule_name: str
+    business_rationale: str
+    proposal_basis: str
+    evidence: dict
+    parameter_provenance: list[dict]
+    assumptions: list[str]
+    confidence_breakdown: dict
     created_at: str
     updated_at: str
 
@@ -873,6 +880,13 @@ def list_proposals(
             evidence_summary=p.evidence_summary,
             confidence=p.confidence,
             model_name=p.model_name,
+            rule_name=p.rule_name,
+            business_rationale=p.business_rationale,
+            proposal_basis=p.proposal_basis,
+            evidence=json.loads(p.evidence or "{}"),
+            parameter_provenance=json.loads(p.parameter_provenance or "[]"),
+            assumptions=json.loads(p.assumptions or "[]"),
+            confidence_breakdown=json.loads(p.confidence_breakdown or "{}"),
             created_at=p.created_at.isoformat(),
             updated_at=p.updated_at.isoformat(),
         )
@@ -909,6 +923,13 @@ def create_manual_rule(
         evidence_summary="Manually added by data steward",
         confidence=1.0,
         model_name="data-steward",
+        rule_name=body.title,
+        business_rationale=body.description,
+        proposal_basis="POLICY",
+        evidence=json.dumps({"source_refs": ["manual"]}),
+        parameter_provenance="[]",
+        assumptions="[]",
+        confidence_breakdown=json.dumps({"overall": 1.0, "evidence_strength": 1.0, "business_support": 1.0, "sample_representativeness": 1.0, "explanation": "Manually authored by data steward"}),
         created_at=utc_now(),
         updated_at=utc_now(),
     )
@@ -937,6 +958,13 @@ def create_manual_rule(
         evidence_summary=prop.evidence_summary,
         confidence=prop.confidence,
         model_name=prop.model_name,
+        rule_name=prop.rule_name,
+        business_rationale=prop.business_rationale,
+        proposal_basis=prop.proposal_basis,
+        evidence=json.loads(prop.evidence or "{}"),
+        parameter_provenance=json.loads(prop.parameter_provenance or "[]"),
+        assumptions=json.loads(prop.assumptions or "[]"),
+        confidence_breakdown=json.loads(prop.confidence_breakdown or "{}"),
         created_at=prop.created_at.isoformat(),
         updated_at=prop.updated_at.isoformat(),
     )
@@ -1089,6 +1117,13 @@ def review_proposal(
         evidence_summary=prop.evidence_summary,
         confidence=prop.confidence,
         model_name=prop.model_name,
+        rule_name=prop.rule_name,
+        business_rationale=prop.business_rationale,
+        proposal_basis=prop.proposal_basis,
+        evidence=json.loads(prop.evidence or "{}"),
+        parameter_provenance=json.loads(prop.parameter_provenance or "[]"),
+        assumptions=json.loads(prop.assumptions or "[]"),
+        confidence_breakdown=json.loads(prop.confidence_breakdown or "{}"),
         created_at=prop.created_at.isoformat(),
         updated_at=prop.updated_at.isoformat(),
     )

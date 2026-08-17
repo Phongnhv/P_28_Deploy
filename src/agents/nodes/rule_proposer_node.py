@@ -37,7 +37,7 @@ from src.agents.tools.profile_digest import (
     split_digest_by_table,
 )
 from src.config import get_settings
-from src.models.rule_schemas import ProposedRule, RuleStatus, TableRuleProposal
+from src.models.rule_schemas import ProposedRule, RuleEvidenceSnapshot, TableRuleProposal
 from src.services.llm import get_llm
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,10 @@ def _build_coverage_requirements(table_digest: dict) -> list[dict]:
         # profile evidence into a small policy-approved candidate set.  Do not add
         # legacy heuristic candidates here: doing so lets a model spend all five
         # slots on repeated NOT_NULL rules and weakens the product contract.
-        return [candidate for candidate in dashboard_candidates if isinstance(candidate, dict)]
+        return _attach_evidence_items(
+            [candidate for candidate in dashboard_candidates if isinstance(candidate, dict)],
+            table_digest,
+        )
 
     requirements: list[dict] = []
     digest_columns = table_digest.get("columns") or []
@@ -142,7 +145,8 @@ def _build_coverage_requirements(table_digest: dict) -> list[dict]:
                 "evidence": {"null_pct": null_pct},
             })
 
-        if "fixed_length" in signals:
+        is_datetime_col = any(suffix in name for suffix in ["_at", "_time", "_date", "datetime", "pickup", "dropoff"])
+        if "fixed_length" in signals and not is_datetime_col:
             requirements.append({
                 "column": name,
                 "rule_type": "REGEX_FORMAT",
@@ -196,7 +200,97 @@ def _build_coverage_requirements(table_digest: dict) -> list[dict]:
         "rule_type": "ROW_COUNT",
         "evidence": {"rows": table_digest.get("rows", 0)},
     })
-    return requirements
+    return _attach_evidence_items(requirements, table_digest)
+
+
+def _evidence_source_type(reference: str) -> str:
+    if reference.startswith(("policy.", "policy:")):
+        return "POLICY"
+    if reference.startswith(("schema.", "schema:")):
+        return "SCHEMA_CONSTRAINT"
+    if reference.startswith("dictionary."):
+        return "DATA_DICTIONARY"
+    if reference.startswith("history."):
+        return "HISTORICAL_RULE"
+    return "DATA_PROFILE"
+
+
+def _digest_metric_value(table_digest: dict, column: str | None, metric: str):
+    if metric == "rows":
+        return table_digest.get("rows")
+    if column:
+        column_digest = next(
+            (item for item in table_digest.get("columns", []) if item.get("name") == column),
+            {},
+        )
+        aliases = {
+            "null_rate": "null_pct",
+            "negative_rate": "negative_pct",
+            "min_value": "range",
+            "max_value": "range",
+            "distinct_count": "full_distinct_count",
+            "uniqueness_rate": "uniqueness_pct",
+            "out_of_domain_rate": "out_of_domain_pct",
+            "data_type": "type",
+        }
+        key = aliases.get(metric, metric)
+        value = column_digest.get(key)
+        if value is None and metric in {"p05", "p50", "p95", "p5", "p95"}:
+            quantiles = column_digest.get("quantiles") or column_digest.get("percentiles") or {}
+            value = quantiles.get(metric) or quantiles.get(metric.replace("p0", "p"))
+        if metric == "min_value" and isinstance(value, list):
+            return value[0]
+        if metric == "max_value" and isinstance(value, list):
+            return value[1]
+        return value
+    return None
+
+
+def _attach_evidence_items(requirements: list[dict], table_digest: dict) -> list[dict]:
+    """Convert legacy evidence hints into allow-listed, stable evidence references."""
+    enriched: list[dict] = []
+    for requirement in requirements:
+        item = dict(requirement)
+        column = item.get("column")
+        raw_evidence = item.pop("evidence", [])
+        evidence_items: list[dict] = []
+        if isinstance(raw_evidence, list):
+            for raw in raw_evidence:
+                reference = str(raw)
+                if not reference.startswith(("profile.", "policy.", "schema.", "dictionary.", "history.")):
+                    prefix = "schema" if "constraint" in reference or reference == "has_pk_constraint" else "profile"
+                    reference = f"{prefix}:{column or '_table'}:{reference}"
+                metric = reference.rsplit(".", 1)[-1].rsplit(":", 1)[-1]
+                evidence_items.append({
+                    "id": reference,
+                    "source_type": _evidence_source_type(reference),
+                    "metric": metric,
+                    "value": _digest_metric_value(table_digest, column, metric),
+                })
+        elif isinstance(raw_evidence, dict):
+            for metric, value in raw_evidence.items():
+                evidence_items.append({
+                    "id": f"profile:{column or '_table'}:{metric}",
+                    "source_type": "DATA_PROFILE",
+                    "metric": metric,
+                    "value": value,
+                })
+        item["evidence_items"] = evidence_items
+        enriched.append(item)
+    return enriched
+
+
+def _find_requirement(rule: ProposedRule, requirements: list[dict]) -> dict | None:
+    for requirement in requirements:
+        if rule.candidate_id and requirement.get("candidate_id") == rule.candidate_id:
+            return requirement
+        if (
+            not rule.candidate_id
+            and requirement.get("column") == rule.column
+            and requirement.get("rule_type") == rule.rule_type.value
+        ):
+            return requirement
+    return None
 
 
 def _load_data_dictionary() -> str:
@@ -306,6 +400,8 @@ def _stamp_rule(
     table_name: str,
     run_id: str,
     used_ids: set[str] | None = None,
+    requirement: dict | None = None,
+    table_digest: dict | None = None,
 ) -> dict:
     """Chuyển ProposedRule sang dict có rule_id, table_name, run_id đính kèm.
 
@@ -341,6 +437,33 @@ def _stamp_rule(
         )
         return {}  # sentinel
 
+    evidence_items = (requirement or {}).get("evidence_items", [])
+    if requirement is None:
+        evidence_items = [
+            {"id": ref, "source_type": _evidence_source_type(ref), "value": None}
+            for ref in rule.selected_evidence_refs
+        ]
+    evidence_by_id = {item["id"]: item for item in evidence_items}
+    if not set(rule.selected_evidence_refs).issubset(evidence_by_id):
+        logger.warning("Rule %s tham chiếu evidence không thuộc candidate", rule_id)
+        return {}
+    if any(item.source_ref not in rule.selected_evidence_refs for item in rule.parameter_provenance):
+        logger.warning("Rule %s có parameter provenance ngoài selected evidence", rule_id)
+        return {}
+
+    digest = table_digest or {}
+    sample = digest.get("sample") or {}
+    dashboard_full_table = bool(digest.get("dashboard_candidate_mode"))
+    evidence = RuleEvidenceSnapshot(
+        sample_row_count=int(digest.get("rows") or 0) if dashboard_full_table else int(sample.get("n") or digest.get("rows") or 0),
+        sample_rate=1.0 if dashboard_full_table else float(sample.get("rate", 1.0)),
+        sampling_caveat=sample.get("caveat"),
+        observed_metrics={
+            ref: evidence_by_id[ref].get("value") for ref in rule.selected_evidence_refs
+        },
+        source_refs=rule.selected_evidence_refs,
+    )
+
     return {
         "candidate_id": rule.candidate_id,
         "rule_id": rule_id,
@@ -349,17 +472,19 @@ def _stamp_rule(
         "column": rule.column,
         "rule_type": rule.rule_type.value,
         "parameters": rule.parameters.model_dump(exclude_none=True),
-        "confidence_score": rule.confidence_score,
+        "rule_name": rule.rule_name,
+        "business_rationale": rule.business_rationale,
+        "proposal_basis": rule.proposal_basis.value,
+        "selected_evidence_refs": rule.selected_evidence_refs,
+        "parameter_provenance": [item.model_dump(mode="json") for item in rule.parameter_provenance],
+        "assumptions": rule.assumptions,
+        "confidence": rule.confidence.model_dump(),
+        "confidence_score": rule.confidence.overall,
+        "evidence": evidence.model_dump(),
         "severity": rule.severity.value,
         "dimension": rule.dimension.value,
         "rule_description": rule.rule_description,
         "ai_reasoning": rule.ai_reasoning,
-        "status": RuleStatus.PENDING.value,
-        "edited_parameters": None,
-        "reviewer": None,
-        "review_note": None,
-        "reviewed_at": None,
-        "created_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -441,8 +566,16 @@ async def rule_proposer_node(state: AgentState) -> dict:
             continue
 
         proposal: TableRuleProposal = result
+        requirements = _build_coverage_requirements(per_table[table_name])
         for rule in proposal.rules:
-            stamped = _stamp_rule(rule, table_name, run_id, used_ids)
+            stamped = _stamp_rule(
+                rule,
+                table_name,
+                run_id,
+                used_ids,
+                _find_requirement(rule, requirements),
+                per_table[table_name],
+            )
             if stamped:  # bỏ qua sentinel rỗng (rule bị loại do validation)
                 flat_rules.append(stamped)
 

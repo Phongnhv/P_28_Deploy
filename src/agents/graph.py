@@ -23,6 +23,7 @@ from langgraph.graph import END, StateGraph
 
 from src.agents.state import AgentState
 
+
 # ---------------------------------------------------------------------------
 # Run 1: Proposal Graph (profiler → digest → rule_proposer → persist_rules)
 # ---------------------------------------------------------------------------
