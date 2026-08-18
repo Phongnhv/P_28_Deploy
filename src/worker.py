@@ -204,8 +204,21 @@ async def run_propose_rules(job_id: str, dataset_id: str):
 
     # Invoke proposal pipeline
     final_state = await proposal_graph.ainvoke(state)
-    if final_state.get("error"):
-        raise Exception(f"Proposal pipeline failed: {final_state.get('error')}")
+    err = final_state.get("error")
+    if err:
+        if err == "AWAITING_SEMANTIC_REVIEW":
+            logger.info("Proposal pipeline paused: AWAITING_SEMANTIC_REVIEW. Exiting worker cleanly.")
+            from src.services.rule_store import get_engine
+            from sqlalchemy.orm import Session
+            from src.models.database import JobModel
+            with Session(get_engine()) as session:
+                db_job = session.query(JobModel).filter_by(id=job_id).first()
+                if db_job:
+                    db_job.status = "AWAITING_SEMANTIC_REVIEW"
+                    db_job.error = None
+                    session.commit()
+            return
+        raise Exception(f"Proposal pipeline failed: {err}")
 
     logger.info(f"PROPOSE_RULES job {job_id} completed successfully.")
 
@@ -264,8 +277,9 @@ async def main():
         with Session(engine) as session:
             db_job = session.query(JobModel).filter_by(id=job_id).first()
             if db_job:
-                db_job.status = 'SUCCEEDED' # Align with IMPLEMENTATION_GUIDE
-                db_job.error = None
+                if db_job.status != "AWAITING_SEMANTIC_REVIEW":
+                    db_job.status = "SUCCEEDED"
+                    db_job.error = None
                 session.commit()
         logger.info(f"Job {job_id} completed successfully in {time.time() - start_time:.2f} seconds.")
 

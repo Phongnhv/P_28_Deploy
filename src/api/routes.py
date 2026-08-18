@@ -622,6 +622,99 @@ def get_dataset_profile(
     )
 
 
+@router.get("/datasets/{id}/semantic-contract")
+def get_semantic_contract(
+    id: str, session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])), db: Session = Depends(get_db)
+):
+    """
+    GET /api/v1/datasets/{id}/semantic-contract - Returns the latest semantic contract draft or confirmed version.
+    """
+    from pathlib import Path
+    dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    require_dataset_access(db, session, id)
+
+    # Find the latest PROPOSE_RULES job for this dataset
+    job = db.query(JobModel).filter(
+        JobModel.linked_entity == id,
+        JobModel.type == "PROPOSE_RULES"
+    ).order_by(JobModel.created_at.desc()).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="No rule proposal job found for this dataset")
+
+    run_id = job.id
+    settings = get_settings()
+    semantic_dir = Path(settings.output_dir) / "semantic"
+    semantic_file = semantic_dir / f"debug_semantic_contract_{run_id}.json"
+
+    if not semantic_file.exists():
+        raise HTTPException(status_code=404, detail=f"Semantic Contract not generated yet for run {run_id}")
+
+    try:
+        with open(semantic_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read semantic contract: {str(e)}")
+
+
+@router.post("/datasets/{id}/semantic-contract/confirm")
+def confirm_semantic_contract(
+    id: str,
+    body: dict,
+    background_tasks: BackgroundTasks,
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db)
+):
+    """
+    POST /api/v1/datasets/{id}/semantic-contract/confirm - Allows Steward to confirm/update the semantic contract.
+    Resumes rule proposal graph execution in background.
+    """
+    from pathlib import Path
+    dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    require_dataset_access(db, session, id, manage=True)
+
+    # Find the latest PROPOSE_RULES job
+    job = db.query(JobModel).filter(
+        JobModel.linked_entity == id,
+        JobModel.type == "PROPOSE_RULES"
+    ).order_by(JobModel.created_at.desc()).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="No rule proposal job found to confirm")
+
+    run_id = job.id
+    settings = get_settings()
+    semantic_dir = Path(settings.output_dir) / "semantic"
+    semantic_dir.mkdir(parents=True, exist_ok=True)
+    semantic_file = semantic_dir / f"debug_semantic_contract_{run_id}.json"
+
+    # Set status to confirmed in the payload
+    body["status"] = "confirmed"
+    body["dataset_id"] = id
+
+    try:
+        with open(semantic_file, "w", encoding="utf-8") as f:
+            json.dump(body, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save semantic contract: {str(e)}")
+
+    # Update job status back to PENDING to resume the job
+    job.status = "PENDING"
+    job.progress = 30.0
+    job.message = "Semantic contract confirmed. Resuming rule proposals generation..."
+    db.commit()
+
+    # Trigger background task to continue
+    background_tasks.add_task(run_propose_rules, job.id, id, session.id, session.role)
+
+    return {"message": "Semantic contract confirmed successfully. Resumed proposals job.", "job_id": job.id}
+
+
 @router.get("/datasets/{id}/rows", response_model=DatasetRowsResponse)
 def query_dataset_rows(
     id: str,

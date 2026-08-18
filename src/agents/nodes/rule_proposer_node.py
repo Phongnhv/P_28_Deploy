@@ -317,16 +317,15 @@ def _load_data_dictionary() -> str:
     return "None"
 
 
-# ---------------------------------------------------------------------------
-# Helper: đề xuất rule cho 1 bảng (async, retry với backoff mũ)
-# ---------------------------------------------------------------------------
-
 async def _propose_for_table(
     table_name: str,
     table_digest: dict,
     structured_llm,
     semaphore: asyncio.Semaphore,
     max_retries: int,
+    semantic_contract: dict | None = None,
+    candidates: list[dict] | None = None,
+    dataset_id: str = "unknown",
 ) -> TableRuleProposal:
     """Gọi LLM một lần cho một bảng, bảo vệ bằng semaphore + retry."""
     columns = [col["name"] for col in table_digest.get("columns", [])]
@@ -345,14 +344,30 @@ async def _propose_for_table(
                     max_retries + 1,
                     entry_ts.isoformat(),
                 )
-                coverage_requirements = json.dumps(
-                    _build_coverage_requirements(table_digest),
-                    ensure_ascii=False,
-                )
+                
+                is_taxi = dataset_id.lower().startswith("nyc-yellow") or "taxi" in dataset_id.lower()
+                
+                if candidates is not None:
+                    coverage_requirements = json.dumps(candidates, ensure_ascii=False)
+                else:
+                    coverage_requirements = json.dumps(
+                        _build_coverage_requirements(table_digest),
+                        ensure_ascii=False,
+                    )
+
                 if dashboard_mode:
                     messages = dashboard_rule_proposer_prompt.format_messages(
                         table_name=table_name,
                         table_digest=json.dumps(table_digest, ensure_ascii=False),
+                        coverage_requirements=coverage_requirements,
+                    )
+                elif not is_taxi and semantic_contract:
+                    from src.agents.nodes.templates import generic_rule_proposer_prompt
+                    messages = generic_rule_proposer_prompt.format_messages(
+                        table_name=table_name,
+                        table_digest=json.dumps(table_digest, ensure_ascii=False),
+                        semantic_contract=json.dumps(semantic_contract, ensure_ascii=False),
+                        historical_rules=json.dumps(historical, ensure_ascii=False),
                         coverage_requirements=coverage_requirements,
                     )
                 else:
@@ -551,6 +566,17 @@ async def rule_proposer_node(state: AgentState) -> dict:
     # 4. Fan-out
     semaphore = asyncio.Semaphore(settings.rule_proposer_concurrency)
     table_names = list(per_table.keys())
+    dataset_id = state.get("dataset_id", "unknown")
+
+    contract = state.get("semantic_contract") or {}
+    tables_contract = contract.get("tables", {})
+
+    all_candidates = state.get("rule_candidates", [])
+    candidates_by_table = {}
+    for c in all_candidates:
+        tb = c.get("table")
+        if tb:
+            candidates_by_table.setdefault(tb, []).append(c)
 
     results = await asyncio.gather(
         *[
@@ -560,6 +586,9 @@ async def rule_proposer_node(state: AgentState) -> dict:
                 structured_llm=structured_llm,
                 semaphore=semaphore,
                 max_retries=max_retries,
+                semantic_contract=tables_contract.get(t),
+                candidates=candidates_by_table.get(t),
+                dataset_id=dataset_id,
             )
             for t in table_names
         ],
@@ -579,7 +608,10 @@ async def rule_proposer_node(state: AgentState) -> dict:
             continue
 
         proposal: TableRuleProposal = result
-        requirements = _build_coverage_requirements(per_table[table_name])
+        requirements = candidates_by_table.get(table_name)
+        if requirements is None:
+            requirements = _build_coverage_requirements(per_table[table_name])
+
         for rule in proposal.rules:
             stamped = _stamp_rule(
                 rule,
@@ -589,7 +621,7 @@ async def rule_proposer_node(state: AgentState) -> dict:
                 _find_requirement(rule, requirements),
                 per_table[table_name],
             )
-            if stamped:  # bỏ qua sentinel rỗng (rule bị loại do validation)
+            if stamped:
                 flat_rules.append(stamped)
 
     logger.info(
@@ -599,8 +631,6 @@ async def rule_proposer_node(state: AgentState) -> dict:
         len(errors),
     )
 
-    # Store free-form model output only when a developer has explicitly enabled
-    # debug artifacts.  Dashboard persistence keeps the validated typed proposal.
     if settings.debug_dump_table_digests:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         try:
@@ -608,7 +638,7 @@ async def rule_proposer_node(state: AgentState) -> dict:
             dump_file = rule_proposer_dir / f"debug_proposed_rules_{timestamp}_{run_id}.json"
             dump_payload = {
                 "run_id": run_id,
-                "generated_at": datetime.now(UTC).isoformat(),
+                "generated_at": datetime.now().isoformat(),
                 "total_rules": len(flat_rules),
                 "total_errors": len(errors),
                 "proposed_rules": flat_rules,
@@ -625,11 +655,8 @@ async def rule_proposer_node(state: AgentState) -> dict:
         "rule_run_id": run_id,
     }
 
-
-
 # ---------------------------------------------------------------------------
-# Persist rules node (thin)
-# ---------------------------------------------------------------------------
+
 
 async def persist_rules_node(state: AgentState) -> dict:
     """Lưu proposed_rules vào DB qua asyncio.to_thread (SQLAlchemy sync).

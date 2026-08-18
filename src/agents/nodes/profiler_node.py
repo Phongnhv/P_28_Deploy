@@ -107,16 +107,30 @@ async def raw_profiler_node(state: AgentState) -> dict:
             engine = get_engine()
             inspector = inspect(engine)
             all_tables = inspector.get_table_names()
-            tables = [t for t in all_tables if t.lower() == "source_rows"]
         else:
             engine = create_engine(connection_string)
             try:
                 with engine.connect():
                     inspector = inspect(engine)
                     all_tables = inspector.get_table_names()
-                    tables = [t for t in all_tables if t.lower() == "source_rows"]
             finally:
                 engine.dispose()
+
+        # Lọc bỏ bảng hệ thống
+        available_tables = [t for t in all_tables if t.lower() not in system_tables]
+
+        # Đọc target_tables từ state
+        target_tables = state.get("target_tables")
+        if target_tables:
+            target_lower = {t.lower() for t in target_tables}
+            tables = [t for t in available_tables if t.lower() in target_lower]
+        else:
+            # Tương thích ngược: nếu có source_rows thì ưu tiên dùng source_rows làm default
+            source_rows_match = [t for t in available_tables if t.lower() == "source_rows"]
+            if source_rows_match:
+                tables = source_rows_match
+            else:
+                tables = available_tables
     except Exception as e:
         logger.error(f"Lỗi khi kết nối database hoặc lấy danh sách bảng: {str(e)}", exc_info=True)
         return {"error": f"Lỗi khi kết nối database hoặc lấy danh sách bảng: {str(e)}"}
