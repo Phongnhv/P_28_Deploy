@@ -45,6 +45,10 @@ graph TD
     Worker -- "Access" --> DB
 ```
 
+> 📖 **Gate 2 MVP Documentation:** Xem tài liệu Gate 2 MVP tại [`docs/gate2-mvp`](docs/DATABASE_ARCHITECTURE.md), chi tiết Kiến trúc CSDL PostgreSQL tại [`docs/DATABASE_ARCHITECTURE.md`](docs/DATABASE_ARCHITECTURE.md) và Báo cáo Nghiệm thu 5 kịch bản E1-E5 tại [`eval/results/E1_E5_EVALUATION.md`](eval/results/E1_E5_EVALUATION.md).
+
+
+
 ### Data Flow
 - **Flow 1 (Proposal):** `User/CLI -> Backend -> Proposal Graph (LangGraph) -> Profiler -> LLM (Propose Rules) -> HITL Gate -> PostgreSQL -> User`
 - **Flow 2 (Execution):** `User/CLI -> Backend -> Execution Graph (LangGraph) -> Generate Tests via LLM -> Validate SQL -> Run on Data -> Detect Anomalies -> Save Report -> User`
