@@ -195,8 +195,6 @@ class RuleProposalSchema(BaseModel):
     business_rationale: str
     proposal_basis: str
     evidence: dict
-    parameter_provenance: list[dict]
-    assumptions: list[str]
     confidence_breakdown: dict
     created_at: str
     updated_at: str

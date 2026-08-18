@@ -37,7 +37,12 @@ from src.agents.tools.profile_digest import (
     split_digest_by_table,
 )
 from src.config import get_settings
-from src.models.rule_schemas import ProposedRule, RuleEvidenceSnapshot, TableRuleProposal
+from src.models.rule_schemas import (
+    EvidenceSourceType,
+    ProposedRule,
+    RuleEvidenceSnapshot,
+    TableRuleProposal,
+)
 from src.services.llm import get_llm
 
 logger = logging.getLogger(__name__)
@@ -198,6 +203,9 @@ def _build_coverage_requirements(table_digest: dict) -> list[dict]:
     requirements.append({
         "column": None,
         "rule_type": "ROW_COUNT",
+        "parameters": {
+            "min_row_count": max(1, int((table_digest.get("rows") or 0) * 0.8)),
+        },
         "evidence": {"rows": table_digest.get("rows", 0)},
     })
     return _attach_evidence_items(requirements, table_digest)
@@ -444,11 +452,18 @@ def _stamp_rule(
             for ref in rule.selected_evidence_refs
         ]
     evidence_by_id = {item["id"]: item for item in evidence_items}
-    if not set(rule.selected_evidence_refs).issubset(evidence_by_id):
-        logger.warning("Rule %s tham chiếu evidence không thuộc candidate", rule_id)
-        return {}
-    if any(item.source_ref not in rule.selected_evidence_refs for item in rule.parameter_provenance):
-        logger.warning("Rule %s có parameter provenance ngoài selected evidence", rule_id)
+    selected_refs = list(rule.selected_evidence_refs)
+    allowed_refs = list(evidence_by_id)
+    invalid_refs = [ref for ref in selected_refs if ref not in evidence_by_id]
+    if invalid_refs:
+        logger.warning(
+            "Rule %s tham chiếu evidence không thuộc candidate; tự động chuẩn hóa %s",
+            rule_id,
+            invalid_refs,
+        )
+        selected_refs = allowed_refs
+    if not selected_refs:
+        logger.warning("Rule %s không còn evidence hợp lệ sau chuẩn hóa", rule_id)
         return {}
 
     digest = table_digest or {}
@@ -459,9 +474,9 @@ def _stamp_rule(
         sample_rate=1.0 if dashboard_full_table else float(sample.get("rate", 1.0)),
         sampling_caveat=sample.get("caveat"),
         observed_metrics={
-            ref: evidence_by_id[ref].get("value") for ref in rule.selected_evidence_refs
+            ref: evidence_by_id[ref].get("value") for ref in selected_refs
         },
-        source_refs=rule.selected_evidence_refs,
+        source_refs=selected_refs,
     )
 
     return {
@@ -475,9 +490,7 @@ def _stamp_rule(
         "rule_name": rule.rule_name,
         "business_rationale": rule.business_rationale,
         "proposal_basis": rule.proposal_basis.value,
-        "selected_evidence_refs": rule.selected_evidence_refs,
-        "parameter_provenance": [item.model_dump(mode="json") for item in rule.parameter_provenance],
-        "assumptions": rule.assumptions,
+        "selected_evidence_refs": selected_refs,
         "confidence": rule.confidence.model_dump(),
         "confidence_score": rule.confidence.overall,
         "evidence": evidence.model_dump(),

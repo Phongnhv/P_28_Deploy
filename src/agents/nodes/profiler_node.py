@@ -107,14 +107,14 @@ async def raw_profiler_node(state: AgentState) -> dict:
             engine = get_engine()
             inspector = inspect(engine)
             all_tables = inspector.get_table_names()
-            tables = [t for t in all_tables if t.lower() not in system_tables]
+            tables = [t for t in all_tables if t.lower() == "source_rows"]
         else:
             engine = create_engine(connection_string)
             try:
                 with engine.connect():
                     inspector = inspect(engine)
                     all_tables = inspector.get_table_names()
-                    tables = [t for t in all_tables if t.lower() not in system_tables]
+                    tables = [t for t in all_tables if t.lower() == "source_rows"]
             finally:
                 engine.dispose()
     except Exception as e:

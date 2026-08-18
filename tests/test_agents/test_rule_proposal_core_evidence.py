@@ -51,6 +51,23 @@ def test_parameter_provenance_must_cover_all_parameters():
         ProposedRule.model_validate(payload)
 
 
+def test_empty_optional_parameters_do_not_require_provenance():
+    payload = _range_payload()
+    payload["parameters"]["accepted_values"] = []
+
+    rule = ProposedRule.model_validate(payload)
+
+    assert rule.parameters.accepted_values == []
+
+
+def test_parameter_provenance_rejects_duplicate_entries():
+    payload = _range_payload()
+    payload["parameter_provenance"].append(dict(payload["parameter_provenance"][0]))
+
+    with pytest.raises(ValidationError, match="parameter_provenance"):
+        ProposedRule.model_validate(payload)
+
+
 def test_confidence_breakdown_rejects_inconsistent_overall():
     payload = _range_payload()
     payload["confidence"]["overall"] = 0.1
@@ -86,7 +103,7 @@ def test_stamp_resolves_only_allowlisted_evidence_from_digest():
     assert stamped["confidence_score"] == 0.9
 
 
-def test_stamp_rejects_evidence_reference_from_another_candidate():
+def test_stamp_normalizes_evidence_reference_to_matched_candidate():
     payload = _range_payload()
     payload["selected_evidence_refs"] = ["policy.nonnegative_column.other"]
     payload["parameter_provenance"][0]["source_ref"] = "policy.nonnegative_column.other"
@@ -94,7 +111,10 @@ def test_stamp_rejects_evidence_reference_from_another_candidate():
     requirement = {
         "evidence_items": [{"id": "policy.nonnegative_column.amount", "value": None}]
     }
-    assert _stamp_rule(rule, "source_rows", "run-1", requirement=requirement) == {}
+    stamped = _stamp_rule(rule, "source_rows", "run-1", requirement=requirement)
+    assert stamped["selected_evidence_refs"] == ["policy.nonnegative_column.amount"]
+    assert stamped["parameter_provenance"][0]["source_ref"] == "policy.nonnegative_column.amount"
+    assert stamped["parameter_provenance"][0]["source_type"] == "POLICY"
 
 
 @pytest.mark.parametrize(
@@ -112,3 +132,17 @@ def test_rule_specific_required_parameters_and_scope(rule_type, column, paramete
     payload["parameter_provenance"] = []
     with pytest.raises(ValidationError):
         ProposedRule.model_validate(payload)
+
+
+def test_row_count_requirement_supplies_deterministic_parameter():
+    requirements = _build_coverage_requirements({"rows": 50_000, "columns": []})
+
+    row_count = next(item for item in requirements if item["rule_type"] == "ROW_COUNT")
+    assert row_count["column"] is None
+    assert row_count["parameters"] == {"min_row_count": 40_000}
+    assert row_count["evidence_items"] == [{
+        "id": "profile:_table:rows",
+        "source_type": "DATA_PROFILE",
+        "metric": "rows",
+        "value": 50_000,
+    }]

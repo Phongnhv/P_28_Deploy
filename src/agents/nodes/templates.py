@@ -60,72 +60,58 @@ và Từ điển dữ liệu (Data Dictionary) được cung cấp.
 - `fixed_length`: độ dài chuỗi cố định — gợi ý mạnh cho REGEX_FORMAT hoặc length constraint.
 - `cross_column_hints` (cấp bảng): gợi ý quan hệ liên cột (e.g., pickup <= dropoff) — ưu tiên xem xét rule CROSS_FIELD_COMPARISON.
 
-## Hướng dẫn quan trọng
+## Hướng dẫn quan trọng về mặt Ngôn ngữ & Nghiệp vụ (Data Steward-friendly)
 
-1. **Chỉ đề xuất rule cho các cột có tên xuất hiện trong digest đầu vào.** \
-   Không được tự bịa tên cột.
-2. **`ai_reasoning` là rationale ngắn, không phải chain-of-thought.** Chỉ tóm tắt evidence đã chọn, \
-   nguồn nghiệp vụ có thật và lý do trực tiếp cho rule. Không bịa policy, metric hoặc edge case.
-3. **RANGE không được biến biên quan sát thành hard limit.** \
+1. **`rule_name` (Tên quy tắc)**: 
+   - Phải viết bằng tiếng Việt tự nhiên, mang tính chất nghiệp vụ thuần túy và dễ hiểu cho Data Steward.
+   - **CẤM** sử dụng tên cột kỹ thuật (e.g. `fare_amount`) hay tên kiểu dữ liệu, toán tử logic (e.g. `NOT_NULL`, `RANGE`).
+   - *Ví dụ tốt*: `Yêu cầu bắt buộc nhập mã chuyến đi`, `Khống chế cước phí cơ bản tối thiểu`, `Định danh nhà cung cấp hợp lệ`.
+   - *Ví dụ xấu*: `Cột vendor_id NOT_NULL`, `Range cước phí fare_amount`.
+
+2. **`business_rationale` (Giải thích nghiệp vụ)**:
+   - Viết hoàn toàn bằng tiếng Việt, giải thích tác động nghiệp vụ (doanh thu, quy trình, kiểm toán, an toàn dữ liệu) nếu rule này bị vi phạm.
+   - **TUYỆT ĐỐI CẤM sử dụng tên biến kỹ thuật** (như `fare_amount`, `tpep_pickup_datetime`, `payment_type`) trong phần giải thích này. Phải thay thế bằng từ ngữ tiếng Việt tương ứng theo Data Dictionary: "Cước phí cơ bản", "Thời gian đón khách", "Hình thức thanh toán".
+   - *Ví dụ tốt*: "Thời gian đón khách không được trống vì đây là mốc thời gian cốt lõi dùng để tính thời lượng hành trình và làm căn cứ đối soát hóa đơn."
+   - *Ví dụ xấu*: "Cần check tpep_pickup_datetime để không bị NULL khi chạy dbt."
+
+3. **`ai_reasoning` (Lập luận của AI)**:
+   - **BẮT BUỘC sử dụng các số liệu thực tế từ Profiler/Digest** để làm căn cứ lập luận cho rule.
+   - Trích dẫn rõ ràng các chỉ số quan sát được (ví dụ: tỷ lệ trống là 0.0%, dải giá trị thực tế quan sát từ 1 đến 6 hành khách, số lượng bản ghi quan sát được là 50,000 dòng, v.v.).
+   - *Ví dụ tốt*: "Profile dữ liệu thực tế cho thấy tỷ lệ trống của trường này là 0.0% trên tổng số 50,000 dòng được phân tích."
+   - *Ví dụ xấu*: "Cột này quan trọng nên đặt NOT_NULL."
+
+4. **`rule_description` (Mô tả quy tắc)**:
+   - Một câu tiếng Việt tự nhiên nêu rõ tên cột tiếng Việt (kèm tên biến kỹ thuật trong ngoặc đơn) và điều kiện kiểm tra một cách lịch sự, dễ hiểu.
+   - *Ví dụ*: "Thời gian đón khách (tpep_pickup_datetime) phải luôn được ghi nhận đầy đủ cho mọi chuyến đi."
+
+5. **RANGE không được biến biên quan sát thành hard limit.** \
    Ưu tiên dùng `typical_range` [p5, p95] nếu có, mở rộng ≥ 10% mỗi phía. \
-   Nếu có signal `has_extreme_outliers`, đặt threshold dựa trên typical_range, không dùng min/max tuyệt đối. \
-   Mỗi parameter phải có provenance riêng; threshold chỉ suy ra từ profile phải dùng DATA_PROFILE và nêu assumption.
-4. **Sampling caveat:** Nếu digest có "sample.rate < 1.0" và "sample.caveat", \
-   hãy GIẢM confidence_score và NỚI RỘNG ngưỡng hơn nữa — tránh đặt thresholds \
-   quá chặt từ mẫu.
-5. **Không đề xuất rule trùng lặp** (cùng column + cùng rule_type).
-6. ROW_COUNT dùng column = null (rule cấp bảng).
-7. Độ ưu tiên severity: NOT_NULL / UNIQUE trên cột id → CRITICAL; \
+   Nếu có signal `has_extreme_outliers`, đặt threshold dựa trên typical_range, không dùng min/max tuyệt đối.
+
+6. **Không đề xuất rule trùng lặp** (cùng column + cùng rule_type).
+7. ROW_COUNT dùng column = null (rule cấp bảng).
+8. Độ ưu tiên severity: NOT_NULL / UNIQUE trên cột id → CRITICAL; \
    RANGE / FRESHNESS → HIGH; ACCEPTED_VALUES / NULL_RATE → MEDIUM; REGEX_FORMAT → LOW.
-8. **`dimension`** — ĐÂY LÀ FIELD RIÊNG, KHÔNG PHẢI rule_type. \
+9. **`dimension`** — ĐÂY LÀ FIELD RIÊNG, KHÔNG PHẢI rule_type. \
    Các giá trị hợp lệ của `dimension` là: COMPLETENESS, UNIQUENESS, VALIDITY, ACCURACY, CONSISTENCY, FRESHNESS. \
-   **TUYỆT ĐỐI KHÔNG điền các giá trị này vào trường `rule_type`.** \
    Mapping `rule_type` → `dimension` đề nghị dùng: \
    - NOT_NULL, NULL_RATE → dimension = COMPLETENESS \
    - UNIQUE → dimension = UNIQUENESS \
    - RANGE, ACCEPTED_VALUES, REGEX_FORMAT, ROW_COUNT → dimension = VALIDITY \
    - FRESHNESS → dimension = FRESHNESS \
-   - CROSS_FIELD_COMPARISON → dimension = CONSISTENCY \
-   - Nếu không chắc → dimension = VALIDITY \
-9. **`rule_description`**: Một câu tiếng Việt dễ hiểu, tự nhiên dành cho Data Steward. \
-   Nêu tên cột bằng tiếng Việt (nếu có trong Data Dictionary) kèm tên kỹ thuật trong ngoặc, \
-   sau đó mô tả điều kiện một cách có ngữ cảnh. \
-   VD: "Cước phí cơ bản (fare_amount) không được mang giá trị âm, vì đây là tiền tính theo đồng hồ chứ không phải hoàn tiền." \
-   KHÔNG viết kiểu template máy móc như "Cột X không được để trống." hay "Cột X phải có giá trị từ A đến B."
-10. **Đề xuất đầy đủ:** Không chỉ trả về vài rule đại diện. Hãy duyệt hết checklist evidence \
-    được cung cấp trong user message và tạo rule cho từng ứng viên đủ bằng chứng. \
-    Một cột có thể có nhiều rule khác loại; chỉ loại ứng viên khi thực sự mâu thuẫn với ý nghĩa nghiệp vụ. \
-    Với bảng dữ liệu giàu evidence, mục tiêu thông thường là 1-3 rule phù hợp cho mỗi cột.
-11. Với `CROSS_FIELD_COMPARISON`, sao chép nguyên vẹn `parameters.target_column` và \
-    `parameters.operator` từ checklist vào field `parameters` của structured output. \
-    Không đặt `target_column` hoặc `operator` ở cấp ngoài của rule và không tự thay đổi toán tử.
-12. Khi digest có `dashboard_candidate_mode = true`, đây là product workflow có guardrail nghiêm ngặt: \
-    checklist chỉ gồm candidate đã qua evidence/policy filter. Phải trả về MỖI candidate đúng một lần, \
-    theo đúng thứ tự checklist, tối đa một rule cho mỗi `rule_type`, và phải sao chép nguyên vẹn `parameters` \
-    cho cả RANGE, ACCEPTED_VALUES lẫn CROSS_FIELD_COMPARISON. Không tự tạo threshold, enum, cột hoặc \
-    rule_type mới; chỉ viết severity, mô tả và rationale cho Data Steward.
-13. Với `REGEX_FORMAT`, phải điền biểu thức chính quy (regular expression) tương ứng vào `parameters.regex` \
-    khi digest hoặc Data Dictionary cung cấp bằng chứng format rõ ràng. Không suy ra regex chỉ từ tên cột.
-14. Chỉ chọn `selected_evidence_refs` từ `evidence_items[].id` của đúng candidate. Không trả lại giá trị metric; \
-    server sẽ resolve metric từ digest. Mọi `parameter_provenance.source_ref` phải nằm trong danh sách đã chọn.
-15. `rule_name` là tiêu đề ngắn; `rule_description` mô tả điều kiện; `business_rationale` mô tả tác động nghiệp vụ. \
-    Không lặp cùng một câu cho cả ba field.
-16. `proposal_basis` phản ánh nguồn thực tế. Pattern chỉ quan sát được phải là DATA_PROFILE; dùng MIXED khi có \
-    cả profile và policy/dictionary/schema. `assumptions` phải nêu rõ giới hạn của sample hoặc ngưỡng suy diễn.
-17. Confidence rubric: schema constraint/policy authoritative có evidence_strength cao; sample pattern có \
-    business_support thấp nếu chưa có tài liệu xác nhận. Không mặc định mọi score bằng 1.0.
-
-**⚠️ NHẮC LẠI:** Trường `rule_type` CHỈ được nhận 9 giá trị sau, không hơn không kém: \
-NOT_NULL, UNIQUE, RANGE, ACCEPTED_VALUES, REGEX_FORMAT, FRESHNESS, ROW_COUNT, NULL_RATE, CROSS_FIELD_COMPARISON.
+   - CROSS_FIELD_COMPARISON → dimension = CONSISTENCY
+10. **Đề xuất đầy đủ:** Duyệt hết checklist evidence được cung cấp và tạo rule cho từng ứng viên đủ bằng chứng.
+11. Với `CROSS_FIELD_COMPARISON`, sao chép nguyên vẹn `parameters.target_column` và `parameters.operator` từ checklist.
+12. Khi digest có `dashboard_candidate_mode = true`, copy chính xác parameters từ checklist.
+13. Với `REGEX_FORMAT`, điền regex hợp lý từ format định sẵn.
+14. Chỉ chọn `selected_evidence_refs` từ `evidence_items[].id`.
 """
+
 
 _RULE_PROPOSER_FEW_SHOT = """\
 ## Ví dụ few-shot — structured proposal mới
 
-Các ví dụ dưới đây minh hoạ văn phong và mức độ lập luận kỳ vọng. \
-Đây KHÔNG phải rule cho dataset hiện tại — chỉ dùng để học style.
-
-Các ID dưới đây chỉ minh hoạ format; output thật phải dùng đúng ID từ checklist hiện tại.
+Các ví dụ dưới đây minh hoạ văn phong nghiệp vụ và mức độ lập luận dựa trên số liệu thực tế kỳ vọng.
 
 ### Ví dụ 1 — NOT_NULL có schema/policy support
 
@@ -134,17 +120,15 @@ Các ID dưới đây chỉ minh hoạ format; output thật phải dùng đúng
   "column": "tpep_pickup_datetime",
   "rule_type": "NOT_NULL",
   "parameters": {},
-  "rule_name": "Thời điểm đón khách phải được ghi nhận",
-  "rule_description": "Thời điểm bắt đầu chuyến đi (tpep_pickup_datetime) phải luôn có giá trị, vì đây là mốc thời gian thiết yếu để tính cước và kiểm tra tính liên tục của dữ liệu.",
-  "business_rationale": "Thiếu thời điểm đón làm các phép tính thời lượng và kiểm tra thứ tự chuyến đi không đáng tin cậy.",
+  "rule_name": "Yêu cầu ghi nhận thời điểm bắt đầu chuyến đi",
+  "rule_description": "Thời điểm đón khách (tpep_pickup_datetime) phải luôn được ghi nhận đầy đủ cho mọi chuyến đi.",
+  "business_rationale": "Thông tin thời gian đón khách là căn cứ pháp lý và nghiệp vụ bắt buộc để tính toán thời lượng hành trình, xuất hóa đơn tài chính và đối soát dữ liệu vận hành.",
   "proposal_basis": "MIXED",
   "selected_evidence_refs": ["schema:tpep_pickup_datetime:has_pk_constraint", "profile:tpep_pickup_datetime:no_nulls"],
-  "parameter_provenance": [],
-  "assumptions": [],
-  "confidence": {"overall": 0.9, "evidence_strength": 1.0, "business_support": 0.85, "sample_representativeness": 0.85, "explanation": "Có schema support và profile nhất quán."},
+  "confidence": {"overall": 0.9, "evidence_strength": 1.0, "business_support": 0.85, "sample_representativeness": 0.85, "explanation": "Ràng buộc hệ thống bắt buộc và dữ liệu thực tế không có dòng trống."},
   "severity": "CRITICAL",
   "dimension": "COMPLETENESS",
-  "ai_reasoning": "Schema xác định đây là trường bắt buộc và profile không ghi nhận giá trị thiếu."
+  "ai_reasoning": "Ràng buộc cấu trúc schema yêu cầu giá trị bắt buộc và profile thực tế ghi nhận 0.0% dòng trống trên tổng số 50,000 chuyến đi."
 }
 ```
 
@@ -155,20 +139,102 @@ Các ID dưới đây chỉ minh hoạ format; output thật phải dùng đúng
   "column": "passenger_count",
   "rule_type": "NULL_RATE",
   "parameters": {"max_null_pct": 10.0},
-  "rule_name": "Tỷ lệ thiếu số hành khách không vượt quá 10%",
-  "rule_description": "Tỷ lệ thiếu của passenger_count phải nhỏ hơn hoặc bằng 10%.",
-  "business_rationale": "Mức thiếu cao làm giảm độ tin cậy của phân tích nhu cầu hành khách.",
+  "rule_name": "Khống chế tỷ lệ khuyết thiếu thông tin hành khách",
+  "rule_description": "Tỷ lệ khuyết thiếu của trường số hành khách (passenger_count) không được vượt quá ngưỡng cảnh báo 10.0%.",
+  "business_rationale": "Tỷ lệ khuyết thiếu thông tin số lượng hành khách quá cao sẽ làm sai lệch các báo cáo phân tích hiệu suất phục vụ và nhu cầu thị trường của đội xe.",
   "proposal_basis": "DATA_PROFILE",
   "selected_evidence_refs": ["profile:passenger_count:null_pct"],
-  "parameter_provenance": [{"parameter_name": "max_null_pct", "source_type": "DATA_PROFILE", "source_ref": "profile:passenger_count:null_pct", "derivation_method": "steward-review threshold below observed baseline"}],
-  "assumptions": ["Ngưỡng 10% chưa được policy nghiệp vụ xác nhận và sẽ fail trên baseline 15.3% hiện tại."],
-  "confidence": {"overall": 0.65, "evidence_strength": 0.9, "business_support": 0.4, "sample_representativeness": 0.65, "explanation": "Metric rõ ràng nhưng threshold chưa có policy xác nhận."},
+  "confidence": {"overall": 0.65, "evidence_strength": 0.9, "business_support": 0.4, "sample_representativeness": 0.65, "explanation": "Chỉ số khuyết thiếu thực tế cao hơn ngưỡng đề xuất, cần Steward xem xét."},
   "severity": "MEDIUM",
   "dimension": "COMPLETENESS",
-  "ai_reasoning": "Profile ghi nhận null_pct 15.3%; threshold 10% là đề xuất cần Steward xác nhận và hiện sẽ làm rule fail."
+  "ai_reasoning": "Phân tích digest ghi nhận tỷ lệ khuyết thiếu thực tế là 15.3%, vượt quá ngưỡng đề xuất 10.0%. Quy tắc này sẽ được đánh dấu là không đạt và cần được Steward xem xét điều chỉnh."
+}
+```
+
+### Ví dụ 3 — ROW_COUNT (Quy tắc cấp bảng, column=null)
+
+```json
+{
+  "column": null,
+  "rule_type": "ROW_COUNT",
+  "parameters": {
+    "min_row_count": 40000
+  },
+  "rule_name": "Ngưỡng số lượng chuyến đi tối thiểu hàng ngày",
+  "rule_description": "Tổng số bản ghi chuyến đi trong ngày phải đạt tối thiểu từ 40,000 dòng trở lên.",
+  "business_rationale": "Lượng giao dịch quá thấp là dấu hiệu cảnh báo hệ thống truyền nhận dữ liệu gặp sự cố kỹ thuật hoặc quá trình trích xuất dữ liệu từ các nhà xe bị gián đoạn.",
+  "proposal_basis": "DATA_PROFILE",
+  "selected_evidence_refs": ["profile:_table:rows"],
+  "confidence": {
+    "overall": 0.8,
+    "evidence_strength": 0.9,
+    "business_support": 0.7,
+    "sample_representativeness": 0.8,
+    "explanation": "Đặt ngưỡng an toàn ở mức 80% sản lượng quan sát thực tế."
+  },
+  "severity": "HIGH",
+  "dimension": "VALIDITY",
+  "ai_reasoning": "Profile thực tế ghi nhận 50,000 chuyến đi. Thiết lập ngưỡng cảnh báo tối thiểu ở mức 80% (tương đương 40,000 chuyến đi) để phát hiện sớm các sự cố mất mát dữ liệu diện rộng."
+}
+```
+
+### Ví dụ 4 — RANGE (Cột số lượng, min/max)
+
+```json
+{
+  "column": "trip_distance",
+  "rule_type": "RANGE",
+  "parameters": {
+    "min": 0.0,
+    "max": 50.0
+  },
+  "rule_name": "Giới hạn cự ly di chuyển hợp lệ",
+  "rule_description": "Quãng đường di chuyển của chuyến đi (trip_distance) phải nằm trong khoảng hợp lệ từ 0.0 đến 50.0 dặm.",
+  "business_rationale": "Quãng đường di chuyển của xe không thể mang giá trị âm, và các chuyến đi taxi nội đô có cự ly vượt quá 50 dặm là cực kỳ bất thường, cần được cô lập để kiểm tra thiết bị định vị.",
+  "proposal_basis": "MIXED",
+  "selected_evidence_refs": ["profile:trip_distance:range", "policy:trip_distance:max_limit"],
+  "confidence": {
+    "overall": 0.85,
+    "evidence_strength": 0.9,
+    "business_support": 0.8,
+    "sample_representativeness": 0.85,
+    "explanation": "Min là giới hạn vật lý tuyệt đối; Max tuân theo quy chế vận hành khu vực."
+  },
+  "severity": "HIGH",
+  "dimension": "VALIDITY",
+  "ai_reasoning": "Dữ liệu thực tế ghi nhận dải quãng đường dao động từ 0.1 đến 42.5 dặm; kết hợp với quy chế max 50 dặm của liên bang để đặt giới hạn trên an toàn."
+}
+```
+
+### Ví dụ 5 — CROSS_FIELD_COMPARISON (Ràng buộc logic 2 cột)
+
+```json
+{
+  "column": "tpep_pickup_datetime",
+  "rule_type": "CROSS_FIELD_COMPARISON",
+  "parameters": {
+    "target_column": "tpep_dropoff_datetime",
+    "operator": "<="
+  },
+  "rule_name": "Trình tự thời gian đón trả khách hợp lệ",
+  "rule_description": "Thời điểm đón khách (tpep_pickup_datetime) phải xảy ra trước hoặc cùng lúc với thời điểm trả khách (tpep_dropoff_datetime).",
+  "business_rationale": "Về mặt vật lý và logic vận hành, hành trình của khách luôn phải bắt đầu trước khi kết thúc. Lỗi vi phạm chỉ ra sự cố đồng hồ định vị hoặc lỗi logic ghi nhận log hành trình.",
+  "proposal_basis": "POLICY",
+  "selected_evidence_refs": ["schema:tpep_pickup_datetime:datetime_order"],
+  "confidence": {
+    "overall": 0.95,
+    "evidence_strength": 1.0,
+    "business_support": 0.9,
+    "sample_representativeness": 0.95,
+    "explanation": "Ràng buộc logic nghiệp vụ tuyệt đối không thể thay đổi."
+  },
+  "severity": "HIGH",
+  "dimension": "CONSISTENCY",
+  "ai_reasoning": "Áp dụng kiểm tra quan hệ thứ tự logic: thời gian kết thúc chuyến đi phải lớn hơn hoặc bằng thời gian bắt đầu chuyến đi."
 }
 ```
 """
+
 
 _RULE_PROPOSER_USER = """\
 ## Ngữ cảnh domain
@@ -194,7 +260,7 @@ _RULE_PROPOSER_USER = """\
 
 Checklist trên là danh sách cần đánh giá đầy đủ, không phải ví dụ. Sau khi đánh giá, đề xuất tất cả các \
 ứng viên có evidence mạnh và ý nghĩa để bảo vệ chất lượng dữ liệu (không giới hạn số lượng). Mỗi rule tạo ra phải giữ nguyên đúng tên `column` trong digest và phải \
-dẫn chứng evidence tương ứng trong `ai_reasoning`. Với `CROSS_FIELD_COMPARISON`, phải sao chép đúng object \
+dẫn chứng bằng số liệu cụ thể từ profile trong `ai_reasoning`. Với `CROSS_FIELD_COMPARISON`, phải sao chép đúng object \
 `parameters` từ checklist vào structured output. Không tạo rule ngoài checklist trừ khi Data Dictionary \
 cung cấp bằng chứng nghiệp vụ rõ ràng.
 
@@ -203,12 +269,13 @@ cung cấp bằng chứng nghiệp vụ rõ ràng.
 Hãy trả về JSON structured output theo schema TableRuleProposal. \
 Điền trường "table" = "{table_name}". \
 Điền trường "dimension" theo bảng phân loại DQ dimension đã hướng dẫn. \
-Điền trường "rule_description": một câu tiếng Việt tự nhiên, có ngữ cảnh nghiệp vụ, tránh template máy móc. \
-Điền trường "ai_reasoning": rationale ngắn gọn, nêu evidence aggregate và lý do nghiệp vụ mà không trình bày chuỗi suy luận nội bộ. \
-Chỉ chọn evidence ID có trong `evidence_items`; không sao chép hoặc tự tạo giá trị metric. \
-Điền đầy đủ rule_name, business_rationale, proposal_basis, parameter_provenance, assumptions và confidence. \
+Điền trường "rule_description": một câu tiếng Việt tự nhiên, có ngữ cảnh nghiệp vụ rõ ràng, tránh template máy móc. \
+Điền trường "ai_reasoning": lập luận ngắn gọn, **BẮT BUỘC trích dẫn số liệu thực tế cụ thể từ profile** (như số lượng dòng, tỷ lệ null %, dải giá trị). \
+Điền trường "business_rationale": giải thích bằng tiếng Việt tác động nghiệp vụ tự nhiên, **TUYỆT ĐỐI CẤM dùng tên biến kỹ thuật** (như fare_amount, trip_distance, payment_type). \
+Điền đầy đủ rule_name (tên thuần nghiệp vụ tiếng Việt, dễ hiểu cho Data Steward, **tuyệt đối không dùng tên biến kỹ thuật hay thuật ngữ lập trình**), business_rationale, proposal_basis và confidence. \
 Đề xuất đầy đủ và chính xác.
 """
+
 
 rule_proposer_prompt = ChatPromptTemplate.from_messages(
     [

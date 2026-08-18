@@ -173,8 +173,6 @@ class RuleProposalModel(Base):
     business_rationale: Mapped[str] = mapped_column(Text, nullable=False, default="")
     proposal_basis: Mapped[str] = mapped_column(String(32), nullable=False, default="DATA_PROFILE")
     evidence: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
-    parameter_provenance: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
-    assumptions: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     confidence_breakdown: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)

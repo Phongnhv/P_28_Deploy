@@ -224,8 +224,6 @@ class DashboardProposal:
     business_rationale: str
     proposal_basis: str
     evidence: dict[str, Any]
-    parameter_provenance: list[dict[str, Any]]
-    assumptions: list[str]
     confidence_breakdown: dict[str, Any]
 
 
@@ -492,8 +490,6 @@ def _normalise_graph_rule(
             "observed_metrics": {},
             "source_refs": candidate.evidence_refs,
         },
-        parameter_provenance=list(raw.get("parameter_provenance") or []),
-        assumptions=list(raw.get("assumptions") or []),
         confidence_breakdown=normalized_breakdown,
     )
 
@@ -708,8 +704,6 @@ def _fallback_core_fields(
             "observed_metrics": {},
             "source_refs": candidate.evidence_refs,
         },
-        "parameter_provenance": [],
-        "assumptions": [],
         "confidence_breakdown": {
             "overall": confidence,
             "evidence_strength": confidence,
@@ -822,8 +816,6 @@ def _mock_proposals(evidence: ProposalEvidence) -> list[DashboardProposal]:
                 business_rationale="Duplicate business keys can double-count trips and financial measures.",
                 proposal_basis="MIXED",
                 evidence={"sample_row_count": evidence.row_count, "sample_rate": 1.0, "sampling_caveat": None, "observed_metrics": {}, "source_refs": duplicate_refs},
-                parameter_provenance=[],
-                assumptions=[],
                 confidence_breakdown={"overall": 0.8, "evidence_strength": 0.8, "business_support": 0.8, "sample_representativeness": 1.0, "explanation": "Policy-backed duplicate candidate"},
             )
         )

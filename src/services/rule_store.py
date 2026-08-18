@@ -102,8 +102,6 @@ class ProposedRuleModel(Base):
     business_rationale: Mapped[str] = mapped_column(Text, nullable=False, default="")
     proposal_basis: Mapped[str] = mapped_column(String(32), nullable=False, default="DATA_PROFILE")
     evidence: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
-    parameter_provenance: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
-    assumptions: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     confidence_breakdown: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
 
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=RuleStatus.PENDING.value, index=True)
@@ -147,8 +145,6 @@ class ProposedRuleModel(Base):
             "business_rationale": self.business_rationale,
             "proposal_basis": self.proposal_basis,
             "evidence": json.loads(self.evidence or "{}"),
-            "parameter_provenance": json.loads(self.parameter_provenance or "[]"),
-            "assumptions": json.loads(self.assumptions or "[]"),
             "confidence": json.loads(self.confidence_breakdown or "{}"),
             "status": self.status,
             "reviewer": self.reviewer,
@@ -402,7 +398,33 @@ def _migrate_local_profile_columns(engine) -> None:
 
 
 def _migrate_local_proposal_columns(engine) -> None:
-    """Add core evidence fields to existing local SQLite proposal tables."""
+    """Add core evidence fields to existing proposal tables.
+
+    Deployments historically initialized metadata with ``create_all`` only, so
+    additive proposal columns must be reconciled at startup for both local
+    SQLite and the compose PostgreSQL database.
+    """
+    if engine.dialect.name == "postgresql":
+        statements = (
+            "ALTER TABLE proposed_rules ADD COLUMN IF NOT EXISTS rule_name VARCHAR(256) DEFAULT 'Rule proposal'",
+            "ALTER TABLE proposed_rules ADD COLUMN IF NOT EXISTS business_rationale TEXT DEFAULT ''",
+            "ALTER TABLE proposed_rules ADD COLUMN IF NOT EXISTS proposal_basis VARCHAR(32) DEFAULT 'DATA_PROFILE'",
+            "ALTER TABLE proposed_rules ADD COLUMN IF NOT EXISTS evidence TEXT DEFAULT '{}'",
+            "ALTER TABLE proposed_rules ADD COLUMN IF NOT EXISTS parameter_provenance TEXT DEFAULT '[]'",
+            "ALTER TABLE proposed_rules ADD COLUMN IF NOT EXISTS assumptions TEXT DEFAULT '[]'",
+            "ALTER TABLE proposed_rules ADD COLUMN IF NOT EXISTS confidence_breakdown TEXT DEFAULT '{}'",
+            "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS rule_name VARCHAR(256) DEFAULT 'Rule proposal'",
+            "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS business_rationale TEXT DEFAULT ''",
+            "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS proposal_basis VARCHAR(32) DEFAULT 'DATA_PROFILE'",
+            "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS evidence TEXT DEFAULT '{}'",
+            "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS parameter_provenance TEXT DEFAULT '[]'",
+            "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS assumptions TEXT DEFAULT '[]'",
+            "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS confidence_breakdown TEXT DEFAULT '{}'",
+        )
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.exec_driver_sql(statement)
+        return
     if engine.dialect.name != "sqlite":
         return
     inspector = inspect(engine)
@@ -563,8 +585,6 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
                 business_rationale=rule.get("business_rationale") or rule.get("ai_reasoning", ""),
                 proposal_basis=rule.get("proposal_basis", "DATA_PROFILE"),
                 evidence=json.dumps(rule.get("evidence", {}), ensure_ascii=False),
-                parameter_provenance=json.dumps(rule.get("parameter_provenance", []), ensure_ascii=False),
-                assumptions=json.dumps(rule.get("assumptions", []), ensure_ascii=False),
                 confidence_breakdown=json.dumps(
                     rule.get("confidence") or {
                         "overall": rule.get("confidence_score", 1.0),
@@ -600,8 +620,6 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
                 business_rationale=rule.get("business_rationale") or rule.get("ai_reasoning", ""),
                 proposal_basis=rule.get("proposal_basis", "DATA_PROFILE"),
                 evidence=json.dumps(rule.get("evidence", {}), ensure_ascii=False),
-                parameter_provenance=json.dumps(rule.get("parameter_provenance", []), ensure_ascii=False),
-                assumptions=json.dumps(rule.get("assumptions", []), ensure_ascii=False),
                 confidence_breakdown=json.dumps(
                     rule.get("confidence") or {
                         "overall": rule.get("confidence_score", 1.0),
@@ -666,10 +684,7 @@ def list_rules(
                     "rule_name": r.rule_name,
                     "business_rationale": r.business_rationale,
                     "proposal_basis": r.proposal_basis,
-                    "selected_evidence_refs": json.loads(r.evidence or "{}").get("source_refs", []),
                     "evidence": json.loads(r.evidence or "{}"),
-                    "parameter_provenance": json.loads(r.parameter_provenance or "[]"),
-                    "assumptions": json.loads(r.assumptions or "[]"),
                     "confidence": json.loads(r.confidence_breakdown or "{}"),
                     "status": r.status,
                     "reviewer": r.reviewer,
