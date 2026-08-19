@@ -1,454 +1,516 @@
-# RIDEPULSE DQ — KẾ HOẠCH PHÁT TRIỂN & PHÂN CÔNG KỸ THUẬT CHI TIẾT
+# RIDEPULSE DQ — KẾ HOẠCH KỸ THUẬT & PHÂN CÔNG THỰC HIỆN
 
 > **Dự án:** RidePulse DQ — AI Agent Xây dựng, Kiểm tra Data Quality & Phát hiện Bất thường  
-> **Phiên bản:** v2.0 (Gate 3 — Production-Ready Upgrade)  
+> **Phiên bản:** v2.0 (Gate 3 — Production-Ready)  
 > **Ngày lập:** 2026-08-19  
-> **Team:** Kiên (AI Infra Lead) · Chiến (ML/Anomaly & Eval) · Phong (DevOps/MLOps) · Đạt (LLM Core & Frontend)
+> **Team:** Kiên · Chiến · Phong · Đạt
 
 ---
 
-## 1. TỔNG QUAN PHÂN TÍCH HỆ THỐNG
+## TECH STACK CHUẨN (CHỈ SỬ DỤNG CÁC CÔNG NGHỆ SAU)
 
-### 1.1 Điểm yếu & Hạn chế của hệ thống hiện tại (Gate 2 MVP)
-
-Hệ thống Gate 2 đã đạt được luồng cơ bản end-to-end (`Profiler → Proposer → HITL → Test Generator → Runner → Anomaly → Report`), nhưng vẫn tồn tại các lỗ hổng kiến trúc nghiêm trọng cần giải quyết trước khi tiến lên production:
-
-| # | Hạn chế | Mô tả chi tiết | Ảnh hưởng |
-|---|---------|-----------------|-----------|
-| **L1** | **Hard-code business rules & single-dataset** | Hệ thống chỉ hỗ trợ dataset `yellow_tripdata` với 9 rule types cố định trong `RuleType` enum. Worker `run_ingest_profile()` hard-code mapping vendor/payment. Schema `SourceRowModel` gắn chặt 21 cột NYC taxi. | Không mở rộng được cho dataset khác (payments, drivers, customers). Mỗi dataset mới yêu cầu sửa code. |
-| **L2** | **Thiếu Dataset Understanding Agent** | LLM nhận profiling stats thô (null_rate, min/max, distinct_count) nhưng thiếu ngữ cảnh nghiệp vụ (data dictionary, domain semantics). Rule proposer dựa hoàn toàn vào prompt engineering tĩnh. | LLM sinh rule chung chung, thiếu reasoning chất lượng. `ai_reasoning` và `rule_description` mang tính generic. |
-| **L3** | **Thiếu Dynamic Context Builder** | `ProposalEvidence` model là aggregate tĩnh. Không có cơ chế tự động build context dựa trên schema detected type, historical rules (RAG), và business metadata. | Prompt gửi LLM thiếu enrichment → confidence_score không phản ánh đúng chất lượng reasoning. |
-| **L4** | **Rule Catalog chưa đủ chuẩn hóa** | `RuleType` enum hiện có 9 types nhưng thiếu `STATISTICAL_DISTRIBUTION`, `TEMPORAL_CONSISTENCY`. `RuleParameters` dùng flat optional fields → khó validate theo từng type. | Không cover đủ DQ dimensions. Parameter validation dựa vào `model_validator` manual, dễ bỏ sót. |
-| **L5** | **Thiếu cơ chế đo lường offline/online (DeepEval)** | Không có benchmark pipeline đánh giá chất lượng output LLM (Faithfulness, Executability, Correctness). Chỉ có mock mode và manual smoke test. | Không track được regression khi đổi model/prompt. Không có baseline metrics để so sánh cross-model. |
-| **L6** | **Visualization tĩnh, không dynamic** | Frontend `App.tsx` (90KB monolith) render static tables. Anomaly dashboard chỉ hiển thị bảng danh sách, chưa có time-series chart, trend analysis, hay dynamic drill-down. | UX kém cho Data Steward khi cần analyze pattern. Không hỗ trợ interactive exploration. |
-| **L7** | **Thiếu State Machine & Resilience rõ ràng** | `AgentState` là flat `TypedDict`. Job status tracking qua `JobModel.status` đơn giản (`PENDING/RUNNING/SUCCEEDED/FAILED`). Không có retry policy có cấu trúc, circuit breaker, hay dead-letter queue. | Khi node fail giữa chừng, state không recover được. Không có observability cho từng transition. |
-| **L8** | **Nguy cơ Hallucination gây fail compile** | `test_generator_node` và `llm_dbt_repair_node` vẫn cho phép LLM sinh/sửa YAML. Repair loop giới hạn 3 attempts nhưng thiếu guardrail semantic. | LLM có thể hallucinate column names, table names, hoặc sinh SQL syntax không hợp lệ → test compile fail. |
-
-### 1.2 Chiến lược cải tiến trọng tâm — 7 Module
-
-| Module | Tên | Mục tiêu | Owner chính |
-|--------|-----|----------|-------------|
-| **M1** | Multi-Dataset Architecture | Hỗ trợ N dataset với schema registry dynamic | Kiên |
-| **M2** | Dataset Understanding Agent | LangGraph node tự động sinh Data Dictionary & Semantic Profile | Đạt |
-| **M3** | Dynamic Context Builder | Auto-assemble prompt context từ profile + history + dictionary | Đạt |
-| **M4** | 11 Cataloged Rule Types | Chuẩn hóa catalog với typed parameter schemas & target compilers | Kiên + Đạt |
-| **M5** | DeepEval Benchmark Pipeline | Offline/Online eval cho LLM outputs (Faithfulness, Executability, Correctness) | Chiến |
-| **M6** | Dynamic Visualization | Interactive dashboards, time-series charts, drill-down anomaly explorer | Đạt |
-| **M7** | State Machine & Resilience | Formal FSM, retry policies, circuit breaker, structured logging | Phong |
+| # | Thành phần | Công nghệ |
+|---|-----------|-----------|
+| 1 | LLM Core | LLM sinh rule & diễn giải (OpenAI / Anthropic / Google GenAI / Mistral) |
+| 2 | Agent Framework | LangGraph (StateGraph 4 node chính) |
+| 3 | DQ Test Engine | Great Expectations / dbt tests |
+| 4 | Anomaly Detection | scikit-learn (Isolation Forest, Z-score) |
+| 5 | Orchestrator & Scheduler | Airflow hoặc Dagster |
+| 6 | Data Warehouse | Snowflake / BigQuery |
+| 7 | Vector Storage | Vector DB (ChromaDB — lưu embeddings lịch sử rule) |
+| 8 | Backend Core | FastAPI (Python) |
+| 9 | Frontend Web | React + Ant Design |
+| 10 | DevOps & Deployment | Docker + Cloud Run |
 
 ---
 
-## 2. KIẾN TRÚC HỆ THỐNG & AGENT WORKFLOW
+## 1. TỔNG QUAN HỆ THỐNG & ĐỊNH HƯỚNG CẢI TIẾN
 
-### 2.1 StateFlow chi tiết — LangGraph Orchestrated Pipeline
+### 1.1 Hiện trạng & Bài toán
 
-Luồng trạng thái mở rộng từ 7 nodes hiện tại lên 10 trạng thái chính thức:
+Dữ liệu vận hành dịch vụ gọi xe (trips, drivers, customers, payments) thường xuyên chứa giá trị null, sai định dạng, ngoại lai — nhưng đội Data phải viết tay hàng trăm bộ test dbt thủ công. Hệ thống Gate 2 MVP hiện tại đã xây dựng được luồng cơ bản end-to-end nhưng còn tồn tại các hạn chế:
+
+| # | Hạn chế | Ảnh hưởng |
+|---|---------|-----------|
+| L1 | **Single-dataset cố định** — Schema `SourceRowModel` gắn chặt 21 cột NYC Yellow Taxi. Worker hard-code mapping vendor/payment. | Không mở rộng cho dataset khác mà không sửa code. |
+| L2 | **Thiếu Dataset Understanding Agent** — LLM nhận stats thô nhưng thiếu ngữ cảnh nghiệp vụ (data dictionary, domain semantics). | Rule đề xuất generic, thiếu reasoning nghiệp vụ chất lượng. |
+| L3 | **Thiếu Dynamic Context Builder** — Prompt gửi LLM không tự động enrich từ historical rules (RAG) và business metadata. | Confidence score không phản ánh đúng chất lượng suy luận. |
+| L4 | **Rule Catalog chưa đủ** — 9 rule types, thiếu String Length, Distribution Quantiles, Schema Conformance, Anomaly Outlier Check. | Không cover đủ 6 DQ dimensions cho production. |
+| L5 | **Thiếu đo lường LLM offline** — Không có benchmark đánh giá Faithfulness, Executability, Correctness. | Không track regression khi đổi model/prompt. |
+| L6 | **UI tĩnh** — Frontend `App.tsx` monolith 90KB, thiếu time-series chart, trend analysis, drill-down. | UX kém cho Data Steward phân tích pattern. |
+| L7 | **Thiếu pipeline định kỳ** — Chưa có orchestrator (Airflow/Dagster) chạy DQ checks theo lịch tự động. | Phụ thuộc hoàn toàn vào trigger thủ công. |
+| L8 | **Chưa tích hợp warehouse chuẩn** — Chỉ chạy trên SQLite/PostgreSQL local, chưa kết nối Snowflake/BigQuery. | Không kiểm tra được dữ liệu production quy mô lớn. |
+
+### 1.2 Chiến lược cải tiến — 7 Module
+
+Mỗi module được map trực tiếp vào Tech Stack chỉ định:
+
+| Module | Tên | Giải quyết | Tech Stack áp dụng |
+|--------|-----|-----------|---------------------|
+| **M1** | Multi-Dataset & Warehouse Integration | L1, L8 | FastAPI, Snowflake/BigQuery, Great Expectations |
+| **M2** | Dataset Understanding Agent | L2 | LangGraph, LLM, Vector DB |
+| **M3** | Dynamic Context Builder (Semantic Contract) | L3 | LangGraph, Vector DB, LLM |
+| **M4** | 11 Cataloged DQ Rules & Test Compiler | L4 | Great Expectations / dbt tests |
+| **M5** | DeepEval Offline Validation | L5 | scikit-learn (metrics), Great Expectations |
+| **M6** | Dynamic UI & Dashboard | L6 | React + Ant Design |
+| **M7** | Orchestrated Pipeline & Resilience | L7 | Airflow/Dagster, Docker, Cloud Run |
+
+---
+
+## 2. KIẾN TRÚC AGENT & LUỒNG THỰC THI (LANGGRAPH WORKFLOW)
+
+### 2.1 Tổng quan kiến trúc
 
 ```
-[QUEUED]
-  │  User triggers DQ job / Scheduled run
-  ▼
-[PROFILING]
-  │  raw_profiler_node: DuckDB/SQL stats query, schema introspection
-  │  Output: dataset_profile (per-column stats + cross-column metrics)
-  ▼
-[UNDERSTANDING_DATASET]  ← NEW
-  │  understanding_agent_node: LLM generates Data Dictionary
-  │  Semantic type inference, business name mapping
-  │  Output: dataset_understanding (dictionary + domain_context)
-  ▼
-[BUILDING_CONTEXT]  ← NEW
-  │  context_builder_node: Assemble prompt context
-  │  Sources: profile + dictionary + historical rules (RAG) + domain constraints
-  │  Token budget: ≤ 4000 tokens. PII guard active.
-  │  Output: context_payload (evidence-tracked, redacted)
-  ▼
-[PROPOSING_RULES]
-  │  rule_proposer_node: Structured LLM output (11 typed rules)
-  │  with_structured_output() → TableRuleProposalV2
-  │  Output: proposed_rules (list of ProposedRule)
-  ▼
-[VALIDATING_RULES]
-  │  Pydantic parse → evidence cross-reference → duplicate dedup
-  │  Parameter range validation → schema identifier check
-  │  Reject ratio tracking (target < 20%)
-  ▼
-[WAITING_FOR_REVIEW — HITL Gate]
-  │  Data Steward reviews via Rule Approval Board
-  │  Actions: Approve / Reject (with reason) / Edit parameters
-  │  Bulk operations supported. Version tracking.
-  ▼
-[TEST_COMPILATION_AND_EXECUTION]
-  │  Deterministic compiler: RuleType → SQL Template → bind params
-  │  dbt YAML generation → dbt parse validation
-  │  Repair loop (max 3 attempts) for dbt validation failures
-  │  Read-only SQL runner: bounded results, max 20 sample IDs
-  ▼
-[ANOMALY_DETECTION]
-  │  Hybrid model: Z-Score + Isolation Forest + Dynamic Threshold
-  │  Cold-start: fixed 5% threshold
-  │  Warm (≥5 runs): Z-score spike + IForest score + EMA breach
-  │  Root cause attribution: correlate with metadata changes
-  ▼
-[REPORTING_AND_LOGGING]
-  │  persist_report_node: Save test results + anomalies
-  │  steward_insights_node: DQ Score calculation + grade + remediation
-  │  Audit event logging. Structured trace output.
-  │
-  ▼
-[COMPLETED] / [FAILED]
+┌───────────────────────────────────────────────────────────────────────┐
+│                        React + Ant Design UI                         │
+│  (Data Catalog, HITL Review Board, Anomaly Dashboard, Trend Charts)  │
+└─────────────────────────────┬─────────────────────────────────────────┘
+                              │ REST API
+┌─────────────────────────────▼─────────────────────────────────────────┐
+│                         FastAPI Backend                                │
+│  (Auth/RBAC, Dataset CRUD, Rule CRUD, Job Management, WebSocket)      │
+└──────┬──────────────┬─────────────────┬──────────────────┬────────────┘
+       │              │                 │                  │
+       ▼              ▼                 ▼                  ▼
+┌──────────┐   ┌─────────────┐   ┌───────────┐   ┌────────────────┐
+│ LangGraph│   │ Snowflake / │   │ Vector DB │   │ Airflow/Dagster│
+│ Agent    │   │ BigQuery    │   │ (ChromaDB)│   │ Scheduler      │
+│ (4 Nodes)│   │ Warehouse   │   │ Rule      │   │ DQ Pipeline    │
+│          │   │             │   │ Embeddings│   │ DAGs           │
+└──────────┘   └─────────────┘   └───────────┘   └────────────────┘
+       │              │
+       ▼              ▼
+┌──────────────────────────────┐
+│  Great Expectations / dbt    │
+│  Test Execution Engine       │
+└──────────────────────────────┘
 ```
 
-**Error Handling tại mỗi node:**
-- Node failure → `ERROR_STATE` → persist error + audit log → Job `FAILED`
-- LLM timeout/refusal → Fallback mock output (nếu circuit breaker open) hoặc retry (max 3)
-- dbt parse failure → Repair loop (deterministic template re-render, không dùng LLM repair)
+### 2.2 LangGraph StateGraph — 4 Node chính
 
-### 2.2 Chi tiết 11 Cataloged Rule Types
+```
+                        ┌────────────┐
+                        │   START    │
+                        └─────┬──────┘
+                              │ Input: dataset_id, warehouse_connection
+                              ▼
+                   ┌─────────────────────┐
+                   │  1. PROFILER NODE   │
+                   │  (Quét metadata &   │
+                   │   thống kê cột)     │
+                   └─────────┬───────────┘
+                             │ Output: dataset_profile, data_dictionary
+                             │ (query stats từ Snowflake/BigQuery)
+                             ▼
+                  ┌──────────────────────┐
+                  │ 2. RULE PROPOSER NODE│
+                  │  (LLM sinh 11-type   │
+                  │   DQ rules + HITL)   │
+                  └─────────┬────────────┘
+                            │ Context: profile + Vector DB history + dictionary
+                            │ Output: proposed_rules (Pydantic structured)
+                            │
+                   ┌────────▼────────┐
+                   │  ⏸ HITL GATE   │
+                   │  Data Steward   │
+                   │  Review via UI  │
+                   │  (Ant Design)   │
+                   └────────┬────────┘
+                            │ Only APPROVED rules pass
+                            ▼
+                ┌────────────────────────┐
+                │ 3. TEST GENERATOR NODE │
+                │  (Compile rules →      │
+                │   GE Expectations /    │
+                │   dbt YAML tests)      │
+                └────────────┬───────────┘
+                             │ Output: GE expectation suite / dbt schema.yml
+                             │ Execute tests trên Snowflake/BigQuery
+                             ▼
+                ┌────────────────────────┐
+                │ 4. ANOMALY DETECTOR    │
+                │    NODE                │
+                │  (Isolation Forest /   │
+                │   Z-score trên kết quả │
+                │   test)                │
+                └────────────┬───────────┘
+                             │ Output: anomalies, dq_score, alerts
+                             ▼
+                        ┌────────┐
+                        │  END   │
+                        └────────┘
+```
 
-Mở rộng từ 9 types hiện tại, bổ sung `STATISTICAL_DISTRIBUTION` và `TEMPORAL_CONSISTENCY`:
-
-| # | Rule Type | DQ Dimension | Parameter Schema | Validator Logic | Target Compiler (SQL) |
-|---|-----------|-------------|------------------|-----------------|----------------------|
-| **R1** | `NOT_NULL` | COMPLETENESS | `{}` (no params) | Column phải tồn tại trong schema. Không áp dụng cho cột có null_rate = 0% (redundant). | `SELECT COUNT(*) FROM {table} WHERE {col} IS NULL` |
-| **R2** | `UNIQUE` | UNIQUENESS | `{}` (no params) | Column phải có `uniqueness_rate` > 0.95 trong profile để justify. | `SELECT {col}, COUNT(*) AS cnt FROM {table} GROUP BY {col} HAVING cnt > 1` |
-| **R3** | `RANGE` | VALIDITY | `{min?: float, max?: float}` — ít nhất 1 required | Giá trị min/max phải nằm trong biên hợp lý so với profile (±3σ). Column phải là numeric type. | `SELECT COUNT(*) FROM {table} WHERE {col} < :min OR {col} > :max` |
-| **R4** | `ACCEPTED_VALUES` | VALIDITY | `{accepted_values: list[str]}` — non-empty | Danh sách accepted phải cover ≥ 90% distinct values trong profile. Max 50 values. | `SELECT COUNT(*) FROM {table} WHERE CAST({col} AS TEXT) NOT IN (:vals)` |
-| **R5** | `REGEX_FORMAT` | VALIDITY | `{regex: str}` — valid regex pattern | Regex phải compile thành công. Phải match ≥ 80% sample values trong profile. | `SELECT COUNT(*) FROM {table} WHERE {col} !~ :regex` (PostgreSQL) |
-| **R6** | `FRESHNESS` | FRESHNESS | `{max_age_hours: float}` — positive | Column phải là timestamp/date type. max_age_hours phải > 0 và ≤ 8760 (1 năm). | `SELECT EXTRACT(EPOCH FROM NOW() - MAX({col}))/3600 AS age_hours FROM {table}` |
-| **R7** | `ROW_COUNT` | COMPLETENESS | `{min_row_count: int}` — positive | Rule cấp bảng (column = None). min_row_count phải ≤ current row_count × 2. | `SELECT COUNT(*) AS total FROM {table}` |
-| **R8** | `NULL_RATE` | COMPLETENESS | `{max_null_pct: float}` — [0.0, 100.0] | Khác NOT_NULL ở chỗ cho phép tỷ lệ null nhất định. Column phải có null_rate > 0 trong profile. | `SELECT (COUNT(*) FILTER (WHERE {col} IS NULL))::float / COUNT(*) * 100 FROM {table}` |
-| **R9** | `CROSS_FIELD_COMPARISON` | CONSISTENCY | `{target_column: str, operator: str}` — cả hai required | Cả source và target column phải tồn tại và cùng comparable type. Operator ∈ {`<=`, `<`, `>=`, `>`, `=`, `!=`}. | `SELECT COUNT(*) FROM {table} WHERE NOT ({col} {op} {target_col})` |
-| **R10** | `STATISTICAL_DISTRIBUTION` | ACCURACY | `{method: "zscore"\|"iqr", threshold: float}` | Column phải là numeric. Threshold > 0. | Z-score: `WITH stats AS (SELECT AVG({col}) mu, STDDEV({col}) sigma FROM {table}) SELECT COUNT(*) FROM {table}, stats WHERE ABS(({col}-mu)/NULLIF(sigma,0)) > :threshold` |
-| **R11** | `TEMPORAL_CONSISTENCY` | CONSISTENCY | `{start_col: str, end_col: str, max_duration_hours?: float}` | Cả start_col và end_col phải là timestamp type. | `SELECT COUNT(*) FROM {table} WHERE {end_col} < {start_col} OR EXTRACT(EPOCH FROM {end_col}-{start_col})/3600 > :max_duration` |
-
-#### Typed Parameter Schema (Pydantic v2)
+### 2.3 Graph State Schema
 
 ```python
-class RuleParametersV2(BaseModel):
-    """Discriminated union parameter bag — validate theo rule_type."""
+class AgentState(TypedDict, total=False):
+    # Input
+    dataset_id: str
+    warehouse_connection: dict       # Snowflake/BigQuery connection config
+
+    # Node 1: Profiler
+    dataset_profile: dict            # Per-column stats từ warehouse
+    data_dictionary: dict            # LLM-generated semantic metadata
+
+    # Node 2: Rule Proposer
+    context_payload: dict            # Assembled context (profile + RAG + dictionary)
+    proposed_rules: list             # LLM structured output: list[ProposedRule]
+    approved_rules: list             # Sau HITL gate: chỉ rules APPROVED
+
+    # Node 3: Test Generator
+    ge_expectation_suite: dict       # Great Expectations JSON suite
+    dbt_test_yaml: str               # dbt schema.yml test definitions
+    test_results: list               # Kết quả thực thi từ GE/dbt
+
+    # Node 4: Anomaly Detector
+    anomalies: list                  # Danh sách anomaly detected
+    dq_score: float                  # Điểm chất lượng tổng thể (0–100)
+    dq_grade: str                    # Xếp hạng: A / B / C / D
+
+    # Metadata
+    run_id: str
+    error: str
+```
+
+### 2.4 Cơ chế HITL (Human-in-the-Loop)
+
+**Luồng hoạt động:**
+
+1. **Rule Proposer Node** sinh `proposed_rules` → persist vào DB với trạng thái `PENDING`.
+2. **LangGraph interrupt**: Graph pause tại HITL Gate. FastAPI trả `run_id` cho frontend.
+3. **Data Steward** mở React + Ant Design UI → xem danh sách rules → thực hiện:
+   - **Approve**: Rule chuyển sang `APPROVED` (giữ nguyên hoặc chỉnh parameters).
+   - **Reject**: Rule chuyển sang `REJECTED` (bắt buộc ghi `review_note`).
+   - **Edit**: Chỉnh threshold/severity → lưu `edited_parameters` tách biệt `ai_parameters`.
+4. **Resume graph**: Khi Steward hoàn tất review, frontend gọi `POST /dq/runs/{run_id}/resume`.
+5. **Test Generator Node** chỉ nhận `approved_rules` — rules PENDING/REJECTED không bao giờ được compile.
+
+**Governance:**
+- LLM chỉ nhận aggregate metadata/statistics — KHÔNG gửi raw data rows, PII, credentials.
+- Mọi hành động review được ghi Audit Log (actor, action, timestamp, before/after).
+
+### 2.5 Tương tác với Vector DB & Warehouse
+
+| Tương tác | Thời điểm | Mục đích |
+|-----------|-----------|----------|
+| **Profiler → Snowflake/BigQuery** | Node 1 | Chạy SQL aggregate queries (`COUNT`, `AVG`, `STDDEV`, `NULL` rate, `DISTINCT`, quantiles) trên bảng dữ liệu production. |
+| **Rule Proposer → Vector DB** | Node 2 (context building) | Query embeddings lịch sử rules đã approved/rejected trên cùng dataset type → cung cấp few-shot context cho LLM. |
+| **Rule Proposer → Vector DB** | Node 2 (post-persist) | Embed rule mới vào Vector DB sau khi HITL approve — enriching future queries. |
+| **Test Generator → Snowflake/BigQuery** | Node 3 | Thực thi Great Expectations checkpoints hoặc `dbt test` trực tiếp trên warehouse. |
+| **Anomaly Detector → DB** | Node 4 | Query historical test results để tính Z-score trend, train Isolation Forest. |
+
+---
+
+## 3. DANH MỤC 11 RULE CHUẨN HÓA & TEST COMPILER
+
+### 3.1 Bảng quy chuẩn 11 DQ Rules
+
+| # | Rule Type | DQ Dimension | Input Parameters | Great Expectations Target | dbt Test Target |
+|---|-----------|-------------|------------------|--------------------------|-----------------|
+| **R1** | `NULLNESS` | Completeness | `{column}` | `expect_column_values_to_not_be_null` | `not_null` |
+| **R2** | `UNIQUENESS` | Uniqueness | `{column}` | `expect_column_values_to_be_unique` | `unique` |
+| **R3** | `RANGE` | Validity | `{column, min?, max?}` — ít nhất 1 required | `expect_column_values_to_be_between(min_value, max_value)` | `dbt_utils.accepted_range(min_value, max_value)` |
+| **R4** | `FORMAT_REGEX` | Validity | `{column, regex: str}` | `expect_column_values_to_match_regex(regex)` | Custom dbt test `assert_regex_match` |
+| **R5** | `FRESHNESS` | Freshness | `{column, max_age_hours: float}` | `expect_column_max_to_be_between(min_value=now()-max_age)` | `dbt_utils.recency(datepart, field, interval)` |
+| **R6** | `CROSS_COLUMN` | Consistency | `{column_a, column_b, operator}` — operator ∈ {`<=`, `<`, `>=`, `>`, `=`, `!=`} | `expect_column_pair_values_A_to_be_greater_than_B` (hoặc variant) | Custom dbt test `assert_column_comparison` |
+| **R7** | `SET_MEMBERSHIP` | Validity | `{column, accepted_values: list[str]}` — non-empty, max 50 | `expect_column_values_to_be_in_set(value_set)` | `accepted_values(values)` |
+| **R8** | `STRING_LENGTH` | Validity | `{column, min_length?, max_length?}` | `expect_column_value_lengths_to_be_between(min, max)` | Custom dbt test `assert_string_length` |
+| **R9** | `DISTRIBUTION_QUANTILES` | Accuracy | `{column, method: "zscore"\|"iqr", threshold: float}` | `expect_column_stdev_to_be_between` + custom expectation | Custom dbt test `assert_distribution_bound` |
+| **R10** | `SCHEMA_CONFORMANCE` | Consistency | `{expected_columns: list[{name, type}]}` | `expect_table_columns_to_match_set` + `expect_column_values_to_be_of_type` | `dbt_utils.equal_rowcount` + schema contract |
+| **R11** | `ANOMALY_OUTLIER` | Accuracy | `{column, contamination: float, n_estimators: int}` | Custom GE expectation wrapping Isolation Forest | Custom dbt test triggering scikit-learn |
+
+### 3.2 Input Parameter Schema (Pydantic v2)
+
+```python
+class RuleType(StrEnum):
+    NULLNESS = "NULLNESS"
+    UNIQUENESS = "UNIQUENESS"
+    RANGE = "RANGE"
+    FORMAT_REGEX = "FORMAT_REGEX"
+    FRESHNESS = "FRESHNESS"
+    CROSS_COLUMN = "CROSS_COLUMN"
+    SET_MEMBERSHIP = "SET_MEMBERSHIP"
+    STRING_LENGTH = "STRING_LENGTH"
+    DISTRIBUTION_QUANTILES = "DISTRIBUTION_QUANTILES"
+    SCHEMA_CONFORMANCE = "SCHEMA_CONFORMANCE"
+    ANOMALY_OUTLIER = "ANOMALY_OUTLIER"
+
+
+class RuleParameters(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # R3: RANGE
     min: float | None = None
     max: float | None = None
-    # R4: ACCEPTED_VALUES
-    accepted_values: list[str] | None = None
-    # R5: REGEX_FORMAT
+    # R4: FORMAT_REGEX
     regex: str | None = None
-    # R6: FRESHNESS
+    # R5: FRESHNESS
     max_age_hours: float | None = None
-    # R7: ROW_COUNT
-    min_row_count: int | None = None
-    # R8: NULL_RATE
-    max_null_pct: float | None = None
-    # R9: CROSS_FIELD_COMPARISON
-    target_column: str | None = None
-    operator: Literal["<=", "<", ">=", ">", "=", "==", "!=", "<>"] | None = None
-    # R10: STATISTICAL_DISTRIBUTION (NEW)
+    # R6: CROSS_COLUMN
+    column_b: str | None = None
+    operator: Literal["<=", "<", ">=", ">", "=", "!="] | None = None
+    # R7: SET_MEMBERSHIP
+    accepted_values: list[str] | None = None
+    # R8: STRING_LENGTH
+    min_length: int | None = None
+    max_length: int | None = None
+    # R9: DISTRIBUTION_QUANTILES
     method: Literal["zscore", "iqr"] | None = None
     threshold: float | None = None
-    percentile_low: float | None = None
-    percentile_high: float | None = None
-    # R11: TEMPORAL_CONSISTENCY (NEW)
-    start_col: str | None = None
-    end_col: str | None = None
-    max_duration_hours: float | None = None
-    allow_equal: bool | None = None
+    # R10: SCHEMA_CONFORMANCE
+    expected_columns: list[dict] | None = None
+    # R11: ANOMALY_OUTLIER
+    contamination: float | None = None
+    n_estimators: int | None = None
 ```
 
----
+### 3.3 Test Compiler Logic
 
-## 3. PHÂN CÔNG CÔNG VIỆC CHI TIẾT (WBS — WORK BREAKDOWN STRUCTURE)
+Test Generator Node sử dụng deterministic mapping — **KHÔNG** để LLM tự viết SQL/YAML:
 
----
+| Rule Type | Compiler Action |
+|-----------|----------------|
+| R1–R8 | Map trực tiếp sang built-in Great Expectations expectation hoặc built-in dbt test. Template rendering với bind parameters. |
+| R9 (Distribution) | Sinh custom GE expectation class wrapping `scipy.stats` Z-score/IQR calculation. |
+| R10 (Schema) | Sinh `expect_table_columns_to_match_set` + per-column type assertions. |
+| R11 (Anomaly Outlier) | Sinh custom GE expectation wrapping `sklearn.ensemble.IsolationForest`. Fit trên column values, predict outliers. |
 
-### 3.1 KIÊN — AI Infrastructure Lead
-
-> **Trách nhiệm tổng:** Backend core, Orchestration framework, Database architecture, Execution Pipeline & Test Compiler.
-
-#### Module M1: Multi-Dataset Architecture
-
-| Hạng mục | Chi tiết |
-|----------|----------|
-| **Nhiệm vụ chính** | Thiết kế Schema Registry cho phép đăng ký N dataset với schema động; refactor `SourceRowModel` từ fixed-column sang EAV hoặc JSONB; xây dựng Dataset Connector abstraction layer. |
-| **Chi tiết kỹ thuật** | **1) Schema Registry:** Tạo bảng `dataset_schemas` lưu trữ column definitions dạng JSONB (`[{name, type, nullable, description}]`). Khi ingest dataset mới, hệ thống auto-introspect schema và persist. **2) Dynamic Source Table:** Thay thế `trips_raw` fixed-schema bằng pattern `source_rows_{dataset_id}` với DDL tự động sinh từ registry, hoặc dùng single table `source_data` với JSONB `row_data` column + GIN index. **3) Connector Factory:** Abstract class `DatasetConnector` với implementations: `PostgresConnector`, `DuckDBConnector`, `BigQueryConnector`, `SnowflakeConnector`. Mỗi connector implement `introspect_schema()`, `sample_rows(n)`, `execute_dq_query(sql)`. **4) Migration:** Alembic migration tạo `dataset_schemas`, `dataset_connectors` tables. Backward-compatible với data hiện tại. |
-| **Tech Stack** | SQLAlchemy 2.0, Alembic, PostgreSQL (JSONB + GIN index), DuckDB (local analytics), Pydantic v2 |
-| **Deliverables** | `src/models/dataset_schema.py`, `src/services/connector_factory.py`, `src/services/schema_registry.py`, `alembic/versions/xxx_multi_dataset.py`, API endpoints: `POST /datasets/register`, `GET /datasets/{id}/schema` |
-
-#### Module M4: 11 Rule Catalog — Compiler Engine
-
-| Hạng mục | Chi tiết |
-|----------|----------|
-| **Nhiệm vụ chính** | Mở rộng Rule Catalog từ 9 lên 11 types; xây dựng Deterministic Test Compiler sinh SQL/dbt YAML từ typed rule spec; loại bỏ dependency vào LLM cho test generation. |
-| **Chi tiết kỹ thuật** | **1) Rule Template Registry:** Dictionary mapping `RuleType → SQLTemplate`. Mỗi template là parameterized SQL string với bind parameters. Template được unit-test riêng biệt. **2) Compiler Pipeline:** `RuleCompiler.compile(rule: ApprovedRule, schema: DatasetSchema) → CompiledTest` — validate identifiers against schema registry, render SQL với bind params, generate dbt YAML test block. **3) Execution Boundary:** `CompiledTest` must pass `SQLValidator.validate()` — reject non-SELECT, DDL/DML, comments, multi-statements, unknown identifiers. Chỉ cho phép aggregate functions trong allowlist. **4) dbt YAML Generator:** Deterministic template rendering thay vì LLM generation. Output `generated_dq_tests.yml` + `schema.yml` cho dbt parse validation. |
-| **Tech Stack** | Jinja2 (SQL template rendering), SQLAlchemy `text()` with bind params, `dbt-core` parse validation, Pydantic v2 |
-| **Deliverables** | `src/agents/nodes/rule_compiler.py`, `src/agents/nodes/sql_templates/` (11 template files), `src/models/rule_schemas_v2.py`, `tests/unit/test_rule_compiler.py` (22 test cases: success + failure per type) |
-
-#### Module M7: State Machine — Backend Infrastructure
-
-| Hạng mục | Chi tiết |
-|----------|----------|
-| **Nhiệm vụ chính** | Nâng cấp `AgentState` từ flat TypedDict sang Formal State Machine; implement Job State transitions với validation; state checkpoint persistence cho crash recovery. |
-| **Chi tiết kỹ thuật** | **1) Formal State Enum:** `JobPhase` enum: `QUEUED → PROFILING → UNDERSTANDING → CONTEXT_BUILDING → PROPOSING → VALIDATING → AWAITING_REVIEW → COMPILING → EXECUTING → ANALYZING → REPORTING → COMPLETED / FAILED`. **2) Transition Guard:** `StateTransitionValidator` class — validate allowed transitions, reject invalid jumps (e.g., QUEUED → EXECUTING). **3) State Checkpoint:** Persist `AgentState` snapshot vào DB tại mỗi node boundary. Recovery = load last checkpoint + resume từ failed node. **4) Enhanced JobModel:** Thêm `current_phase`, `phase_entered_at`, `checkpoint_data` (JSONB) columns. |
-| **Tech Stack** | SQLAlchemy 2.0, LangGraph `StateGraph`, PostgreSQL JSONB, Python `enum` |
-| **Deliverables** | `src/models/state_machine.py`, migration `xxx_state_machine.py`, `src/services/state_checkpoint.py`, updated `src/agents/graph.py` |
+**Output format:**
+- **Great Expectations:** JSON expectation suite file → chạy qua `checkpoint.run()` trên warehouse connection.
+- **dbt tests:** YAML `schema.yml` file → chạy qua `dbt test --target <warehouse_profile>`.
 
 ---
 
-### 3.2 CHIẾN — AI Infrastructure (ML/Anomaly & Evaluation)
-
-> **Trách nhiệm tổng:** Anomaly Detection Models, DeepEval benchmark pipeline, Data profiling engine, Latency/Cost audit.
-
-#### Module M5: DeepEval Benchmark Pipeline
-
-| Hạng mục | Chi tiết |
-|----------|----------|
-| **Nhiệm vụ chính** | Xây dựng offline evaluation pipeline đánh giá chất lượng LLM rule proposals trên 3 trục: Faithfulness (trung thành với evidence), Executability (rule compilable thành SQL hợp lệ), Correctness (rule phát hiện đúng lỗi trên labeled test data). |
-| **Chi tiết kỹ thuật** | **1) Test Dataset Preparation:** Tạo labeled dataset với injected errors — null injection (5-20%), out-of-range values, duplicate rows, format violations. Ground truth labels cho từng error type. **2) Faithfulness Metric:** So sánh `ai_reasoning` với evidence keys trong `ProposalEvidence`. Score = (cited_evidence ∩ actual_evidence) / cited_evidence. LLM-as-judge backup cho semantic matching. **3) Executability Metric:** Compile mỗi proposed rule qua `RuleCompiler` → binary pass/fail. Score = compiled_rules / total_proposed. **4) Correctness Metric:** Run compiled tests trên labeled dataset → precision (true violations / detected violations), recall (detected / total injected), F1. **5) Cross-Model Comparison:** Run pipeline với OpenAI GPT-4o, Anthropic Claude Sonnet, Google Gemini, Mistral. Output comparison matrix. **6) Latency & Cost Tracking:** Log `tokens_used`, `latency_ms`, `cost_usd` per LLM call. |
-| **Tech Stack** | DeepEval framework, scikit-learn (metrics), pandas, pytest (test runner), matplotlib/seaborn (visualization) |
-| **Deliverables** | `eval/benchmark_pipeline.py`, `eval/metrics/faithfulness.py`, `eval/metrics/executability.py`, `eval/metrics/correctness.py`, `eval/datasets/` (labeled test data), `eval/results/` (benchmark reports), CI integration `eval/run_benchmark.sh` |
-
-#### Anomaly Detection Engine — Nâng cấp
-
-| Hạng mục | Chi tiết |
-|----------|----------|
-| **Nhiệm vụ chính** | Nâng cấp anomaly detection từ rule-based sang hybrid model: Statistical (Z-score, IQR) + ML (Isolation Forest) + Dynamic Thresholding. |
-| **Chi tiết kỹ thuật** | **1) Statistical Layer:** Giữ nguyên Z-score spike detection (warm-start ≥ 5 runs). Bổ sung IQR-based outlier detection cho skewed distributions. **2) Isolation Forest Layer:** Train trên historical DQ metrics (`violation_rate`, `null_rate_delta`, `row_count_change`) per column per dataset. Re-train trigger: mỗi 50 runs hoặc weekly. **3) Dynamic Thresholding:** Thay cold-start fixed 5% bằng adaptive threshold — exponential moving average (EMA) × 1.5. Window = 10 runs. **4) Ensemble Scoring:** `anomaly_score = w1 × zscore_flag + w2 × iforest_score + w3 × threshold_breach`. Weights tunable via config. **5) Root Cause Attribution:** Auto-correlate anomalies với metadata changes (schema drift, row_count spike). |
-| **Tech Stack** | scikit-learn (IsolationForest, StandardScaler), numpy/scipy (statistics), pandas, DuckDB |
-| **Deliverables** | `src/services/anomaly_engine.py`, `src/services/dynamic_threshold.py`, `src/models/anomaly_models.py`, `tests/unit/test_anomaly_engine.py` |
-
-#### Data Profiling Engine — Nâng cấp
-
-| Hạng mục | Chi tiết |
-|----------|----------|
-| **Nhiệm vụ chính** | Comprehensive profiling engine với distribution analysis, correlation detection, pattern recognition. |
-| **Chi tiết kỹ thuật** | **1) Enhanced Column Profile:** Thêm metrics — `mean`, `median`, `stddev`, `skewness`, `kurtosis`, `p5/p25/p75/p95` quantiles, `most_frequent_values` (top-10), `pattern_frequency` (string columns). **2) Cross-Column Analysis:** Pearson correlation (numeric), Cramér's V (categorical). Functional dependency detection. **3) DQ Score per Column:** Composite = weighted (completeness + uniqueness + validity). **4) DuckDB Integration:** In-process analytics, load parquet/CSV trực tiếp. |
-| **Tech Stack** | DuckDB, ydata-profiling (optional), scipy.stats, numpy |
-| **Deliverables** | `src/services/profiling_engine.py`, `src/models/profile_models.py` (`ColumnProfileV2`), migration `xxx_enhanced_profiles.py` |
+## 4. BẢNG PHÂN CÔNG NHIỆM VỤ CHI TIẾT (WBS)
 
 ---
 
-### 3.3 PHONG — AI Infrastructure (DevOps/MLOps & Production Readiness)
+### 4.1 KIÊN — AI Infrastructure (Backend & Data Engine)
 
-> **Trách nhiệm tổng:** CI/CD, Containerization, Cloud Deployment, Async Task Scheduler, Logging/Tracing, Agent State monitoring.
-
-#### Module M7: State Machine & Resilience — Operations Layer
-
-| Hạng mục | Chi tiết |
-|----------|----------|
-| **Nhiệm vụ chính** | Production-grade job execution: retry policies, circuit breaker, dead-letter queue, observability stack. |
-| **Chi tiết kỹ thuật** | **1) Retry Policy Engine:** Configurable per job type — `max_retries` (default 3), `backoff_strategy` (exponential/linear), `retry_on` (exception types). **2) Circuit Breaker:** Monitor LLM API error rate. Open khi error > 50% trong 5-min window. Fallback = mock mode. **3) Dead Letter Queue:** Failed jobs sau max retries → `failed_jobs_dlq` table. Manual retry endpoint + alert notification. **4) Health Endpoints:** `/health` report: DB connectivity, LLM API status, queue depth, active jobs. Kubernetes liveness/readiness probes. |
-| **Tech Stack** | tenacity (retry), Redis (circuit breaker state), Celery (task queue), PostgreSQL (DLQ) |
-| **Deliverables** | `src/services/retry_policy.py`, `src/services/circuit_breaker.py`, `src/services/dead_letter_queue.py`, `src/api/health.py` |
-
-#### CI/CD & Containerization
-
-| Hạng mục | Chi tiết |
-|----------|----------|
-| **Nhiệm vụ chính** | Multi-stage Docker builds, GitHub Actions CI pipeline, automated testing & linting, Cloud Run deployment. |
-| **Chi tiết kỹ thuật** | **1) Dockerfile:** Multi-stage (builder → runtime). Target < 500MB. Non-root user. Health check. **2) Docker Compose Production:** Services: `api`, `worker`, `db` (PostgreSQL 16), `redis`, `minio`. Resource limits. **3) GitHub Actions:** Triggers: push to `main`, PR. Steps: lint (ruff) → type-check (mypy) → unit tests → integration tests → Docker build → deploy (staging → production). **4) Cloud Run:** API service (min 0, max 5), Worker service (min 1), Cloud SQL proxy, Secret Manager. |
-| **Tech Stack** | Docker, Docker Compose, GitHub Actions, Cloud Run, GCR, Terraform (optional) |
-| **Deliverables** | `Dockerfile` (optimized), `Dockerfile.worker`, `docker-compose.prod.yml`, `.github/workflows/ci.yml`, `.github/workflows/deploy.yml`, `scripts/deploy_cloud_run.sh` |
-
-#### Logging, Tracing & Observability
-
-| Hạng mục | Chi tiết |
-|----------|----------|
-| **Nhiệm vụ chính** | Structured logging, distributed tracing, LLM call observability. |
-| **Chi tiết kỹ thuật** | **1) Structured Logging:** JSON-formatted: `timestamp`, `level`, `service`, `trace_id`, `job_id`, `dataset_id`. Correlation ID propagation. **2) LangSmith:** `LANGCHAIN_TRACING_V2` cho all LangGraph invocations. Tags: `run_type`, `model_name`, `token_count`. **3) OpenTelemetry:** Traces: API → Agent → LLM → DB. Per-node execution time spans. OTLP export. **4) Prometheus Metrics:** `dq_jobs_total`, `dq_job_duration_seconds`, `llm_tokens_used_total`, `llm_latency_seconds`, `anomaly_detected_total`. |
-| **Tech Stack** | LangSmith, OpenTelemetry SDK + OTLP, structlog, Prometheus client |
-| **Deliverables** | `src/core/logging.py`, `src/core/tracing.py`, `src/core/metrics.py`, `docs/OBSERVABILITY.md` |
-
-#### Async Task Scheduler
-
-| Hạng mục | Chi tiết |
-|----------|----------|
-| **Nhiệm vụ chính** | Production-grade async task processing cho DQ jobs. |
-| **Chi tiết kỹ thuật** | **1) Celery + Redis:** Task types: `ingest_profile`, `propose_rules`, `run_dq`, `run_benchmark`. Priority queues: `critical`, `default`, `low`. **2) Celery Beat:** Scheduled DQ runs per dataset: `MANUAL/HOURLY/DAILY/WEEKLY`. Timezone-aware. **3) Distributed Lock:** Redis-based per dataset — prevent concurrent runs. Lock TTL = 30 min. **4) Worker Config:** Concurrency = 2 (IO-bound). Prefetch = 1. Ack late for crash recovery. |
-| **Tech Stack** | Celery 5.x, Redis 7.x, celery-beat, flower (monitoring) |
-| **Deliverables** | `src/tasks/celery_app.py`, `src/tasks/dq_tasks.py`, `src/tasks/beat_schedule.py`, Docker services (redis, celery-worker, celery-beat, flower) |
+| Module | Nhiệm vụ (Làm gì?) | Phương pháp (Làm như thế nào?) | Tech Stack | Deliverables |
+|--------|---------------------|-------------------------------|------------|-------------|
+| **M1: Multi-Dataset & Warehouse** | Thiết kế API đăng ký dataset, kết nối Snowflake/BigQuery, schema registry cho N datasets. | Tạo bảng `dataset_schemas` (JSONB column definitions). Abstract `WarehouseConnector` class với 2 implementations: `SnowflakeConnector`, `BigQueryConnector`. Mỗi connector implement `introspect_schema()`, `run_aggregate_stats()`, `execute_ge_checkpoint()`. Alembic migration backward-compatible. | FastAPI, Snowflake Python SDK, BigQuery Python SDK, SQLAlchemy | `src/services/warehouse_connector.py`, `src/services/schema_registry.py`, `src/models/dataset_schema.py`, API: `POST /datasets/register`, `GET /datasets/{id}/schema` |
+| **M4: Test Compiler Engine** | Xây dựng deterministic compiler mapping 11 rule types → Great Expectations expectations / dbt tests. | Dictionary `RuleType → GEExpectationTemplate`. Mỗi template là parameterized JSON config. Compiler validate column identifiers against schema registry trước khi render. Sinh GE `expectation_suite.json` và dbt `schema.yml`. Chạy GE checkpoint hoặc `dbt test` trên warehouse. | Great Expectations, dbt-core, FastAPI | `src/services/test_compiler.py`, `src/services/ge_runner.py`, `src/services/dbt_runner.py`, GE custom expectations cho R9/R10/R11, `tests/unit/test_compiler.py` (22 test cases) |
+| **Vector DB Setup** | Cấu hình ChromaDB lưu embeddings lịch sử rules; API tra cứu similar rules. | Embed (rule_type + column_name + parameters + ai_reasoning) thành vector. Collection per dataset_type. CRUD operations: insert on APPROVE, query on context building. | Vector DB (ChromaDB) | `src/services/vector_store.py`, ChromaDB collection schema, API: `GET /rules/similar?column=&type=` |
+| **Backend Core** | API endpoints cho toàn bộ lifecycle: propose, review, execute, results, anomalies. | RESTful design. Pydantic v2 request/response models. RBAC middleware (Steward vs Viewer). Job queue management. Audit event logging. | FastAPI | `src/api/routes.py` (updated), `src/models/schemas.py` (updated), `src/api/dependencies.py` |
 
 ---
 
-### 3.4 ĐẠT — AI Application Lead (LLM Core & Frontend)
+### 4.2 CHIẾN — AI Infrastructure (Anomaly & Profiling)
 
-> **Trách nhiệm tổng:** Frontend React UI, LLM Prompt Engineering, Output Parsers, Dynamic Context/Rule Generation, HITL UI.
-
-#### Module M2: Dataset Understanding Agent
-
-| Hạng mục | Chi tiết |
-|----------|----------|
-| **Nhiệm vụ chính** | LangGraph node tự động sinh Data Dictionary và Semantic Profile — cung cấp business context cho Rule Proposer. |
-| **Chi tiết kỹ thuật** | **1) Understanding Agent Node:** Input = `dataset_profile`. Output = `dataset_understanding` chứa: `data_dictionary` (per-column: business_name_vi, description, semantic_type, business_rules), `domain_context` (industry, data_source_type), `relationships` (foreign keys, logical groupings). **2) Prompt Design:** System prompt = "Data Analyst chuyên ride-hailing". Few-shot examples. Constraint: chỉ aggregate stats, KHÔNG raw data. **3) Semantic Type Inference:** Map DB types + column names + distributions → semantic types: `CURRENCY`, `TIMESTAMP`, `GEO_ID`, `ENUM`, `IDENTIFIER`, `MEASUREMENT`, `FLAG`. Heuristic + LLM fallback. **4) Pydantic Parser:** `DatasetUnderstanding` model. `with_structured_output()`. Retry max 2. **5) Caching:** Per (dataset_id, schema_hash). Invalidate on schema change. |
-| **Tech Stack** | LangChain `with_structured_output()`, Pydantic v2, LangGraph, ChromaDB |
-| **Deliverables** | `src/agents/nodes/understanding_agent_node.py`, `src/models/understanding_schemas.py`, `src/prompts/understanding_prompt.py`, `tests/unit/test_understanding_agent.py` |
-
-#### Module M3: Dynamic Context Builder
-
-| Hạng mục | Chi tiết |
-|----------|----------|
-| **Nhiệm vụ chính** | Auto-assemble optimal LLM context — đảm bảo Rule Proposer nhận đủ thông tin mà không exceed token limit. |
-| **Chi tiết kỹ thuật** | **1) Context Assembly:** Merge 4 nguồn: (a) profile stats, (b) data dictionary, (c) historical rules (RAG/ChromaDB), (d) domain constraints. **2) Token Budget:** Target ≤ 4000 tokens. Priority: dictionary > profile > constraints > history. Auto-truncate lower-priority. **3) RAG:** Embed approved rules + rejection reasons vào ChromaDB. Query top-3 similar rules per column. **4) Evidence Tracking:** Mỗi element có `evidence_key` cho Faithfulness eval. Output = `ContextPayload`. **5) PII Guard:** Scan context for PII patterns → `[REDACTED]`. Log redactions. |
-| **Tech Stack** | LangChain, ChromaDB, tiktoken, Pydantic v2 |
-| **Deliverables** | `src/agents/nodes/context_builder_node.py`, `src/services/rag_service.py`, `src/services/token_budget.py`, `src/models/context_schemas.py`, `tests/unit/test_context_builder.py` |
-
-#### Module M4: 11 Rule Types — LLM Integration
-
-| Hạng mục | Chi tiết |
-|----------|----------|
-| **Nhiệm vụ chính** | Updated Rule Proposer prompt & parser cho 11 types; LLM Guardrails. |
-| **Chi tiết kỹ thuật** | **1) Prompt V2:** 11 rule types với examples + constraints. Include Data Dictionary context. Few-shot cho STATISTICAL_DISTRIBUTION, TEMPORAL_CONSISTENCY. **2) Output Parser V2:** `TableRuleProposalV2` + `RuleParametersV2`. Strict `model_validator`. **3) Guardrails:** Pre-call: token budget check, context completeness. Post-call: parse → evidence cross-ref → dedup → range validation. Reject ratio < 20%. **4) Multi-Model:** `LLMAdapter` abstract + OpenAI/Anthropic/Google/Mistral implementations. Unified `with_structured_output()`. |
-| **Tech Stack** | LangChain, Pydantic v2, langchain-openai/anthropic/google-genai/mistralai |
-| **Deliverables** | `src/prompts/rule_proposer_v2_prompt.py`, `src/models/rule_schemas_v2.py`, `src/services/llm_adapter.py`, `src/agents/nodes/rule_proposer_node_v2.py` |
-
-#### Module M6: Dynamic Visualization — Frontend
-
-| Hạng mục | Chi tiết |
-|----------|----------|
-| **Nhiệm vụ chính** | Refactor monolithic `App.tsx` thành component architecture; interactive dashboards. |
-| **Chi tiết kỹ thuật** | **1) Component Architecture:** Tách `App.tsx` (90KB) thành 15+ components: `DatasetCatalog`, `ProfileViewer`, `RuleReviewBoard`, `RuleEditor`, `TestExecutionConsole`, `AnomalyDashboard`, `AnomalyDrillDown`, `TrendAnalysis`, `DQScoreCard`, `StewardInsights`, `UserManagement`, `AuditLog`. **2) Data Catalog:** Interactive table, status badges, quick actions, schema viewer modal. **3) HITL Board:** Ant Design Table + filters (dimension, severity, status). Inline editing. Bulk approve/reject. Confidence progress bars. AI reasoning vs evidence comparison. **4) Anomaly Dashboard:** Recharts `LineChart` — DQ score time-series + anomaly markers. `ScatterPlot` — violation rate vs baseline. Click-to-drill modal. **5) Trend Analysis:** Multi-axis chart. Date range picker. Dataset/dimension filter. Export PDF/CSV. **6) Real-time:** WebSocket cho job status. Progress bars. Toast notifications. **7) Responsive:** Ant Design Grid. Desktop (1440px), tablet (768px), mobile (375px). |
-| **Tech Stack** | React 18, TypeScript, Ant Design 5.x, Recharts, React Router v6, Axios, WebSocket |
-| **Deliverables** | `frontend/src/components/` (15+ files), `frontend/src/pages/`, `frontend/src/hooks/` (useWebSocket, useDQData, useAuth), `frontend/src/api/client.ts`, updated `styles.css` |
-
-#### Semantic Contract Reviewer UI
-
-| Hạng mục | Chi tiết |
-|----------|----------|
-| **Nhiệm vụ chính** | UI cho Steward xem/edit AI-generated Data Dictionary + semantic contracts. |
-| **Chi tiết kỹ thuật** | **1) Viewer:** Hiển thị dictionary. Steward edit business names/descriptions. Version tracking. **2) Diff View:** Show diff giữa versions. Highlight changes. **3) Export:** Download Markdown, JSON, YAML. dbt `schema.yml` compatible. |
-| **Tech Stack** | React, Ant Design, react-diff-viewer, js-yaml |
-| **Deliverables** | `frontend/src/components/SemanticContractViewer.tsx`, `ContractDiffView.tsx`, `ContractExporter.tsx` |
+| Module | Nhiệm vụ (Làm gì?) | Phương pháp (Làm như thế nào?) | Tech Stack | Deliverables |
+|--------|---------------------|-------------------------------|------------|-------------|
+| **Profiling Engine** | Xây dựng module profiling thống kê metadata chi tiết từ warehouse, cung cấp input cho Profiler Node. | Chạy SQL aggregate queries trên Snowflake/BigQuery: `COUNT`, `COUNT(DISTINCT)`, `AVG`, `STDDEV`, `MIN`, `MAX`, `PERCENTILE_CONT` (p5, p25, p50, p75, p95), `NULL` rate, `APPROX_TOP_COUNT` (top-10 frequent values). Cross-column: Pearson correlation cho numeric pairs. Output: `ProfileResult` Pydantic model per column. | Snowflake/BigQuery SQL, Great Expectations profiler | `src/services/profiling_engine.py`, `src/models/profile_models.py`, SQL template files cho Snowflake và BigQuery dialects |
+| **Anomaly Detection Engine** | Xây dựng hybrid anomaly detection: Statistical (Z-score) + ML (Isolation Forest) + Dynamic Thresholding. | **Z-score layer:** Tính Z-score trên violation_rate time-series (≥5 historical runs). Alert khi Z > 2.5 AND rate > 1%. **Isolation Forest layer:** Train trên feature vector (violation_rate, null_rate_delta, row_count_change) per column. Re-train mỗi 50 runs hoặc weekly. **Dynamic Threshold:** Exponential Moving Average (EMA) × 1.5 thay fixed 5% cold-start. **Ensemble:** `score = w1×zscore_flag + w2×iforest_score + w3×ema_breach`. Weights configurable. | scikit-learn (IsolationForest, StandardScaler) | `src/services/anomaly_engine.py`, `src/services/dynamic_threshold.py`, `src/models/anomaly_models.py`, `tests/unit/test_anomaly_engine.py` |
+| **M5: DeepEval Offline Validation** | Benchmark pipeline đánh giá chất lượng LLM rule proposals trên 3 trục. | **Faithfulness:** So sánh `ai_reasoning` citations vs actual evidence keys. Score = intersection / cited. **Executability:** Compile mỗi proposed rule qua Test Compiler → binary pass/fail. Score = compiled / total. **Correctness:** Tạo labeled dataset (injected null 5-20%, out-of-range, duplicates, format violations). Run compiled tests → Precision, Recall, F1. **Cross-model:** So sánh OpenAI, Anthropic, Google, Mistral. | scikit-learn (precision/recall/f1 metrics), Great Expectations (compile verification) | `eval/benchmark_pipeline.py`, `eval/metrics/faithfulness.py`, `eval/metrics/executability.py`, `eval/metrics/correctness.py`, `eval/datasets/` (labeled test data), `eval/results/` |
+| **Threshold Optimization** | Tối ưu ngưỡng cảnh báo giảm false positive. | Grid search trên threshold parameters (Z-score threshold, IForest contamination, EMA window). Evaluate trên labeled anomaly dataset. Output: optimal config per dataset type. | scikit-learn | `eval/threshold_optimizer.py`, `config/anomaly_thresholds.yml` |
 
 ---
 
-## 4. MA TRẬN TƯƠNG TÁC VÀ TÍCH HỢP (INTEGRATION MATRIX)
+### 4.3 PHONG — AI Infrastructure (Orchestration & Deployment)
 
-### 4.1 API Contract Definitions
+| Module | Nhiệm vụ (Làm gì?) | Phương pháp (Làm như thế nào?) | Tech Stack | Deliverables |
+|--------|---------------------|-------------------------------|------------|-------------|
+| **M7: Orchestration Pipeline** | Xây dựng DAG/Pipeline chạy DQ checks định kỳ trên warehouse. | **DAG Definition:** `ridepulse_dq_pipeline` DAG với tasks: `profile_dataset` → `propose_rules` (optional, nếu chưa có active rules) → `execute_tests` → `detect_anomalies` → `send_alerts`. **Schedule:** Configurable per dataset: `MANUAL`, `HOURLY`, `DAILY`, `WEEKLY`. **Retry:** Max 3 retries per task, exponential backoff. **Alerting:** On failure → Slack/Email webhook. | Airflow hoặc Dagster | `dags/ridepulse_dq_dag.py` (Airflow) hoặc `pipelines/ridepulse_dq.py` (Dagster), `dags/config.yml` (schedule config per dataset), Alert integration config |
+| **Worker Management** | Quản lý background job execution, liveness monitoring. | FastAPI background tasks cho interactive jobs (user-triggered). Airflow/Dagster workers cho scheduled jobs. Health check endpoint `/health` báo cáo: DB connectivity, warehouse reachability, DAG status. | Airflow/Dagster, FastAPI | `src/api/health.py`, worker monitoring config, DAG health sensors |
+| **Containerization** | Multi-stage Docker builds, production-ready containers. | **API Container:** Multi-stage build (builder → runtime). Target < 500MB. Non-root user. Health check instruction. **Worker Container:** Separate Dockerfile cho Airflow/Dagster worker. **Docker Compose:** Services: `api`, `worker`, `db` (PostgreSQL), `scheduler` (Airflow/Dagster). | Docker | `Dockerfile` (optimized), `Dockerfile.worker`, `docker-compose.yml` (updated), `docker-compose.prod.yml` |
+| **Cloud Deployment** | Triển khai lên Google Cloud Run, CI/CD automation. | **Cloud Run:** API service (min 0, max 5 instances, 512MB RAM, 1 vCPU). Worker service (min 1). **CI/CD:** GitHub Actions → lint (ruff) → test (pytest) → Docker build → push GCR → deploy Cloud Run (staging → production). Warehouse credentials qua Secret Manager. | Docker, Cloud Run | `.github/workflows/ci.yml`, `.github/workflows/deploy.yml`, `scripts/deploy_cloud_run.sh`, Cloud Run service configs |
 
-#### Contract 1: Frontend (Đạt) ↔ Backend API (Kiên + Phong)
+---
 
-| Interface | Endpoint | Request | Response | Owner |
-|-----------|----------|---------|----------|-------|
-| Dataset Registration | `POST /api/v1/datasets/register` | `{name, description, connection_config, source_type}` | `{dataset_id, status: "REGISTERED"}` | Kiên (API), Đạt (UI) |
-| Dataset Schema | `GET /api/v1/datasets/{id}/schema` | — | `{dataset_id, columns: [{name, type, nullable, stats}]}` | Kiên |
-| DQ Proposal Trigger | `POST /api/v1/dq/propose` | `{dataset_id, sampling_rate?}` | `{run_id, status: "QUEUED"}` | Kiên |
-| Rule Review List | `GET /api/v1/dq/runs/{run_id}/rules` | `?status=&dimension=` | `{rules: [RuleReviewResponse]}` | Kiên |
-| Rule Update (HITL) | `PATCH /api/v1/dq/runs/{rid}/rules/{rule_id}` | `RuleUpdateRequest` | `{updated: RuleReviewResponse}` | Kiên + Đạt |
-| Job Status Stream | `WS /api/v1/ws/jobs/{job_id}` | — | `{phase, progress, message, ts}` | Phong + Đạt |
-| Anomaly Data | `GET /api/v1/anomalies/{dataset_id}` | `?from=&to=&rule_type=` | `{anomalies, trend}` | Kiên + Chiến |
-| Dataset Understanding | `GET /api/v1/datasets/{id}/understanding` | — | `DatasetUnderstanding` | Kiên + Đạt |
+### 4.4 ĐẠT — AI Application (LangGraph Agent & Frontend UI)
 
-#### Contract 2: LLM Outputs (Đạt) ↔ Test Compiler (Kiên)
+| Module | Nhiệm vụ (Làm gì?) | Phương pháp (Làm như thế nào?) | Tech Stack | Deliverables |
+|--------|---------------------|-------------------------------|------------|-------------|
+| **M2: Dataset Understanding Agent** | Xây dựng logic trong Profiler Node để LLM tự động sinh Data Dictionary và Semantic Profile. | **Input:** `dataset_profile` (aggregate stats từ Profiler Engine). **LLM Call:** System prompt = "Data Analyst chuyên ride-hailing". Few-shot examples. Output = `DatasetUnderstanding` Pydantic model: per-column `business_name_vi`, `description`, `semantic_type` (CURRENCY/TIMESTAMP/GEO_ID/ENUM/IDENTIFIER/MEASUREMENT/FLAG), `business_rules`. **Governance:** Chỉ aggregate stats, KHÔNG raw data. `with_structured_output()`. Retry max 2. **Cache:** Per (dataset_id, schema_hash) trong Vector DB. | LangGraph, LLM, Vector DB | `src/agents/nodes/understanding_logic.py`, `src/models/understanding_schemas.py`, `src/prompts/understanding_prompt.py` |
+| **M3: Dynamic Context Builder** | Auto-assemble LLM context cho Rule Proposer từ multiple sources. | **Assembly pipeline:** Merge 4 nguồn: (a) aggregate profile stats, (b) data dictionary (from Understanding), (c) historical rules (RAG query Vector DB — top-3 similar per column), (d) domain constraints (static config). **Token budget:** ≤ 4000 tokens. Priority: dictionary > profile > constraints > history. Auto-truncate. **Evidence tracking:** Mỗi context element có `evidence_key` cho DeepEval Faithfulness scoring. **PII Guard:** Scan cho email/phone/name patterns → `[REDACTED]`. | LangGraph, LLM, Vector DB | `src/agents/nodes/context_builder.py`, `src/services/rag_query.py`, `src/models/context_schemas.py` |
+| **LangGraph 4-Node Graph** | Implement StateGraph với 4 node chính + HITL gate + error handling. | **Graph construction:** `StateGraph(AgentState)` → add 4 nodes + hitl_gate + error handler. Conditional edges: error → END. HITL → interrupt_before. **Node 1 (Profiler):** Call `profiling_engine` (Chiến) + `understanding_logic` (Đạt). **Node 2 (Rule Proposer):** Call `context_builder` → `LLM.with_structured_output(TableRuleProposal)` → validate → persist PENDING. **Node 3 (Test Generator):** Call `test_compiler` (Kiên) → execute via `ge_runner`/`dbt_runner` (Kiên). **Node 4 (Anomaly Detector):** Call `anomaly_engine` (Chiến) → compute dq_score → persist report. | LangGraph, LLM | `src/agents/graph.py` (rewritten), `src/agents/state.py` (updated), `src/agents/nodes/profiler_node.py`, `rule_proposer_node.py`, `test_generator_node.py`, `anomaly_detector_node.py` |
+| **Prompt Engineering** | Thiết kế prompt templates cho Understanding Agent và Rule Proposer. | **Rule Proposer prompt:** Mô tả 11 rule types với examples/constraints. Include Data Dictionary context. Few-shot cho DISTRIBUTION_QUANTILES, SCHEMA_CONFORMANCE, ANOMALY_OUTLIER. System prompt enforce: chỉ dùng aggregate stats, output Tiếng Việt cho `rule_description`. **Output parser:** Pydantic `with_structured_output()`. Post-parse: evidence cross-ref, dedup, parameter range guard. Reject ratio < 20%. | LLM | `src/prompts/rule_proposer_prompt.py`, `src/prompts/understanding_prompt.py` |
+| **M6: Frontend — Data Catalog** | Giao diện quản lý datasets: đăng ký, xem schema, trigger profiling. | Ant Design `Table` component listing datasets. Status badges (`Tag`): REGISTERED, PROFILED, ACTIVE. Quick action buttons: Profile, Propose Rules, Run DQ. Schema viewer `Modal` hiển thị column list + stats. | React, Ant Design | `frontend/src/components/DatasetCatalog.tsx` |
+| **M6: Frontend — HITL Rule Approval Board** | Giao diện Data Steward duyệt/từ chối/chỉnh sửa rules do AI đề xuất. | Ant Design `Table` với filters (`Select`): by dimension, severity, status. Columns: Column Name, Rule Type, AI Reasoning, Confidence %, Parameters, Status, Actions. Inline editing (`Modal` + `Form` + `InputNumber`) cho parameters. Bulk approve/reject (`Checkbox` + `Popconfirm`). Side panel: AI reasoning vs evidence data comparison. | React, Ant Design | `frontend/src/components/RuleReviewBoard.tsx`, `frontend/src/components/RuleEditor.tsx` |
+| **M6: Frontend — Anomaly Dashboard** | Dashboard trực quan hóa kết quả DQ và anomalies. | **Time-series chart:** Ant Design `Card` wrapping chart component — DQ score over time với anomaly markers (red dots). **Alert table:** Ant Design `Table` với `Badge` status. Nút "AI Diagnosis" mở `Modal` giải thích root cause. **Drill-down:** Click anomaly → detail view (rule, sample violations, trend). | React, Ant Design | `frontend/src/components/AnomalyDashboard.tsx`, `frontend/src/components/AnomalyDrillDown.tsx` |
+| **M6: Frontend — Trend & Evaluation** | Biểu đồ xu hướng DQ score, pass/fail ratio, model evaluation metrics. | Multi-axis chart: DQ score trend + rule pass/fail ratio + anomaly count. `DatePicker.RangePicker` cho time filter. `Select` cho dataset/dimension. `Statistic` cards: Precision, Recall, F1. `Tabs` cho different views. Export button (CSV). | React, Ant Design | `frontend/src/components/TrendAnalysis.tsx`, `frontend/src/components/DQScoreCard.tsx` |
+| **M6: Frontend — Semantic Contract Viewer** | UI cho Steward xem/edit Data Dictionary và semantic contracts. | Hiển thị dictionary do Understanding Agent sinh. Steward edit business names/descriptions. Version tracking (AI vs edited). Export: Markdown, JSON, dbt `schema.yml`. | React, Ant Design | `frontend/src/components/SemanticContractViewer.tsx` |
+| **Frontend Architecture** | Refactor monolith `App.tsx` (90KB) thành modular components. | Tách thành 12+ components. React Router v6 routing. Typed API client (`axios`). Custom hooks: `useAuth`, `useDQData`, `useJobStatus`. 2 role-based layouts: Steward (full access), Viewer (read-only). | React, Ant Design | `frontend/src/pages/`, `frontend/src/components/`, `frontend/src/hooks/`, `frontend/src/api/client.ts`, `frontend/src/types/index.ts` |
 
-| Handoff | Input Schema | Output Schema | Validation |
-|---------|-------------|---------------|-----------|
-| Proposer → Compiler | `TableRuleProposalV2` | `list[CompiledTest]` | Column exists in schema registry. Params pass RuleParametersV2 validation. Evidence keys mapped. |
-| Compiler → Runner | `CompiledTest {sql, bind_params, rule_id}` | `TestResult {status, violation_count, total_rows, sample_ids}` | SQL passes SQLValidator: SELECT-only, known identifiers, no comments, single statement, bind params only. |
-| Understanding → Context | `DatasetUnderstanding` | `ContextPayload` | Dictionary covers all profile columns. Semantic types in allowed enum. |
+---
 
-#### Contract 3: Profiler & Eval (Chiến) ↔ Agent & CI (Đạt + Phong)
+## 5. MA TRẬN TÍCH HỢP & DỮ LIỆU (INTEGRATION MATRIX)
 
-| Handoff | Producer | Consumer | Format | Frequency |
-|---------|----------|----------|--------|-----------|
-| Profile Stats | Chiến | Đạt (understanding_agent, context_builder) | `ProfileResult` Pydantic | Per dataset run |
-| Anomaly Scores | Chiến | Kiên (persist), Đạt (dashboard) | `AnomalyResult` Pydantic | Per test run |
-| DeepEval Metrics | Chiến | Phong (CI gate), Đạt (prompt tuning) | `BenchmarkReport` JSON | Nightly CI |
-| Model Performance | Chiến | Đạt (Trend Analysis UI) | `ModelMetrics` JSON | Per model re-train |
+### 5.1 Sơ đồ tích hợp
 
-### 4.2 Integration Testing Strategy
+```
+   React + Ant Design ◄──── REST API / WebSocket ────► FastAPI
+          │                                                │
+          │ UI renders data                                │ Dispatch jobs
+          │                                                │
+          ▼                                                ▼
+   [HITL Review Board]                              [LangGraph Agent]
+   [Anomaly Dashboard]                                     │
+   [Trend Analysis]                          ┌─────────────┼─────────────┐
+                                             │             │             │
+                                             ▼             ▼             ▼
+                                        [Vector DB]    [LLM API]   [Warehouse]
+                                        (ChromaDB)                 (Snowflake/
+                                                                    BigQuery)
+                                                                       │
+                                                           ┌───────────┼───────────┐
+                                                           ▼                       ▼
+                                                   [Great Expectations]      [dbt tests]
+                                                   (GE Checkpoints)         (dbt test)
+                                                           │                       │
+                                                           ▼                       ▼
+                                                    [scikit-learn Anomaly Engine]
+                                                    (Isolation Forest / Z-score)
+                                                           │
+                                                           ▼
+                                                   [Airflow / Dagster]
+                                                   (Scheduled DAG runs)
+```
+
+### 5.2 Contract Definitions
+
+#### Interface 1: FastAPI ↔ React + Ant Design
+
+| Endpoint | Method | Request | Response | Vai trò UI |
+|----------|--------|---------|----------|-----------|
+| `/api/v1/datasets` | GET | `?status=` | `{datasets: [DatasetResponse]}` | DatasetCatalog |
+| `/api/v1/datasets/register` | POST | `{name, description, warehouse_type, connection_config}` | `{dataset_id, status}` | DatasetCatalog |
+| `/api/v1/datasets/{id}/schema` | GET | — | `{columns: [{name, type, stats}]}` | Schema Modal |
+| `/api/v1/dq/propose` | POST | `{dataset_id}` | `{run_id, status: "QUEUED"}` | Trigger button |
+| `/api/v1/dq/runs/{run_id}/rules` | GET | `?status=&dimension=` | `{rules: [RuleReviewResponse]}` | RuleReviewBoard |
+| `/api/v1/dq/runs/{rid}/rules/{rule_id}` | PATCH | `{status, edited_parameters?, review_note?}` | `{updated: RuleReviewResponse}` | RuleEditor |
+| `/api/v1/dq/runs/{run_id}/rules/bulk-review` | POST | `{decisions: [{rule_id, status, ...}]}` | `{updated_count, rules}` | Bulk approve |
+| `/api/v1/dq/runs/{run_id}/resume` | POST | — | `{status: "RUNNING"}` | Resume after HITL |
+| `/api/v1/dq/runs/{run_id}/results` | GET | — | `{results: [TestResultResponse]}` | Results table |
+| `/api/v1/anomalies/{dataset_id}` | GET | `?from=&to=` | `{anomalies, trend, dq_score}` | AnomalyDashboard |
+| `/api/v1/datasets/{id}/understanding` | GET | — | `DatasetUnderstanding` | SemanticContractViewer |
+
+#### Interface 2: LangGraph ↔ Vector DB & LLM
+
+| Interaction | Direction | Data Format | Purpose |
+|-------------|-----------|-------------|---------|
+| Rule Proposer → Vector DB | Query | `{column_name, rule_type, dataset_type}` → top-3 similar embeddings | Retrieve historical rules cho few-shot context |
+| HITL Approve → Vector DB | Insert | `{rule_embedding, metadata: {rule_type, column, parameters, outcome}}` | Enrich future rule proposals |
+| Rule Proposer → LLM | Request | `ContextPayload` (aggregate stats + dictionary + RAG results) | Sinh `TableRuleProposal` structured output |
+| Understanding → LLM | Request | `ProfileResult` (column stats only, no raw data) | Sinh `DatasetUnderstanding` structured output |
+
+#### Interface 3: Airflow/Dagster ↔ Snowflake/BigQuery & GE/dbt
+
+| DAG Task | Input | Execution | Output |
+|----------|-------|-----------|--------|
+| `profile_dataset` | `dataset_id`, warehouse connection | SQL aggregate queries trên warehouse | `ProfileResult` persisted to DB |
+| `execute_ge_tests` | `expectation_suite.json`, warehouse datasource | `checkpoint.run()` trên Snowflake/BigQuery connection | `ValidationResult` JSON |
+| `execute_dbt_tests` | `schema.yml`, dbt profile | `dbt test --target warehouse` | Test results JSON |
+| `detect_anomalies` | Test results, historical data | scikit-learn Isolation Forest + Z-score | `AnomalyResult` list |
+| `send_alerts` | Anomaly results | Webhook (Slack/Email) | Alert delivery confirmation |
+
+#### Interface 4: scikit-learn Anomaly Engine ↔ Warehouse Data
+
+| Data Flow | Source | Processing | Output |
+|-----------|--------|-----------|--------|
+| Historical violation rates | Query `dq_results` table (PostgreSQL) | Time-series construction per (rule_id, column) | Feature matrix for Z-score |
+| Column value distributions | SQL query trên Snowflake/BigQuery | Extract sample + aggregate stats | Feature vectors for Isolation Forest |
+| Anomaly scoring | Feature matrix | `IsolationForest.fit_predict()` + Z-score calculation + EMA threshold | Anomaly scores + classifications |
+
+### 5.3 Integration Testing
 
 | Test Type | Scope | Owners | Trigger |
 |-----------|-------|--------|---------|
-| **Unit Contract Tests** | Pydantic schema serialization at each boundary | All | Every PR |
-| **Integration Smoke** | E2E: Register → Profile → Propose → HITL → Execute → Report | Kiên + Đạt | Nightly |
-| **Frontend API Contract** | TypeScript type assertions vs backend schemas | Đạt + Kiên | Every PR |
-| **DeepEval Regression Gate** | Block merge if Faithfulness < 0.7 or Executability < 0.9 | Chiến + Phong | `main` branch |
+| **Unit Contract Tests** | Pydantic schema serialization tại mỗi boundary | All | Mỗi PR |
+| **E2E Smoke Test** | Register → Profile → Propose → HITL → Execute GE/dbt → Anomaly → Report | Kiên + Đạt | Nightly |
+| **DAG Integration Test** | Airflow/Dagster DAG renders correctly, task dependencies valid | Phong | Mỗi PR chạm DAG files |
+| **DeepEval Regression** | Block merge nếu Faithfulness < 0.7 hoặc Executability < 0.9 | Chiến + Phong | `main` branch |
 
 ---
 
-## 5. LỘ TRÌNH TRIỂN KHAI (TIMELINE & PHASES)
+## 6. LỘ TRÌNH TRIỂN KHAI (4 PHASES)
 
 ---
 
-### Phase 1: Foundation & Profiling (Tuần 1–2)
+### Phase 1: Foundation (Tuần 1–2)
 
-**Mục tiêu:** Nền tảng kỹ thuật vững chắc — multi-dataset, state machine, CI/CD, enhanced profiling.
+**Mục tiêu:** Warehouse connection, FastAPI core, base UI, Vector DB schema.
 
-| Thành viên | Nhiệm vụ | Deliverables | Phụ thuộc |
-|------------|----------|-------------|-----------|
-| **Kiên** | M1: Schema Registry + Connector abstraction. M7: JobPhase enum + TransitionValidator + checkpoint. | `dataset_schema.py`, `connector_factory.py`, `state_machine.py`, migrations | — |
-| **Chiến** | Enhanced Profiler: DuckDB-based, extended metrics, cross-column correlation. | `profiling_engine.py`, `profile_models.py`, migration | M1 schema (Kiên) |
-| **Phong** | CI/CD: GitHub Actions (lint + test + build). Multi-stage Dockerfile. Docker Compose prod. | `.github/workflows/ci.yml`, `Dockerfile`, `docker-compose.prod.yml` | — |
-| **Đạt** | Frontend refactor: Component architecture, base layout, routing, DatasetCatalog. | `frontend/src/components/`, `pages/`, `hooks/` | M1 APIs (Kiên) |
+| Thành viên | Nhiệm vụ | Deliverables |
+|------------|----------|-------------|
+| **Kiên** | Warehouse Connector (Snowflake/BigQuery SDK). Schema registry API. Vector DB (ChromaDB) setup + embedding pipeline. FastAPI core routes. | `warehouse_connector.py`, `schema_registry.py`, `vector_store.py`, API endpoints, migrations |
+| **Chiến** | Profiling Engine: SQL aggregate queries cho Snowflake/BigQuery. `ProfileResult` Pydantic model. | `profiling_engine.py`, `profile_models.py`, SQL templates per dialect |
+| **Phong** | Docker multi-stage build. Docker Compose (api + db + scheduler). CI pipeline (GitHub Actions: lint + test + build). | `Dockerfile`, `docker-compose.yml`, `.github/workflows/ci.yml` |
+| **Đạt** | Frontend refactor: tách `App.tsx` → component architecture. DatasetCatalog UI. Base routing + layout. | `frontend/src/components/`, `frontend/src/pages/`, `frontend/src/hooks/`, `api/client.ts` |
 
-**Definition of Done Phase 1:**
-- [ ] Đăng ký & ingest ≥ 2 dataset types thành công
-- [ ] State machine persist & recover job phases
-- [ ] CI pipeline green (lint + 100% unit tests pass)
-- [ ] Frontend components render DatasetCatalog từ API
+**DoD Phase 1:**
+- [ ] Kết nối thành công Snowflake hoặc BigQuery từ FastAPI
+- [ ] Profiling engine trả về stats cho ≥ 1 dataset
+- [ ] ChromaDB insert/query hoạt động
+- [ ] CI pipeline green
+- [ ] DatasetCatalog render danh sách datasets
 
 ---
 
-### Phase 2: Agent Core & Semantic Contract (Tuần 3–4)
+### Phase 2: Agent Core (Tuần 3–4)
 
-**Mục tiêu:** Intelligence layer — Understanding Agent, Context Builder, DeepEval baseline, observability.
+**Mục tiêu:** LangGraph 4 nodes, prompt templates, Understanding Agent, Context Builder.
 
-| Thành viên | Nhiệm vụ | Deliverables | Phụ thuộc |
-|------------|----------|-------------|-----------|
-| **Kiên** | RAG infra: ChromaDB setup, embedding pipeline, understanding API endpoints. | `rag_service.py`, API routes, ChromaDB Docker | Phase 1 |
-| **Chiến** | DeepEval baseline: Labeled test dataset, Faithfulness + Executability metrics. | `eval/benchmark_pipeline.py`, `eval/metrics/`, `eval/datasets/` | Rule format (Đạt) |
-| **Phong** | Observability: Structured logging, LangSmith, OpenTelemetry, health endpoints. | `src/core/logging.py`, `tracing.py`, `health.py` | Phase 1 CI |
-| **Đạt** | M2: Understanding Agent + prompt + parser. M3: Context Builder + token budget + PII guard. | `understanding_agent_node.py`, `context_builder_node.py`, schemas | Profiler (Chiến), RAG (Kiên) |
+| Thành viên | Nhiệm vụ | Deliverables |
+|------------|----------|-------------|
+| **Kiên** | Vector DB RAG query API cho historical rules. Test Compiler: mapping 11 rule types → GE expectations / dbt tests. | `rag_query.py`, `test_compiler.py`, GE custom expectations (R9, R10, R11) |
+| **Chiến** | DeepEval baseline: labeled test dataset + Faithfulness + Executability metrics. Anomaly Engine: Z-score + Isolation Forest base implementation. | `eval/benchmark_pipeline.py`, `eval/metrics/`, `eval/datasets/`, `anomaly_engine.py` |
+| **Phong** | Airflow/Dagster DAG definition: `ridepulse_dq_pipeline`. Task definitions + schedule config. Health endpoint. | `dags/ridepulse_dq_dag.py`, `dags/config.yml`, `src/api/health.py` |
+| **Đạt** | LangGraph StateGraph: 4 nodes + HITL gate. Understanding Agent + Context Builder logic. Prompt templates cho 11 rule types. | `graph.py`, `state.py`, 4 node files, `understanding_logic.py`, `context_builder.py`, prompt files |
 
-**Definition of Done Phase 2:**
+**DoD Phase 2:**
+- [ ] LangGraph graph chạy end-to-end (mock mode)
 - [ ] Understanding Agent sinh dictionary với ≥ 80% semantic accuracy
 - [ ] Context Builder output ≤ 4000 tokens, zero PII
 - [ ] DeepEval baseline metrics recorded
-- [ ] LangSmith traces visible for all LangGraph runs
+- [ ] DAG renders và chạy được locally
 
 ---
 
-### Phase 3: Rule Proposal, HITL & Execution Engine (Tuần 5–6)
+### Phase 3: HITL & Execution Engine (Tuần 5–6)
 
-**Mục tiêu:** Complete rule lifecycle — 11-type catalog, compiler, HITL, anomaly upgrade, async.
+**Mục tiêu:** GE/dbt test generation + execution, Anomaly model upgrade, HITL UI, scheduled DAGs.
 
-| Thành viên | Nhiệm vụ | Deliverables | Phụ thuộc |
-|------------|----------|-------------|-----------|
-| **Kiên** | M4 Compiler: 11 SQL templates, RuleCompiler, SQLValidator, dbt YAML generator. | `rule_compiler.py`, `sql_templates/`, 22 test cases | M4 schemas (Đạt) |
-| **Chiến** | Anomaly upgrade: IsolationForest, dynamic threshold, ensemble scoring, root cause. | `anomaly_engine.py`, `dynamic_threshold.py`, tests | Test results (Kiên) |
-| **Phong** | Async: Celery + Redis, task definitions, scheduled execution, locking, retry + circuit breaker. | `celery_app.py`, `dq_tasks.py`, `retry_policy.py`, Docker services | Phase 2 observability |
-| **Đạt** | M4 LLM: Prompt V2 cho 11 types, parser V2, guardrails. HITL Board UI (table + inline edit + bulk). | `rule_proposer_v2_prompt.py`, `RuleReviewBoard.tsx`, `RuleEditor.tsx` | Compiler (Kiên), Profiler (Chiến) |
+| Thành viên | Nhiệm vụ | Deliverables |
+|------------|----------|-------------|
+| **Kiên** | GE Runner: execute checkpoint trên warehouse. dbt Runner: `dbt test --target`. 22 compiler unit tests. API: resume, results, anomalies. | `ge_runner.py`, `dbt_runner.py`, `tests/unit/test_compiler.py`, API routes |
+| **Chiến** | Anomaly Engine upgrade: Dynamic Threshold (EMA), ensemble scoring, root cause attribution. Threshold optimization grid search. | `dynamic_threshold.py`, updated `anomaly_engine.py`, `threshold_optimizer.py`, `anomaly_thresholds.yml` |
+| **Phong** | DAG scheduling: per-dataset cron config. Retry policies (max 3, exponential). Alert webhooks (Slack/Email). Worker monitoring. | Updated DAGs, alert config, monitoring dashboards |
+| **Đạt** | HITL Rule Approval Board (Ant Design). Rule Editor modal. Anomaly Dashboard (charts + drill-down). Semantic Contract Viewer. | `RuleReviewBoard.tsx`, `RuleEditor.tsx`, `AnomalyDashboard.tsx`, `AnomalyDrillDown.tsx`, `SemanticContractViewer.tsx` |
 
-**Definition of Done Phase 3:**
-- [ ] All 11 rule types: propose → compile → execute → detect anomaly
+**DoD Phase 3:**
+- [ ] Tất cả 11 rule types: propose → HITL review → compile GE/dbt → execute → detect anomaly
 - [ ] HITL UI: approve/reject/edit rules, bulk operations
-- [ ] Celery workers process jobs asynchronously
-- [ ] Anomaly hybrid model: Z-score + IForest + dynamic threshold
+- [ ] Airflow/Dagster DAG chạy scheduled DQ checks
+- [ ] Anomaly hybrid model (Z-score + IForest + EMA) operational
 
 ---
 
-### Phase 4: Optimization, Evals & Cloud Deployment (Tuần 7–8)
+### Phase 4: Integration, Cloud Run & UAT (Tuần 7–8)
 
-**Mục tiêu:** Production-readiness — visualization, full benchmark, cloud deploy, comprehensive testing.
+**Mục tiêu:** Cloud deployment, full benchmark, integration testing, user acceptance.
 
-| Thành viên | Nhiệm vụ | Deliverables | Phụ thuộc |
-|------------|----------|-------------|-----------|
-| **Kiên** | Integration testing, performance optimization, OpenAPI docs. | `tests/integration/`, API docs, benchmarks | All modules |
-| **Chiến** | DeepEval full: Cross-model comparison, Correctness F1, model dashboard, threshold tuning. | Benchmark report, model matrix, tuned config | Full pipeline |
-| **Phong** | Cloud Run deploy: Terraform, Secret Manager, Cloud SQL. Monitoring alerts. | Deploy scripts, Terraform, Grafana, alerts | All Docker |
-| **Đạt** | M6: Anomaly Dashboard, Trend Analysis, DQ ScoreCard, Contract Viewer, WebSocket real-time. | 6+ dashboard components, WebSocket hooks | All APIs |
+| Thành viên | Nhiệm vụ | Deliverables |
+|------------|----------|-------------|
+| **Kiên** | E2E integration tests. Performance optimization (query caching, connection pooling). API documentation (OpenAPI). | `tests/integration/`, performance benchmarks, API docs |
+| **Chiến** | DeepEval full benchmark: cross-model comparison, Correctness F1. Dynamic threshold tuning trên production data. | `eval/results/benchmark_report.md`, model comparison matrix, tuned configs |
+| **Phong** | Cloud Run deployment. Secret Manager for warehouse credentials. GitHub Actions deploy pipeline. Production monitoring. | `scripts/deploy_cloud_run.sh`, deploy workflow, Cloud Run configs |
+| **Đạt** | Trend Analysis + DQ ScoreCard UI. Frontend polish + responsive design. 2-role testing (Steward/Viewer). | `TrendAnalysis.tsx`, `DQScoreCard.tsx`, responsive CSS, UAT test cases |
 
-**Definition of Done Phase 4 (Gate 3 Complete):**
-- [ ] System deployed on Cloud Run, SSL, auto-scaling
+**DoD Phase 4 (Gate 3 Complete):**
+- [ ] System deployed trên Cloud Run, auto-scaling configured
 - [ ] DeepEval: Faithfulness ≥ 0.7, Executability ≥ 0.9, Correctness F1 ≥ 0.8
-- [ ] All 6 major frontend views operational
-- [ ] Zero raw PII in LLM payloads (verified by automated test)
-- [ ] Audit log complete, structured traces in LangSmith
-- [ ] Documentation: Architecture, API, Runbook, Deploy guide
+- [ ] Airflow/Dagster scheduled pipeline chạy ổn định ≥ 3 ngày liên tục
+- [ ] Tất cả 6 major frontend views hoạt động (Catalog, HITL, Execution, Anomaly, Trend, Contract)
+- [ ] Zero raw PII trong LLM payloads (verified by automated test)
+- [ ] Audit log complete cho mọi HITL actions
+- [ ] Documentation: Architecture, API docs, Runbook, Deploy guide
 
 ---
 
-> **Prepared by:** Senior AI Architect & Lead Technical Project Manager  
+> **Prepared by:** Senior AI Architect & Technical Project Lead  
 > **Review date:** 2026-08-19  
-> **Next review:** Phase 1 completion checkpoint
+> **Tech Stack Compliance:** ✅ Chỉ sử dụng 10 công nghệ trong danh mục chỉ định
