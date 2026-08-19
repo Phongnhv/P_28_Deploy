@@ -153,7 +153,7 @@ def main():
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             print(f"[ai-log] Submitted {len(entries)} entries → {resp.status}", file=sys.stderr)
     except urllib.error.HTTPError as e:
         _restore_pending(pending)
@@ -163,8 +163,8 @@ def main():
         except Exception:
             print(f"[ai-log] Submit failed: {e} — logs kept locally.", file=sys.stderr)
         sys.exit(0)  # Don't block push on server error
-    except urllib.error.URLError as e:
-        # Failure: restore the whole pending (including leftover) for next push.
+    except Exception as e:
+        # Failure (TimeoutError, URLError, socket error, etc.): restore pending for next push.
         _restore_pending(pending)
         print(f"[ai-log] Submit failed: {e} — logs kept locally.", file=sys.stderr)
         sys.exit(0)  # Don't block push on server error
