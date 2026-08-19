@@ -9,15 +9,17 @@
 
 ## 1. Kết quả cần đạt
 
-Frontend phải trình diễn được một luồng đa dataset hoàn chỉnh:
+Frontend phải trình diễn được một luồng đa dataset hoàn chỉnh theo từng bước, không dùng tabs làm cơ chế điều hướng chính:
 
 ```text
 Chọn/Upload dataset
 → Xem schema và profile
-→ Xem/chỉnh semantic contract
-→ Trigger Rule Proposer
+→ Agent 1 đọc hiểu dataset và tạo semantic contract
+→ Agent 1 đề xuất rules
 → Review/approve/edit/reject rule
-→ Chạy rule đã approve
+→ Agent 2 đề xuất code chuẩn hóa/kiểm tra
+→ Steward review code và chạy rule đã approve
+→ Loop Agent phân tích kết quả, đề xuất lần cải thiện tiếp theo
 → Xem kết quả, violation và trend
 ```
 
@@ -26,6 +28,8 @@ Giao diện cần thể hiện rõ ba giá trị của sản phẩm:
 1. Agent hiểu dataset trước khi đề xuất rule.
 2. Rule có evidence và con người vẫn kiểm soát quyết định.
 3. Kết quả DQ có thể theo dõi và giải thích được.
+
+Định hướng orchestration là chuyển sang **Deep Agent** ở backend. Frontend không tự chứa logic agent; UI chỉ biểu diễn plan, trạng thái từng bước, artifact, yêu cầu phê duyệt, vòng lặp và trace rút gọn do backend trả về.
 
 Không mở rộng frontend sang các tính năng future work như ChromaDB UI, multi-model comparison, Airflow monitoring hoặc Isolation Forest configuration trong critical path.
 
@@ -76,6 +80,9 @@ Không mở rộng frontend sang các tính năng future work như ChromaDB UI, 
 - Rule Proposal Review Board.
 - Execute approved rules và hiển thị progress/result.
 - DQ Dashboard cơ bản theo dataset đang chọn.
+- Workflow stepper có resume/retry và khóa bước theo dependency.
+- Review artifact của Agent 2: code chuẩn hóa/validation, diff, giải thích và cảnh báo.
+- Loop Agent panel: kết quả vòng hiện tại, đề xuất vòng kế tiếp và quyền Continue/Stop của steward.
 - Mock API hỗ trợ cùng contract với real API.
 - Loading/error/empty states.
 - Responsive layout cho laptop và mobile width cơ bản.
@@ -105,7 +112,7 @@ Không mở rộng frontend sang các tính năng future work như ChromaDB UI, 
 
 ## 4. Information architecture
 
-Frontend dùng một `AppShell` với context dataset hiện tại và session hiện tại.
+Frontend dùng một `AppShell` với context dataset/session hiện tại và một workflow stepper làm luồng chính. Primary navigation chỉ chuyển giữa Catalog, Workflow, Runs và Admin; các phase Profile/Contract/Rules/Code/Results không còn là tabs ngang hàng.
 
 ```text
 AppShell
@@ -116,13 +123,19 @@ AppShell
 │   └── UserMenu
 ├── PrimaryNav
 │   ├── Overview
-│   ├── Dataset
-│   ├── Semantic Contract
-│   ├── Rules
+│   ├── Dataset Catalog
+│   ├── Workflow
 │   ├── Runs
-│   ├── Data Explorer
 │   └── Admin (role-gated)
 └── PageContent
+    └── WorkflowStepper
+        ├── 1. Upload & Profile
+        ├── 2. Agent 1 — Understand Data
+        ├── 3. Agent 1 — Propose Rules
+        ├── 4. Steward — Review Rules
+        ├── 5. Agent 2 — Propose Standardization Code
+        ├── 6. Steward — Review & Execute
+        └── 7. Loop Agent — Analyze & Improve
 ```
 
 ### 4.1 Overview
@@ -145,15 +158,25 @@ Mục đích: trả lời nhanh “dataset đang khỏe không và cần làm g�
 - View schema/profile action.
 - Error status nếu ingest/profile fail.
 
-### 4.3 Dataset Workspace
+### 4.3 Dataset Workflow Workspace
 
 Workspace giữ `datasetId` và `datasetVersionId` trong state, không đọc dataset đầu tiên từ array.
 
 - Header hiển thị dataset/version.
-- Tabs hoặc sub-navigation cho Profile, Contract, Rules, Runs và Data.
+- Stepper dọc hoặc ngang tùy viewport; mỗi thời điểm có một bước active và một CTA chính.
+- Bước đã hoàn thành có summary và có thể mở lại để xem, nhưng thay đổi artifact cũ phải cảnh báo các bước downstream sẽ stale.
+- URL/state lưu `datasetId`, `workflowRunId` và `step`; refresh có thể resume đúng bước.
+- Các bước bị khóa phải giải thích dependency còn thiếu, không chỉ disable nút.
 - Nếu chưa chọn dataset, hiển thị empty state có CTA tới catalog.
 
-### 4.4 Semantic Contract
+### 4.4 Vai trò Agent và artifact hiển thị
+
+- **Agent 1 — Dataset Understanding + Rule Proposal:** nhận schema, metadata và profile; sinh semantic contract có cấu trúc rồi đề xuất rules kèm evidence.
+- **Agent 2 — Standardization Code Proposal:** chỉ chạy sau khi rules được steward chấp nhận; tạo code/plan chuẩn hóa hoặc validation artifact, kèm diff, target, assumptions và rủi ro. Code không được tự động áp dụng nếu chưa có phê duyệt.
+- **Loop Agent:** đọc execution results, violations, anomaly signals và steward feedback; đề xuất giữ/sửa rule, sửa code hoặc chạy lại. Mỗi vòng có iteration number, input/output và điều kiện dừng rõ ràng.
+- **Deep Agent:** là lớp orchestration dự kiến thay cho chuỗi gọi agent rời rạc. UI cần dựa vào contract trung lập (`workflow`, `step`, `artifact`, `approval`, `trace`) để việc đổi framework không buộc viết lại màn hình.
+
+### 4.5 Semantic Contract
 
 - Column table: name, physical type, semantic type, description, confidence, evidence.
 - Contract summary và warnings.
@@ -162,7 +185,7 @@ Workspace giữ `datasetId` và `datasetVersionId` trong state, không đọc da
 - Save draft và confirm contract actions.
 - Diff/version view ở P1.
 
-### 4.5 Rules
+### 4.6 Rules
 
 - Filter by status, dimension, severity, rule type.
 - Table/card view cho proposal.
@@ -171,7 +194,21 @@ Workspace giữ `datasetId` và `datasetVersionId` trong state, không đọc da
 - Approve/reject/bulk review.
 - Hiển thị `model_name`, prompt version, confidence và agent mode.
 
-### 4.6 Runs và Dashboard
+### 4.7 Agent 2 — Code Review
+
+- Code viewer/diff theo ngôn ngữ artifact (`SQL`, `dbt SQL`, YAML hoặc structured transformation plan).
+- Hiển thị rule nguồn, input/output columns, assumptions, safety warning và validation result.
+- Actions: approve, request revision, reject; destructive/apply action phải có confirmation riêng.
+- Không cho frontend thực thi code tùy ý; chỉ gửi approval/action tới endpoint được backend kiểm soát.
+
+### 4.8 Loop Agent
+
+- Timeline theo iteration: artifacts đầu vào, quyết định, kết quả run và đề xuất tiếp theo.
+- Hiển thị lý do tiếp tục/dừng, confidence và blocker.
+- Steward chọn `Continue with proposal`, `Request changes` hoặc `Stop loop`.
+- Giới hạn số vòng và trạng thái timeout/error phải nhìn thấy được.
+
+### 4.9 Runs và Dashboard
 
 - Run status và progress.
 - Summary cards.
@@ -180,7 +217,7 @@ Workspace giữ `datasetId` và `datasetVersionId` trong state, không đọc da
 - Anomaly signal và trend.
 - Link ngược tới rule và evidence.
 
-### 4.7 Data Explorer
+### 4.10 Data Explorer
 
 Data Explorer phải render từ `schema.columns` và row projection do API trả về.
 
@@ -212,6 +249,12 @@ frontend/src/
 │   │   ├── TopBar.tsx
 │   │   ├── PrimaryNav.tsx
 │   │   └── DatasetSwitcher.tsx
+│   ├── workflow/
+│   │   ├── WorkflowPage.tsx
+│   │   ├── WorkflowStepper.tsx
+│   │   ├── StepSummary.tsx
+│   │   ├── AgentActivityPanel.tsx
+│   │   └── ArtifactLineage.tsx
 │   ├── dataset/
 │   │   ├── DatasetCatalog.tsx
 │   │   ├── DatasetUploadDialog.tsx
@@ -232,6 +275,14 @@ frontend/src/
 │   │   ├── RuleEvidenceDrawer.tsx
 │   │   ├── RuleStatusBadge.tsx
 │   │   └── BulkReviewBar.tsx
+│   ├── code-review/
+│   │   ├── CodeProposalReview.tsx
+│   │   ├── CodeDiffViewer.tsx
+│   │   └── ValidationSummary.tsx
+│   ├── loop/
+│   │   ├── LoopTimeline.tsx
+│   │   ├── LoopRecommendation.tsx
+│   │   └── LoopDecisionBar.tsx
 │   ├── runs/
 │   │   ├── RunStatusPanel.tsx
 │   │   ├── RunResultTable.tsx
@@ -257,6 +308,9 @@ frontend/src/
 │   ├── useDatasetCatalog.ts
 │   ├── useSemanticContract.ts
 │   ├── useRuleReview.ts
+│   ├── useWorkflow.ts
+│   ├── useArtifactReview.ts
+│   ├── useLoopDecision.ts
 │   ├── useDqRun.ts
 │   └── useDashboardData.ts
 └── styles/
@@ -346,6 +400,54 @@ export interface EvidenceItem {
   value: string | number | boolean | null;
   source: "PROFILE" | "SCHEMA" | "SEMANTIC_CONTRACT" | "HISTORY";
 }
+
+export type WorkflowStepKey =
+  | "UPLOAD_PROFILE"
+  | "UNDERSTAND_DATA"
+  | "PROPOSE_RULES"
+  | "REVIEW_RULES"
+  | "PROPOSE_CODE"
+  | "REVIEW_EXECUTE"
+  | "ANALYZE_IMPROVE";
+
+export type WorkflowStepStatus =
+  | "LOCKED"
+  | "READY"
+  | "RUNNING"
+  | "WAITING_APPROVAL"
+  | "COMPLETED"
+  | "FAILED"
+  | "STALE";
+
+export interface WorkflowStep {
+  key: WorkflowStepKey;
+  status: WorkflowStepStatus;
+  artifact_ids: string[];
+  blocker?: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+export interface AgentArtifact {
+  id: string;
+  workflow_run_id: string;
+  agent_role: "DATA_RULE_AGENT" | "STANDARDIZATION_AGENT" | "LOOP_AGENT";
+  type: "SEMANTIC_CONTRACT" | "RULE_SET" | "CODE_PROPOSAL" | "LOOP_RECOMMENDATION";
+  version: number;
+  status: "DRAFT" | "VALIDATED" | "APPROVED" | "REJECTED" | "STALE";
+  payload: unknown;
+  created_at: string;
+}
+
+export interface WorkflowRun {
+  id: string;
+  dataset_id: string;
+  dataset_version_id: string;
+  current_step: WorkflowStepKey;
+  iteration: number;
+  max_iterations: number;
+  steps: WorkflowStep[];
+}
 ```
 
 Existing `Dataset`, `DatasetProfile`, `RuleProposal` and `DqResult` types should be extended compatibly. Do not silently rename fields consumed by the current backend; introduce mapping functions at the API boundary if the new backend contract differs.
@@ -362,6 +464,12 @@ startUnderstanding(datasetId: string, versionId?: string): Promise<CreateJobResp
 getSemanticContract(datasetId: string, versionId?: string): Promise<SemanticContract | null>;
 updateSemanticContract(id: string, input: SemanticContractUpdate): Promise<SemanticContract>;
 listEvidence(datasetId: string, keys: string[]): Promise<EvidenceItem[]>;
+createWorkflow(datasetId: string, versionId: string): Promise<WorkflowRun>;
+getWorkflow(workflowRunId: string): Promise<WorkflowRun>;
+runWorkflowStep(workflowRunId: string, step: WorkflowStepKey): Promise<CreateJobResponse>;
+listWorkflowArtifacts(workflowRunId: string): Promise<AgentArtifact[]>;
+reviewArtifact(artifactId: string, input: ArtifactReviewInput): Promise<AgentArtifact>;
+continueLoop(workflowRunId: string, input: LoopDecisionInput): Promise<WorkflowRun>;
 ```
 
 API names must be aligned with actual backend routes before implementation. The frontend plan does not authorize inventing routes that backend does not expose.
@@ -377,6 +485,9 @@ API names must be aligned with actual backend routes before implementation. The 
 - Mô phỏng loading và failed job.
 - Giữ cùng response shape với real API.
 - Không dùng taxi columns trong generic screens.
+- Có fixture cho step locked/running/waiting approval/failed/stale.
+- Có code proposal và ít nhất hai iteration của Loop Agent.
+- Deep Agent được mock qua cùng workflow contract, không tạo một adapter riêng theo framework.
 
 Mock data là demo/test fixture, không phải logic production.
 
@@ -391,11 +502,13 @@ Tạo `useDatasetWorkspace` quản lý:
 ```text
 selectedDatasetId
 selectedVersionId
-selectedView
+workflowRunId
+currentStep
 profile
 schema
 semanticContract
 proposals
+artifacts
 latestRun
 ```
 
@@ -499,6 +612,8 @@ Không xây dashboard nhiều biểu đồ trước khi API trả được time-
 
 ## 9. Các vertical slices cần implement
 
+Các slice dưới đây được triển khai theo dependency của step-by-step workflow. Route/tab cũ chỉ được giữ tạm làm compatibility layer trong quá trình chuyển đổi.
+
 ### Slice 1 — App shell và dataset context
 
 **Mục tiêu:** mọi page dùng dataset đã chọn.
@@ -580,6 +695,21 @@ Không xây dashboard nhiều biểu đồ trước khi API trả được time-
 - Rule chưa approve không có nút execute active.
 - Duplicate submit bị ngăn ở UI và backend contract.
 
+### Slice 5B — Agent 2 code proposal review
+
+**Mục tiêu:** steward hiểu và kiểm soát code chuẩn hóa trước khi áp dụng/chạy.
+
+- Render code/diff và structured plan.
+- Liên kết mỗi artifact với accepted rule/version.
+- Hiển thị validation, assumptions và security warning.
+- Approve/request revision/reject.
+
+**Acceptance criteria:**
+
+- Không có nút apply/execute trước khi artifact pass validation và được approve.
+- UI không render HTML/script từ agent output dưới dạng executable content.
+- Version rule thay đổi làm code proposal cũ chuyển sang `stale`.
+
 ### Slice 6 — Runs và result detail
 
 **Mục tiêu:** nối quyết định HITL với kết quả thực tế.
@@ -611,6 +741,21 @@ Không xây dashboard nhiều biểu đồ trước khi API trả được time-
 - Dashboard thay đổi khi đổi dataset.
 - Không có data thì chart có empty state.
 - Anomaly có link về rule/result detail.
+
+### Slice 7B — Loop Agent timeline
+
+**Mục tiêu:** đóng vòng feedback nhưng vẫn giữ human control.
+
+- Timeline các iteration và artifact lineage.
+- Recommendation card: sửa rule, sửa code, chạy lại hoặc dừng.
+- Continue/request changes/stop controls.
+- Hiển thị max-iteration, timeout và reason-to-stop.
+
+**Acceptance criteria:**
+
+- Một iteration không thể tự chạy vô hạn từ frontend.
+- Mọi lần continue đều tạo audit event và workflow state mới.
+- User phân biệt được agent suggestion, deterministic result và steward decision.
 
 ### Slice 8 — Generic Data Explorer và polish
 
@@ -648,6 +793,11 @@ Trước khi code từng slice, cần xác nhận backend contract tương ứng
 | Versions/schema | Version/schema endpoints | Cần backend contract |
 | Semantic contract | Understand/get/update endpoints | Cần backend contract |
 | Evidence detail | Profile/evidence endpoint | Có thể derive trước, cần chốt |
+| Workflow state | Create/get/resume workflow endpoints | Cần chốt contract độc lập với Deep Agent framework |
+| Run step | Start/poll/retry một workflow step | Cần backend contract và idempotency key |
+| Agent artifacts | List/get versioned artifacts | Cần backend contract |
+| Artifact review | Approve/reject/request revision | Cần audit log và authorization |
+| Loop decision | Continue/stop iteration | Cần max-iteration và stop condition |
 
 Nếu endpoint mới chưa sẵn sàng, frontend dùng feature flag/disabled state, không tự giả lập production success.
 
@@ -816,6 +966,10 @@ Các quyết định đã được đưa vào bản này:
 8. Semantic contract và evidence là UI riêng, không nhồi vào Rule table.
 9. Dashboard chỉ hiển thị metric mà backend có nguồn dữ liệu xác định.
 10. Mọi trạng thái Agent/mock/error phải hiển thị minh bạch.
+11. Thay tabs của dataset workspace bằng workflow stepper; tabs chỉ còn cho nội dung phụ trong một step nếu thật sự cần.
+12. Tách rõ Agent 1, Agent 2 và Loop Agent bằng artifact/approval contract, không chỉ đổi nhãn giao diện.
+13. Deep Agent là thay đổi orchestration backend; frontend chống phụ thuộc framework bằng workflow contract trung lập.
+14. Loop luôn có giới hạn vòng và quyền dừng của steward.
 
 ### 15.3 Kết luận tự đánh giá
 
@@ -842,14 +996,16 @@ Rủi ro còn lại lớn nhất là backend chưa có upload/version/semantic c
 
 ### 15.5 Critical path và fallback
 
-Critical path frontend chỉ gồm năm khối:
+Critical path frontend gồm các khối:
 
 ```text
 Dataset context
 → Generic schema/profile
-→ Semantic contract
-→ Rule review
-→ Run result/dashboard
+→ Agent 1: semantic contract + rule proposal
+→ Steward rule review
+→ Agent 2: code proposal review
+→ Execute + result
+→ Loop Agent recommendation
 ```
 
 Upload UI, version picker và evidence drawer có thể phát triển song song nhưng không được chặn việc tách workspace state.
@@ -876,6 +1032,9 @@ Một slice chỉ được bắt đầu khi có:
 - Owner và reviewer.
 - Acceptance criteria.
 - Dataset fixture để test.
+- Workflow/step transition table và approval authority đã chốt.
+- Với Agent 2: artifact format, validator response và apply/execute policy đã chốt.
+- Với Deep Agent: backend đã cung cấp contract ổn định hoặc mock adapter tương đương; frontend không gọi trực tiếp framework-specific API.
 
 ## 17. Definition of Done sau mỗi slice
 
