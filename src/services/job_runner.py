@@ -544,6 +544,11 @@ def run_propose_rules(job_id: str, dataset_id: str, session_id: str | None = Non
                     evidence_summary=p.evidence_summary,
                     confidence=p.confidence,
                     model_name=p.model_name,
+                    rule_name=p.rule_name,
+                    business_rationale=p.business_rationale,
+                    proposal_basis=p.proposal_basis,
+                    evidence=json.dumps(p.evidence, ensure_ascii=False),
+                    confidence_breakdown=json.dumps(p.confidence_breakdown, ensure_ascii=False),
                     created_at=utc_now(),
                     updated_at=utc_now()
                 )

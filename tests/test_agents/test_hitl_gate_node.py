@@ -169,7 +169,7 @@ def test_stamp_rule_3_positional_args_backward_compat():
     )
     stamped = _stamp_rule(rule, "orders", "abc123")
     assert stamped["rule_id"] == "orders.order_id.NOT_NULL"
-    assert stamped["status"] == "PENDING"
+    assert "status" not in stamped  # HITL/persistence owns review state.
 
 
 def test_stamp_rule_dedup_suffix():

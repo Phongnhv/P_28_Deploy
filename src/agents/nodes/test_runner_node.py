@@ -21,10 +21,10 @@ from pathlib import Path
 
 from sqlalchemy import text
 
+from src.agents.nodes.dbt_validation import get_state_dbt_yaml, materialize_dbt_project, validate_dbt_yaml_structure
 from src.agents.state import AgentState
 from src.config import get_settings
 from src.models.rule_schemas import RuleType
-from src.agents.nodes.dbt_validation import get_state_dbt_yaml, materialize_dbt_project, validate_dbt_yaml_structure
 from src.services.rule_store import get_engine
 
 logger = logging.getLogger(__name__)
@@ -348,7 +348,7 @@ def _run_dbt_cli_test(dbt_dir: Path) -> bool:
             raise RuntimeError(f"dbt test failed (returncode={res.returncode}): {output}")
         logger.info("Chạy dbt test CLI thành công (returncode=%d): %s", res.returncode, output[:200])
         return True
-    except Exception as exc:
+    except Exception:
         raise
 
 

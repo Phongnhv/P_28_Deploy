@@ -169,6 +169,11 @@ class RuleProposalModel(Base):
     evidence_refs: Mapped[str] = mapped_column(Text, nullable=False)  # JSON
     evidence_summary: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    rule_name: Mapped[str] = mapped_column(String(256), nullable=False, default="Rule proposal")
+    business_rationale: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    proposal_basis: Mapped[str] = mapped_column(String(32), nullable=False, default="DATA_PROFILE")
+    evidence: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    confidence_breakdown: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(

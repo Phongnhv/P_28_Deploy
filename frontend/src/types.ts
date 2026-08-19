@@ -128,6 +128,13 @@ export interface RuleProposal {
   evidence_summary: string;
   confidence: number;
   model_name: string;
+  rule_name?: string;
+  business_rationale?: string;
+  proposal_basis?: "SCHEMA_CONSTRAINT" | "DATA_PROFILE" | "DATA_DICTIONARY" | "HISTORICAL_RULE" | "POLICY" | "MIXED";
+  evidence?: Record<string, unknown>;
+  parameter_provenance?: Array<Record<string, unknown>>;
+  assumptions?: string[];
+  confidence_breakdown?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }

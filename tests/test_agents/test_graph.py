@@ -122,6 +122,7 @@ async def test_proposal_graph_execution(monkeypatch, tmp_path):
     initial_state = {
         "dataset_id": "demo_graph_table",
         "rule_run_id": run_id,
+        "semantic_contract": {"status": "confirmed", "tables": {}},
         "metadata": {
             "connection_string": f"sqlite:///{tmp_path / 'test_graph.db'}",
             "sampling_rate": 1.0,
@@ -230,7 +231,22 @@ async def test_runners(monkeypatch, tmp_path):
             "rule_proposal_errors": [],
         }
 
+    async def mock_dataset_understanding(state):
+        return {
+            "semantic_contract": {
+                "dataset_id": state.get("dataset_id"),
+                "tables": {},
+                "status": "confirmed"
+            },
+            "progress_state": "PROPOSING_RULES"
+        }
+
+    async def mock_prompt_customizer(state):
+        return {"specialized_system_prompts": {}}
+
     monkeypatch.setattr("src.agents.nodes.rule_proposer_node.rule_proposer_node", mock_rule_proposer)
+    monkeypatch.setattr("src.agents.nodes.dataset_understanding_node.dataset_understanding_node", mock_dataset_understanding)
+    monkeypatch.setattr("src.agents.nodes.prompt_customizer_node.prompt_customizer_node", mock_prompt_customizer)
 
     # 1. Chạy run_proposal_graph
     prop_res = await run_proposal_graph(

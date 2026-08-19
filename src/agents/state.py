@@ -50,4 +50,9 @@ class AgentState(TypedDict, total=False):
     steward_summary: str         # Báo cáo tổng kết Markdown cho Data Steward
     remediation_actions: list    # Danh sách hành động khuyến nghị dạng structured
 
-
+    # Generalised scope expansion fields
+    target_tables: list[str]                  # Bảng mục tiêu cần chạy phân tích và đề xuất
+    semantic_contract: dict                   # Hợp đồng ngữ nghĩa (Semantic Contract) được đề xuất hoặc đã duyệt
+    rule_candidates: list[dict]               # Danh sách các candidates deterministic sinh từ Semantic Contract
+    specialized_system_prompts: dict[str, str] # System prompt tĩnh đã được custom hóa ngữ cảnh theo từng bảng
+    progress_state: str                       # Trạng thái tiến trình của Agent (PROFILING, etc.)

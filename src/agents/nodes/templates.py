@@ -60,111 +60,153 @@ và Từ điển dữ liệu (Data Dictionary) được cung cấp.
 - `fixed_length`: độ dài chuỗi cố định — gợi ý mạnh cho REGEX_FORMAT hoặc length constraint.
 - `cross_column_hints` (cấp bảng): gợi ý quan hệ liên cột (e.g., pickup <= dropoff) — ưu tiên xem xét rule CROSS_FIELD_COMPARISON.
 
-## Hướng dẫn quan trọng
+## Hướng dẫn quan trọng về mặt Ngôn ngữ & Nghiệp vụ (Data Steward-friendly)
 
-1. **Chỉ đề xuất rule cho các cột có tên xuất hiện trong digest đầu vào.** \
-   Không được tự bịa tên cột.
-2. **`ai_reasoning` là suy luận logic của bạn — không phải bản tóm tắt số liệu.** \
-   Viết như cách một chuyên gia DQ thực sự giải thích quyết định của mình: \
-   bắt đầu từ điều bạn quan sát trong dữ liệu, kết nối với ý nghĩa nghiệp vụ của cột (từ Data Dictionary), \
-   sau đó lý giải tại sao threshold/constraint đó là hợp lý — bao gồm cả các edge case bạn đã cân nhắc. \
-   Văn phong tự nhiên, mạch lạc, không dùng dấu bullet hay template cứng nhắc.
-3. **RANGE không được ghim sát vào giá trị quan sát.** \
+1. **`rule_name` (Tên quy tắc)**: 
+   - Phải viết bằng tiếng Việt tự nhiên, mang tính chất nghiệp vụ thuần túy và dễ hiểu cho Data Steward.
+   - **CẤM** sử dụng tên cột kỹ thuật (e.g. `fare_amount`) hay tên kiểu dữ liệu, toán tử logic (e.g. `NOT_NULL`, `RANGE`).
+   - *Ví dụ tốt*: `Yêu cầu bắt buộc nhập mã chuyến đi`, `Khống chế cước phí cơ bản tối thiểu`, `Định danh nhà cung cấp hợp lệ`.
+   - *Ví dụ xấu*: `Cột vendor_id NOT_NULL`, `Range cước phí fare_amount`.
+
+2. **`business_rationale` (Giải thích nghiệp vụ)**:
+   - Viết hoàn toàn bằng tiếng Việt, giải thích tác động nghiệp vụ (doanh thu, quy trình, kiểm toán, an toàn dữ liệu) nếu rule này bị vi phạm.
+   - **TUYỆT ĐỐI CẤM sử dụng tên biến kỹ thuật** (như `fare_amount`, `tpep_pickup_datetime`, `payment_type`) trong phần giải thích này. Phải thay thế bằng từ ngữ tiếng Việt tương ứng theo Data Dictionary: "Cước phí cơ bản", "Thời gian đón khách", "Hình thức thanh toán".
+   - *Ví dụ tốt*: "Thời gian đón khách không được trống vì đây là mốc thời gian cốt lõi dùng để tính thời lượng hành trình và làm căn cứ đối soát hóa đơn."
+   - *Ví dụ xấu*: "Cần check tpep_pickup_datetime để không bị NULL khi chạy dbt."
+
+3. **`ai_reasoning` (Lập luận của AI)**:
+   - **BẮT BUỘC sử dụng các số liệu thực tế từ Profiler/Digest** để làm căn cứ lập luận cho rule.
+   - Trích dẫn rõ ràng các chỉ số quan sát được (ví dụ: tỷ lệ trống là 0.0%, dải giá trị thực tế quan sát từ 1 đến 6 hành khách, số lượng bản ghi quan sát được là 50,000 dòng, v.v.).
+   - *Ví dụ tốt*: "Profile dữ liệu thực tế cho thấy tỷ lệ trống của trường này là 0.0% trên tổng số 50,000 dòng được phân tích."
+   - *Ví dụ xấu*: "Cột này quan trọng nên đặt NOT_NULL."
+
+4. **`rule_description` (Mô tả quy tắc)**:
+   - Một câu tiếng Việt tự nhiên nêu rõ tên cột tiếng Việt (kèm tên biến kỹ thuật trong ngoặc đơn) và điều kiện kiểm tra một cách lịch sự, dễ hiểu.
+   - *Ví dụ*: "Thời gian đón khách (tpep_pickup_datetime) phải luôn được ghi nhận đầy đủ cho mọi chuyến đi."
+
+5. **RANGE không được biến biên quan sát thành hard limit.** \
    Ưu tiên dùng `typical_range` [p5, p95] nếu có, mở rộng ≥ 10% mỗi phía. \
    Nếu có signal `has_extreme_outliers`, đặt threshold dựa trên typical_range, không dùng min/max tuyệt đối.
-4. **Sampling caveat:** Nếu digest có "sample.rate < 1.0" và "sample.caveat", \
-   hãy GIẢM confidence_score và NỚI RỘNG ngưỡng hơn nữa — tránh đặt thresholds \
-   quá chặt từ mẫu.
-5. **Không đề xuất rule trùng lặp** (cùng column + cùng rule_type).
-6. ROW_COUNT dùng column = null (rule cấp bảng).
-7. Độ ưu tiên severity: NOT_NULL / UNIQUE trên cột id → CRITICAL; \
+
+6. **Không đề xuất rule trùng lặp** (cùng column + cùng rule_type).
+7. ROW_COUNT dùng column = null (rule cấp bảng).
+8. Độ ưu tiên severity: NOT_NULL / UNIQUE trên cột id → CRITICAL; \
    RANGE / FRESHNESS → HIGH; ACCEPTED_VALUES / NULL_RATE → MEDIUM; REGEX_FORMAT → LOW.
-8. **`dimension`** — ĐÂY LÀ FIELD RIÊNG, KHÔNG PHẢI rule_type. \
+9. **`dimension`** — ĐÂY LÀ FIELD RIÊNG, KHÔNG PHẢI rule_type. \
    Các giá trị hợp lệ của `dimension` là: COMPLETENESS, UNIQUENESS, VALIDITY, ACCURACY, CONSISTENCY, FRESHNESS. \
-   **TUYỆT ĐỐI KHÔNG điền các giá trị này vào trường `rule_type`.** \
    Mapping `rule_type` → `dimension` đề nghị dùng: \
    - NOT_NULL, NULL_RATE → dimension = COMPLETENESS \
    - UNIQUE → dimension = UNIQUENESS \
    - RANGE, ACCEPTED_VALUES, REGEX_FORMAT, ROW_COUNT → dimension = VALIDITY \
    - FRESHNESS → dimension = FRESHNESS \
-   - CROSS_FIELD_COMPARISON → dimension = CONSISTENCY \
-   - Nếu không chắc → dimension = VALIDITY \
-9. **`rule_description`**: Một câu tiếng Việt dễ hiểu, tự nhiên dành cho Data Steward. \
-   Nêu tên cột bằng tiếng Việt (nếu có trong Data Dictionary) kèm tên kỹ thuật trong ngoặc, \
-   sau đó mô tả điều kiện một cách có ngữ cảnh. \
-   VD: "Cước phí cơ bản (fare_amount) không được mang giá trị âm, vì đây là tiền tính theo đồng hồ chứ không phải hoàn tiền." \
-   KHÔNG viết kiểu template máy móc như "Cột X không được để trống." hay "Cột X phải có giá trị từ A đến B."
-10. **Đề xuất đầy đủ:** Không chỉ trả về vài rule đại diện. Hãy duyệt hết checklist evidence \
-    được cung cấp trong user message và tạo rule cho từng ứng viên đủ bằng chứng. \
-    Một cột có thể có nhiều rule khác loại; chỉ loại ứng viên khi thực sự mâu thuẫn với ý nghĩa nghiệp vụ. \
-    Với bảng dữ liệu giàu evidence, mục tiêu thông thường là 1-3 rule phù hợp cho mỗi cột.
-11. Với `CROSS_FIELD_COMPARISON`, sao chép nguyên vẹn `parameters.target_column` và \
-    `parameters.operator` từ checklist vào field `parameters` của structured output. \
-    Không đặt `target_column` hoặc `operator` ở cấp ngoài của rule và không tự thay đổi toán tử.
-12. Khi digest có `dashboard_candidate_mode = true`, đây là product workflow có guardrail nghiêm ngặt: \
-    checklist chỉ gồm candidate đã qua evidence/policy filter. Phải trả về MỖI candidate đúng một lần, \
-    theo đúng thứ tự checklist, tối đa một rule cho mỗi `rule_type`, và phải sao chép nguyên vẹn `parameters` \
-    cho cả RANGE, ACCEPTED_VALUES lẫn CROSS_FIELD_COMPARISON. Không tự tạo threshold, enum, cột hoặc \
-    rule_type mới; chỉ viết severity, mô tả và rationale cho Data Steward.
-
-**⚠️ NHẮC LẠI:** Trường `rule_type` CHỈ được nhận 9 giá trị sau, không hơn không kém: \
-NOT_NULL, UNIQUE, RANGE, ACCEPTED_VALUES, REGEX_FORMAT, FRESHNESS, ROW_COUNT, NULL_RATE, CROSS_FIELD_COMPARISON.
+   - CROSS_FIELD_COMPARISON → dimension = CONSISTENCY
+10. **Đề xuất đầy đủ:** Duyệt hết checklist evidence được cung cấp và tạo rule cho từng ứng viên đủ bằng chứng.
+11. Với `CROSS_FIELD_COMPARISON`, sao chép nguyên vẹn `parameters.target_column` và `parameters.operator` từ checklist.
+12. Khi digest có `dashboard_candidate_mode = true`, copy chính xác parameters từ checklist.
+13. Với `REGEX_FORMAT`, điền regex hợp lý từ format định sẵn.
+14. Chỉ chọn `selected_evidence_refs` từ `evidence_items[].id`.
 """
 
+
 _RULE_PROPOSER_FEW_SHOT = """\
-## Ví dụ few-shot — Chất lượng viết `rule_description` và `ai_reasoning`
+## Ví dụ few-shot — structured proposal mới
 
-Các ví dụ dưới đây minh hoạ văn phong và mức độ lập luận kỳ vọng. \
-Đây KHÔNG phải rule cho dataset hiện tại — chỉ dùng để học style.
+Các ví dụ dưới đây minh hoạ văn phong nghiệp vụ và mức độ lập luận dựa trên số liệu thực tế kỳ vọng.
 
-### Ví dụ 1 — NOT_NULL trên cột quan trọng
+### Ví dụ 1 — NOT_NULL có schema/policy support
 
 ```json
 {
   "column": "tpep_pickup_datetime",
   "rule_type": "NOT_NULL",
-  "rule_description": "Thời điểm bắt đầu chuyến đi (tpep_pickup_datetime) phải luôn có giá trị, vì đây là mốc thời gian thiết yếu để tính cước và kiểm tra tính liên tục của dữ liệu.",
-  "ai_reasoning": "Profiler xác nhận null_pct = 0.0 trên toàn bộ 50,000 bản ghi quan sát, không có ngoại lệ nào. Điều này phù hợp hoàn toàn với đặc điểm nghiệp vụ: một chuyến taxi không thể tồn tại trong hệ thống nếu không có thời điểm đón khách — đây là sự kiện khởi tạo toàn bộ giao dịch. Bởi vậy rule NOT_NULL với severity CRITICAL là bắt buộc, không có vùng xám nào cần cân nhắc."
+  "parameters": {},
+  "rule_name": "Yêu cầu ghi nhận thời điểm bắt đầu chuyến đi",
+  "rule_description": "Thời điểm đón khách (tpep_pickup_datetime) phải luôn được ghi nhận đầy đủ cho mọi chuyến đi.",
+  "business_rationale": "Thông tin thời gian đón khách là căn cứ pháp lý và nghiệp vụ bắt buộc để tính toán thời lượng hành trình, xuất hóa đơn tài chính và đối soát dữ liệu vận hành.",
+  "proposal_basis": "MIXED",
+  "selected_evidence_refs": ["schema:tpep_pickup_datetime:has_pk_constraint", "profile:tpep_pickup_datetime:no_nulls"],
+  "confidence": {"overall": 0.9, "evidence_strength": 1.0, "business_support": 0.85, "sample_representativeness": 0.85, "explanation": "Ràng buộc hệ thống bắt buộc và dữ liệu thực tế không có dòng trống."},
+  "severity": "CRITICAL",
+  "dimension": "COMPLETENESS",
+  "ai_reasoning": "Ràng buộc cấu trúc schema yêu cầu giá trị bắt buộc và profile thực tế ghi nhận 0.0% dòng trống trên tổng số 50,000 chuyến đi."
 }
 ```
 
-### Ví dụ 2 — RANGE trên cột số tiền có outlier
-
-```json
-{
-  "column": "fare_amount",
-  "rule_type": "RANGE",
-  "parameters": {"min": 0.0, "max": 63.0},
-  "rule_description": "Cước phí cơ bản (fare_amount) phải nằm trong khoảng từ 0 đến 63 đô — giá trị âm là bất hợp lý, còn các giá trị cực lớn thường là lỗi nhập liệu hơn là chuyến thực tế.",
-  "ai_reasoning": "Digest cho thấy fare_amount có negative_pct = 4.7%, tức gần 5% chuyến có cước âm. Theo Data Dictionary, fare_amount là cước tính theo thời gian và quãng đường qua đồng hồ tính cước — không có kịch bản hợp lệ nào tạo ra cước âm; đây gần như chắc chắn là lỗi hoặc nhầm trường với bản ghi hoàn tiền. Về phía trên, signal has_extreme_outliers cho thấy max tuyệt đối lên đến hàng nghìn dollar, nhưng typical_range (p5–p95) là [3.0, 57.0]. Tôi mở rộng thêm 10% ở phía trên để có max = 63.0 — đủ phủ chuyến dài đặc biệt (ví dụ vùng ngoại ô) mà vẫn loại được các giá trị cực đoan rõ ràng là lỗi. Chọn min = 0 thay vì min > 0 để không loại các chuyến miễn phí hợp lệ."
-}
-```
-
-### Ví dụ 3 — ACCEPTED_VALUES trên cột categorical
-
-```json
-{
-  "column": "payment_type",
-  "rule_type": "ACCEPTED_VALUES",
-  "parameters": {"accepted_values": ["Credit card", "Cash", "No charge", "Dispute"]},
-  "rule_description": "Phương thức thanh toán (payment_type) chỉ được nhận các giá trị đã định nghĩa trong hệ thống TLC — mọi mã ngoài danh sách này đều cho thấy dữ liệu bị lỗi hoặc chưa được chuẩn hoá.",
-  "ai_reasoning": "Cột này có signal low_cardinality với 4 giá trị distinct quan sát được, hoàn toàn khớp với bảng mã trong Data Dictionary (1=Credit card, 2=Cash, 3=No charge, 4=Dispute). Đây là trường enum cứng do TLC quy định — tài xế chọn từ màn hình thiết bị, không nhập tự do. Bất kỳ giá trị nào ngoài 4 mã này đều là bằng chứng dữ liệu từ nguồn không chuẩn hoặc bug trong pipeline ánh xạ mã về label."
-}
-```
-
-### Ví dụ 4 — NULL_RATE trên cột có missing data cao bất thường
+### Ví dụ 2 — NULL_RATE sẽ fail trên baseline hiện tại
 
 ```json
 {
   "column": "passenger_count",
   "rule_type": "NULL_RATE",
   "parameters": {"max_null_pct": 10.0},
-  "rule_description": "Số hành khách (passenger_count) không nên bị thiếu quá 10% — mức null cao hơn cho thấy thiết bị tài xế đang gặp vấn đề ghi nhận hoặc dữ liệu không được đồng bộ đúng cách.",
-  "ai_reasoning": "Profiler ghi nhận null_pct = 15.3%, đây là con số đáng chú ý vì passenger_count là trường tài xế nhập thủ công khi bắt đầu chuyến. Null trong trường hợp này không có nghĩa là 'không có hành khách' — mà là tài xế quên nhập hoặc thiết bị mất kết nối. Tôi không đặt ngưỡng quá chặt (5%) vì dữ liệu quan sát đã cho thấy 15.3% là baseline hiện tại, khả năng cao do đặc thù thiết bị của một vendor. Ngưỡng 10% được chọn để cảnh báo nếu tình trạng này lan rộng thêm, nhưng không tạo alert ồ ạt ngay lập tức."
+  "rule_name": "Khống chế tỷ lệ khuyết thiếu thông tin hành khách",
+  "rule_description": "Tỷ lệ khuyết thiếu của trường số hành khách (passenger_count) không được vượt quá ngưỡng cảnh báo 10.0%.",
+  "business_rationale": "Tỷ lệ khuyết thiếu thông tin số lượng hành khách quá cao sẽ làm sai lệch các báo cáo phân tích hiệu suất phục vụ và nhu cầu thị trường của đội xe.",
+  "proposal_basis": "DATA_PROFILE",
+  "selected_evidence_refs": ["profile:passenger_count:null_pct"],
+  "confidence": {"overall": 0.65, "evidence_strength": 0.9, "business_support": 0.4, "sample_representativeness": 0.65, "explanation": "Chỉ số khuyết thiếu thực tế cao hơn ngưỡng đề xuất, cần Steward xem xét."},
+  "severity": "MEDIUM",
+  "dimension": "COMPLETENESS",
+  "ai_reasoning": "Phân tích digest ghi nhận tỷ lệ khuyết thiếu thực tế là 15.3%, vượt quá ngưỡng đề xuất 10.0%. Quy tắc này sẽ được đánh dấu là không đạt và cần được Steward xem xét điều chỉnh."
 }
 ```
 
-### Ví dụ 5 — CROSS_FIELD_COMPARISON cho thứ tự thời gian liên cột
+### Ví dụ 3 — ROW_COUNT (Quy tắc cấp bảng, column=null)
+
+```json
+{
+  "column": null,
+  "rule_type": "ROW_COUNT",
+  "parameters": {
+    "min_row_count": 40000
+  },
+  "rule_name": "Ngưỡng số lượng chuyến đi tối thiểu hàng ngày",
+  "rule_description": "Tổng số bản ghi chuyến đi trong ngày phải đạt tối thiểu từ 40,000 dòng trở lên.",
+  "business_rationale": "Lượng giao dịch quá thấp là dấu hiệu cảnh báo hệ thống truyền nhận dữ liệu gặp sự cố kỹ thuật hoặc quá trình trích xuất dữ liệu từ các nhà xe bị gián đoạn.",
+  "proposal_basis": "DATA_PROFILE",
+  "selected_evidence_refs": ["profile:_table:rows"],
+  "confidence": {
+    "overall": 0.8,
+    "evidence_strength": 0.9,
+    "business_support": 0.7,
+    "sample_representativeness": 0.8,
+    "explanation": "Đặt ngưỡng an toàn ở mức 80% sản lượng quan sát thực tế."
+  },
+  "severity": "HIGH",
+  "dimension": "VALIDITY",
+  "ai_reasoning": "Profile thực tế ghi nhận 50,000 chuyến đi. Thiết lập ngưỡng cảnh báo tối thiểu ở mức 80% (tương đương 40,000 chuyến đi) để phát hiện sớm các sự cố mất mát dữ liệu diện rộng."
+}
+```
+
+### Ví dụ 4 — RANGE (Cột số lượng, min/max)
+
+```json
+{
+  "column": "trip_distance",
+  "rule_type": "RANGE",
+  "parameters": {
+    "min": 0.0,
+    "max": 50.0
+  },
+  "rule_name": "Giới hạn cự ly di chuyển hợp lệ",
+  "rule_description": "Quãng đường di chuyển của chuyến đi (trip_distance) phải nằm trong khoảng hợp lệ từ 0.0 đến 50.0 dặm.",
+  "business_rationale": "Quãng đường di chuyển của xe không thể mang giá trị âm, và các chuyến đi taxi nội đô có cự ly vượt quá 50 dặm là cực kỳ bất thường, cần được cô lập để kiểm tra thiết bị định vị.",
+  "proposal_basis": "MIXED",
+  "selected_evidence_refs": ["profile:trip_distance:range", "policy:trip_distance:max_limit"],
+  "confidence": {
+    "overall": 0.85,
+    "evidence_strength": 0.9,
+    "business_support": 0.8,
+    "sample_representativeness": 0.85,
+    "explanation": "Min là giới hạn vật lý tuyệt đối; Max tuân theo quy chế vận hành khu vực."
+  },
+  "severity": "HIGH",
+  "dimension": "VALIDITY",
+  "ai_reasoning": "Dữ liệu thực tế ghi nhận dải quãng đường dao động từ 0.1 đến 42.5 dặm; kết hợp với quy chế max 50 dặm của liên bang để đặt giới hạn trên an toàn."
+}
+```
+
+### Ví dụ 5 — CROSS_FIELD_COMPARISON (Ràng buộc logic 2 cột)
 
 ```json
 {
@@ -174,13 +216,25 @@ Các ví dụ dưới đây minh hoạ văn phong và mức độ lập luận k
     "target_column": "tpep_dropoff_datetime",
     "operator": "<="
   },
-  "severity": "CRITICAL",
-  "dimension": "CONSISTENCY",
+  "rule_name": "Trình tự thời gian đón trả khách hợp lệ",
   "rule_description": "Thời điểm đón khách (tpep_pickup_datetime) phải xảy ra trước hoặc cùng lúc với thời điểm trả khách (tpep_dropoff_datetime).",
-  "ai_reasoning": "Digest chỉ ra signal datetime_order giữa tpep_pickup_datetime và tpep_dropoff_datetime với 0% vi phạm. Về mặt nghiệp vụ taxi, hành khách luôn được đón trước khi trả, do đó tpep_pickup_datetime phải nhỏ hơn hoặc bằng tpep_dropoff_datetime."
+  "business_rationale": "Về mặt vật lý và logic vận hành, hành trình của khách luôn phải bắt đầu trước khi kết thúc. Lỗi vi phạm chỉ ra sự cố đồng hồ định vị hoặc lỗi logic ghi nhận log hành trình.",
+  "proposal_basis": "POLICY",
+  "selected_evidence_refs": ["schema:tpep_pickup_datetime:datetime_order"],
+  "confidence": {
+    "overall": 0.95,
+    "evidence_strength": 1.0,
+    "business_support": 0.9,
+    "sample_representativeness": 0.95,
+    "explanation": "Ràng buộc logic nghiệp vụ tuyệt đối không thể thay đổi."
+  },
+  "severity": "HIGH",
+  "dimension": "CONSISTENCY",
+  "ai_reasoning": "Áp dụng kiểm tra quan hệ thứ tự logic: thời gian kết thúc chuyến đi phải lớn hơn hoặc bằng thời gian bắt đầu chuyến đi."
 }
 ```
 """
+
 
 _RULE_PROPOSER_USER = """\
 ## Ngữ cảnh domain
@@ -206,7 +260,7 @@ _RULE_PROPOSER_USER = """\
 
 Checklist trên là danh sách cần đánh giá đầy đủ, không phải ví dụ. Sau khi đánh giá, đề xuất tất cả các \
 ứng viên có evidence mạnh và ý nghĩa để bảo vệ chất lượng dữ liệu (không giới hạn số lượng). Mỗi rule tạo ra phải giữ nguyên đúng tên `column` trong digest và phải \
-dẫn chứng evidence tương ứng trong `ai_reasoning`. Với `CROSS_FIELD_COMPARISON`, phải sao chép đúng object \
+dẫn chứng bằng số liệu cụ thể từ profile trong `ai_reasoning`. Với `CROSS_FIELD_COMPARISON`, phải sao chép đúng object \
 `parameters` từ checklist vào structured output. Không tạo rule ngoài checklist trừ khi Data Dictionary \
 cung cấp bằng chứng nghiệp vụ rõ ràng.
 
@@ -215,10 +269,13 @@ cung cấp bằng chứng nghiệp vụ rõ ràng.
 Hãy trả về JSON structured output theo schema TableRuleProposal. \
 Điền trường "table" = "{table_name}". \
 Điền trường "dimension" theo bảng phân loại DQ dimension đã hướng dẫn. \
-Điền trường "rule_description": một câu tiếng Việt tự nhiên, có ngữ cảnh nghiệp vụ, tránh template máy móc. \
-Điền trường "ai_reasoning": rationale ngắn gọn, nêu evidence aggregate và lý do nghiệp vụ mà không trình bày chuỗi suy luận nội bộ. \
+Điền trường "rule_description": một câu tiếng Việt tự nhiên, có ngữ cảnh nghiệp vụ rõ ràng, tránh template máy móc. \
+Điền trường "ai_reasoning": lập luận ngắn gọn, **BẮT BUỘC trích dẫn số liệu thực tế cụ thể từ profile** (như số lượng dòng, tỷ lệ null %, dải giá trị). \
+Điền trường "business_rationale": giải thích bằng tiếng Việt tác động nghiệp vụ tự nhiên, **TUYỆT ĐỐI CẤM dùng tên biến kỹ thuật** (như fare_amount, trip_distance, payment_type). \
+Điền đầy đủ rule_name (tên thuần nghiệp vụ tiếng Việt, dễ hiểu cho Data Steward, **tuyệt đối không dùng tên biến kỹ thuật hay thuật ngữ lập trình**), business_rationale, proposal_basis và confidence. \
 Đề xuất đầy đủ và chính xác.
 """
+
 
 rule_proposer_prompt = ChatPromptTemplate.from_messages(
     [
@@ -232,7 +289,7 @@ dashboard_rule_proposer_prompt = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            """You are a constrained data-quality candidate selector. The server has already built an allow-listed, evidence-backed candidate checklist. Select all necessary candidates; do not create rules or parameters. For every selected candidate, copy candidate_id, column, rule_type, and parameters exactly. Return at most one candidate per rule_type. Write a concise steward-facing description and a short rationale using only the supplied aggregate evidence. Do not mention a threshold, enum value, or relationship that is absent from the selected candidate. Use the structured output schema exactly.""",
+            """You are a constrained data-quality candidate selector. The server has already built an allow-listed, evidence-backed candidate checklist. Return every supplied candidate exactly once and copy candidate_id, column, rule_type, and parameters exactly. Select only evidence_items IDs from that candidate and use those same IDs for parameter provenance. Never copy or invent metric values. Write rule_name, rule_description, business_rationale, proposal_basis, assumptions, a calibrated confidence breakdown, and a concise rationale. Do not mention a threshold, enum value, relationship, policy, or business fact absent from the candidate. Use the structured output schema exactly.""",
         ),
         (
             "user",
@@ -408,4 +465,137 @@ steward_insights_prompt = ChatPromptTemplate.from_messages(
         ("user", _STEWARD_INSIGHTS_USER),
     ]
 )
+
+
+# ===========================================================================
+# Generalised Dataset Understanding & Rule Proposer Prompts
+# ===========================================================================
+
+_DATASET_UNDERSTANDING_SYSTEM = """Bạn là một AI Data Architect chuyên nghiệp chuyên phân tích cấu trúc và ý nghĩa nghiệp vụ của dữ liệu (Semantic Data Profiler).
+Nhiệm vụ của bạn là phân tích các số liệu thống kê (Profile Digest), Schema kỹ thuật và Từ điển dữ liệu (nếu có) để tạo ra một Bản hợp đồng ngữ nghĩa dữ liệu (Semantic Contract) có cấu trúc cho bảng `{table_name}`.
+
+## Hướng dẫn phân tích vai trò và kiểu dữ liệu ngữ nghĩa:
+1. **semantic_type (Kiểu dữ liệu ngữ nghĩa)**:
+   - `identifier`: Khóa chính, ID nghiệp vụ, mã giao dịch, mã số định danh.
+   - `timestamp`: Các mốc thời gian ghi nhận sự kiện (ngày giờ giao dịch, ngày tạo, ngày hoàn thành).
+   - `category`: Cột phân loại, trạng thái, phương thức, giới tính, mã nhóm (enum).
+   - `currency`: Các cột số tiền, doanh thu, phí, thuế, tiền tip (cần kiểm tra range >= 0).
+   - `numeric`: Các cột số đo lường vật lý thông thường (khoảng cách, nhiệt độ, số lượng vật phẩm).
+   - `text`: Các cột chuỗi tự do (tên người, mô tả, nội dung đánh giá).
+   - `location`: Tọa độ, ID vùng đón/trả, địa chỉ, mã quốc gia.
+   - `PII`: Email, số điện thoại, số CCCD/CMND.
+   
+2. **business_role (Vai trò nghiệp vụ)**:
+   - Đặt tên vai trò nghiệp vụ tương ứng bằng tiếng Anh dạng snake_case (e.g., `primary_key`, `created_at`, `transaction_amount`, `customer_id`, `category_code`).
+
+3. **relationships (Quan hệ liên cột)**:
+   - Phát hiện các ràng buộc logic về thứ tự thời gian hoặc giá trị số (ví dụ: ngày bắt đầu <= ngày kết thúc, giá gốc <= giá bán).
+
+Hãy điền thông tin chi tiết bằng tiếng Việt vào `description`, `table_purpose` và `business_assumptions` để làm tài liệu nghiệp vụ rõ ràng cho Data Steward.
+"""
+
+_DATASET_UNDERSTANDING_USER = """Dưới đây là thông tin kỹ thuật của bảng `{table_name}`:
+
+## Profile Digest của bảng:
+```json
+{table_digest}
+```
+
+## Domain Hint (Gợi ý nghiệp vụ từ người dùng):
+{domain_hint}
+
+## Data Dictionary (Từ điển dữ liệu nếu có):
+{data_dictionary}
+
+Hãy phân tích và trả về cấu trúc TableSemanticContract phù hợp nhất.
+"""
+
+dataset_understanding_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", _DATASET_UNDERSTANDING_SYSTEM),
+        ("user", _DATASET_UNDERSTANDING_USER),
+    ]
+)
+
+
+_GENERIC_RULE_PROPOSER_SYSTEM = """Bạn là chuyên gia kiểm định chất lượng dữ liệu (Data Quality Expert). Nhiệm vụ của bạn là đề xuất các quy tắc kiểm thử chất lượng (DQ Rules) cho bảng `{table_name}` dựa trên digest profile thực tế và Hợp đồng ngữ nghĩa (Semantic Contract) đã được Data Steward duyệt.
+
+## Các loại rule được hỗ trợ (rule_type) và điều kiện áp dụng:
+- **NOT_NULL**: Áp dụng cho các cột là khóa chính (identifier) hoặc được đánh dấu `nullable_expected = false` trong Semantic Contract.
+- **UNIQUE**: Áp dụng cho các cột khóa chính (`semantic_type = identifier`) có bằng chứng unique (`unique_full_table` hoặc constraint).
+- **RANGE**: Áp dụng cho các cột số (`numeric`, `currency`) có dải giá trị giới hạn cụ thể. Pad biên thêm 10-20% từ typical_range nếu có outliers.
+- **ACCEPTED_VALUES**: Áp dụng cho cột phân loại (`category`) có danh sách giá trị giới hạn cố định.
+- **REGEX_FORMAT**: Áp dụng cho các cột định dạng đặc biệt (PII, email, phone, zip code) dựa trên pattern thực tế.
+- **FRESHNESS**: Áp dụng cho các cột thời gian chính (`timestamp`) kiểm tra dữ liệu mới cập nhật trong vòng N giờ.
+- **ROW_COUNT**: Quy tắc cấp bảng để kiểm tra số lượng bản ghi tối thiểu dựa trên baseline.
+- **NULL_RATE**: Đặt giới hạn tỷ lệ null tối đa cho phép đối với các cột được phép khuyết thiếu.
+- **CROSS_FIELD_COMPARISON**: Áp dụng khi có ràng buộc thứ tự hoặc giá trị giữa 2 cột nghiệp vụ (ví dụ: ngày bắt đầu <= ngày kết thúc).
+
+## Quy tắc Ngôn ngữ & Nghiệp vụ (Data Steward-friendly):
+1. **rule_name**: Tên quy tắc viết bằng tiếng Việt tự nhiên thuần nghiệp vụ. CẤM dùng tên cột kỹ thuật hoặc toán tử viết tắt (e.g. dùng 'Yêu cầu điền đầy đủ mã đơn hàng' thay vì 'Cột order_id NOT_NULL').
+2. **business_rationale**: Giải thích tác động nghiệp vụ bằng tiếng Việt nếu quy tắc này bị vi phạm. CẤM sử dụng tên biến kỹ thuật trong lời giải thích (thay bằng tên tiếng Việt nghiệp vụ tương ứng).
+3. **ai_reasoning**: BẮT BUỘC trích dẫn số liệu thực tế cụ thể từ Profile/Digest để làm chứng cứ lập luận cho việc chọn tham số.
+4. **rule_description**: Mô tả điều kiện kiểm tra bằng một câu tiếng Việt lịch sự, dễ hiểu (được kèm tên cột kỹ thuật trong ngoặc).
+"""
+
+_GENERIC_RULE_PROPOSER_USER = """Dưới đây là thông tin kiểm tra cho bảng `{table_name}`:
+
+## Hợp đồng ngữ nghĩa (Semantic Contract):
+```json
+{semantic_contract}
+```
+
+## Digest profile bảng `{table_name}`:
+```json
+{table_digest}
+```
+
+## Danh sách Candidates tự động sinh từ bằng chứng profile:
+```json
+{coverage_requirements}
+```
+
+## Lịch sử rules (nếu có):
+{historical_rules}
+
+Hãy trả về JSON structured output theo schema TableRuleProposal cho bảng `{table_name}`. Đảm bảo tất cả các rules đề xuất đều có đầy đủ thông tin mô tả nghiệp vụ tiếng Việt chi tiết.
+"""
+
+generic_rule_proposer_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", _GENERIC_RULE_PROPOSER_SYSTEM),
+        ("user", _GENERIC_RULE_PROPOSER_USER),
+    ]
+)
+
+
+_PROMPT_CUSTOMIZER_SYSTEM = """Bạn là một AI Prompt Engineer và Tech Lead giàu kinh nghiệm. Nhiệm vụ của bạn là viết một System Prompt chuyên biệt cho Rule Proposer Agent đối với bảng `{table_name}`.
+System Prompt được tạo ra phải phản ánh đúng nghiệp vụ cụ thể của bảng đó dựa trên Hợp đồng ngữ nghĩa (Semantic Contract) được Data Steward xác nhận.
+
+## Hướng dẫn thiết kế System Prompt:
+1. **Tinh chỉnh hướng dẫn nghiệp vụ**: Thêm các quy chuẩn và hướng dẫn kiểm thử chất lượng dữ liệu cụ thể phù hợp với domain (ví dụ: e-commerce, banking, log, v.v.).
+2. **Kỳ vọng kiểu dữ liệu**: Nhắc nhở Agent kiểm tra kỹ các dải giá trị đặc thù hoặc các giá trị được chấp nhận tương ứng với các vai trò nghiệp vụ (business role) trong bảng.
+3. **Giữ cấu trúc và định hướng chung**: Đảm bảo prompt hệ thống mới vẫn yêu cầu xuất kết quả theo schema `TableRuleProposal`, sử dụng tiếng Việt tự nhiên cho `rule_name`, `business_rationale`, `rule_description` và trích dẫn số liệu thực tế cho `ai_reasoning`.
+
+System Prompt đầu ra phải được viết bằng tiếng Việt và sẵn sàng để truyền thẳng vào Rule Proposer Agent làm System Prompt.
+"""
+
+_PROMPT_CUSTOMIZER_USER = """Dưới đây là thông tin Hợp đồng ngữ nghĩa của bảng `{table_name}`:
+
+## Hợp đồng ngữ nghĩa (Semantic Contract):
+```json
+{semantic_contract}
+```
+
+Hãy tạo ra System Prompt chuyên biệt hoàn chỉnh (chỉ trả về chuỗi văn bản System Prompt, không kèm markdown code block hoặc lời dẫn).
+"""
+
+prompt_customizer_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", _PROMPT_CUSTOMIZER_SYSTEM),
+        ("user", _PROMPT_CUSTOMIZER_USER),
+    ]
+)
+
+
 

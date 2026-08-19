@@ -142,33 +142,46 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START([🚀 Bắt đầu: Chọn Dataset]) --> ProfilerNode[1. Profiler Agent]
+    START([🚀 Bắt đầu: Chọn Dataset]) --> EntryRouter{Bộ định tuyến Entry Router}
     
-    %% 1. Profiler
-    ProfilerNode -->|Đọc Metadata & Quét SQL| ProfileStats[Bảng thống kê Dữ liệu & Metadata JSON]
+    %% 1. Profiler & Understanding
+    EntryRouter -->|Chưa duyệt contract| ProfilerNode[1. Profiler Agent]
+    ProfilerNode -->|Đọc Metadata & Quét SQL| ProfileStats[Bảng thống kê Profile JSON]
+    ProfileStats --> DatasetUnderNode[2. Dataset Understanding Agent]
+    DatasetUnderNode -->|LLM Reasoning| SemanticContractDraft[Bản nháp Hợp đồng ngữ nghĩa]
     
-    %% 2. Rule Proposer (LLM Reasoning)
-    ProfileStats --> RuleProposerNode[2. LLM Rule Proposer]
-    RuleProposerNode -->|LLM Reasoning & Suggest Rules| ProposedRules[Đề xuất bộ Rule Chất lượng]
-    
-    %% 3. HITL (Human-In-The-Loop)
-    ProposedRules --> HITLNode["⏸️ Human-In-The-Loop (HITL)"]
-    subgraph HITL_Section ["Vai trò Data Steward"]
-        HITLNode -->|Duyệt / Từ chối / Chỉnh sửa| ApprovedRules[Bộ Rule đã phê duyệt]
+    %% 2. HITL Gate 1 (Semantic Review)
+    SemanticContractDraft --> HITL_Semantic["⏸️ Cổng duyệt Semantic Contract (HITL 1)"]
+    subgraph Semantic_Review ["Steward Review 1"]
+        HITL_Semantic -->|Chỉnh sửa / Xác nhận| ConfirmedContract[Semantic Contract đã phê duyệt]
     end
     
-    %% 4. Test Generator
-    ApprovedRules --> TestGenNode[3. Test Generator Agent]
+    EntryRouter -->|Đã xác nhận Semantic Contract| rule_candidate_builder
+    ConfirmedContract --> rule_candidate_builder[3. Rule Candidate Builder]
+    
+    %% 3. Prompt Customizer & Rule Proposer
+    rule_candidate_builder -->|Sinh checklist candidates| prompt_customizer[4. Prompt Customizer Node]
+    prompt_customizer -->|LLM viết lại prompt nghiệp vụ riêng| rule_proposer[5. LLM Rule Proposer]
+    rule_proposer -->|Đề xuất bộ Rule| ProposedRules[Danh sách Proposed Rules]
+    
+    %% 4. HITL Gate 2 (Rules Review)
+    ProposedRules --> HITL_Rule["⏸️ Cổng duyệt DQ Rules (HITL 2)"]
+    subgraph Rule_Review ["Steward Review 2"]
+        HITL_Rule -->|Duyệt / Từ chối / Chỉnh sửa| ApprovedRules[Bộ Rule đã phê duyệt]
+    end
+    
+    %% 5. Test Generator
+    ApprovedRules --> TestGenNode[6. Test Generator Agent]
     TestGenNode -->|Sinh mã kiểm thử dbt / GX| TestScripts[Bài test sinh tự động]
     
-    %% 5. Test Runner & Anomaly Detector
-    TestScripts --> TestRunnerNode[4. Thực thi kiểm thử]
+    %% 6. Test Runner & Anomaly Detector
+    TestScripts --> TestRunnerNode[7. Thực thi kiểm thử]
     TestRunnerNode -->|Chạy test trên Database| TestResults[Kết quả kiểm thử]
-    TestResults --> AnomalyCheckNode{5. Phát hiện Bất thường Anomaly?}
+    TestResults --> AnomalyCheckNode{8. Phát hiện Bất thường Anomaly?}
     
-    %% 6. Diagnostic & Report
+    %% 7. Diagnostic & Report
     AnomalyCheckNode -->|Có lỗi / Bất thường| DiagnoseAnomaly[Chẩn đoán nguyên nhân & Phân tích]
-    AnomalyCheckNode -->|Bình thường| DashboardNode[6. Dashboard & Báo cáo]
+    AnomalyCheckNode -->|Bình thường| DashboardNode[9. Dashboard & Báo cáo]
     DiagnoseAnomaly --> DashboardNode
     
     DashboardNode --> END([🏁 Kết thúc: Gửi thông báo tới Data Steward])

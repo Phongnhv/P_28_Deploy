@@ -1,5 +1,6 @@
 
 import os
+
 try:
     from openinference.instrumentation.langchain import LangChainInstrumentor
     from opentelemetry import trace

@@ -23,32 +23,51 @@ from langgraph.graph import END, StateGraph
 
 from src.agents.state import AgentState
 
+
 # ---------------------------------------------------------------------------
 # Run 1: Proposal Graph (profiler → digest → rule_proposer → persist_rules)
 # ---------------------------------------------------------------------------
 def build_proposal_graph() -> StateGraph:
     """Xây dựng graph cho Run 1 — kết thúc sau khi persist rules vào DB và ghi trace.
 
-    Luồng: raw_profiler → profiler_digest → rule_proposer → hitl_gate → END
-    Conditional edge: nếu state có 'error' → END ngay (pattern giống build_graph).
+    Luồng: raw_profiler → profiler_digest → dataset_understanding → hitl_semantic_gate → rule_candidate_builder → prompt_customizer → rule_proposer → hitl_gate → END
+    Bao gồm chốt chặn duyệt Semantic Contract động và tự động viết lại system prompt theo nghiệp vụ riêng của từng bảng.
     """
     from src.agents.nodes.hitl_gate_node import hitl_gate_node
     from src.agents.nodes.profiler_node import profiler_digest_node, raw_profiler_node
     from src.agents.nodes.rule_proposer_node import rule_proposer_node
+    from src.agents.nodes.dataset_understanding_node import dataset_understanding_node
+    from src.agents.nodes.hitl_semantic_gate_node import hitl_semantic_gate_node
+    from src.agents.nodes.rule_candidate_builder_node import rule_candidate_builder_node
+    from src.agents.nodes.prompt_customizer_node import prompt_customizer_node
 
     def _should_continue_proposal(state: AgentState) -> str:
         if state.get("error"):
             return END
         return "next"
 
+    def _route_entry(state: AgentState) -> str:
+        contract = state.get("semantic_contract")
+        if contract and contract.get("status") == "confirmed":
+            return "rule_candidate_builder"
+        return "raw_profiler"
+
     graph = StateGraph(AgentState)
 
     graph.add_node("raw_profiler", raw_profiler_node)
     graph.add_node("profiler_digest", profiler_digest_node)
+    graph.add_node("dataset_understanding", dataset_understanding_node)
+    graph.add_node("hitl_semantic_gate", hitl_semantic_gate_node)
+    graph.add_node("rule_candidate_builder", rule_candidate_builder_node)
+    graph.add_node("prompt_customizer", prompt_customizer_node)
     graph.add_node("rule_proposer", rule_proposer_node)
     graph.add_node("hitl_gate", hitl_gate_node)
 
-    graph.set_entry_point("raw_profiler")
+    # Entry point động
+    graph.set_conditional_entry_point(
+        _route_entry,
+        {"rule_candidate_builder": "rule_candidate_builder", "raw_profiler": "raw_profiler"}
+    )
 
     # raw_profiler → profiler_digest (hoặc END nếu lỗi)
     graph.add_conditional_edges(
@@ -57,9 +76,37 @@ def build_proposal_graph() -> StateGraph:
         {"next": "profiler_digest", END: END},
     )
 
-    # profiler_digest → rule_proposer (hoặc END nếu lỗi)
+    # profiler_digest → dataset_understanding (hoặc END nếu lỗi)
     graph.add_conditional_edges(
         "profiler_digest",
+        _should_continue_proposal,
+        {"next": "dataset_understanding", END: END},
+    )
+
+    # dataset_understanding → hitl_semantic_gate (hoặc END nếu lỗi)
+    graph.add_conditional_edges(
+        "dataset_understanding",
+        _should_continue_proposal,
+        {"next": "hitl_semantic_gate", END: END},
+    )
+
+    # hitl_semantic_gate → rule_candidate_builder (hoặc END nếu lỗi/pause)
+    graph.add_conditional_edges(
+        "hitl_semantic_gate",
+        _should_continue_proposal,
+        {"next": "rule_candidate_builder", END: END},
+    )
+
+    # rule_candidate_builder → prompt_customizer (hoặc END nếu lỗi)
+    graph.add_conditional_edges(
+        "rule_candidate_builder",
+        _should_continue_proposal,
+        {"next": "prompt_customizer", END: END},
+    )
+
+    # prompt_customizer → rule_proposer (hoặc END nếu lỗi)
+    graph.add_conditional_edges(
+        "prompt_customizer",
         _should_continue_proposal,
         {"next": "rule_proposer", END: END},
     )
@@ -173,6 +220,7 @@ async def run_proposal_graph(
     dataset_id: str = "dataset-nyc-yellow-taxi-50k",
     connection_string: str | None = None,
     sampling_rate: float = 1.0,
+    auto_confirm_semantic: bool = True,
 ) -> dict:
     """Chạy toàn bộ pipeline Run 1 (Đề xuất Rules): Profiler -> Digest -> Proposer -> HITL Gate."""
     import uuid
@@ -196,6 +244,7 @@ async def run_proposal_graph(
         "metadata": {
             "connection_string": conn_str,
             "sampling_rate": sampling_rate,
+            "auto_confirm_semantic": auto_confirm_semantic,
         },
     }
 
