@@ -631,23 +631,23 @@ async def rule_proposer_node(state: AgentState) -> dict:
         len(errors),
     )
 
-    if settings.debug_dump_table_digests:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        try:
-            rule_proposer_dir.mkdir(parents=True, exist_ok=True)
-            dump_file = rule_proposer_dir / f"debug_proposed_rules_{timestamp}_{run_id}.json"
-            dump_payload = {
-                "run_id": run_id,
-                "generated_at": datetime.now().isoformat(),
-                "total_rules": len(flat_rules),
-                "total_errors": len(errors),
-                "proposed_rules": flat_rules,
-                "errors": errors,
-            }
-            dump_file.write_text(json.dumps(dump_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            logger.info("Đã xuất trace proposed rules ra %s", dump_file)
-        except Exception as exc:
-            logger.warning("Không thể ghi file trace proposed rules: %s", exc)
+    # Xuất trace JSON proposed rules
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    try:
+        rule_proposer_dir.mkdir(parents=True, exist_ok=True)
+        dump_file = rule_proposer_dir / f"debug_proposed_rules_{timestamp}_{run_id}.json"
+        dump_payload = {
+            "run_id": run_id,
+            "generated_at": datetime.now().isoformat(),
+            "total_rules": len(flat_rules),
+            "total_errors": len(errors),
+            "proposed_rules": flat_rules,
+            "errors": errors,
+        }
+        dump_file.write_text(json.dumps(dump_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("Đã xuất trace proposed rules ra %s", dump_file)
+    except Exception as exc:
+        logger.warning("Không thể ghi file trace proposed rules: %s", exc)
 
     return {
         "proposed_rules": flat_rules,

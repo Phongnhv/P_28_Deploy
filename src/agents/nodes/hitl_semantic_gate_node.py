@@ -38,7 +38,7 @@ async def hitl_semantic_gate_node(state: AgentState) -> dict:
         base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
         semantic_dir = Path(base_dir) / "semantic"
         semantic_dir.mkdir(parents=True, exist_ok=True)
-        out_path = semantic_dir / f"semantic_contract_{run_id}.json"
+        out_path = semantic_dir / f"debug_semantic_contract_{run_id}.json"
         out_path.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
         logger.info(f"Đã lưu semantic contract nháp tại {out_path}")
     except Exception as e:

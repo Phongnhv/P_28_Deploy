@@ -52,6 +52,8 @@ class AgentState(TypedDict, total=False):
 
     # Generalised scope expansion fields
     target_tables: list[str]                  # Bảng mục tiêu cần chạy phân tích và đề xuất
+    normalized_data_dictionary: dict           # User-supplied or LLM-inferred dictionary
+    data_dictionary_source: str               # supplied | inferred
     semantic_contract: dict                   # Hợp đồng ngữ nghĩa (Semantic Contract) được đề xuất hoặc đã duyệt
     rule_candidates: list[dict]               # Danh sách các candidates deterministic sinh từ Semantic Contract
     specialized_system_prompts: dict[str, str] # System prompt tĩnh đã được custom hóa ngữ cảnh theo từng bảng

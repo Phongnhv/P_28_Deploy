@@ -80,6 +80,23 @@ async def prompt_customizer_node(state: AgentState) -> dict:
             specialized_system_prompts[table_name] = result
             logger.info(f"Đã tạo specialized prompt dài {len(result)} ký tự cho bảng {table_name}")
 
+    # Xuất trace JSON
+    from datetime import datetime
+    from pathlib import Path
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = state.get("rule_run_id") or "test_run"
+    try:
+        out_dir = getattr(settings, "output_dir", None)
+        res_dir = getattr(settings, "results_dir", None)
+        base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+        prompts_dir = Path(base_dir) / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        dump_file = prompts_dir / f"debug_specialized_prompts_{timestamp}_{run_id}.json"
+        dump_file.write_text(json.dumps(specialized_system_prompts, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"Đã xuất trace specialized prompts ra {dump_file}")
+    except Exception as e:
+        logger.warning(f"Không thể ghi file trace specialized prompts: {e}")
+
     return {
         "specialized_system_prompts": specialized_system_prompts
     }

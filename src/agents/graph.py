@@ -37,6 +37,7 @@ def build_proposal_graph() -> StateGraph:
     from src.agents.nodes.profiler_node import profiler_digest_node, raw_profiler_node
     from src.agents.nodes.rule_proposer_node import rule_proposer_node
     from src.agents.nodes.dataset_understanding_node import dataset_understanding_node
+    from src.agents.nodes.data_dictionary_generator_node import data_dictionary_generator_node
     from src.agents.nodes.hitl_semantic_gate_node import hitl_semantic_gate_node
     from src.agents.nodes.rule_candidate_builder_node import rule_candidate_builder_node
     from src.agents.nodes.prompt_customizer_node import prompt_customizer_node
@@ -57,6 +58,7 @@ def build_proposal_graph() -> StateGraph:
     graph.add_node("raw_profiler", raw_profiler_node)
     graph.add_node("profiler_digest", profiler_digest_node)
     graph.add_node("dataset_understanding", dataset_understanding_node)
+    graph.add_node("data_dictionary_generator", data_dictionary_generator_node)
     graph.add_node("hitl_semantic_gate", hitl_semantic_gate_node)
     graph.add_node("rule_candidate_builder", rule_candidate_builder_node)
     graph.add_node("prompt_customizer", prompt_customizer_node)
@@ -79,6 +81,12 @@ def build_proposal_graph() -> StateGraph:
     # profiler_digest → dataset_understanding (hoặc END nếu lỗi)
     graph.add_conditional_edges(
         "profiler_digest",
+        lambda state: END if state.get("error") else ("dataset_understanding" if state.get("normalized_data_dictionary") else "data_dictionary_generator"),
+        {"dataset_understanding": "dataset_understanding", "data_dictionary_generator": "data_dictionary_generator", END: END},
+    )
+
+    graph.add_conditional_edges(
+        "data_dictionary_generator",
         _should_continue_proposal,
         {"next": "dataset_understanding", END: END},
     )

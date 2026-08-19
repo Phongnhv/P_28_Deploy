@@ -193,4 +193,26 @@ def rule_candidate_builder_node(state: AgentState) -> dict:
             enriched_candidates.append(res[0])
 
     logger.info(f"Đã tạo {len(enriched_candidates)} candidates từ Semantic Contract.")
+
+    # Xuất trace JSON
+    from datetime import datetime
+    from pathlib import Path
+    import json
+    from src.config import get_settings
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = state.get("rule_run_id") or "test_run"
+    try:
+        settings = get_settings()
+        out_dir = getattr(settings, "output_dir", None)
+        res_dir = getattr(settings, "results_dir", None)
+        base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+        candidates_dir = Path(base_dir) / "candidates"
+        candidates_dir.mkdir(parents=True, exist_ok=True)
+        dump_file = candidates_dir / f"debug_rule_candidates_{timestamp}_{run_id}.json"
+        dump_file.write_text(json.dumps(enriched_candidates, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"Đã xuất trace rule candidates ra {dump_file}")
+    except Exception as e:
+        logger.warning(f"Không thể ghi file trace rule candidates: {e}")
+
     return {"rule_candidates": enriched_candidates}
