@@ -423,6 +423,14 @@ nav { display: grid; gap: 3px; }
 :root[data-theme="light"] .next-panel .eyebrow, :root[data-theme="light"] .run-hero .eyebrow { color: #bfdbfe; }
 :root[data-theme="light"] .spark, :root[data-theme="light"] .next-panel p, :root[data-theme="light"] .run-hero p, :root[data-theme="light"] .next-stat span { color: #dbeafe; }
 :root[data-theme="light"] .empty-state { border-color: #c8dcff; }
+
+/* Keep the original two-panel sign-in composition on laptop and desktop widths. */
+@media (min-width: 761px) {
+  .login-shell { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(420px, .92fr); min-height: 100dvh; }
+  .login-art { display: flex; min-height: 100dvh; padding: clamp(32px, 5vw, 78px); }
+  .login-card { display: flex; max-width: 34rem; min-height: 100dvh; padding: clamp(40px, 7vw, 112px); }
+  .mobile-brand { display: none; }
+}
 :root[data-theme="light"] .proposal-card { border-left-color: #dce8ff; }
 :root[data-theme="light"] .dialog-backdrop { background: rgb(13 21 38 / 52%); }
 :root[data-theme="light"] .dialog { box-shadow: 0 28px 80px rgb(13 21 38 / 26%); }
