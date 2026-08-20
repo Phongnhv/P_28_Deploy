@@ -232,13 +232,13 @@ function workflowStepLabelsForMock(step: WorkflowStepKey) {
   return step.replaceAll("_", " ").toLowerCase();
 }
 
-function makeWorkflow(id: string): WorkflowRun {
+function makeWorkflow(id: string, workflowDatasetId = datasetId): WorkflowRun {
   const steps: WorkflowStep[] = workflowKeys.map((key, index) => ({
     key,
     status: index === 0 ? "READY" : "LOCKED",
     artifact_ids: [],
   }));
-  return { id, dataset_id: datasetId, current_step: "UPLOAD_PROFILE", iteration: 0, max_iterations: 3, steps };
+  return { id, dataset_id: workflowDatasetId, current_step: "UPLOAD_PROFILE", iteration: 0, max_iterations: 3, steps };
 }
 
 function advanceWorkflow(workflow: WorkflowRun, completed: WorkflowStepKey) {
@@ -511,10 +511,9 @@ export const mockApi: ApiClient = {
   async revokeDatasetAccess(id: string, username: string) { ensureAdmin(); const grant = access.find((item) => item.dataset_id === id && item.username === username.toLowerCase()); if (!grant) throw new Error("Dataset access grant not found."); access = access.filter((item) => item.id !== grant.id); addAudit("DATASET_ACCESS_REVOKED", "dataset_access", grant.id, `Revoked access for '${username}'.`); },
   async createWorkflow(id: string) {
     await wait(180);
-    if (id !== datasetId) throw new Error("Dataset not found.");
     const existing = workflowRuns.find((item) => item.dataset_id === id && item.steps.some((step) => !["COMPLETED", "STALE"].includes(step.status)));
     if (existing) return structuredClone(existing);
-    const workflow = makeWorkflow(`workflow-${Date.now()}`);
+    const workflow = makeWorkflow(`workflow-${Date.now()}`, id);
     workflowRuns = [...workflowRuns, workflow];
     addAudit("WORKFLOW_CREATED", "workflow", workflow.id, "Created a step-by-step agent workflow in the local adapter.");
     return structuredClone(workflow);

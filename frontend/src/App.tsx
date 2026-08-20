@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { api, isMockMode } from "./api";
+import { api, isMockMode, workflowApi } from "./api";
 import { ApiError, clearApiSession } from "./api/client";
 import ThemeControl from "./ThemeControl";
 import type {
@@ -230,9 +230,9 @@ function DatasetsPage({
   profile: DatasetProfile | null;
   onOpenPipeline: () => void;
   onOpenExplorer: () => void;
-  onUploadPreview: () => void;
+  onUploadPreview: (fileName: string) => void;
 }) {
-  return <div className="datasets-page"><div className="page-heading"><div><span className="eyebrow">DATASET CATALOG</span><h1>Registered datasets</h1><p>Choose an artifact to inspect its profile or start a pipeline run.</p></div><button className="button secondary" onClick={onUploadPreview}>Upload dataset</button></div>{datasets.length ? <div className="dataset-catalog-grid">{datasets.map((item) => <article className="dataset-catalog-card" key={item.id}><div className="dataset-catalog-top"><StatusPill label={item.status.replaceAll("_", " ")} tone={item.status === "PROFILE_READY" ? "success" : "info"} /><code>{item.manifest_version}</code></div><h2>{item.name}</h2><p>{item.description}</p><div className="dataset-catalog-stats"><div><span>Rows</span><strong>{item.row_count.toLocaleString()}</strong></div><div><span>Source</span><strong>{item.source_label}</strong></div><div><span>Updated</span><strong>{formatTime(item.updated_at)}</strong></div></div><div className="dataset-catalog-actions"><button className="button primary" onClick={onOpenPipeline}>Open pipeline</button><button className="button ghost" onClick={onOpenExplorer}>View data</button></div></article>)}</div> : <div className="empty-state"><h2>No datasets registered.</h2><p className="muted">Upload a CSV or Parquet artifact to begin.</p><button className="button primary" onClick={onUploadPreview}>Upload dataset</button></div>}{profile && <section className="panel dataset-profile-summary"><div className="panel-heading"><div><span className="eyebrow">ACTIVE DATASET PROFILE</span><h3>Aggregate signals</h3></div><button className="button ghost" onClick={onOpenPipeline}>Run pipeline</button></div><div className="dataset-catalog-stats"><div><span>Completeness</span><strong>{profile.completeness_score.toFixed(1)}%</strong></div><div><span>Validity</span><strong>{profile.validity_score.toFixed(1)}%</strong></div><div><span>Duplicate rate</span><strong>{profile.duplicate_rate.toFixed(2)}%</strong></div><div><span>Columns</span><strong>{profile.columns.length}</strong></div></div></section>}</div>;
+  return <div className="datasets-page"><div className="page-heading"><div><span className="eyebrow">DATASET CATALOG</span><h1>Registered datasets</h1><p>Choose an artifact to inspect its profile or start a pipeline run.</p></div><label className="button secondary upload-button">+ Add dataset<input type="file" accept=".csv,.parquet" onChange={(event) => { const file = event.target.files?.[0]; if (file) onUploadPreview(file.name); event.currentTarget.value = ""; }} /></label></div>{datasets.length ? <div className="dataset-catalog-grid">{datasets.map((item) => <article className="dataset-catalog-card" key={item.id}><div className="dataset-catalog-top"><StatusPill label={item.status.replaceAll("_", " ")} tone={item.status === "PROFILE_READY" ? "success" : "info"} /><code>{item.manifest_version}</code></div><h2>{item.name}</h2><p>{item.description}</p><div className="dataset-catalog-stats"><div><span>Rows</span><strong>{item.row_count.toLocaleString()}</strong></div><div><span>Source</span><strong>{item.source_label}</strong></div><div><span>Updated</span><strong>{formatTime(item.updated_at)}</strong></div></div><div className="dataset-catalog-actions"><button className="button primary" onClick={onOpenPipeline}>Open pipeline</button><button className="button ghost" onClick={onOpenExplorer}>View data</button></div></article>)}</div> : <div className="empty-state"><h2>No datasets registered.</h2><p className="muted">Upload a CSV or Parquet artifact to begin.</p><label className="button primary upload-button">Upload dataset<input type="file" accept=".csv,.parquet" onChange={(event) => { const file = event.target.files?.[0]; if (file) onUploadPreview(file.name); event.currentTarget.value = ""; }} /></label></div>}{profile && <section className="panel dataset-profile-summary"><div className="panel-heading"><div><span className="eyebrow">ACTIVE DATASET PROFILE</span><h3>Aggregate signals</h3></div><button className="button ghost" onClick={onOpenPipeline}>Run pipeline</button></div><div className="dataset-catalog-stats"><div><span>Completeness</span><strong>{profile.completeness_score.toFixed(1)}%</strong></div><div><span>Validity</span><strong>{profile.validity_score.toFixed(1)}%</strong></div><div><span>Duplicate rate</span><strong>{profile.duplicate_rate.toFixed(2)}%</strong></div><div><span>Columns</span><strong>{profile.columns.length}</strong></div></div></section>}</div>;
 }
 
 function workflowArtifactForStep(workflow: WorkflowRun, artifacts: AgentArtifact[], step: WorkflowStepKey) {
@@ -242,6 +242,7 @@ function workflowArtifactForStep(workflow: WorkflowRun, artifacts: AgentArtifact
 
 function WorkflowPage({
   dataset,
+  datasets,
   workflow,
   artifacts,
   proposals,
@@ -258,8 +259,11 @@ function WorkflowPage({
   onSaveConfiguration,
   onCreateManualRule,
   onRewindStep,
+  onSelectDataset,
+  onUploadPreview,
 }: {
   dataset?: Dataset;
+  datasets: Dataset[];
   workflow: WorkflowRun | null;
   artifacts: AgentArtifact[];
   proposals: RuleProposal[];
@@ -276,12 +280,14 @@ function WorkflowPage({
   onSaveConfiguration: (id: string, input: RuleConfigurationInput) => void;
   onCreateManualRule: () => void;
   onRewindStep: (step: WorkflowStepKey) => void;
+  onSelectDataset: (datasetId: string) => void;
+  onUploadPreview: (fileName: string) => void;
 }) {
   if (!dataset) {
     return <div className="empty-state"><span className="eyebrow">WORKFLOW</span><h2>Select a dataset to begin.</h2><p className="muted">The workflow will keep every agent artifact scoped to the selected dataset.</p></div>;
   }
   if (!workflow) {
-    return <section className="workflow-intro panel"><div><span className="eyebrow">STEP-BY-STEP AGENT WORKFLOW</span><h1>Turn a dataset into an approved quality run.</h1><p className="muted">Agent 1 understands the data and proposes rules. Agent 2 prepares standardization code. You decide what runs, while the Loop Agent explains what to improve.</p></div><div className="workflow-intro-actions"><StatusPill label="Local preview" tone="info" /><button className="button primary" onClick={() => onStartStep("UPLOAD_PROFILE")} disabled={!canOperate || Boolean(activeJob)}>Create workflow</button>{!canOperate && <small>Steward access is required to start a workflow.</small>}</div></section>;
+    return <section className="rule-proposer-start panel"><div className="rule-proposer-copy"><span className="eyebrow">RULE PROPOSER</span><h1>Choose a dataset to start.</h1><p className="muted">Select a registered dataset or add a new CSV/Parquet artifact. Agent 1 will profile the selected data before proposing rules.</p></div><div className="dataset-choice-list">{datasets.map((item) => <button className={`dataset-choice ${item.id === dataset?.id ? "selected" : ""}`} key={item.id} onClick={() => onSelectDataset(item.id)}><span><strong>{item.name}</strong><small>{item.row_count.toLocaleString()} rows · {item.manifest_version}</small></span><span>{item.status.replaceAll("_", " ")}</span></button>)}</div><div className="rule-proposer-actions"><label className="button secondary upload-button">+ Add dataset<input type="file" accept=".csv,.parquet" onChange={(event) => { const file = event.target.files?.[0]; if (file) onUploadPreview(file.name); event.currentTarget.value = ""; }} /></label><button className="button primary" onClick={() => onStartStep("UPLOAD_PROFILE")} disabled={!canOperate || Boolean(activeJob) || !dataset}>Start Rule Proposer</button>{!canOperate && <small>Steward access is required to start a workflow.</small>}</div></section>;
   }
   const currentStep = workflow.steps.find((step) => step.key === workflow.current_step);
   const currentArtifact = currentStep ? workflowArtifactForStep(workflow, artifacts, currentStep.key) : undefined;
@@ -317,6 +323,9 @@ function App() {
   const [loginError, setLoginError] = useState("");
   const [view, setView] = useState<View>("overview");
   const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(
+    () => sessionStorage.getItem("ridepulse.dataset") ?? null,
+  );
   const [profile, setProfile] = useState<DatasetProfile | null>(null);
   const [proposals, setProposals] = useState<RuleProposal[]>([]);
   const [ruleConfigurations, setRuleConfigurations] = useState<RuleConfiguration[]>([]);
@@ -340,7 +349,10 @@ function App() {
   );
   const [manualRuleOpen, setManualRuleOpen] = useState(false);
 
-  const dataset = datasets[0];
+  const dataset = useMemo(
+    () => datasets.find((item) => item.id === selectedDatasetId) ?? datasets[0],
+    [datasets, selectedDatasetId],
+  );
   const approvedRules = useMemo(
     () => proposals.filter((proposal) => proposal.status === "APPROVED"),
     [proposals],
@@ -358,7 +370,10 @@ function App() {
       ]);
       setDatasets(nextDatasets);
       setAuditLogs(nextAudit);
-      const nextDataset = nextDatasets[0];
+      const rememberedDatasetId = sessionStorage.getItem("ridepulse.dataset");
+      const nextDataset = nextDatasets.find((item) => item.id === rememberedDatasetId) ?? nextDatasets[0];
+      setSelectedDatasetId(nextDataset?.id ?? null);
+      if (nextDataset) sessionStorage.setItem("ridepulse.dataset", nextDataset.id);
       if (nextDataset?.status === "PROFILE_READY") {
         const [nextProfile, nextProposals, nextConfigurations, latestRun, nextTrends] = await Promise.all([
           api.getProfile(nextDataset.id),
@@ -409,6 +424,14 @@ function App() {
     }
   }, [canAdmin, dataset]);
 
+  async function selectDataset(datasetId: string) {
+    sessionStorage.setItem("ridepulse.dataset", datasetId);
+    setSelectedDatasetId(datasetId);
+    setWorkflow(null);
+    setWorkflowArtifacts([]);
+    await refreshWorkspace();
+  }
+
   useEffect(() => {
     if (authenticated) void refreshWorkspace();
   }, [authenticated, refreshWorkspace]);
@@ -442,14 +465,16 @@ function App() {
     sessionStorage.removeItem("ridepulse.auth");
     sessionStorage.removeItem("ridepulse.role");
     sessionStorage.removeItem("ridepulse.username");
+    sessionStorage.removeItem("ridepulse.dataset");
     setAuthenticated(false);
   }
 
   async function pollJob(
     acceptedJob: CreateJobResponse,
     onComplete: () => Promise<void>,
+    jobApi: typeof api = api,
   ) {
-    let current = await api.getJob(acceptedJob.job_id);
+    let current = await jobApi.getJob(acceptedJob.job_id);
     setActiveJob(current);
     for (
       let attempt = 0;
@@ -458,7 +483,7 @@ function App() {
       attempt += 1
     ) {
       await sleep(450);
-      current = await api.getJob(acceptedJob.job_id);
+      current = await jobApi.getJob(acceptedJob.job_id);
       setActiveJob(current);
     }
     const finalStatus = current.status as Job["status"];
@@ -468,7 +493,7 @@ function App() {
       setRetryAction(null);
       setToast("Job completed successfully.");
     } else {
-      setRetryAction(() => () => void pollJob(acceptedJob, onComplete));
+      setRetryAction(() => () => void pollJob(acceptedJob, onComplete, jobApi));
       setError(
         current.error ??
           "The job did not complete. Retry the operation when ready.",
@@ -630,8 +655,8 @@ function App() {
 
   async function refreshWorkflow(workflowId: string) {
     const [nextWorkflow, nextArtifacts] = await Promise.all([
-      api.getWorkflow(workflowId),
-      api.listWorkflowArtifacts(workflowId),
+      workflowApi.getWorkflow(workflowId),
+      workflowApi.listWorkflowArtifacts(workflowId),
     ]);
     setWorkflow(nextWorkflow);
     setWorkflowArtifacts(nextArtifacts);
@@ -644,17 +669,17 @@ function App() {
     try {
       let currentWorkflow = workflow;
       if (!currentWorkflow) {
-        currentWorkflow = await api.createWorkflow(dataset.id);
+        currentWorkflow = await workflowApi.createWorkflow(dataset.id);
         setWorkflow(currentWorkflow);
-        setWorkflowArtifacts(await api.listWorkflowArtifacts(currentWorkflow.id));
+        setWorkflowArtifacts(await workflowApi.listWorkflowArtifacts(currentWorkflow.id));
       }
-      const queuedJob = await api.runWorkflowStep(currentWorkflow.id, step);
+      const queuedJob = await workflowApi.runWorkflowStep(currentWorkflow.id, step);
       await pollJob(queuedJob, async () => {
         await refreshWorkflow(currentWorkflow!.id);
         setProfile(await api.getProfile(dataset.id));
         setProposals(await api.listProposals(dataset.id));
         setAuditLogs(await api.listAuditLogs());
-      });
+      }, workflowApi);
     } catch (err) {
       setError(getErrorMessage(err, "Unable to run workflow step."));
     }
@@ -663,7 +688,7 @@ function App() {
   async function reviewWorkflowArtifact(id: string, input: ArtifactReviewInput) {
     if (!canOperate) return;
     try {
-      const updated = await api.reviewArtifact(id, input);
+      const updated = await workflowApi.reviewArtifact(id, input);
       setWorkflowArtifacts((current) => current.map((artifact) => artifact.id === id ? updated : artifact));
       if (workflow) await refreshWorkflow(workflow.id);
       setToast(input.action === "approve" ? "Artifact approved. The next workflow step is ready." : input.action === "reject" ? "Artifact rejected and kept out of execution." : "Revision requested from the agent.");
@@ -675,8 +700,8 @@ function App() {
   async function decideWorkflowLoop(input: LoopDecisionInput) {
     if (!workflow || !canOperate) return;
     try {
-      setWorkflow(await api.continueLoop(workflow.id, input));
-      setWorkflowArtifacts(await api.listWorkflowArtifacts(workflow.id));
+      setWorkflow(await workflowApi.continueLoop(workflow.id, input));
+      setWorkflowArtifacts(await workflowApi.listWorkflowArtifacts(workflow.id));
       setAuditLogs(await api.listAuditLogs());
       setToast(input.action === "continue" ? "Loop continued with a bounded next iteration." : "Loop stopped by the steward.");
     } catch (err) {
@@ -689,9 +714,9 @@ function App() {
     const label = workflowStepLabels[targetStep].label;
     if (!window.confirm(`Revisit ${label}? Downstream stages will be marked stale and need to run again.`)) return;
     try {
-      const nextWorkflow = await api.rewindWorkflow(workflow.id, targetStep);
+      const nextWorkflow = await workflowApi.rewindWorkflow(workflow.id, targetStep);
       setWorkflow(nextWorkflow);
-      setWorkflowArtifacts(await api.listWorkflowArtifacts(workflow.id));
+      setWorkflowArtifacts(await workflowApi.listWorkflowArtifacts(workflow.id));
       setToast(`Revisited ${label}. Downstream stages are marked stale.`);
     } catch (err) {
       setError(getErrorMessage(err, "Unable to revisit workflow stage."));
@@ -739,7 +764,7 @@ function App() {
               {item === "overview"
                 ? "Overview"
                 : item === "workflow"
-                  ? "Agent workflow"
+                  ? "Rule proposer"
                 : item === "datasets"
                   ? "Datasets"
                 : item === "rules"
@@ -798,7 +823,7 @@ function App() {
               {view === "overview"
                 ? "Overview"
                 : view === "workflow"
-                  ? "Agent workflow"
+                  ? "Rule proposer"
                 : view === "datasets"
                   ? "Datasets"
                 : view === "rules"
@@ -850,8 +875,8 @@ function App() {
           )}
           {error && (
             <div className="alert error">
-              <strong>Action needs attention</strong>
-              <span>{getErrorMessage(error, "Action needs attention")}</span>
+              <strong>{getErrorMessage(error, "Action needs attention") === "Action needs attention" ? "Action needs attention" : "Action failed"}</strong>
+              <span>{getErrorMessage(error, "Action needs attention") === "Action needs attention" ? "Retry the current step or open the audit log for details." : getErrorMessage(error, "Action needs attention")}</span>
               <button onClick={() => setError("")}>×</button>
             </div>
           )}
@@ -891,6 +916,7 @@ function App() {
           {view === "workflow" && (
             <WorkflowPage
               dataset={dataset}
+              datasets={datasets}
               workflow={workflow}
               artifacts={workflowArtifacts}
               proposals={proposals}
@@ -907,6 +933,8 @@ function App() {
               onSaveConfiguration={(id, input) => void saveRuleConfiguration(id, input)}
               onCreateManualRule={() => setManualRuleOpen(true)}
               onRewindStep={(step) => void rewindWorkflowStage(step)}
+              onSelectDataset={(id) => void selectDataset(id)}
+              onUploadPreview={(fileName) => setToast(`Selected ${fileName}. Upload is ready for the backend contract; this preview keeps the catalog unchanged.`)}
             />
           )}
           {view === "datasets" && (
@@ -915,7 +943,7 @@ function App() {
               profile={profile}
               onOpenPipeline={() => setView("workflow")}
               onOpenExplorer={() => setView("data")}
-              onUploadPreview={() => setToast("Upload flow is ready for the backend upload contract; this local preview keeps the current dataset unchanged.")}
+              onUploadPreview={(fileName) => setToast(`Selected ${fileName}. Upload is ready for the backend contract; this preview keeps the catalog unchanged.`)}
             />
           )}
           {view === "rules" && (
