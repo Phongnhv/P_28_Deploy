@@ -94,3 +94,4 @@ class AnomalyGraphState(TypedDict, total=False):
     anomaly_status: str
     hypothesis_status: str
     metadata: dict
+    steward_report_path: str      # Đường dẫn file báo cáo MD cho Data Steward (Graph 3 output)

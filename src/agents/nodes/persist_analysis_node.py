@@ -41,28 +41,35 @@ async def persist_analysis_node(state: AnomalyGraphState) -> dict:
             ).first()
             
             if existing_run:
-                logger.info("Found existing anomaly run ID %s. Deleting old signals/hypotheses for idempotency.", existing_run.id)
-                # Use the existing ID to be consistent
+                logger.info("Found existing anomaly run ID %s. Updating fields and deleting old signals/hypotheses for idempotency.", existing_run.id)
                 anomaly_run_id = existing_run.id
                 session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anomaly_run_id).delete()
                 session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == anomaly_run_id).delete()
-                session.delete(existing_run)
-                session.flush()
                 
-            # Create new AnomalyRun
-            anomaly_run = AnomalyRunModel(
-                id=anomaly_run_id,
-                execution_run_id=execution_run_id,
-                detector_config_version=detector_config_version,
-                status="SUCCEEDED",
-                decision=decision_data.get("decision", "NORMAL"),
-                score=float(decision_data.get("score", 0.0)),
-                confidence=float(decision_data.get("confidence", 0.0)),
-                severity=decision_data.get("severity", "LOW"),
-                error_message=decision_data.get("override_reason") or None,
-                completed_at=datetime.now(UTC)
-            )
-            session.add(anomaly_run)
+                # Update existing run
+                existing_run.status = "SUCCEEDED"
+                existing_run.decision = decision_data.get("decision", "NORMAL")
+                existing_run.score = float(decision_data.get("score", 0.0))
+                existing_run.confidence = float(decision_data.get("confidence", 0.0))
+                existing_run.severity = decision_data.get("severity", "LOW")
+                existing_run.error_message = decision_data.get("override_reason") or None
+                existing_run.completed_at = datetime.now(UTC)
+            else:
+                # Create new AnomalyRun
+                anomaly_run = AnomalyRunModel(
+                    id=anomaly_run_id,
+                    execution_run_id=execution_run_id,
+                    detector_config_version=detector_config_version,
+                    status="SUCCEEDED",
+                    decision=decision_data.get("decision", "NORMAL"),
+                    score=float(decision_data.get("score", 0.0)),
+                    confidence=float(decision_data.get("confidence", 0.0)),
+                    severity=decision_data.get("severity", "LOW"),
+                    error_message=decision_data.get("override_reason") or None,
+                    completed_at=datetime.now(UTC)
+                )
+                session.add(anomaly_run)
+                session.flush()  # Ensure anomaly_runs row exists before children are added
             
             # Create AnomalySignals
             for sig in signals:

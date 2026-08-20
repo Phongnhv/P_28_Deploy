@@ -215,11 +215,12 @@ def build_anomaly_graph() -> StateGraph:
     """Xây dựng graph cho Run 3 (Anomaly Analysis Graph).
 
     Luồng:
-      anomaly_detector ➔ hypothesis_agent ➔ persist_analysis ➔ END
+      anomaly_detector ➔ hypothesis_agent ➔ persist_analysis ➔ report_writer ➔ END
     """
     from src.agents.nodes.anomaly_detector_node import anomaly_detector_node
     from src.agents.nodes.steward_insights_node import steward_insights_node
     from src.agents.nodes.persist_analysis_node import persist_analysis_node
+    from src.agents.nodes.report_writer_node import report_writer_node
     from src.agents.state import AnomalyGraphState
 
     graph = StateGraph(AnomalyGraphState)
@@ -227,11 +228,13 @@ def build_anomaly_graph() -> StateGraph:
     graph.add_node("anomaly_detector", anomaly_detector_node)
     graph.add_node("hypothesis_agent", steward_insights_node)
     graph.add_node("persist_analysis", persist_analysis_node)
+    graph.add_node("report_writer", report_writer_node)
 
     graph.set_entry_point("anomaly_detector")
     graph.add_edge("anomaly_detector", "hypothesis_agent")
     graph.add_edge("hypothesis_agent", "persist_analysis")
-    graph.add_edge("persist_analysis", END)
+    graph.add_edge("persist_analysis", "report_writer")
+    graph.add_edge("report_writer", END)
 
     return graph.compile()
 
@@ -411,7 +414,13 @@ async def run_anomaly_graph(
         decision_data = final_state.get("anomaly_decision", {})
         signals = final_state.get("signal_observations", [])
         hypotheses = final_state.get("hypotheses", [])
-        
+        # report_writer_node sets steward_report_path in state and metadata
+        steward_report_path = (
+            final_state.get("steward_report_path")
+            or final_state.get("metadata", {}).get("steward_report_path")
+        )
+        llm_used = final_state.get("metadata", {}).get("steward_report_llm_used", False)
+
         print("\n" + "=" * 75)
         print(f"🎉 RUN 3 HOÀN THÀNH THÀNH CÔNG (anomaly_run_id: {anomaly_run_id})")
         print("=" * 75)
@@ -420,14 +429,17 @@ async def run_anomaly_graph(
         print(f"• Độ tự tin             : {decision_data.get('confidence', 0.0)}")
         print(f"• Số tín hiệu           : {len(signals)}")
         print(f"• Số giả thuyết AI sinh : {len(hypotheses)}")
-        
+        if steward_report_path:
+            mode = "LLM" if llm_used else "FALLBACK"
+            print(f"• Báo cáo Steward (MD)  : {steward_report_path} [{mode}]")
+
         if hypotheses:
             print("\n💡 GIẢ THUYẾT NGUYÊN NHÂN AI ĐỀ XUẤT:")
             for idx, h in enumerate(hypotheses, 1):
                 print(f"   [{idx}] Loại: {h.get('hypothesis_type')} (Độ tin cậy: {h.get('confidence'):.2f})")
                 print(f"       Tóm tắt: {h.get('summary')}")
                 print(f"       Khuyến nghị: {', '.join(h.get('recommended_checks', []))}")
-                
+
         print("\n" + "=" * 75 + "\n")
         return final_state
     except Exception as exc:

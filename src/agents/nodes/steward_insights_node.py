@@ -152,10 +152,12 @@ async def steward_insights_node(state: AnomalyGraphState) -> dict:
                 DqResultModel.status.in_(["FAIL", "FAILED", "ERROR"])
             ).all()
             for r in rows:
+                rule_parts = r.rule_id.split(".")
+                col_name = rule_parts[1] if len(rule_parts) > 2 else None
                 failed_rules.append({
                     "rule_id": r.rule_id,
                     "rule_title": r.rule_title,
-                    "column": r.column,
+                    "column": col_name,
                     "status": r.status,
                     "violation_rate": r.violation_rate or 0.0,
                     "violation_count": r.failed_count

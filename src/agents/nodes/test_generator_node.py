@@ -240,12 +240,14 @@ def generate_tests_for_table(
 
 
 def generate_dbt_test_yaml(approved_rules: list[dict]) -> str:
-
     """Biên dịch danh sách approved rules thành định dạng tệp dbt test YAML chuẩn (generated_dq_tests.yml)."""
     tables_map: dict[str, dict[str, list[dict]]] = {}
     for r in approved_rules:
         t_name = r.get("table_name") or "profile_input"
-        c_name = r.get("column") or "source_row_id"
+        c_name = r.get("column")
+        # Chỉ xử lý column-level rules
+        if not c_name or c_name == "_table":
+            continue
         tables_map.setdefault(t_name, {}).setdefault(c_name, []).append(r)
 
     models_list = []
@@ -256,10 +258,14 @@ def generate_dbt_test_yaml(approved_rules: list[dict]) -> str:
             for rule in rules:
                 r_type = (rule.get("rule_type") or "").upper()
                 params = rule.get("effective_parameters") or rule.get("parameters") or {}
+                
+                # Chỉ mapping các rule types được dbt hỗ trợ chính thức
                 if r_type == "NOT_NULL":
-                    tests_list.append("not_null")
+                    if "not_null" not in tests_list:
+                        tests_list.append("not_null")
                 elif r_type == "UNIQUE":
-                    tests_list.append("unique")
+                    if "unique" not in tests_list:
+                        tests_list.append("unique")
                 elif r_type == "ACCEPTED_VALUES":
                     vals = params.get("accepted_values") or []
                     tests_list.append({"accepted_values": {"values": vals}})
@@ -276,13 +282,17 @@ def generate_dbt_test_yaml(approved_rules: list[dict]) -> str:
                     op = params.get("operator") or "<="
                     expr = f"{op} {target_col}"
                     tests_list.append({"dbt_utils.expression_is_true": {"expression": expr}})
-                else:
-                    tests_list.append("not_null")
-            columns_list.append({"name": c_name, "tests": tests_list})
-        models_list.append({"name": t_name, "columns": columns_list})
+                # Bỏ qua các rule types khác (ví dụ NULL_RATE, REGEX_FORMAT, ROW_COUNT) không được dbt hỗ trợ nguyên bản
+            
+            if tests_list:
+                columns_list.append({"name": c_name, "tests": tests_list})
+                
+        if columns_list:
+            models_list.append({"name": t_name, "columns": columns_list})
 
     yaml_dict = {"version": 2, "models": models_list}
     return yaml.dump(yaml_dict, sort_keys=False, allow_unicode=True)
+
 
 
 from sqlalchemy import inspect

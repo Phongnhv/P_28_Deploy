@@ -254,30 +254,30 @@ async def test_execution_graph_end_to_end():
     assert res_map["mock_trips.fare_amount.NOT_NULL"]["violation_count"] == 1
     assert res_map["mock_trips.fare_amount.NOT_NULL"]["total_rows"] == 10
     assert res_map["mock_trips.fare_amount.NOT_NULL"]["violation_rate"] == 0.1
-    assert res_map["mock_trips.fare_amount.NOT_NULL"]["status"] == "FAILED"
+    assert res_map["mock_trips.fare_amount.NOT_NULL"]["status"] == "FAIL"
 
     # RANGE [0, 100]: -5.0 và 150.0 vi phạm -> 2 dòng
     assert res_map["mock_trips.fare_amount.RANGE"]["violation_count"] == 2
-    assert res_map["mock_trips.fare_amount.RANGE"]["status"] == "FAILED"
+    assert res_map["mock_trips.fare_amount.RANGE"]["status"] == "FAIL"
 
     # ACCEPTED_VALUES ['Credit card', 'Cash']: 'Crypto' và 'Gold' vi phạm -> 2 dòng
     assert res_map["mock_trips.payment_type.ACCEPTED_VALUES"]["violation_count"] == 2
-    assert res_map["mock_trips.payment_type.ACCEPTED_VALUES"]["status"] == "FAILED"
+    assert res_map["mock_trips.payment_type.ACCEPTED_VALUES"]["status"] == "FAIL"
 
     # CROSS_FIELD_COMPARISON (pickup_datetime <= dropoff_datetime): TRIP_5 vi phạm (15:00 > 14:00) -> 1 dòng
     cross_res = res_map["mock_trips.pickup_datetime.VS.dropoff_datetime.CROSS_FIELD_COMPARISON"]
     assert cross_res["violation_count"] == 1
-    assert cross_res["status"] == "FAILED"
+    assert cross_res["status"] == "FAIL"
     assert cross_res["sample_failures"] is not None
     assert len(cross_res["sample_failures"]) == 1
     assert cross_res["sample_failures"][0]["trip_id"] == "TRIP_5"
 
     # UNIQUE: 'TRIP_1' bị lặp lại 1 lần -> violation_count == 1
     assert res_map["mock_trips.trip_id.UNIQUE"]["violation_count"] == 1
-    assert res_map["mock_trips.trip_id.UNIQUE"]["status"] == "FAILED"
+    assert res_map["mock_trips.trip_id.UNIQUE"]["status"] == "FAIL"
 
     # ROW_COUNT: 10 dòng >= 5 -> PASSED
-    assert res_map["mock_trips._table.ROW_COUNT"]["status"] == "PASSED"
+    assert res_map["mock_trips._table.ROW_COUNT"]["status"] == "PASS"
     assert res_map["mock_trips._table.ROW_COUNT"]["violation_count"] == 0
 
 
