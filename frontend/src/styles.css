@@ -537,3 +537,31 @@ nav { display: grid; gap: 3px; }
   .workflow-intro-actions { justify-items: stretch; }
   .workflow-detail-heading { flex-direction: column; }
 }
+
+/* Keep the workspace navigation as a left rail on laptop and desktop widths. */
+@media (min-width: 761px) {
+  .app-shell { display: block; min-height: 100dvh; }
+  .sidebar {
+    position: fixed;
+    z-index: 20;
+    inset: 0 auto 0 0;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: 232px;
+    height: 100dvh;
+    min-height: 0;
+    overflow-y: auto;
+    gap: 0;
+    padding: 28px 16px 18px;
+    border-right: 1px solid var(--border);
+    border-bottom: 0;
+  }
+  .sidebar .brand-lockup { padding: 0 10px 44px; }
+  .sidebar-label { display: block; }
+  .sidebar-bottom { display: grid; }
+  nav { display: grid; width: auto; overflow: visible; }
+  .nav-item { width: 100%; white-space: normal; }
+  .main-content { min-width: 0; margin-left: 232px; }
+  .topbar { top: 0; }
+}
