@@ -328,7 +328,7 @@ function WorkflowPage({
   const currentStepIndex = currentStep ? workflow.steps.findIndex((step) => step.key === currentStep.key) : -1;
   const nextWorkflowStep = currentStepIndex >= 0 ? workflow.steps[currentStepIndex + 1] : undefined;
   const canAdvance = currentStep?.key === "UNDERSTAND_DATA" && currentStep.status === "COMPLETED" && !currentStep.temporary && nextWorkflowStep?.status === "READY" && canOperate && !activeJob;
-  return <div className="workflow-page"><div className="page-heading"><div><span className="eyebrow">WORKFLOW RUN {workflow.id}</span><h1>Dataset to decision</h1><p>{dataset.name} · iteration {workflow.iteration} of {workflow.max_iterations}</p></div><StatusPill label={isMockMode ? "Preview adapter" : "Connected API"} tone={isMockMode ? "info" : "success"} /></div><div className="workflow-layout"><aside className="workflow-stepper" aria-label="Workflow steps">{workflow.steps.map((step, index) => { const meta = workflowStepLabels[step.key]; const currentIndex = workflow.steps.findIndex((item) => item.key === workflow.current_step); const canSelect = !activeJob && canOperate && index !== currentIndex && ((index < currentIndex && ["COMPLETED", "READY"].includes(step.status)) || (index > currentIndex && step.temporary === true)); return <button type="button" className={`workflow-step ${step.key === workflow.current_step ? "current" : ""} ${step.status.toLowerCase()} ${step.temporary ? "temporary" : ""} ${canSelect ? "clickable" : ""}`} key={step.key} onClick={() => { if (canSelect) onRewindStep(step.key); }} aria-disabled={!canSelect} aria-label={canSelect ? `Open ${meta.label}` : meta.label} title={canSelect ? `Open ${meta.label}` : undefined}><div className="workflow-step-index">{step.status === "COMPLETED" && !step.temporary ? "✓" : index + 1}</div><div className="workflow-step-copy"><strong>{meta.label}</strong><span>{meta.owner}</span><small>{step.temporary ? "TEMPORARY SESSION" : step.status.replaceAll("_", " ")}</small>{step.blocker && <em>{step.blocker}</em>}</div></button>; })}</aside><section className="workflow-detail panel"><div className="workflow-detail-heading"><div><span className="eyebrow">CURRENT STEP</span><h2>{currentStep ? workflowStepLabels[currentStep.key].label : "Complete"}</h2><p className="muted">{currentStep ? workflowStepLabels[currentStep.key].description : "The workflow is complete."}</p></div>{currentStep && <StatusPill label={currentStep.temporary ? "TEMPORARY SESSION" : currentStep.status.replaceAll("_", " ")} tone={currentStep.temporary ? "info" : currentStep.status === "FAILED" ? "danger" : currentStep.status === "WAITING_APPROVAL" ? "warning" : currentStep.status === "COMPLETED" ? "success" : "info"} />}</div>{activeJob && <ProgressPanel job={activeJob} title={`Running ${workflowStepLabels[workflow.current_step].label}`} />}<div className="workflow-artifact"><div className="panel-heading"><div><span className="eyebrow">AGENT ARTIFACT</span><h3>{currentArtifact ? currentArtifact.type.replaceAll("_", " ") : "Waiting for output"}</h3></div>{currentArtifact && <StatusPill label={currentArtifact.status} tone={currentArtifact.status === "APPROVED" ? "success" : currentArtifact.status === "REJECTED" ? "danger" : "info"} />}</div>{renderArtifact()}</div>{currentStep?.key === "REVIEW_RULES" && <RulesPage proposals={proposals} configurations={configurations} profileReady busy={Boolean(activeJob)} canOperate={canOperate && !currentStep.temporary} onRequestProposals={() => undefined} onApprove={onApproveRule} onReject={onRejectRule} onEdit={onEditRule} onDelete={onDeleteRule} onSaveConfiguration={onSaveConfiguration} onCreateManual={onCreateManualRule} onRun={() => undefined} pipelineMode /> }<div className="workflow-actions">{currentStep && ["READY", "FAILED"].includes(currentStep.status) && <button className="button primary" disabled={!canRun || (currentStep.key === "REVIEW_RULES" && Boolean(currentArtifact))} onClick={() => onStartStep(currentStep.key)}>{nextActionLabel}</button>}{canAdvance && <button className="button primary" onClick={onAdvanceStep}>Next step <span aria-hidden="true">→</span></button>}{currentStep?.temporary && <span className="muted">Viewing a preserved session. Return to the active stage to make changes.</span>}{reviewable && !currentStep?.temporary && <><button className="button primary" disabled={!canOperate || (currentStep?.key === "REVIEW_RULES" && !rulesDecided)} onClick={() => onReviewArtifact(currentArtifact.id, { action: "approve" })}>Confirm stage and continue</button>{currentStep?.key === "REVIEW_RULES" && !rulesDecided && <span className="muted">Decide every rule and keep at least one approved rule before continuing.</span>}<button className="button ghost" disabled={!canOperate} onClick={() => onReviewArtifact(currentArtifact.id, { action: "request_revision" })}>Request revision</button><button className="button danger" disabled={!canOperate} onClick={() => onReviewArtifact(currentArtifact.id, { action: "reject" })}>Reject artifact</button></>}{currentStep?.key === "ANALYZE_IMPROVE" && currentStep.status === "WAITING_APPROVAL" && <><button className="button primary" disabled={!canOperate} onClick={() => onLoopDecision({ action: "continue" })}>Continue loop</button><button className="button ghost" disabled={!canOperate} onClick={() => onLoopDecision({ action: "stop" })}>Stop loop</button></>}{!canOperate && <span className="muted">Read-only role: review is disabled.</span>}</div></section></div></div>;
+  return <div className="workflow-page"><div className="page-heading"><div><span className="eyebrow">WORKFLOW RUN {workflow.id}</span><h1>Dataset to decision</h1><p>{dataset.name} · iteration {workflow.iteration} of {workflow.max_iterations}</p></div><StatusPill label={isMockMode ? "Preview adapter" : "Connected API"} tone={isMockMode ? "info" : "success"} /></div><div className="workflow-layout"><aside className="workflow-stepper" aria-label="Workflow steps">{workflow.steps.map((step, index) => { const meta = workflowStepLabels[step.key]; const currentIndex = workflow.steps.findIndex((item) => item.key === workflow.current_step); const currentIsComplete = workflow.steps[currentIndex]?.status === "COMPLETED"; const canSelect = !activeJob && canOperate && index !== currentIndex && ((index < currentIndex && ["COMPLETED", "READY"].includes(step.status)) || (index > currentIndex && currentIsComplete && step.temporary === true)); return <button type="button" className={`workflow-step ${step.key === workflow.current_step ? "current" : ""} ${step.status.toLowerCase()} ${step.temporary ? "temporary" : ""} ${canSelect ? "clickable" : ""}`} key={step.key} onClick={() => { if (canSelect) onRewindStep(step.key); }} aria-disabled={!canSelect} aria-label={canSelect ? `Open ${meta.label}` : meta.label} title={canSelect ? `Open ${meta.label}` : undefined}><div className="workflow-step-index">{step.status === "COMPLETED" && !step.temporary ? "✓" : index + 1}</div><div className="workflow-step-copy"><strong>{meta.label}</strong><span>{meta.owner}</span><small>{step.temporary ? "TEMPORARY SESSION" : step.status.replaceAll("_", " ")}</small>{step.blocker && <em>{step.blocker}</em>}</div></button>; })}</aside><section className="workflow-detail panel"><div className="workflow-detail-heading"><div><span className="eyebrow">CURRENT STEP</span><h2>{currentStep ? workflowStepLabels[currentStep.key].label : "Complete"}</h2><p className="muted">{currentStep ? workflowStepLabels[currentStep.key].description : "The workflow is complete."}</p></div>{currentStep && <StatusPill label={currentStep.temporary ? "TEMPORARY SESSION" : currentStep.status.replaceAll("_", " ")} tone={currentStep.temporary ? "info" : currentStep.status === "FAILED" ? "danger" : currentStep.status === "WAITING_APPROVAL" ? "warning" : currentStep.status === "COMPLETED" ? "success" : "info"} />}</div>{activeJob && <ProgressPanel job={activeJob} title={`Running ${workflowStepLabels[workflow.current_step].label}`} />}<div className="workflow-artifact"><div className="panel-heading"><div><span className="eyebrow">AGENT ARTIFACT</span><h3>{currentArtifact ? currentArtifact.type.replaceAll("_", " ") : "Waiting for output"}</h3></div>{currentArtifact && <StatusPill label={currentArtifact.status} tone={currentArtifact.status === "APPROVED" ? "success" : currentArtifact.status === "REJECTED" ? "danger" : "info"} />}</div>{renderArtifact()}</div>{currentStep?.key === "REVIEW_RULES" && <RulesPage proposals={proposals} configurations={configurations} profileReady busy={Boolean(activeJob)} canOperate={canOperate && !currentStep.temporary} onRequestProposals={() => undefined} onApprove={onApproveRule} onReject={onRejectRule} onEdit={onEditRule} onDelete={onDeleteRule} onSaveConfiguration={onSaveConfiguration} onCreateManual={onCreateManualRule} onRun={() => undefined} pipelineMode /> }<div className="workflow-actions">{currentStep && ["READY", "FAILED"].includes(currentStep.status) && <button className="button primary" disabled={!canRun || (currentStep.key === "REVIEW_RULES" && Boolean(currentArtifact))} onClick={() => onStartStep(currentStep.key)}>{nextActionLabel}</button>}{canAdvance && <button className="button primary" onClick={onAdvanceStep}>Next step <span aria-hidden="true">→</span></button>}{currentStep?.temporary && <span className="muted">Viewing a preserved session. Return to the active stage to make changes.</span>}{reviewable && !currentStep?.temporary && <><button className="button primary" disabled={!canOperate || (currentStep?.key === "REVIEW_RULES" && !rulesDecided)} onClick={() => onReviewArtifact(currentArtifact.id, { action: "approve" })}>Confirm stage and continue</button>{currentStep?.key === "REVIEW_RULES" && !rulesDecided && <span className="muted">Decide every rule and keep at least one approved rule before continuing.</span>}<button className="button ghost" disabled={!canOperate} onClick={() => onReviewArtifact(currentArtifact.id, { action: "request_revision" })}>Request revision</button><button className="button danger" disabled={!canOperate} onClick={() => onReviewArtifact(currentArtifact.id, { action: "reject" })}>Reject artifact</button></>}{currentStep?.key === "ANALYZE_IMPROVE" && currentStep.status === "WAITING_APPROVAL" && <><button className="button primary" disabled={!canOperate} onClick={() => onLoopDecision({ action: "continue" })}>Continue loop</button><button className="button ghost" disabled={!canOperate} onClick={() => onLoopDecision({ action: "stop" })}>Stop loop</button></>}{!canOperate && <span className="muted">Read-only role: review is disabled.</span>}</div></section></div></div>;
 }
 
 function App() {
@@ -352,6 +352,7 @@ function App() {
     () => sessionStorage.getItem("ridepulse.dataset") ?? null,
   );
   const [profile, setProfile] = useState<DatasetProfile | null>(null);
+  const [datasetProfiles, setDatasetProfiles] = useState<Record<string, DatasetProfile>>({});
   const [proposals, setProposals] = useState<RuleProposal[]>([]);
   const [ruleConfigurations, setRuleConfigurations] = useState<RuleConfiguration[]>([]);
   const [adminUsers, setAdminUsers] = useState<UserAccount[]>([]);
@@ -395,18 +396,21 @@ function App() {
       ]);
       setDatasets(nextDatasets);
       setAuditLogs(nextAudit);
+      const profileEntries = await Promise.all(nextDatasets.filter((item) => item.status === "PROFILE_READY").map(async (item) => [item.id, await api.getProfile(item.id)] as const));
+      const nextProfiles = Object.fromEntries(profileEntries.filter((entry): entry is [string, DatasetProfile] => Boolean(entry[1]))) as Record<string, DatasetProfile>;
+      setDatasetProfiles(nextProfiles);
       const rememberedDatasetId = sessionStorage.getItem("ridepulse.dataset");
       const nextDataset = nextDatasets.find((item) => item.id === rememberedDatasetId) ?? nextDatasets[0];
       setSelectedDatasetId(nextDataset?.id ?? null);
       if (nextDataset) sessionStorage.setItem("ridepulse.dataset", nextDataset.id);
       if (nextDataset?.status === "PROFILE_READY") {
-        const [nextProfile, nextProposals, nextConfigurations, latestRun, nextTrends] = await Promise.all([
-          api.getProfile(nextDataset.id),
+        const [nextProposals, nextConfigurations, latestRun, nextTrends] = await Promise.all([
           api.listProposals(nextDataset.id),
           api.listRuleConfigurations(nextDataset.id),
           api.getLatestDqRun(nextDataset.id),
           api.getQualityTrends(nextDataset.id),
         ]);
+        const nextProfile = nextProfiles[nextDataset.id] ?? null;
         setProfile(nextProfile);
         setProposals(nextProposals);
         setRuleConfigurations(nextConfigurations);
@@ -420,6 +424,10 @@ function App() {
           setDqResults(latestResults);
           setDqAnomalies(latestAnomalies);
         }
+      } else {
+        setProfile(null);
+        setProposals([]);
+        setRuleConfigurations([]);
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -534,7 +542,9 @@ function App() {
       const job = await api.startIngestion(dataset.id, crypto.randomUUID());
       await pollJob(job, async () => {
         setDatasets(await api.listDatasets());
-        setProfile(await api.getProfile(dataset.id));
+        const nextProfile = await api.getProfile(dataset.id);
+        setProfile(nextProfile);
+        if (nextProfile) setDatasetProfiles((current) => ({ ...current, [dataset.id]: nextProfile }));
       });
     } catch (err) {
       setError(getErrorMessage(err, "Unable to start analysis."));
@@ -937,7 +947,10 @@ function App() {
           {view === "overview" && (
             <OverviewPage
               dataset={dataset}
+              datasets={datasets}
               profile={profile}
+              datasetProfiles={datasetProfiles}
+              qualityTrends={qualityTrends}
               proposals={proposals}
               approvedRules={approvedRules.length}
               loading={loading}
@@ -1043,7 +1056,10 @@ function App() {
 
 function OverviewPage({
   dataset,
+  datasets,
   profile,
+  datasetProfiles,
+  qualityTrends,
   proposals,
   approvedRules,
   loading,
@@ -1054,7 +1070,10 @@ function OverviewPage({
   onNavigate,
 }: {
   dataset?: Dataset;
+  datasets: Dataset[];
   profile: DatasetProfile | null;
+  datasetProfiles: Record<string, DatasetProfile>;
+  qualityTrends: QualityTrendPoint[];
   proposals: RuleProposal[];
   approvedRules: number;
   loading: boolean;
@@ -1064,230 +1083,56 @@ function OverviewPage({
   onRequestProposals: () => void;
   onNavigate: (view: View) => void;
 }) {
-  const proposalCount = proposals.filter((proposal) =>
-    ["PROPOSED", "EDITED"].includes(proposal.status),
-  ).length;
+  const proposalCount = proposals.filter((proposal) => ["PROPOSED", "EDITED"].includes(proposal.status)).length;
+  const qualityRows = datasets.map((item) => {
+    const itemProfile = datasetProfiles[item.id] ?? (item.id === dataset?.id ? profile : null);
+    const score = itemProfile ? (itemProfile.completeness_score + itemProfile.validity_score) / 2 : null;
+    return { dataset: item, profile: itemProfile, score };
+  });
+  const profiledRows = qualityRows.filter((row) => row.score !== null);
+  const averageQuality = profiledRows.length ? profiledRows.reduce((sum, row) => sum + (row.score ?? 0), 0) / profiledRows.length : null;
+  const totalRows = datasets.reduce((sum, item) => sum + item.row_count, 0);
+  const profileReadyCount = datasets.filter((item) => item.status === "PROFILE_READY").length;
+  const statusRows = [
+    { label: "Profile ready", count: datasets.filter((item) => item.status === "PROFILE_READY").length },
+    { label: "Ingested", count: datasets.filter((item) => item.status === "INGESTED").length },
+    { label: "Registered", count: datasets.filter((item) => item.status === "REGISTERED").length },
+  ];
+  const statusMax = Math.max(1, ...statusRows.map((row) => row.count));
   if (!dataset)
     return (
       <>
-        <div className="page-heading">
-          <div>
-            <span className="eyebrow">DATA STEWARD WORKSPACE</span>
-            <h1>No registered dataset</h1>
-            <p>The backend has not registered a Gate 2 dataset yet.</p>
-          </div>
-        </div>
-        <section className="empty-state">
-          <div className="empty-illustration">▦</div>
-          <h2>Dataset catalog is empty</h2>
-          <p>
-            Connect the dataset registration API to show the approved NYC Yellow
-            Taxi artifact here.
-          </p>
-        </section>
+        <div className="page-heading"><div><span className="eyebrow">QUALITY COMMAND CENTER</span><h1>No registered dataset</h1><p>The backend has not registered a Gate 2 dataset yet.</p></div></div>
+        <section className="empty-state"><div className="empty-illustration">▦</div><h2>Dataset catalog is empty</h2><p>Upload or register a dataset to populate the multi-dataset quality dashboard.</p></section>
       </>
     );
   return (
     <>
-      <div className="page-heading">
-        <div>
-          <span className="eyebrow">DATA STEWARD WORKSPACE</span>
-          <h1>Good morning, Steward.</h1>
-          <p>
-            One clear view of your dataset’s quality signals and the decisions
-            waiting for review.
-          </p>
-        </div>
-        <div className="heading-date">
-          <span>LAST SYNC</span>
-          <strong>{formatTime(dataset.updated_at)}</strong>
-        </div>
+      <div className="page-heading overview-heading">
+        <div><span className="eyebrow">QUALITY COMMAND CENTER</span><h1>Dataset quality overview</h1><p>Compare quality signals across the catalog before opening an individual pipeline.</p></div>
+        <div className="heading-actions"><button className="button ghost" onClick={() => onNavigate("datasets")}>Dataset catalog →</button><button className="button primary" onClick={() => onNavigate("visualization")}>Open observatory →</button></div>
       </div>
-      <section className="dataset-hero">
-        <div className="dataset-icon">⌁</div>
-        <div className="dataset-copy">
-          <div className="title-line">
-            <h2>{dataset.name}</h2>
-            <StatusPill
-              label={
-                dataset.status === "PROFILE_READY"
-                  ? "PROFILE READY"
-                  : "REGISTERED"
-              }
-              tone={dataset.status === "PROFILE_READY" ? "success" : "info"}
-            />
-          </div>
-          <p>{dataset.description}</p>
-          <div className="dataset-meta">
-            <span>▦ {dataset.row_count.toLocaleString()} rows</span>
-            <span>◌ {dataset.source_label}</span>
-            <span>◇ {dataset.manifest_version}</span>
-          </div>
-        </div>
-        <div className="dataset-action">
-          {canOperate &&
-            (!profile ? (
-              <button
-                className="button primary"
-                onClick={onStartAnalysis}
-                disabled={busy}
-              >
-                Start analysis <span>→</span>
-              </button>
-            ) : (
-              <button
-                className="button secondary"
-                onClick={onRequestProposals}
-                disabled={busy}
-              >
-                Request rule proposals <span>→</span>
-              </button>
-            ))}
-        </div>
+      <section className="stat-grid overview-kpis">
+        <StatCard label="Datasets" value={`${datasets.length}`} detail="Registered in workspace" tone="green" />
+        <StatCard label="Profile ready" value={`${profileReadyCount}/${datasets.length}`} detail="Datasets with aggregate profile" tone="blue" />
+        <StatCard label="Rows tracked" value={totalRows.toLocaleString()} detail="Across registered datasets" tone="amber" />
+        <StatCard label="Average quality" value={averageQuality === null ? "—" : `${averageQuality.toFixed(1)}%`} detail={profiledRows.length ? `${profiledRows.length} profiled dataset${profiledRows.length === 1 ? "" : "s"}` : "Awaiting profile data"} tone="violet" />
       </section>
-      {!profile ? (
-        <section className="empty-state large">
-          <div className="empty-illustration">◌</div>
-          <span className="eyebrow">READY WHEN YOU ARE</span>
-          <h2>Start with a trusted profile</h2>
-          <p>
-            The Cloud Run job will validate the manifest, run the fixed dbt
-            stage and persist aggregate evidence for review.
-          </p>
-          {canOperate && (
-            <button
-              className="button primary"
-              onClick={onStartAnalysis}
-              disabled={loading || busy}
-            >
-              Start analysis →
-            </button>
-          )}
-          <div className="empty-steps">
-            <span>
-              <b>01</b> Ingest
-            </span>
-            <span>
-              <b>02</b> dbt build
-            </span>
-            <span>
-              <b>03</b> Profile
-            </span>
-          </div>
-        </section>
-      ) : (
-        <>
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">QUALITY SNAPSHOT</span>
-              <h2>Profile at a glance</h2>
-            </div>
-            <button className="text-button" onClick={() => onNavigate("audit")}>
-              View audit trail →
-            </button>
-          </div>
-          <section className="stat-grid">
-            <StatCard
-              label="Completeness"
-              value={`${profile.completeness_score}%`}
-              detail="Across profiled columns"
-              tone="green"
-            />
-            <StatCard
-              label="Validity"
-              value={`${profile.validity_score}%`}
-              detail="Contract checks passing"
-              tone="blue"
-            />
-            <StatCard
-              label="Duplicate rate"
-              value={`${profile.duplicate_rate}%`}
-              detail="Fingerprint collisions"
-              tone="amber"
-            />
-            <StatCard
-              label="Review queue"
-              value={`${proposalCount}`}
-              detail="Proposals awaiting Steward"
-              tone="violet"
-            />
-          </section>
-          <section className="two-column">
-            <div className="panel">
-              <div className="panel-heading">
-                <div>
-                  <span className="eyebrow">PROFILE EVIDENCE</span>
-                  <h3>Column quality</h3>
-                </div>
-                <span className="panel-caption">
-                  {profile.columns.length} tracked fields
-                </span>
-              </div>
-              <div className="column-list">
-                {profile.columns.map((column) => (
-                  <div className="column-row" key={column.name}>
-                    <div className="column-name">
-                      <strong>{column.name}</strong>
-                      <small>{column.data_type}</small>
-                    </div>
-                    <div className="column-bar">
-                      <span
-                        style={{
-                          width: `${Math.max(4, 100 - column.null_rate * 100)}%`,
-                        }}
-                      />
-                    </div>
-                    <strong
-                      className={column.null_rate > 0.01 ? "metric-warn" : ""}
-                    >
-                      {(100 - column.null_rate * 100).toFixed(1)}%
-                    </strong>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="panel next-panel">
-              <div className="panel-heading">
-                <div>
-                  <span className="eyebrow">NEXT ACTION</span>
-                  <h3>Review AI proposals</h3>
-                </div>
-                <span className="spark">✦</span>
-              </div>
-              <p>
-                Proposals are grounded in the aggregate evidence above. You
-                remain in control of every executable rule.
-              </p>
-              {proposalCount ? (
-                <>
-                  <div className="next-stat">
-                    <strong>{proposalCount}</strong>
-                    <span>typed proposals are ready</span>
-                  </div>
-                  <button
-                    className="button secondary full"
-                    onClick={() => onNavigate("rules")}
-                  >
-                    Open review queue →
-                  </button>
-                </>
-              ) : (
-                canOperate && (
-                  <button
-                    className="button secondary full"
-                    onClick={onRequestProposals}
-                    disabled={busy}
-                  >
-                    Generate proposals →
-                  </button>
-                )
-              )}
-            </div>
-          </section>
-        </>
-      )}
+      <section className="overview-grid">
+        <article className="panel overview-dataset-panel"><div className="panel-heading"><div><span className="eyebrow">CATALOG QUALITY MAP</span><h3>Quality by dataset</h3></div><span className="panel-caption">{datasets.length} registered</span></div><div className="overview-dataset-list">{qualityRows.map((row) => <div className={`overview-dataset-row ${row.dataset.id === dataset.id ? "active" : ""}`} key={row.dataset.id}><div className="overview-dataset-id"><span className="dataset-mini-icon">⌁</span><div><strong>{row.dataset.name}</strong><small>{row.dataset.source_label} · {row.dataset.row_count.toLocaleString()} rows</small></div></div><StatusPill label={row.dataset.status.replaceAll("_", " ")} tone={row.dataset.status === "PROFILE_READY" ? "success" : "info"} /><div className="overview-dataset-score">{row.score === null ? <span className="muted">Profile pending</span> : <><div className="overview-score-track"><span style={{ width: `${row.score}%` }} /></div><strong>{row.score.toFixed(1)}%</strong></>}</div></div>)}</div></article>
+        <article className="panel overview-status-panel"><div className="panel-heading"><div><span className="eyebrow">CATALOG STATUS</span><h3>Readiness distribution</h3></div><span className="panel-caption">{approvedRules} approved rules active</span></div><div className="overview-status-list">{statusRows.map((row) => <div className="overview-status-row" key={row.label}><div><span>{row.label}</span><strong>{row.count}</strong></div><div className="overview-status-track"><span style={{ width: `${(row.count / statusMax) * 100}%` }} /></div></div>)}</div><div className="overview-status-footer"><span>Review queue</span><strong>{proposalCount} pending</strong></div></article>
+      </section>
+      <section className="overview-chart-grid">
+        <article className="panel overview-trend-panel"><div className="panel-heading"><div><span className="eyebrow">ACTIVE DATASET TREND</span><h3>Quality score over time</h3></div><button className="text-button" onClick={() => onNavigate("visualization")}>Open full view →</button></div><TrendChart points={qualityTrends} /></article>
+        <article className="panel overview-compare-panel"><div className="panel-heading"><div><span className="eyebrow">QUALITY COMPARISON</span><h3>Completeness vs validity</h3></div><span className="panel-caption">Profiled datasets only</span></div><OverviewQualityBars rows={qualityRows} /></article>
+      </section>
+      <section className="overview-action-panel next-panel"><div><span className="eyebrow">NEXT ACTION</span><h3>{profile ? "Continue the active pipeline" : "Build the first profile"}</h3><p>{profile ? "The active dataset is profiled. Move into Rule proposer to review the next agent step." : "Run ingestion and profiling to make this dataset available for cross-dataset comparison."}</p></div><div className="overview-action-buttons">{canOperate && (!profile ? <button className="button secondary" onClick={onStartAnalysis} disabled={loading || busy}>Start profiling →</button> : proposalCount ? <button className="button secondary" onClick={() => onNavigate("rules")}>Open review queue →</button> : <button className="button secondary" onClick={onRequestProposals} disabled={busy}>Generate proposals →</button>)}<button className="button ghost" onClick={() => onNavigate("audit")}>View audit trail</button></div></section>
     </>
   );
+}
+
+function OverviewQualityBars({ rows }: { rows: Array<{ dataset: Dataset; profile: DatasetProfile | null; score: number | null }> }) {
+  return <div className="overview-quality-bars">{rows.map((row) => <div className="overview-quality-bar" key={row.dataset.id}><div className="overview-quality-label"><strong>{row.dataset.name}</strong><span>{row.score === null ? "Profile pending" : `${row.score.toFixed(1)}% overall`}</span></div><div className="overview-quality-lines"><div><span>Completeness</span><div className="overview-line-track"><i style={{ width: `${row.profile?.completeness_score ?? 0}%` }} /></div><strong>{row.profile ? `${row.profile.completeness_score.toFixed(1)}%` : "—"}</strong></div><div><span>Validity</span><div className="overview-line-track validity"><i style={{ width: `${row.profile?.validity_score ?? 0}%` }} /></div><strong>{row.profile ? `${row.profile.validity_score.toFixed(1)}%` : "—"}</strong></div></div></div>)}</div>;
 }
 
 function StatCard({
