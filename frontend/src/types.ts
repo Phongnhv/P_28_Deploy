@@ -151,6 +151,7 @@ export interface RuleProposal {
   model_name: string;
   created_at: string;
   updated_at: string;
+  source?: "AGENT" | "MANUAL";
 }
 
 export interface RuleConfiguration {
@@ -351,4 +352,5 @@ export interface ApiClient {
   listWorkflowArtifacts(workflowRunId: string): Promise<AgentArtifact[]>;
   reviewArtifact(artifactId: string, input: ArtifactReviewInput): Promise<AgentArtifact>;
   continueLoop(workflowRunId: string, input: LoopDecisionInput): Promise<WorkflowRun>;
+  rewindWorkflow(workflowRunId: string, targetStep: WorkflowStepKey): Promise<WorkflowRun>;
 }

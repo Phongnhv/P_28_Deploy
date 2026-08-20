@@ -483,6 +483,19 @@ nav { display: grid; gap: 3px; }
 .workflow-step-copy span, .workflow-step-copy small { color: var(--muted); font-size: .75rem; }
 .workflow-step-copy small { text-transform: uppercase; letter-spacing: .08em; }
 .workflow-step-copy em { color: var(--red); font-size: .75rem; font-style: normal; }
+.workflow-revisit { justify-self: start; margin-top: .2rem; padding: .2rem .45rem; border: 1px solid var(--border); border-radius: 6px; color: var(--accent-deep); background: var(--surface); font-size: .7rem; }
+.workflow-revisit:hover { border-color: var(--accent); background: var(--accent-soft); }
+.proposal-source { color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.dataset-catalog-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; }
+.dataset-catalog-card { display: grid; gap: .9rem; padding: 1.1rem; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
+.dataset-catalog-top, .dataset-catalog-actions { display: flex; align-items: center; justify-content: space-between; gap: .6rem; flex-wrap: wrap; }
+.dataset-catalog-card h2 { font-size: 1.1rem; letter-spacing: -.03em; }
+.dataset-catalog-card p { color: var(--muted); font-size: .86rem; line-height: 1.5; }
+.dataset-catalog-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: .8rem; padding-top: .9rem; border-top: 1px solid var(--border); }
+.dataset-catalog-stats div { display: grid; gap: .25rem; min-width: 0; }
+.dataset-catalog-stats span { color: var(--muted); font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; }
+.dataset-catalog-stats strong { overflow: hidden; color: var(--ink); font-size: .82rem; text-overflow: ellipsis; white-space: nowrap; }
+.dataset-profile-summary { display: grid; gap: 1rem; margin-top: 1rem; }
 .workflow-detail { min-width: 0; }
 .workflow-detail-heading { display: flex; justify-content: space-between; gap: 1rem; align-items: start; }
 .workflow-detail-heading h2 { margin: .3rem 0 .35rem; }

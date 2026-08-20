@@ -228,6 +228,10 @@ const workflowKeys: WorkflowStepKey[] = [
   "ANALYZE_IMPROVE",
 ];
 
+function workflowStepLabelsForMock(step: WorkflowStepKey) {
+  return step.replaceAll("_", " ").toLowerCase();
+}
+
 function makeWorkflow(id: string): WorkflowRun {
   const steps: WorkflowStep[] = workflowKeys.map((key, index) => ({
     key,
@@ -273,28 +277,29 @@ function createArtifact(workflow: WorkflowRun, type: AgentArtifact["type"], agen
 function completeWorkflowStep(workflowId: string, step: WorkflowStepKey) {
   const workflow = workflowRuns.find((item) => item.id === workflowId);
   if (!workflow || workflow.current_step !== step) return;
+  let generatedArtifact: AgentArtifact | undefined;
   if (step === "UPLOAD_PROFILE") {
     dataset.status = "PROFILE_READY";
   } else if (step === "UNDERSTAND_DATA") {
-    createArtifact(workflow, "SEMANTIC_CONTRACT", "DATA_RULE_AGENT", {
+    generatedArtifact = createArtifact(workflow, "SEMANTIC_CONTRACT", "DATA_RULE_AGENT", {
       summary: "Mobility trip dataset with timestamps, numeric measures and a controlled payment vocabulary.",
       columns: profile.columns.map((column) => ({ name: column.name, semantic_type: column.data_type === "numeric" ? "measure" : column.data_type === "timestamp" ? "event_time" : "category", confidence: 0.9 })),
       evidence: profile.evidence_keys,
     });
   } else if (step === "PROPOSE_RULES") {
-    createArtifact(workflow, "RULE_SET", "DATA_RULE_AGENT", {
+    generatedArtifact = createArtifact(workflow, "RULE_SET", "DATA_RULE_AGENT", {
       proposal_count: proposals.length,
       rules: proposals.map((proposal) => ({ id: proposal.id, title: proposal.title, evidence: proposal.evidence_refs, confidence: proposal.confidence })),
     }, "DRAFT");
   } else if (step === "PROPOSE_CODE") {
-    createArtifact(workflow, "CODE_PROPOSAL", "STANDARDIZATION_AGENT", {
+    generatedArtifact = createArtifact(workflow, "CODE_PROPOSAL", "STANDARDIZATION_AGENT", {
       language: "SQL",
       target: "staging.normalized_dataset",
       changes: ["trim categorical values", "normalize timestamps to UTC", "preserve raw columns"],
       validation: { deterministic: true, destructive: false },
     }, "DRAFT");
   } else if (step === "ANALYZE_IMPROVE") {
-    createArtifact(workflow, "LOOP_RECOMMENDATION", "LOOP_AGENT", {
+    generatedArtifact = createArtifact(workflow, "LOOP_RECOMMENDATION", "LOOP_AGENT", {
       hypothesis: "Negative distance violations are concentrated in a small cohort and should be reviewed before relaxing the rule.",
       supporting_signals: ["HIGH_VIOLATION_RATE", "profile.trip_distance.negative_rate"],
       next_action: "Review the range rule and rerun the bounded check.",
@@ -304,7 +309,7 @@ function completeWorkflowStep(workflowId: string, step: WorkflowStepKey) {
   if (waitingApproval && step !== "ANALYZE_IMPROVE") {
     advanceWorkflow(workflow, step);
     const reviewStep = step === "PROPOSE_RULES" ? "REVIEW_RULES" : "REVIEW_EXECUTE";
-    workflow.steps = workflow.steps.map((item) => item.key === reviewStep ? { ...item, status: "WAITING_APPROVAL" } : item);
+    workflow.steps = workflow.steps.map((item) => item.key === reviewStep ? { ...item, status: "WAITING_APPROVAL", artifact_ids: generatedArtifact ? [...item.artifact_ids, generatedArtifact.id] : item.artifact_ids } : item);
   } else if (waitingApproval) {
     workflow.steps = workflow.steps.map((item) => item.key === step ? { ...item, status: "WAITING_APPROVAL" } : item);
   } else {
@@ -362,7 +367,7 @@ export const mockApi: ApiClient = {
   },
   async createManualRule(id, input: ManualRuleInput) {
     if (id !== datasetId) throw new Error("Dataset not found.");
-    const proposal: RuleProposal = { id: `manual-${Date.now()}`, dataset_id: datasetId, ...input, status: "PROPOSED", evidence_refs: [], evidence_summary: "Manually authored by the Data Steward; no agent evidence attached.", confidence: 1, model_name: "manual", created_at: now(), updated_at: now() };
+    const proposal: RuleProposal = { id: `manual-${Date.now()}`, dataset_id: datasetId, ...input, status: "PROPOSED", source: "MANUAL", evidence_refs: [], evidence_summary: "Manually authored by the Data Steward; no agent evidence attached.", confidence: 1, model_name: "manual", created_at: now(), updated_at: now() };
     proposals = [...proposals, proposal];
     addAudit("MANUAL_RULE_CREATED", "rule_proposal", proposal.id, `Created manual rule “${proposal.title}”.`);
     return proposal;
@@ -541,6 +546,11 @@ export const mockApi: ApiClient = {
     if (!existing) throw new Error("Workflow artifact not found.");
     const workflow = workflowRuns.find((item) => item.id === existing.workflow_run_id);
     if (!workflow) throw new Error("Workflow run not found.");
+    if (existing.type === "RULE_SET" && input.action === "approve") {
+      const unresolved = proposals.some((proposal) => ["PROPOSED", "EDITED"].includes(proposal.status));
+      if (unresolved) throw new Error("Decide every proposed rule before confirming the rule set.");
+      if (!proposals.some((proposal) => proposal.status === "APPROVED")) throw new Error("At least one rule must be approved before continuing.");
+    }
     const status: AgentArtifact["status"] = input.action === "approve" ? "APPROVED" : input.action === "reject" ? "REJECTED" : "DRAFT";
     const updated = { ...existing, status };
     workflowArtifacts = workflowArtifacts.map((item) => item.id === id ? updated : item);
@@ -567,6 +577,26 @@ export const mockApi: ApiClient = {
     }
     workflowRuns = workflowRuns.map((item) => item.id === id ? workflow : item);
     addAudit("LOOP_DECISION", "workflow", id, `${input.action} loop at iteration ${workflow.iteration}.`);
+    return structuredClone(workflow);
+  },
+  async rewindWorkflow(id: string, targetStep: WorkflowStepKey) {
+    await wait(180);
+    const workflow = workflowRuns.find((item) => item.id === id);
+    if (!workflow) throw new Error("Workflow run not found.");
+    const targetIndex = workflow.steps.findIndex((item) => item.key === targetStep);
+    if (targetIndex < 0) throw new Error("Target workflow step not found.");
+    const currentIndex = workflow.steps.findIndex((item) => item.key === workflow.current_step);
+    if (targetIndex >= currentIndex && workflow.steps[targetIndex]?.status !== "STALE") throw new Error("Only a previous or stale step can be revisited.");
+    workflow.steps = workflow.steps.map((item, index) => {
+      if (index < targetIndex) return item;
+      if (index === targetIndex) return { ...item, status: "READY", blocker: undefined };
+      return { ...item, status: "STALE", blocker: `Upstream change requires rerunning ${workflowStepLabelsForMock(targetStep)}.` };
+    });
+    const staleIds = new Set(workflow.steps.slice(targetIndex).flatMap((item) => item.artifact_ids));
+    workflowArtifacts = workflowArtifacts.map((artifact) => staleIds.has(artifact.id) ? { ...artifact, status: "STALE" } : artifact);
+    workflow.current_step = targetStep;
+    workflowRuns = workflowRuns.map((item) => item.id === id ? workflow : item);
+    addAudit("WORKFLOW_REWOUND", "workflow", id, `Revisited ${targetStep}; downstream stages were marked stale.`);
     return structuredClone(workflow);
   },
 };

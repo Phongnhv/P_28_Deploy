@@ -33,7 +33,7 @@ import type {
   WorkflowStepKey,
 } from "./types";
 
-type View = "overview" | "workflow" | "rules" | "runs" | "visualization" | "data" | "audit" | "admin";
+type View = "overview" | "workflow" | "datasets" | "rules" | "runs" | "visualization" | "data" | "audit" | "admin";
 
 const sleep = (duration: number) =>
   new Promise((resolve) => window.setTimeout(resolve, duration));
@@ -219,6 +219,22 @@ const workflowStepLabels: Record<WorkflowStepKey, { label: string; owner: string
   ANALYZE_IMPROVE: { label: "Analyze and improve", owner: "Loop Agent", description: "Explain results and propose a bounded next iteration." },
 };
 
+function DatasetsPage({
+  datasets,
+  profile,
+  onOpenPipeline,
+  onOpenExplorer,
+  onUploadPreview,
+}: {
+  datasets: Dataset[];
+  profile: DatasetProfile | null;
+  onOpenPipeline: () => void;
+  onOpenExplorer: () => void;
+  onUploadPreview: () => void;
+}) {
+  return <div className="datasets-page"><div className="page-heading"><div><span className="eyebrow">DATASET CATALOG</span><h1>Registered datasets</h1><p>Choose an artifact to inspect its profile or start a pipeline run.</p></div><button className="button secondary" onClick={onUploadPreview}>Upload dataset</button></div>{datasets.length ? <div className="dataset-catalog-grid">{datasets.map((item) => <article className="dataset-catalog-card" key={item.id}><div className="dataset-catalog-top"><StatusPill label={item.status.replaceAll("_", " ")} tone={item.status === "PROFILE_READY" ? "success" : "info"} /><code>{item.manifest_version}</code></div><h2>{item.name}</h2><p>{item.description}</p><div className="dataset-catalog-stats"><div><span>Rows</span><strong>{item.row_count.toLocaleString()}</strong></div><div><span>Source</span><strong>{item.source_label}</strong></div><div><span>Updated</span><strong>{formatTime(item.updated_at)}</strong></div></div><div className="dataset-catalog-actions"><button className="button primary" onClick={onOpenPipeline}>Open pipeline</button><button className="button ghost" onClick={onOpenExplorer}>View data</button></div></article>)}</div> : <div className="empty-state"><h2>No datasets registered.</h2><p className="muted">Upload a CSV or Parquet artifact to begin.</p><button className="button primary" onClick={onUploadPreview}>Upload dataset</button></div>}{profile && <section className="panel dataset-profile-summary"><div className="panel-heading"><div><span className="eyebrow">ACTIVE DATASET PROFILE</span><h3>Aggregate signals</h3></div><button className="button ghost" onClick={onOpenPipeline}>Run pipeline</button></div><div className="dataset-catalog-stats"><div><span>Completeness</span><strong>{profile.completeness_score.toFixed(1)}%</strong></div><div><span>Validity</span><strong>{profile.validity_score.toFixed(1)}%</strong></div><div><span>Duplicate rate</span><strong>{profile.duplicate_rate.toFixed(2)}%</strong></div><div><span>Columns</span><strong>{profile.columns.length}</strong></div></div></section>}</div>;
+}
+
 function workflowArtifactForStep(workflow: WorkflowRun, artifacts: AgentArtifact[], step: WorkflowStepKey) {
   const ids = workflow.steps.find((item) => item.key === step)?.artifact_ids ?? [];
   return [...artifacts].reverse().find((artifact) => ids.includes(artifact.id));
@@ -228,20 +244,38 @@ function WorkflowPage({
   dataset,
   workflow,
   artifacts,
+  proposals,
+  configurations,
   activeJob,
   canOperate,
   onStartStep,
   onReviewArtifact,
   onLoopDecision,
+  onApproveRule,
+  onRejectRule,
+  onEditRule,
+  onDeleteRule,
+  onSaveConfiguration,
+  onCreateManualRule,
+  onRewindStep,
 }: {
   dataset?: Dataset;
   workflow: WorkflowRun | null;
   artifacts: AgentArtifact[];
+  proposals: RuleProposal[];
+  configurations: RuleConfiguration[];
   activeJob: Job | null;
   canOperate: boolean;
   onStartStep: (step: WorkflowStepKey) => void;
   onReviewArtifact: (artifactId: string, input: ArtifactReviewInput) => void;
   onLoopDecision: (input: LoopDecisionInput) => void;
+  onApproveRule: (id: string) => void;
+  onRejectRule: (id: string) => void;
+  onEditRule: (proposal: RuleProposal) => void;
+  onDeleteRule: (id: string) => void;
+  onSaveConfiguration: (id: string, input: RuleConfigurationInput) => void;
+  onCreateManualRule: () => void;
+  onRewindStep: (step: WorkflowStepKey) => void;
 }) {
   if (!dataset) {
     return <div className="empty-state"><span className="eyebrow">WORKFLOW</span><h2>Select a dataset to begin.</h2><p className="muted">The workflow will keep every agent artifact scoped to the selected dataset.</p></div>;
@@ -255,6 +289,7 @@ function WorkflowPage({
   const isRunning = Boolean(activeJob) || currentStep?.status === "RUNNING";
   const canRun = canOperate && currentStep?.status === "READY" && !isRunning;
   const reviewable = currentStep?.status === "WAITING_APPROVAL" && currentArtifact && ["DRAFT", "VALIDATED"].includes(currentArtifact.status);
+  const rulesDecided = proposals.length > 0 && proposals.some((proposal) => proposal.status === "APPROVED") && proposals.every((proposal) => ["APPROVED", "REJECTED"].includes(proposal.status));
   const renderArtifact = () => {
     if (!currentArtifact || !payload) return <div className="workflow-artifact-empty">This step has not produced an artifact yet.</div>;
     if (currentArtifact.type === "CODE_PROPOSAL") return <><div className="artifact-code"><code>{`-- ${String(payload.target ?? "standardized_dataset")}`}</code><code>select * from source_dataset</code><code>-- normalize timestamps to UTC</code><code>-- trim controlled categorical values</code></div><div className="artifact-meta"><span>Deterministic: {String((payload.validation as Record<string, unknown> | undefined)?.deterministic ?? true)}</span><span>Destructive: {String((payload.validation as Record<string, unknown> | undefined)?.destructive ?? false)}</span></div></>;
@@ -262,7 +297,7 @@ function WorkflowPage({
     return <><p>{String(payload.summary ?? `${currentArtifact.type.replaceAll("_", " ")} generated by ${currentArtifact.agent_role}.`)}</p><div className="artifact-meta"><span>Version {currentArtifact.version}</span><span>{currentArtifact.status}</span>{Array.isArray(payload.evidence) && <span>{payload.evidence.length} evidence references</span>}{typeof payload.proposal_count === "number" && <span>{payload.proposal_count} typed rules</span>}</div></>;
   };
   const nextActionLabel = currentStep?.key === "UPLOAD_PROFILE" ? "Build profile" : currentStep?.key === "UNDERSTAND_DATA" ? "Run Agent 1 understanding" : currentStep?.key === "PROPOSE_RULES" ? "Generate rule proposals" : currentStep?.key === "PROPOSE_CODE" ? "Generate standardization code" : "Run current step";
-  return <div className="workflow-page"><div className="page-heading"><div><span className="eyebrow">WORKFLOW RUN {workflow.id}</span><h1>Dataset to decision</h1><p>{dataset.name} · iteration {workflow.iteration} of {workflow.max_iterations}</p></div><StatusPill label={isMockMode ? "Preview adapter" : "Connected API"} tone={isMockMode ? "info" : "success"} /></div><div className="workflow-layout"><aside className="workflow-stepper" aria-label="Workflow steps">{workflow.steps.map((step, index) => { const meta = workflowStepLabels[step.key]; return <div className={`workflow-step ${step.key === workflow.current_step ? "current" : ""} ${step.status.toLowerCase()}`} key={step.key}><div className="workflow-step-index">{step.status === "COMPLETED" ? "✓" : index + 1}</div><div className="workflow-step-copy"><strong>{meta.label}</strong><span>{meta.owner}</span><small>{step.status.replaceAll("_", " ")}</small>{step.blocker && <em>{step.blocker}</em>}</div></div>; })}</aside><section className="workflow-detail panel"><div className="workflow-detail-heading"><div><span className="eyebrow">CURRENT STEP</span><h2>{currentStep ? workflowStepLabels[currentStep.key].label : "Complete"}</h2><p className="muted">{currentStep ? workflowStepLabels[currentStep.key].description : "The workflow is complete."}</p></div>{currentStep && <StatusPill label={currentStep.status.replaceAll("_", " ")} tone={currentStep.status === "FAILED" ? "danger" : currentStep.status === "WAITING_APPROVAL" ? "warning" : currentStep.status === "COMPLETED" ? "success" : "info"} />}</div>{activeJob && <ProgressPanel job={activeJob} title={`Running ${workflowStepLabels[workflow.current_step].label}`} />}<div className="workflow-artifact"><div className="panel-heading"><div><span className="eyebrow">AGENT ARTIFACT</span><h3>{currentArtifact ? currentArtifact.type.replaceAll("_", " ") : "Waiting for output"}</h3></div>{currentArtifact && <StatusPill label={currentArtifact.status} tone={currentArtifact.status === "APPROVED" ? "success" : currentArtifact.status === "REJECTED" ? "danger" : "info"} />}</div>{renderArtifact()}</div><div className="workflow-actions">{currentStep && ["READY", "FAILED"].includes(currentStep.status) && <button className="button primary" disabled={!canRun} onClick={() => onStartStep(currentStep.key)}>{nextActionLabel}</button>}{reviewable && <><button className="button primary" disabled={!canOperate} onClick={() => onReviewArtifact(currentArtifact.id, { action: "approve" })}>Approve artifact</button><button className="button ghost" disabled={!canOperate} onClick={() => onReviewArtifact(currentArtifact.id, { action: "request_revision" })}>Request revision</button><button className="button danger" disabled={!canOperate} onClick={() => onReviewArtifact(currentArtifact.id, { action: "reject" })}>Reject</button></>}{currentStep?.key === "ANALYZE_IMPROVE" && currentStep.status === "WAITING_APPROVAL" && <><button className="button primary" disabled={!canOperate} onClick={() => onLoopDecision({ action: "continue" })}>Continue loop</button><button className="button ghost" disabled={!canOperate} onClick={() => onLoopDecision({ action: "stop" })}>Stop loop</button></>}{!canOperate && <span className="muted">Read-only role: review is disabled.</span>}</div></section></div></div>;
+  return <div className="workflow-page"><div className="page-heading"><div><span className="eyebrow">WORKFLOW RUN {workflow.id}</span><h1>Dataset to decision</h1><p>{dataset.name} · iteration {workflow.iteration} of {workflow.max_iterations}</p></div><StatusPill label={isMockMode ? "Preview adapter" : "Connected API"} tone={isMockMode ? "info" : "success"} /></div><div className="workflow-layout"><aside className="workflow-stepper" aria-label="Workflow steps">{workflow.steps.map((step, index) => { const meta = workflowStepLabels[step.key]; const canRevisit = step.status === "COMPLETED" && step.key !== workflow.current_step && !activeJob && canOperate; return <div className={`workflow-step ${step.key === workflow.current_step ? "current" : ""} ${step.status.toLowerCase()}`} key={step.key}><div className="workflow-step-index">{step.status === "COMPLETED" ? "✓" : index + 1}</div><div className="workflow-step-copy"><strong>{meta.label}</strong><span>{meta.owner}</span><small>{step.status.replaceAll("_", " ")}</small>{step.blocker && <em>{step.blocker}</em>}{canRevisit && <button className="workflow-revisit" onClick={() => onRewindStep(step.key)}>Revisit stage</button>}</div></div>; })}</aside><section className="workflow-detail panel"><div className="workflow-detail-heading"><div><span className="eyebrow">CURRENT STEP</span><h2>{currentStep ? workflowStepLabels[currentStep.key].label : "Complete"}</h2><p className="muted">{currentStep ? workflowStepLabels[currentStep.key].description : "The workflow is complete."}</p></div>{currentStep && <StatusPill label={currentStep.status.replaceAll("_", " ")} tone={currentStep.status === "FAILED" ? "danger" : currentStep.status === "WAITING_APPROVAL" ? "warning" : currentStep.status === "COMPLETED" ? "success" : "info"} />}</div>{activeJob && <ProgressPanel job={activeJob} title={`Running ${workflowStepLabels[workflow.current_step].label}`} />}<div className="workflow-artifact"><div className="panel-heading"><div><span className="eyebrow">AGENT ARTIFACT</span><h3>{currentArtifact ? currentArtifact.type.replaceAll("_", " ") : "Waiting for output"}</h3></div>{currentArtifact && <StatusPill label={currentArtifact.status} tone={currentArtifact.status === "APPROVED" ? "success" : currentArtifact.status === "REJECTED" ? "danger" : "info"} />}</div>{renderArtifact()}</div>{currentStep?.key === "REVIEW_RULES" && <RulesPage proposals={proposals} configurations={configurations} profileReady busy={Boolean(activeJob)} canOperate={canOperate} onRequestProposals={() => undefined} onApprove={onApproveRule} onReject={onRejectRule} onEdit={onEditRule} onDelete={onDeleteRule} onSaveConfiguration={onSaveConfiguration} onCreateManual={onCreateManualRule} onRun={() => undefined} pipelineMode /> }<div className="workflow-actions">{currentStep && ["READY", "FAILED"].includes(currentStep.status) && <button className="button primary" disabled={!canRun} onClick={() => onStartStep(currentStep.key)}>{nextActionLabel}</button>}{reviewable && <><button className="button primary" disabled={!canOperate || (currentStep?.key === "REVIEW_RULES" && !rulesDecided)} onClick={() => onReviewArtifact(currentArtifact.id, { action: "approve" })}>Confirm stage and continue</button>{currentStep?.key === "REVIEW_RULES" && !rulesDecided && <span className="muted">Decide every rule and keep at least one approved rule before continuing.</span>}<button className="button ghost" disabled={!canOperate} onClick={() => onReviewArtifact(currentArtifact.id, { action: "request_revision" })}>Request revision</button><button className="button danger" disabled={!canOperate} onClick={() => onReviewArtifact(currentArtifact.id, { action: "reject" })}>Reject artifact</button></>}{currentStep?.key === "ANALYZE_IMPROVE" && currentStep.status === "WAITING_APPROVAL" && <><button className="button primary" disabled={!canOperate} onClick={() => onLoopDecision({ action: "continue" })}>Continue loop</button><button className="button ghost" disabled={!canOperate} onClick={() => onLoopDecision({ action: "stop" })}>Stop loop</button></>}{!canOperate && <span className="muted">Read-only role: review is disabled.</span>}</div></section></div></div>;
 }
 
 function App() {
@@ -649,6 +684,20 @@ function App() {
     }
   }
 
+  async function rewindWorkflowStage(targetStep: WorkflowStepKey) {
+    if (!workflow || !canOperate || activeJob) return;
+    const label = workflowStepLabels[targetStep].label;
+    if (!window.confirm(`Revisit ${label}? Downstream stages will be marked stale and need to run again.`)) return;
+    try {
+      const nextWorkflow = await api.rewindWorkflow(workflow.id, targetStep);
+      setWorkflow(nextWorkflow);
+      setWorkflowArtifacts(await api.listWorkflowArtifacts(workflow.id));
+      setToast(`Revisited ${label}. Downstream stages are marked stale.`);
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to revisit workflow stage."));
+    }
+  }
+
   if (!authenticated)
     return (
       <LoginScreen onLogin={handleLogin} busy={loginBusy} error={loginError} />
@@ -664,7 +713,7 @@ function App() {
         </div>
         <div className="sidebar-label">WORKSPACE</div>
         <nav>
-          {(["overview", "workflow", "rules", "runs", "visualization", "data", "audit", ...(canAdmin ? ["admin" as View] : [])] as View[]).map((item) => (
+          {(["overview", "workflow", "datasets", "audit", ...(canAdmin ? ["admin" as View] : [])] as View[]).map((item) => (
             <button
               key={item}
               className={`nav-item ${view === item ? "active" : ""}`}
@@ -675,6 +724,8 @@ function App() {
                   ? "◈"
                   : item === "workflow"
                     ? "↯"
+                  : item === "datasets"
+                    ? "▦"
                   : item === "rules"
                     ? "✦"
                     : item === "runs"
@@ -689,6 +740,8 @@ function App() {
                 ? "Overview"
                 : item === "workflow"
                   ? "Agent workflow"
+                : item === "datasets"
+                  ? "Datasets"
                 : item === "rules"
                   ? "Rule proposals"
                   : item === "runs"
@@ -746,6 +799,8 @@ function App() {
                 ? "Overview"
                 : view === "workflow"
                   ? "Agent workflow"
+                : view === "datasets"
+                  ? "Datasets"
                 : view === "rules"
                   ? "Rule proposals"
                   : view === "runs"
@@ -838,11 +893,29 @@ function App() {
               dataset={dataset}
               workflow={workflow}
               artifacts={workflowArtifacts}
+              proposals={proposals}
+              configurations={ruleConfigurations}
               activeJob={activeJob}
               canOperate={canOperate}
               onStartStep={(step) => void startWorkflowStep(step)}
               onReviewArtifact={(id, input) => void reviewWorkflowArtifact(id, input)}
               onLoopDecision={(input) => void decideWorkflowLoop(input)}
+              onApproveRule={(id) => void reviewProposal(id, "approve")}
+              onRejectRule={(id) => void reviewProposal(id, "reject")}
+              onEditRule={setEditingProposal}
+              onDeleteRule={(id) => void deleteProposal(id)}
+              onSaveConfiguration={(id, input) => void saveRuleConfiguration(id, input)}
+              onCreateManualRule={() => setManualRuleOpen(true)}
+              onRewindStep={(step) => void rewindWorkflowStage(step)}
+            />
+          )}
+          {view === "datasets" && (
+            <DatasetsPage
+              datasets={datasets}
+              profile={profile}
+              onOpenPipeline={() => setView("workflow")}
+              onOpenExplorer={() => setView("data")}
+              onUploadPreview={() => setToast("Upload flow is ready for the backend upload contract; this local preview keeps the current dataset unchanged.")}
             />
           )}
           {view === "rules" && (
@@ -1186,6 +1259,7 @@ function RulesPage({
   onSaveConfiguration,
   onCreateManual,
   onRun,
+  pipelineMode = false,
 }: {
   proposals: RuleProposal[];
   configurations: RuleConfiguration[];
@@ -1200,6 +1274,7 @@ function RulesPage({
   onSaveConfiguration: (id: string, input: RuleConfigurationInput) => void;
   onCreateManual: () => void;
   onRun: () => void;
+  pipelineMode?: boolean;
 }) {
   const [expandedConfigurationId, setExpandedConfigurationId] = useState<string | null>(null);
   const pending = proposals.filter((proposal) =>
@@ -1212,9 +1287,9 @@ function RulesPage({
     <>
       <div className="page-heading">
         <div>
-          <span className="eyebrow">HUMAN-IN-THE-LOOP</span>
-          <h1>Rule proposals</h1>
-          <p>Review agent suggestions or author a typed rule manually.</p>
+          <span className="eyebrow">{pipelineMode ? "PIPELINE STAGE 4" : "HUMAN-IN-THE-LOOP"}</span>
+          <h1>{pipelineMode ? "Review rules before code generation" : "Rule proposals"}</h1>
+          <p>{pipelineMode ? "Accept, edit, reject or add a manual rule. Agent 2 stays locked until this set is approved." : "Review agent suggestions or author a typed rule manually."}</p>
         </div>
         <div className="heading-actions">
           {canOperate && (
@@ -1222,13 +1297,7 @@ function RulesPage({
               + Add manual rule
             </button>
           )}
-          <button
-            className="button primary"
-            onClick={onRun}
-            disabled={!approved.length || busy || !canOperate}
-          >
-            Run approved rules <span>→</span>
-          </button>
+          {!pipelineMode && <button className="button primary" onClick={onRun} disabled={!approved.length || busy || !canOperate}>Run approved rules <span>→</span></button>}
         </div>
       </div>
       {!profileReady ? (
@@ -1351,6 +1420,7 @@ function ProposalCard({
           <span>✦</span>
           {proposal.rule.type.replaceAll("_", " ")}
         </div>
+        <span className="proposal-source">{proposal.source === "MANUAL" ? "Manual rule" : "Agent proposal"}</span>
         <StatusPill label={proposal.status} tone={tone} />
         <span className={`severity ${proposal.severity.toLowerCase()}`}>
           {proposal.severity} severity

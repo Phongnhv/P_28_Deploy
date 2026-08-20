@@ -247,4 +247,10 @@ export const realApiClient: ApiClient = {
       body: JSON.stringify(input),
     });
   },
+  rewindWorkflow(workflowRunId: string, targetStep: WorkflowStepKey) {
+    return request<WorkflowRun>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}/rewind`, {
+      method: "POST",
+      body: JSON.stringify({ target_step: targetStep }),
+    });
+  },
 };
