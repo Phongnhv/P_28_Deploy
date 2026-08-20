@@ -121,6 +121,7 @@ nav { display: grid; gap: 3px; }
 .dev-banner span:first-child { color: #59421a; font-weight: 750; }
 .dev-banner code { margin-left: auto; color: #705526; }
 .page-heading { display: flex; align-items: end; justify-content: space-between; gap: 30px; margin-bottom: 29px; }
+.page-heading-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
 .page-heading h1 { max-width: 20ch; margin: 9px 0 8px; color: var(--ink); font-size: clamp(2rem, 3vw, 3rem); font-weight: 730; letter-spacing: -.065em; line-height: 1; text-wrap: balance; }
 .page-heading p { max-width: 56ch; color: var(--muted); font-size: 14px; line-height: 1.6; }
 .heading-date { display: grid; gap: 5px; min-width: 102px; padding-bottom: 5px; text-align: right; }
