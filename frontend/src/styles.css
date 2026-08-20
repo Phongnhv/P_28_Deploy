@@ -526,6 +526,19 @@ nav { display: grid; gap: 3px; }
 .workflow-detail-heading h2 { margin: .3rem 0 .35rem; }
 .workflow-artifact { border: 1px solid var(--border); border-radius: 12px; padding: 1rem; background: var(--surface-muted); }
 .workflow-artifact-empty { color: var(--muted); padding: 1rem 0; }
+.understanding-holder { display: grid; gap: 1rem; }
+.understanding-summary { display: grid; gap: .45rem; }
+.understanding-summary p { max-width: 72ch; color: var(--ink-soft); line-height: 1.55; }
+.understanding-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .7rem; }
+.understanding-meta > div { display: grid; gap: .2rem; min-width: 0; padding: .7rem .75rem; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.understanding-meta span, .schema-row small { color: var(--muted); font-size: .7rem; }
+.understanding-meta strong { overflow: hidden; color: var(--ink); font-size: .85rem; text-overflow: ellipsis; white-space: nowrap; }
+.understanding-section { display: grid; gap: .65rem; padding-top: .85rem; border-top: 1px solid var(--border); }
+.schema-list { display: grid; gap: .45rem; }
+.schema-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(100px, .8fr) minmax(120px, .8fr); align-items: center; gap: .75rem; padding: .6rem .7rem; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.schema-row strong { overflow: hidden; color: var(--ink); font-size: .8rem; text-overflow: ellipsis; white-space: nowrap; }
+.schema-row span { color: var(--accent-deep); font-size: .75rem; font-weight: 700; }
+.schema-row small { text-align: right; }
 .artifact-meta { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin-top: .9rem; color: var(--muted); font-size: .8rem; }
 .artifact-code { display: grid; gap: .45rem; padding: 1rem; border-radius: 8px; background: #101719; color: #d9f9e7; overflow-x: auto; }
 .artifact-code code { font: .82rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre; }
@@ -538,4 +551,7 @@ nav { display: grid; gap: 3px; }
   .workflow-intro, .rule-proposer-start, .workflow-layout { grid-template-columns: 1fr; }
   .workflow-intro-actions { justify-items: stretch; }
   .workflow-detail-heading { flex-direction: column; }
+  .understanding-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .schema-row { grid-template-columns: minmax(0, 1fr) minmax(100px, .8fr); }
+  .schema-row small { grid-column: 1 / -1; text-align: left; }
 }

@@ -594,7 +594,15 @@ export const mockApi: ApiClient = {
     const targetIndex = workflow.steps.findIndex((item) => item.key === targetStep);
     if (targetIndex < 0) throw new Error("Target workflow step not found.");
     const currentIndex = workflow.steps.findIndex((item) => item.key === workflow.current_step);
-    if (targetIndex >= currentIndex || workflow.steps[targetIndex]?.status !== "COMPLETED") throw new Error("Only a completed previous step can be revisited.");
+    if (targetIndex === currentIndex) return structuredClone(workflow);
+    const target = workflow.steps[targetIndex];
+    if (target.temporary) {
+      workflow.current_step = targetStep;
+      workflowRuns = workflowRuns.map((item) => item.id === id ? workflow : item);
+      addAudit("WORKFLOW_SESSION_VIEWED", "workflow", id, `Viewed preserved ${targetStep} session.`);
+      return structuredClone(workflow);
+    }
+    if (targetIndex < currentIndex && !["COMPLETED", "READY"].includes(target.status)) throw new Error("This workflow stage is not available for navigation.");
     const temporaryArtifactIds = new Set(workflow.steps.slice(targetIndex + 1).flatMap((item) => item.artifact_ids));
     workflow.steps = workflow.steps.map((item, index) => index === targetIndex
       ? { ...item, status: "READY", temporary: false, blocker: undefined }
