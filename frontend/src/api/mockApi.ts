@@ -228,10 +228,6 @@ const workflowKeys: WorkflowStepKey[] = [
   "ANALYZE_IMPROVE",
 ];
 
-function workflowStepLabelsForMock(step: WorkflowStepKey) {
-  return step.replaceAll("_", " ").toLowerCase();
-}
-
 function makeWorkflow(id: string, workflowDatasetId = datasetId): WorkflowRun {
   const steps: WorkflowStep[] = workflowKeys.map((key, index) => ({
     key,
@@ -257,6 +253,17 @@ function addWorkflowArtifact(workflow: WorkflowRun, artifact: AgentArtifact) {
   workflow.steps = workflow.steps.map((step) => step.key === workflow.current_step
     ? { ...step, artifact_ids: [...step.artifact_ids, artifact.id] }
     : step);
+}
+
+function clearTemporaryDownstreamSessions(workflow: WorkflowRun, targetStep: WorkflowStepKey) {
+  const targetIndex = workflow.steps.findIndex((step) => step.key === targetStep);
+  if (targetIndex < 0 || !workflow.steps.some((step, index) => index > targetIndex && step.temporary)) return;
+  const downstreamArtifactIds = new Set(workflow.steps.slice(targetIndex + 1).flatMap((step) => step.artifact_ids));
+  workflowArtifacts = workflowArtifacts.filter((artifact) => !downstreamArtifactIds.has(artifact.id));
+  workflow.steps = workflow.steps.map((step, index) => index > targetIndex
+    ? { ...step, status: "LOCKED", artifact_ids: [], temporary: false, blocker: undefined, started_at: undefined, completed_at: undefined }
+    : { ...step, temporary: false });
+  addAudit("WORKFLOW_TEMP_SESSIONS_CLEARED", "workflow", workflow.id, `Cleared temporary sessions after ${targetStep}.`);
 }
 
 function createArtifact(workflow: WorkflowRun, type: AgentArtifact["type"], agentRole: AgentArtifact["agent_role"], payload: unknown, status: AgentArtifact["status"] = "VALIDATED") {
@@ -530,6 +537,7 @@ export const mockApi: ApiClient = {
     if (workflow.current_step !== step) throw new Error(`Step ${step} is not ready. Complete ${workflow.current_step} first.`);
     const current = workflow.steps.find((item) => item.key === step);
     if (!current || !["READY", "FAILED"].includes(current.status)) throw new Error("This workflow step is waiting for review.");
+    clearTemporaryDownstreamSessions(workflow, step);
     workflow.steps = workflow.steps.map((item) => item.key === step ? { ...item, status: "RUNNING", started_at: now() } : item);
     const job = makeJob(step === "UPLOAD_PROFILE" ? "INGEST_PROFILE" : step === "PROPOSE_RULES" ? "PROPOSE_RULES" : "RUN_DQ");
     void finishJob(job.id, job.type).then(() => completeWorkflowStep(id, step));
@@ -550,11 +558,12 @@ export const mockApi: ApiClient = {
       if (unresolved) throw new Error("Decide every proposed rule before confirming the rule set.");
       if (!proposals.some((proposal) => proposal.status === "APPROVED")) throw new Error("At least one rule must be approved before continuing.");
     }
+    const approvalStep = existing.type === "RULE_SET" ? "REVIEW_RULES" : existing.type === "CODE_PROPOSAL" ? "REVIEW_EXECUTE" : existing.type === "LOOP_RECOMMENDATION" ? "ANALYZE_IMPROVE" : null;
+    if (input.action === "approve" && approvalStep && workflow.current_step === approvalStep) clearTemporaryDownstreamSessions(workflow, approvalStep);
     const status: AgentArtifact["status"] = input.action === "approve" ? "APPROVED" : input.action === "reject" ? "REJECTED" : "DRAFT";
     const updated = { ...existing, status };
     workflowArtifacts = workflowArtifacts.map((item) => item.id === id ? updated : item);
     if (input.action === "approve") {
-      const approvalStep = existing.type === "RULE_SET" ? "REVIEW_RULES" : existing.type === "CODE_PROPOSAL" ? "REVIEW_EXECUTE" : existing.type === "LOOP_RECOMMENDATION" ? "ANALYZE_IMPROVE" : null;
       if (approvalStep && workflow.current_step === approvalStep) advanceWorkflow(workflow, approvalStep);
     }
     workflowRuns = workflowRuns.map((item) => item.id === workflow.id ? workflow : item);
@@ -585,17 +594,17 @@ export const mockApi: ApiClient = {
     const targetIndex = workflow.steps.findIndex((item) => item.key === targetStep);
     if (targetIndex < 0) throw new Error("Target workflow step not found.");
     const currentIndex = workflow.steps.findIndex((item) => item.key === workflow.current_step);
-    if (targetIndex >= currentIndex && workflow.steps[targetIndex]?.status !== "STALE") throw new Error("Only a previous or stale step can be revisited.");
-    workflow.steps = workflow.steps.map((item, index) => {
-      if (index < targetIndex) return item;
-      if (index === targetIndex) return { ...item, status: "READY", blocker: undefined };
-      return { ...item, status: "STALE", blocker: `Upstream change requires rerunning ${workflowStepLabelsForMock(targetStep)}.` };
-    });
-    const staleIds = new Set(workflow.steps.slice(targetIndex).flatMap((item) => item.artifact_ids));
-    workflowArtifacts = workflowArtifacts.map((artifact) => staleIds.has(artifact.id) ? { ...artifact, status: "STALE" } : artifact);
+    if (targetIndex >= currentIndex || workflow.steps[targetIndex]?.status !== "COMPLETED") throw new Error("Only a completed previous step can be revisited.");
+    const temporaryArtifactIds = new Set(workflow.steps.slice(targetIndex + 1).flatMap((item) => item.artifact_ids));
+    workflow.steps = workflow.steps.map((item, index) => index === targetIndex
+      ? { ...item, status: "READY", temporary: false, blocker: undefined }
+      : index > targetIndex
+        ? { ...item, temporary: true, blocker: undefined }
+        : item);
+    workflowArtifacts = workflowArtifacts.map((artifact) => temporaryArtifactIds.has(artifact.id) ? { ...artifact, temporary: true } : artifact);
     workflow.current_step = targetStep;
     workflowRuns = workflowRuns.map((item) => item.id === id ? workflow : item);
-    addAudit("WORKFLOW_REWOUND", "workflow", id, `Revisited ${targetStep}; downstream stages were marked stale.`);
+    addAudit("WORKFLOW_REWOUND", "workflow", id, `Returned to ${targetStep}; downstream sessions were kept temporarily.`);
     return structuredClone(workflow);
   },
 };

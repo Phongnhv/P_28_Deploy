@@ -283,6 +283,8 @@ export interface WorkflowStep {
   key: WorkflowStepKey;
   status: WorkflowStepStatus;
   artifact_ids: string[];
+  /** A preserved downstream session awaiting confirmation that the upstream stage changed. */
+  temporary?: boolean;
   blocker?: string;
   started_at?: string;
   completed_at?: string;
@@ -295,6 +297,8 @@ export interface AgentArtifact {
   type: AgentArtifactType;
   version: number;
   status: "DRAFT" | "VALIDATED" | "APPROVED" | "REJECTED" | "STALE";
+  /** Artifact is retained as a temporary downstream session after a rewind. */
+  temporary?: boolean;
   payload: unknown;
   created_at: string;
 }

@@ -493,10 +493,14 @@ nav { display: grid; gap: 3px; }
 .rule-proposer-actions small { color: #aebbd1; }
 .workflow-layout { display: grid; grid-template-columns: minmax(220px, .34fr) minmax(0, 1fr); gap: 1.25rem; align-items: start; }
 .workflow-stepper { display: grid; gap: .35rem; }
-.workflow-step { display: grid; grid-template-columns: 32px 1fr; gap: .7rem; padding: .85rem .8rem; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); opacity: .62; }
+.workflow-step { display: grid; grid-template-columns: 32px 1fr; gap: .7rem; width: 100%; padding: .85rem .8rem; border: 1px solid var(--border); border-radius: 12px; color: inherit; background: var(--surface); font: inherit; text-align: left; opacity: .62; }
 .workflow-step.current { opacity: 1; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
 .workflow-step.completed { opacity: .82; }
 .workflow-step.waiting_approval { opacity: 1; border-color: color-mix(in srgb, var(--amber) 55%, var(--border)); }
+.workflow-step.clickable { cursor: pointer; }
+.workflow-step:not(.clickable) { cursor: default; }
+.workflow-step.clickable:hover { opacity: 1; border-color: var(--accent); background: var(--accent-soft); }
+.workflow-step.temporary { border-style: dashed; }
 .workflow-step-index { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-muted); color: var(--ink); font-weight: 700; }
 .workflow-step.current .workflow-step-index { background: var(--accent); color: var(--on-accent); }
 .workflow-step-copy { display: grid; gap: .18rem; min-width: 0; }
@@ -504,8 +508,6 @@ nav { display: grid; gap: 3px; }
 .workflow-step-copy span, .workflow-step-copy small { color: var(--muted); font-size: .75rem; }
 .workflow-step-copy small { text-transform: uppercase; letter-spacing: .08em; }
 .workflow-step-copy em { color: var(--red); font-size: .75rem; font-style: normal; }
-.workflow-revisit { justify-self: start; margin-top: .2rem; padding: .2rem .45rem; border: 1px solid var(--border); border-radius: 6px; color: var(--accent-deep); background: var(--surface); font-size: .7rem; }
-.workflow-revisit:hover { border-color: var(--accent); background: var(--accent-soft); }
 .proposal-source { color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
 .dataset-catalog-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; }
 .dataset-catalog-card { display: grid; gap: .9rem; padding: 1.1rem; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
