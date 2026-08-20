@@ -86,3 +86,7 @@ dbt_project/models/generated_dq_tests.yml
 /agent_Workflow.md
 presentation/VIDEO_REHEARSAL.md
 
+
+*.db-shm
+*.db-wal
+*.db

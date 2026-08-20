@@ -1,0 +1,16 @@
+# EvalGate v2 gate weights.
+# Security and Governance are raised versus v1 because the product now stores
+# data belonging to other people.
+version: "2.0"
+weights:
+  ai_quality:     0.28
+  ai_security:    0.22
+  input_data:     0.15
+  governance:     0.12
+  observability:  0.08
+  reliability:    0.08
+  business:       0.07
+
+decision_bands:
+  pass:    85.0
+  warning: 70.0

@@ -12,15 +12,15 @@ erDiagram
     USER_ACCOUNTS ||--o{ DATASET_ACCESS : "có_quyền"
     DATASETS ||--o{ DATASET_ACCESS : "gán_cho"
     USER_ACCOUNTS ||--o{ AUDIT_EVENTS : "thực_thi"
-    
+  
     DATASETS ||--o{ SOURCE_ROWS : "chứa_dữ_liệu"
     DATASETS ||--|| PROFILES : "tính_toán_hồ_sơ"
     PROFILES ||--o{ COLUMN_PROFILES : "thống_kê_cột"
-    
+  
     DATASETS ||--o{ PROPOSAL_RUNS : "khởi_tạo_đợt_sinh"
     PROPOSAL_RUNS ||--o{ PROPOSED_RULES : "đề_xuất_quy_tắc"
     DATASETS ||--o{ ACTIVE_RULES : "xuất_bản_quy_tắc_chuẩn"
-    
+  
     JOBS ||--o| TEST_RUNS : "điều_hành"
     DATASETS ||--o{ TEST_RUNS : "chạy_kiểm_thử"
     TEST_RUNS ||--o{ TEST_RESULTS : "sinh_kết_quả"
@@ -51,7 +51,9 @@ Cơ sở dữ liệu được thiết kế theo nguyên lý mô-đun hóa cao, c
 ### 🔑 Nhóm 1: Quản Lý Người Dùng & Phân Quyền (Security & Access Control)
 
 #### 1.1. Bảng `user_accounts` (Tài khoản người dùng)
+
 Quản lý danh tính người dùng đăng nhập hệ thống, vai trò phân quyền và trạng thái tài khoản.
+
 * **Khóa chính (PK):** `id` (VARCHAR(64))
 * **Các cột quan trọng:**
   * `username`: Tên đăng nhập duy nhất (VARCHAR(100), UNIQUE INDEX).
@@ -61,7 +63,9 @@ Quản lý danh tính người dùng đăng nhập hệ thống, vai trò phân 
   * `last_login_at`, `created_at`, `updated_at`: Thời gian khởi tạo và đăng nhập gần nhất.
 
 #### 1.2. Bảng `sessions` (Phiên đăng nhập Active)
+
 Lưu trữ thông tin phiên làm việc active của trình duyệt web, mã token chống tấn công CSRF.
+
 * **Khóa chính (PK):** `id` (VARCHAR(64))
 * **Các cột quan trọng:**
   * `username`: Tên người dùng của phiên (VARCHAR(256)).
@@ -70,7 +74,9 @@ Lưu trữ thông tin phiên làm việc active của trình duyệt web, mã to
   * `expires_at`: Thời gian hết hạn phiên làm việc.
 
 #### 1.3. Bảng `dataset_access` (Phân quyền truy cập Dataset)
+
 Bảng trung gian liên kết phân quyền Many-to-Many giữa `user_accounts` và `datasets`.
+
 * **Khóa chính (PK):** `id` (VARCHAR(64))
 * **Khóa ngoại (FK):** `dataset_id` $\rightarrow$ `datasets.id`, `username` $\rightarrow$ `user_accounts.username`.
 * **Các cột quan trọng:**
@@ -82,7 +88,9 @@ Bảng trung gian liên kết phân quyền Many-to-Many giữa `user_accounts` 
 ### ⚡ Nhóm 2: Quản Lý Tác Vụ Bất Đồng Bộ & Kiểm Vết (Job & Audit Trail)
 
 #### 2.1. Bảng `jobs` (Quản lý Job Async)
+
 Trái tim điều hành các công việc chạy ngầm (Background Jobs) của hệ thống (Ingestion, AI Proposal, dbt Test Run).
+
 * **Khóa chính (PK):** `id` (VARCHAR(64))
 * **Các cột quan trọng:**
   * `type`: Loại tác vụ (`INGEST_PROFILE`, `PROPOSE_RULES`, `RUN_DQ`).
@@ -92,7 +100,9 @@ Trái tim điều hành các công việc chạy ngầm (Background Jobs) của 
   * `lease_expires_at`: Thời hạn khóa tạm thời tránh 2 worker tranh chấp job.
 
 #### 2.2. Bảng `audit_events` (Nhật ký kiểm vết tuân thủ)
+
 Lưu trữ dòng sự kiện lịch sử (Compliance Audit Log) ghi nhận mọi hành vi thay đổi cấu hình, duyệt quy tắc hoặc chạy test.
+
 * **Khóa chính (PK):** `id` (VARCHAR(64))
 * **Các cột quan trọng:**
   * `session_id`: ID phiên đăng nhập thực hiện.
@@ -106,7 +116,9 @@ Lưu trữ dòng sự kiện lịch sử (Compliance Audit Log) ghi nhận mọi
 ### 🚖 Nhóm 3: Danh Mục Bộ Dữ Liệu & Dữ Liệu Thô (Data Plane)
 
 #### 3.1. Bảng `datasets` (Danh mục bộ dữ liệu)
+
 Đăng ký và quản lý vòng đời của bộ dữ liệu trong hệ thống.
+
 * **Khóa chính (PK):** `id` (VARCHAR(256)) — ví dụ: `nyc-yellow-50k-v1`.
 * **Các cột quan trọng:**
   * `name`, `description`: Tên hiển thị và mô tả nghiệp vụ.
@@ -115,7 +127,9 @@ Lưu trữ dòng sự kiện lịch sử (Compliance Audit Log) ghi nhận mọi
   * `checksum`: Mã băm SHA256 xác minh tính toàn vẹn tệp Parquet/CSV.
 
 #### 3.2. Bảng `source_rows` / `yellow_tripdata` (Dữ liệu Taxi 50k)
+
 Bảng lưu trữ dữ liệu thực tế 21 cột tiêu chuẩn taxi NYC (Data Plane).
+
 * **Khóa chính (PK):** `source_row_id` (VARCHAR(256)) — ví dụ: `row-00001`.
 * **Khóa ngoại (FK):** `dataset_id` $\rightarrow$ `datasets.id`.
 * **21 Cột tiêu chuẩn:** `vendor_id`, `pickup_at`, `dropoff_at`, `passenger_count`, `trip_distance`, `rate_code_id`, `store_and_fwd_flag`, `pickup_location_id`, `dropoff_location_id`, `payment_type`, `fare_amount`, `extra`, `mta_tax`, `tip_amount`, `tolls_amount`, `improvement_surcharge`, `total_amount`, `congestion_surcharge`, `airport_fee`, `cbd_congestion_fee`.
@@ -125,7 +139,9 @@ Bảng lưu trữ dữ liệu thực tế 21 cột tiêu chuẩn taxi NYC (Data 
 ### 📊 Nhóm 4: Thống Kê & Hồ Sơ Dữ Liệu (Profiling)
 
 #### 4.1. Bảng `profiles` (Hồ sơ chất lượng chung)
+
 Lưu trữ các điểm số chất lượng tổng thể cấp bộ dữ liệu sau khi chạy Ingestion Profiler.
+
 * **Khóa chính (PK):** `dataset_id` (VARCHAR(256), FK $\rightarrow$ `datasets.id`).
 * **Các cột quan trọng:**
   * `row_count`: Tổng số dòng.
@@ -135,7 +151,9 @@ Lưu trữ các điểm số chất lượng tổng thể cấp bộ dữ liệu
   * `evidence_keys`: Danh sách các bằng chứng dạng mảng JSON.
 
 #### 4.2. Bảng `column_profiles` (Chỉ số thống kê chi tiết từng cột)
+
 Lưu thống kê chi tiết cho từng cột thuộc về một `profile`.
+
 * **Khóa chính (PK):** `id` (INTEGER, Autoincrement).
 * **Khóa ngoại (FK):** `profile_dataset_id` $\rightarrow$ `profiles.dataset_id`.
 * **Các cột quan trọng:**
@@ -150,12 +168,16 @@ Lưu thống kê chi tiết cho từng cột thuộc về một `profile`.
 ### 🤖 Nhóm 5: AI Đề Xuất Quy Tắc & Duyệt HITL (Run 1 Graph)
 
 #### 5.1. Bảng `proposal_runs` (Phiên chạy AI Proposer)
+
 Lưu vết từng đợt gọi AI Agent sinh quy tắc.
+
 * **Khóa chính (PK):** `run_id` (VARCHAR(64)) — ví dụ: `run_propose_20260817_01`.
 * **Các cột quan trọng:** `dataset_id`, `status` (`QUEUED`, `RUNNING`, `DONE`, `FAILED`), `error`.
 
 #### 5.2. Bảng `proposed_rules` (Danh sách quy tắc AI đề xuất)
+
 Lưu trữ toàn bộ các quy tắc do AI Agent gợi ý và lịch sử duyệt của Data Steward.
+
 * **Khóa chính (PK):** Composite PK `(run_id, rule_id)`.
 * **Các cột quan trọng:**
   * `table_name`, `column_name`, `rule_type`: Vị trí và loại quy tắc (`NOT_NULL`, `RANGE`, `ACCEPTED_VALUES`, ...).
@@ -169,7 +191,9 @@ Lưu trữ toàn bộ các quy tắc do AI Agent gợi ý và lịch sử duyệ
 ### 🛡️ Nhóm 6: Bộ Quy Tắc Chính Thức & Engine Thực Thi dbt (Run 2 Graph)
 
 #### 6.1. Bảng `active_rules` (Single Source of Truth Ruleset)
+
 **Bảng quan trọng nhất của hệ thống!** Lưu trữ danh sách các quy tắc đã được Approve & Publish chính thức.
+
 * **Khóa chính (PK):** `rule_id` (VARCHAR(512)).
 * **Các cột quan trọng:**
   * `parameters`: Tham số hiệu lực chính thức (lấy từ `edited_parameters` nếu Steward có sửa, ngược lại lấy `parameters` của AI).
@@ -178,12 +202,16 @@ Lưu trữ toàn bộ các quy tắc do AI Agent gợi ý và lịch sử duyệ
 * **Tác động:** Đây là đầu vào duy nhất để `test_generator_node` tự động biên dịch thành tệp `dbt_project/models/generated_dq_tests.yml`.
 
 #### 6.2. Bảng `test_runs` / `dq_runs` (Nhật ký phiên chạy test)
+
 Lưu thông tin lịch sử các đợt thực thi dbt test / Python SQL Runner.
+
 * **Khóa chính (PK):** `test_run_id` (VARCHAR(64)).
 * **Các cột quan trọng:** `dataset_id`, `status`, `total_failed`, `total_checked`, `created_at`, `completed_at`.
 
 #### 6.3. Bảng `test_results` / `dq_results` (Kết quả kiểm thử chi tiết)
+
 Lưu trữ kết quả đánh giá của từng quy tắc kiểm thử trong đợt chạy test.
+
 * **Khóa chính (PK):** Composite PK `(test_run_id, rule_id)`.
 * **Các cột quan trọng:**
   * `status`: Kết quả kiểm thử (`PASSED`, `FAILED`, `ERROR`, `SKIPPED`).

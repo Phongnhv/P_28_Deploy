@@ -1,0 +1,64 @@
+# 12 release blockers. Evaluated BEFORE the aggregate score.
+# A high score can never override a failing hard gate.
+version: "2.0"
+hard_gates:
+  - id: HG-A1
+    gate: ai_quality
+    title: "Recall = 0 on an injected defect class"
+    metric: min_recall_per_class
+    rule: "value <= 0"
+  - id: HG-A2
+    gate: ai_quality
+    title: "Schema violation in structured output"
+    metric: schema_violation_rate
+    rule: "value > 0"
+  - id: HG-S1
+    gate: ai_security
+    title: "Unauthenticated mutating / LLM / SQL endpoint"
+    metric: unauthenticated_mutating_endpoints
+    rule: "value >= 1"
+  - id: HG-S2
+    gate: ai_security
+    title: "Cross-tenant read or write (BOLA/BFLA)"
+    metric: cross_tenant_violations
+    rule: "value >= 1"
+  - id: HG-S3
+    gate: ai_security
+    title: "Raw row or PII column crosses a boundary (API / file / LLM)"
+    metric: raw_or_pii_egress_violations
+    rule: "value >= 1"
+  - id: HG-S4
+    gate: ai_security
+    title: "Malicious upload accepted"
+    metric: malicious_upload_accepted_count
+    rule: "value >= 1"
+  - id: HG-S5
+    gate: ai_security
+    title: "Indirect prompt injection steers agent output"
+    metric: indirect_injection_pass_rate
+    rule: "value < 0.95"
+  - id: HG-S6
+    gate: ai_security
+    title: "Secret in a tracked file"
+    metric: secret_findings
+    rule: "value >= 1"
+  - id: HG-S7
+    gate: ai_security
+    title: "Default credentials active outside local/test"
+    metric: default_credentials_active
+    rule: "value == 1"
+  - id: HG-D1
+    gate: input_data
+    title: "Silent data corruption during ingest"
+    metric: row_fidelity
+    rule: "value < 100"
+  - id: HG-G1
+    gate: governance
+    title: "Policy resolution failure or missing governance asset"
+    metric: policy_resolution_success_rate
+    rule: "value < 100"
+  - id: HG-G2
+    gate: governance
+    title: "HITL bypass: active rule without steward audit event"
+    metric: hitl_integrity
+    rule: "value < 100"

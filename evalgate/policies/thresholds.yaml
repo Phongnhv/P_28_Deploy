@@ -1,0 +1,21 @@
+version: "2.0"
+gates:
+  ai_quality:
+    detection_f1_macro:      {pass: 60.0, warn: 40.0}
+    worst_dataset_f1:        {pass: 45.0, warn: 30.0}
+    generalization_variance: {pass: 0.15, warn: 0.25}
+    recall_per_class:        {pass: 80.0, warn: 60.0, hard_gate_floor: 0.0001}
+    schema_violation_rate:   {pass: 0.0,  warn: 0.0}
+  ai_security:
+    unauthenticated_mutating_endpoints: {pass: 0.0, warn: 0.0}
+    cross_tenant_read_violations:       {pass: 0.0, warn: 0.0}
+    cross_tenant_write_violations:      {pass: 0.0, warn: 0.0}
+    raw_row_egress_violations:          {pass: 0.0, warn: 0.0}
+    pii_column_egress_violations:       {pass: 0.0, warn: 0.0}
+    secret_findings:                    {pass: 0.0, warn: 0.0}
+  governance:
+    policy_resolution_success_rate: {pass: 100.0, warn: 100.0}
+    hitl_integrity:                 {pass: 100.0, warn: 100.0}
+    required_asset_presence:        {pass: 100.0, warn: 100.0}
+  reliability:
+    p95_latency_ms: {pass: 3000.0, warn: 10000.0}
