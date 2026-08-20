@@ -36,6 +36,7 @@ data/
 *.db
 *.db-wal
 *.db-shm
+pytest_tmp/
 ui_local_mvp.db*
 agent_integration_smoke.db*
 
@@ -76,6 +77,8 @@ data/
 docs_kien-01033/
 output/
 output_pytest/
+scratch/
+
 
 # dbt generated artifacts
 dbt_project/target/
