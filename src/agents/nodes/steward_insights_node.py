@@ -1,400 +1,227 @@
-"""Steward Insights Node — AI Data Quality & Governance Advisor.
-
-Tính toán chỉ số DQ Health Score (toàn diện & theo 6 Dimensions) và sử dụng LLM
-để sinh báo cáo phân tích, đánh giá chất lượng dữ liệu & đề xuất hành động cho Data Steward.
+"""Steward Insights Node / Hypothesis Agent — LangGraph Node for Graph 3.
+Generates structured root-cause hypotheses for anomalies with safety gates and fallbacks.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import re
-from datetime import datetime
-from typing import Any
+import uuid
+from datetime import UTC, datetime
+from typing import Any, Literal
+from pydantic import BaseModel, Field
 
-from src.agents.state import AgentState
+from sqlalchemy.orm import Session
+from src.agents.state import AnomalyGraphState
+from src.config import get_settings
 from src.services.llm import get_llm
+from src.services.rule_store import get_engine
+from src.models.database import DqResultModel
 
 logger = logging.getLogger(__name__)
 
-# Trọng số mức độ nghiêm trọng (Severity Weights)
-SEVERITY_WEIGHTS: dict[str, float] = {
-    "CRITICAL": 4.0,
-    "HIGH": 3.0,
-    "MEDIUM": 2.0,
-    "LOW": 1.0,
-}
+
+class HypothesisItem(BaseModel):
+    hypothesis_type: Literal[
+        "SYSTEM_BUG", "SCHEMA_CHANGE", "UPSTREAM_DATA_DRIFT", 
+        "ML_MODEL_DRIFT", "OUTLIER", "DATA_QUALITY_VIOLATION", "UNKNOWN"
+    ] = Field(description="Loại giả thuyết chẩn đoán nguyên nhân gốc rễ.")
+    summary: str = Field(description="Tóm tắt giả thuyết giải thích nguyên nhân bất thường.")
+    confidence: float = Field(description="Độ tin cậy của giả thuyết (0.0 đến 1.0).")
+    supporting_signal_ids: list[str] = Field(default_factory=list, description="Danh sách signal_id hỗ trợ giả thuyết này.")
+    contradicting_signal_ids: list[str] = Field(default_factory=list, description="Danh sách signal_id mâu thuẫn với giả thuyết này.")
+    evidence_refs: list[str] = Field(default_factory=list, description="Chứng cứ tham chiếu (tên cột, bảng, hoặc rule_id).")
+    recommended_checks: list[str] = Field(default_factory=list, description="Các đề xuất kiểm tra thủ công hoặc hành động tiếp theo.")
+    missing_evidence: str | None = Field(None, description="Các chứng cứ/metrics còn thiếu chưa có để làm rõ giả thuyết.")
+    limitations: str | None = Field(None, description="Hạn chế hoặc rủi ro của giả thuyết này.")
 
 
-def _get_grade(score: float) -> str:
-    """Xếp hạng chất lượng dữ liệu dựa trên điểm DQ Score."""
-    if score >= 95.0:
-        return "A"
-    elif score >= 85.0:
-        return "B"
-    elif score >= 70.0:
-        return "C"
-    else:
-        return "D"
+class HypothesisResponse(BaseModel):
+    hypotheses: list[HypothesisItem] = Field(default_factory=list)
 
 
-def calculate_dq_metrics(
-    test_results: list[dict],
-    anomalies: list[dict] | None = None,
-) -> dict[str, Any]:
-    """Tính toán bộ chỉ số chất lượng dữ liệu (DQ Score & Dimension Breakdown).
-
-    Công thức:
-    - Clean Rate của rule i: R_i = 1 - violation_rate_i (ERROR -> R_i = 0)
-    - Base DQ Score = sum(w_i * R_i) / sum(w_i) * 100
-    - Anomaly Penalty = count(anomalies) * 2.0
-    - Final DQ Score = max(0.0, min(100.0, Base Score - Anomaly Penalty))
-    - Dimension Scores = trung bình có trọng số của các rules trong từng dimension.
-    """
-    if not test_results:
-        return {
-            "dq_score": 100.0,
-            "dq_grade": "A",
-            "dq_dimensions": {},
-            "total_rules": 0,
-            "passed_count": 0,
-            "failed_count": 0,
-            "error_count": 0,
-            "anomaly_count": 0,
-            "anomaly_penalty": 0.0,
-        }
-
-    total_weighted_clean = 0.0
-    total_weights = 0.0
-
-    dim_weighted_clean: dict[str, float] = {}
-    dim_weights: dict[str, float] = {}
-
-    passed_count = 0
-    failed_count = 0
-    error_count = 0
-
-    for r in test_results:
-        status = r.get("status", "PASSED")
-        v_rate = float(r.get("violation_rate", 0.0))
-        severity = str(r.get("severity", "MEDIUM")).upper()
-        dimension = str(r.get("dimension", "VALIDITY")).upper()
-
-        weight = SEVERITY_WEIGHTS.get(severity, 2.0)
-
-        if status == "PASSED":
-            passed_count += 1
-            clean_rate = max(0.0, min(1.0, 1.0 - v_rate))
-        elif status == "FAILED":
-            failed_count += 1
-            clean_rate = max(0.0, min(1.0, 1.0 - v_rate))
-        else:  # ERROR hoặc trạng thái khác
-            error_count += 1
-            clean_rate = 0.0
-
-        # Tích luỹ toàn bộ
-        total_weighted_clean += weight * clean_rate
-        total_weights += weight
-
-        # Tích luỹ theo Dimension
-        dim_weighted_clean[dimension] = dim_weighted_clean.get(dimension, 0.0) + (weight * clean_rate)
-        dim_weights[dimension] = dim_weights.get(dimension, 0.0) + weight
-
-    # Tính Base Score
-    base_score = (total_weighted_clean / total_weights * 100.0) if total_weights > 0 else 100.0
-
-    # Trừ điểm phạt Anomaly
-    anom_list = anomalies or []
-    anomaly_penalty = round(len(anom_list) * 2.0, 2)
-    final_score = max(0.0, min(100.0, base_score - anomaly_penalty))
-    final_score = round(final_score, 2)
-
-    # Tính điểm theo từng Dimension
-    dq_dimensions: dict[str, float] = {}
-    for dim, w_sum in dim_weights.items():
-        if w_sum > 0:
-            dq_dimensions[dim] = round((dim_weighted_clean[dim] / w_sum) * 100.0, 2)
-        else:
-            dq_dimensions[dim] = 100.0
-
-    return {
-        "dq_score": final_score,
-        "dq_grade": _get_grade(final_score),
-        "dq_dimensions": dq_dimensions,
-        "total_rules": len(test_results),
-        "passed_count": passed_count,
-        "failed_count": failed_count,
-        "error_count": error_count,
-        "anomaly_count": len(anom_list),
-        "anomaly_penalty": anomaly_penalty,
-    }
-
-
-def _extract_remediation_actions(markdown_text: str) -> list[dict]:
-    """Trích xuất danh sách các hành động checklist từ báo cáo Markdown."""
-    actions: list[dict] = []
-    pattern = re.compile(r"[-*]\s*\[([ xX])\]\s*(.+)")
-    for line in markdown_text.splitlines():
-        match = pattern.match(line.strip())
-        if match:
-            is_checked = match.group(1).lower() == "x"
-            content = match.group(2).strip()
-            actions.append({
-                "action": content,
-                "completed": is_checked,
-            })
-    return actions
-
-
-def _generate_fallback_summary(
+def _generate_fallback_hypotheses(
     dataset_id: str,
-    metrics: dict,
+    decision: str,
+    signals: list[dict],
     failed_rules: list[dict],
-    anomalies: list[dict],
-) -> str:
-    """Sinh báo cáo tổng kết dự phòng (Deterministic Fallback) khi không gọi được LLM."""
-    dq_score = metrics["dq_score"]
-    dq_grade = metrics["dq_grade"]
-    dims = metrics.get("dq_dimensions", {})
-
-    dim_lines = [f"- **{dim}**: {score}/100" for dim, score in dims.items()]
-    dim_text = "\n".join(dim_lines) if dim_lines else "- Không có dữ liệu dimension."
-
-    failed_lines = []
+) -> list[dict]:
+    """Generates a deterministic fallback hypothesis when LLM fails or validation fails."""
+    supporting_sigs = [s["signal_id"] for s in signals if s.get("score", 0.0) >= 0.7]
+    evidence_refs = list(set([s["target_id"] for s in signals if s.get("score", 0.0) >= 0.7]))
     for r in failed_rules:
-        col = r.get("column") or "N/A"
-        r_type = r.get("rule_type", "")
-        v_rate = round(r.get("violation_rate", 0.0) * 100, 2)
-        v_count = r.get("violation_count", 0)
-        failed_lines.append(f"- Rule `{r.get('rule_id')}` ({r_type} trên `{col}`): {v_count} dòng vi phạm ({v_rate}%).")
-    failed_text = "\n".join(failed_lines) if failed_lines else "Không có rule nào bị vi phạm."
-
-    anom_lines = []
-    for a in anomalies:
-        rule_id = a.get("rule_id", "")
-        desc = a.get("description", "Đột biến tỷ lệ vi phạm")
-        anom_lines.append(f"- Cảnh báo bất thường trên `{rule_id}`: {desc}")
-    anom_text = "\n".join(anom_lines) if anom_lines else "Không phát hiện bất thường đáng kể."
-
-    return f"""# 📊 Báo Cáo Chất Lượng Dữ Liệu: {dataset_id}
-
-### 1. 📊 Tổng Quan Sức Khỏe Dữ Liệu (Executive DQ Summary)
-- **Điểm DQ Score**: **{dq_score}/100** (Xếp hạng: **Grade {dq_grade}**)
-- **Tổng số rules kiểm tra**: {metrics['total_rules']} (✅ {metrics['passed_count']} Passed, ❌ {metrics['failed_count']} Failed, ⚠️ {metrics['error_count']} Errors)
-- **Điểm chi tiết theo Dimensions**:
-{dim_text}
-
-### 2. 🚨 Phân Tích Lỗi & Cảnh Báo Bất Thường (Failure & Anomaly Drill-Down)
-{failed_text}
-
-**Cảnh báo bất thường (Anomalies):**
-{anom_text}
-
-### 3. 🎯 Đánh Giá & Gợi Ý Tinh Chỉnh Ruleset (Rule Tuning Recommendations)
-- Kiểm tra các rule có tỷ lệ vi phạm thấp (< 1%) xem có phải do ngoại lệ nghiệp vụ hợp lệ hay không để bổ sung điều kiện lọc.
-- Xem xét lại các rule bị lỗi thực thi (ERROR) để cập nhật đúng schema cột.
-
-### 4. 🛠️ Kế Hoạch Hành Động Đề Xuất (Actionable Next Steps)
-- [ ] Data Steward xem xét và xác nhận các vi phạm trên các rule FAILED.
-- [ ] Phối hợp với Data Engineering kiểm tra nguyên nhân gốc rễ nếu phát hiện spike bất thường.
-- [ ] Cập nhật hoặc lưu trữ ruleset chính thức cho đợt chạy tiếp theo.
-"""
+        evidence_refs.append(r.get("rule_id", ""))
+    
+    # Unique evidence refs
+    evidence_refs = sorted(list(set([x for x in evidence_refs if x])))
+    
+    fallback_summary = (
+        f"Phát hiện sự cố chất lượng dữ liệu bất thường ở mức độ {decision}. "
+        f"Có {len(failed_rules)} quy tắc kiểm thử bị vi phạm nghiêm trọng."
+    )
+    
+    return [{
+        "hypothesis_type": "DATA_QUALITY_VIOLATION",
+        "summary": fallback_summary,
+        "confidence": 0.70,
+        "supporting_signal_ids": supporting_sigs,
+        "contradicting_signal_ids": [],
+        "evidence_refs": evidence_refs,
+        "recommended_checks": [
+            "Kiểm tra lại dữ liệu nguồn ở các cột hoặc bảng bị cảnh báo lỗi.",
+            "Xác thực xem có sự thay đổi đột biến ở pipeline tải dữ liệu (upstream ingestion pipeline) hay không."
+        ],
+        "missing_evidence": "Lịch sử log chi tiết của hệ thống Ingestion.",
+        "limitations": "Đây là phân tích dự phòng tĩnh, không có suy luận ngữ cảnh từ AI."
+    }]
 
 
-def _clean_markdown(text: str) -> str:
-    """Làm sạch markdown nếu LLM bọc toàn bộ nội dung trong code block ```markdown ... ```."""
-    stripped = text.strip()
-    match = re.match(r"^```(?:markdown)?\s*\n([\s\S]*?)\n```$", stripped, re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-    return stripped
-
-
-async def steward_insights_node(state: AgentState) -> dict:
-    """LangGraph Node: DQ Health Scoring & Steward Insights Advisor."""
-    dataset_id = state.get("dataset_id", "dataset")
-    test_results = state.get("test_results", [])
-    anomalies = state.get("anomalies", [])
-    profile_digest = state.get("dataset_profile_digest") or state.get("dataset_profile", {})
-
-    # 1. Tính toán các chỉ số DQ Score chuẩn xác
-    metrics = calculate_dq_metrics(test_results, anomalies)
-    dq_score = metrics["dq_score"]
-    dq_grade = metrics["dq_grade"]
-    dq_dimensions = metrics["dq_dimensions"]
-
-    failed_or_error_rules = [
-        r for r in test_results if r.get("status") in ("FAILED", "ERROR")
-    ]
-
-    test_summary = {
-        "total_rules": metrics["total_rules"],
-        "passed": metrics["passed_count"],
-        "failed": metrics["failed_count"],
-        "errors": metrics["error_count"],
-        "anomaly_count": metrics["anomaly_count"],
-        "anomaly_penalty": metrics["anomaly_penalty"],
+def validate_and_sanitize_hypotheses(
+    hypotheses: list[dict],
+    valid_signal_ids: set[str],
+    valid_evidence_refs: set[str],
+) -> list[dict]:
+    """Validates generated citations, allowed types, and clamps confidence values."""
+    allowed_types = {
+        "SYSTEM_BUG", "SCHEMA_CHANGE", "UPSTREAM_DATA_DRIFT", 
+        "ML_MODEL_DRIFT", "OUTLIER", "DATA_QUALITY_VIOLATION", "UNKNOWN"
     }
-
-    # 2. Gọi LLM để sinh Báo cáo tổng kết chuyên sâu
-    steward_summary: str = ""
-    remediation_actions: list[dict] = []
-
-    try:
-        from src.agents.nodes.templates import steward_insights_prompt
-        from src.config import get_settings
-        from src.models.steward_insights_schemas import StewardStructuredInsights
-
-        settings = get_settings()
-        llm = get_llm(settings.llm_provider, temperature=0.2)
-
-        structured_llm = llm.with_structured_output(StewardStructuredInsights)
-        prompt_value = await steward_insights_prompt.ainvoke({
-            "dataset_id": dataset_id,
-            "dq_score": dq_score,
-            "dq_grade": dq_grade,
-            "dq_dimensions_json": json.dumps(dq_dimensions, ensure_ascii=False, indent=2),
-            "test_summary_json": json.dumps(test_summary, ensure_ascii=False, indent=2),
-            "failed_rules_json": json.dumps(failed_or_error_rules[:15], ensure_ascii=False, indent=2, default=str),
-            "anomalies_json": json.dumps(anomalies, ensure_ascii=False, indent=2, default=str),
-            "profile_digest_json": json.dumps(profile_digest, ensure_ascii=False, indent=2, default=str),
+    
+    validated = []
+    for h in hypotheses:
+        # 1. Type validation
+        h_type = h.get("hypothesis_type", "UNKNOWN")
+        if h_type not in allowed_types:
+            h_type = "UNKNOWN"
+            
+        # 2. Clamping confidence
+        confidence = float(h.get("confidence", 0.5))
+        confidence = max(0.0, min(1.0, confidence))
+        
+        # 3. Citation validation: filter out non-existent signal IDs
+        supporting = [sid for sid in h.get("supporting_signal_ids", []) if sid in valid_signal_ids]
+        contradicting = [sid for sid in h.get("contradicting_signal_ids", []) if sid in valid_signal_ids]
+        
+        # 4. Safe recommended checks (must be non-empty list of strings)
+        checks = [str(c) for c in h.get("recommended_checks", []) if c]
+        if not checks:
+            checks = ["Liên hệ với đội ngũ kỹ sư dữ liệu để rà soát log chạy."]
+            
+        validated.append({
+            "hypothesis_type": h_type,
+            "summary": str(h.get("summary", "Không có tóm tắt")),
+            "confidence": confidence,
+            "supporting_signal_ids": supporting,
+            "contradicting_signal_ids": contradicting,
+            "evidence_refs": [str(e) for e in h.get("evidence_refs", [])],
+            "recommended_checks": checks,
+            "missing_evidence": h.get("missing_evidence"),
+            "limitations": h.get("limitations")
         })
-        response = await structured_llm.ainvoke(prompt_value)
-
-        steward_next_steps_str = "\n".join(f"- [ ] {action}" for action in response.steward_next_steps)
-        eng_next_steps_str = "\n".join(f"- [ ] {action}" for action in response.engineering_next_steps)
-
-        steward_summary = f"""# 📊 Báo Cáo Chất Lượng Dữ Liệu: {dataset_id}
-
-### 1. 📊 Tổng Quan Sức Khỏe Dữ Liệu (Executive DQ Summary)
-{response.executive_dq_summary}
-
-### 2. 🚨 Phân Tích Lỗi & Cảnh Báo Bất Thường (Failure & Anomaly Drill-Down)
-{response.failure_anomaly_drill_down}
-
-### 3. 🎯 Đánh Giá & Gợi Ý Tinh Chỉnh Ruleset (Rule Tuning Recommendations)
-{response.rule_tuning_recommendations}
-
-### 4. 🛠️ Kế Hoạch Hành Động Đề Xuất (Actionable Next Steps)
-#### Dành cho Data Steward:
-{steward_next_steps_str}
-
-#### Dành cho Data Engineering / Source Team:
-{eng_next_steps_str}
-"""
-
-        remediation_actions = [
-            {"action": action, "completed": False}
-            for action in response.steward_next_steps + response.engineering_next_steps
-        ]
-        logger.info("Đã tạo Steward Insights Report thành công cho dataset %s (DQ Score: %.2f)", dataset_id, dq_score)
-
-    except Exception as exc:
-        logger.warning("Không thể gọi LLM tạo Steward Insights Report (%s), sử dụng fallback template.", exc)
-        steward_summary = _clean_markdown(_generate_fallback_summary(dataset_id, metrics, failed_or_error_rules, anomalies))
-        remediation_actions = _extract_remediation_actions(steward_summary)
-
-    test_run_id = state.get("test_run_id") or state.get("rule_run_id") or "test_run"
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    # Xuất duy nhất file Markdown (.md) vào output/steward_insights để review
-    md_file_path = None
-    try:
-        from pathlib import Path
-
-        from src.config import get_settings
-        settings = get_settings()
-        base_dir = getattr(settings, "output_dir", None) or "./output"
-        out_dir = Path(base_dir) / "steward_insights"
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        md_file = out_dir / f"steward_report_{timestamp}_{test_run_id}.md"
-        with open(md_file, "w", encoding="utf-8") as f:
-            f.write(steward_summary)
-        md_file_path = str(md_file)
-        logger.info("Đã xuất báo cáo Markdown ra: %s", md_file_path)
-    except Exception as exc:
-        logger.warning("Không thể ghi file báo cáo markdown steward insights: %s", exc)
-
-    metadata = dict(state.get("metadata", {}))
-    if md_file_path:
-        metadata["steward_report_path"] = md_file_path
-
-    return {
-        "dq_score": dq_score,
-        "dq_grade": dq_grade,
-        "dq_dimensions": dq_dimensions,
-        "steward_summary": steward_summary,
-        "remediation_actions": remediation_actions,
-        "metadata": metadata,
-    }
+    return validated
 
 
-# ---------------------------------------------------------------------------
-# Standalone Test Harness
-# ---------------------------------------------------------------------------
-
-async def main():
-    """Chạy thử độc lập steward_insights_node.
-
-    Run: python -m src.agents.nodes.steward_insights_node
+async def steward_insights_node(state: AnomalyGraphState) -> dict:
+    """LangGraph Node: AI Root Cause Hypothesis Agent (Steward Insights).
+    
+    Generates structured diagnoses if decision indicates anomaly (WATCH, ANOMALY, CRITICAL).
+    Fails safe with deterministic output if LLM experiences downtime or schema failure.
     """
-    import glob
-    import os
+    decision_data = state.get("anomaly_decision") or {}
+    decision = decision_data.get("decision", "NORMAL")
+    signals = state.get("signal_observations", [])
+    
+    # 1. Determine if hypothesis is required
+    if decision not in ("WATCH", "ANOMALY", "CRITICAL"):
+        logger.info("Hypothesis agent skipped. Decision is %s (not WATCH/ANOMALY/CRITICAL)", decision)
+        return {
+            "hypotheses": [],
+            "hypothesis_status": "NOT_REQUIRED"
+        }
+        
+    execution_run_id = state.get("execution_run_id") or state.get("anomaly_run_id")
+    dataset_id = state.get("dataset_id") or "dataset"
+    
+    # Load failed rules from current execution
+    failed_rules = []
+    engine = get_engine()
+    try:
+        with Session(engine) as session:
+            rows = session.query(DqResultModel).filter(
+                DqResultModel.run_id == execution_run_id,
+                DqResultModel.status.in_(["FAIL", "FAILED", "ERROR"])
+            ).all()
+            for r in rows:
+                failed_rules.append({
+                    "rule_id": r.rule_id,
+                    "rule_title": r.rule_title,
+                    "column": r.column,
+                    "status": r.status,
+                    "violation_rate": r.violation_rate or 0.0,
+                    "violation_count": r.failed_count
+                })
+    except Exception as exc:
+        logger.warning("Failed to fetch failed rules for hypothesis context: %s", exc)
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+    # 2. Build validation inputs
+    valid_signal_ids = {s["signal_id"] for s in signals}
+    valid_evidence_refs = {s["target_id"] for s in signals}
+    for r in failed_rules:
+        valid_evidence_refs.add(r["rule_id"])
+        if r.get("column"):
+            valid_evidence_refs.add(r["column"])
 
-    print("\n" + "=" * 75)
-    print("🚀 CHẠY THỬ ĐỘC LẬP: steward_insights_node (Data Steward DQ Advisor)")
-    print("=" * 75)
+    # 3. Call structured LLM
+    settings = get_settings()
+    fallback_used = False
+    hypotheses_list = []
+    
+    try:
+        llm = get_llm(settings.llm_provider, temperature=0.1)
+        structured_llm = llm.with_structured_output(HypothesisResponse)
+        
+        prompt = (
+            "Bạn là một chuyên gia chẩn đoán chất lượng dữ liệu (Data Quality Diagnostics Specialist).\n"
+            "Nhiệm vụ của bạn là phân tích đợt kiểm thử dữ liệu bất thường và đề xuất các GIẢ THUYẾT nguyên nhân gốc rễ (root cause hypotheses) cho Data Steward.\n\n"
+            f"THÔNG TIN ĐỢT CHẠY HIỆN TẠI:\n"
+            f"- Dataset ID: {dataset_id}\n"
+            f"- Quyết định tổng hợp: {decision} (Score: {decision_data.get('score')}, Severity: {decision_data.get('severity')})\n"
+            f"- Lý do override (nếu có): {decision_data.get('override_reason')}\n\n"
+            f"DANH SÁCH TÍN HIỆU CẢNH BÁO (SIGNALS):\n"
+            f"{json.dumps(signals, ensure_ascii=False, indent=2)}\n\n"
+            f"DANH SÁCH LUẬT BỊ LỖI/VI PHẠM (FAIL/ERROR RULES):\n"
+            f"{json.dumps(failed_rules, ensure_ascii=False, indent=2)}\n\n"
+            "YÊU CẦU:\n"
+            "1. Hãy đề xuất danh sách các giả thuyết nguyên nhân gốc rễ (chọn loại trong: SYSTEM_BUG, SCHEMA_CHANGE, UPSTREAM_DATA_DRIFT, OUTLIER, ML_MODEL_DRIFT, DATA_QUALITY_VIOLATION).\n"
+            "2. Đối với mỗi giả thuyết, phải chỉ ra chính xác các `supporting_signal_ids` (signal_id ủng hộ) và `contradicting_signal_ids` (signal_id mâu thuẫn nếu có) trích xuất từ danh sách tín hiệu ở trên. KHÔNG ĐƯỢC TỰ BỊA RA SIGNAL_ID KHÔNG CÓ TRONG DANH SÁCH.\n"
+            "3. Chỉ dẫn chứng cứ (`evidence_refs`) là các table/column/rule_id liên quan.\n"
+            "4. Đề xuất các hành động kiểm tra (`recommended_checks`) an toàn, không phá hủy hệ thống.\n"
+            "5. KHÔNG ĐƯỢC trả về dữ liệu thô nhạy cảm hay thông tin PII.\n"
+        )
+        
+        logger.info("Invoking LLM for structured hypotheses...")
+        response = await structured_llm.ainvoke(prompt)
+        
+        # Parse output list of items
+        raw_list = [h.model_dump() for h in response.hypotheses]
+        
+        # Validate citations and sanitize types
+        hypotheses_list = validate_and_sanitize_hypotheses(
+            raw_list, valid_signal_ids, valid_evidence_refs
+        )
+        logger.info("Successfully generated and validated %d hypotheses via LLM", len(hypotheses_list))
+        
+    except Exception as exc:
+        logger.warning("LLM hypothesis generation failed (%s). Triggering fallback generator.", exc)
+        hypotheses_list = _generate_fallback_hypotheses(dataset_id, decision, signals, failed_rules)
+        fallback_used = True
 
-    res_files = glob.glob("output/test_runner/debug_test_results_*.json")
-    test_results = []
-    if res_files:
-        latest = sorted(res_files, key=os.path.getmtime)[-1]
-        print(f"📖 Đọc test results từ: {latest}")
-        with open(latest, encoding="utf-8") as f:
-            test_results = json.load(f)
-    else:
-        print("ℹ️ Dùng mock test results để kiểm tra.")
-        test_results = [
-            {"rule_id": "r1", "severity": "CRITICAL", "dimension": "UNIQUENESS", "status": "PASSED", "violation_rate": 0.0},
-            {"rule_id": "r2", "severity": "HIGH", "dimension": "COMPLETENESS", "status": "PASSED", "violation_rate": 0.0},
-            {"rule_id": "r3", "severity": "MEDIUM", "dimension": "VALIDITY", "status": "FAILED", "violation_rate": 0.02, "violation_count": 10},
-        ]
-
-    anom_files = glob.glob("output/anomaly_detector/debug_anomalies_*.json")
-    anomalies = []
-    if anom_files:
-        latest_anom = sorted(anom_files, key=os.path.getmtime)[-1]
-        print(f"📖 Đọc anomalies từ: {latest_anom}")
-        with open(latest_anom, encoding="utf-8") as f:
-            anomalies = json.load(f)
-
-    mock_state: AgentState = {
-        "dataset_id": "yellow_tripdata",
-        "test_run_id": "standalone_debug",
-        "test_results": test_results,
-        "anomalies": anomalies,
+    # Check if we got empty hypotheses list despite LLM execution
+    if not hypotheses_list:
+        hypotheses_list = _generate_fallback_hypotheses(dataset_id, decision, signals, failed_rules)
+        fallback_used = True
+        
+    return {
+        "hypotheses": hypotheses_list,
+        "hypothesis_status": "FALLBACK_USED" if fallback_used else "SUCCEEDED"
     }
-
-    result = await steward_insights_node(mock_state)
-
-    meta = result.get("metadata", {})
-    md_path = meta.get("steward_report_path")
-
-    print("\n📊 KẾT QUẢ ĐÁNH GIÁ CHẤT LƯỢNG DỮ LIỆU:")
-    print(f"    DQ Score      : {result['dq_score']}/100")
-    print(f"    DQ Grade      : Grade {result['dq_grade']}")
-    print(f"    Dimensions    : {json.dumps(result['dq_dimensions'], indent=2)}")
-    print(f"    Actions found : {len(result['remediation_actions'])}")
-    if md_path:
-        print(f"    📄 Markdown File: {md_path}")
-    print("\n--- [STEWARD SUMMARY PREVIEW] ---\n")
-    print(result["steward_summary"][:500] + "...\n")
-    print("=" * 75 + "\n")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

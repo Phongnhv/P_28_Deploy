@@ -58,3 +58,39 @@ class AgentState(TypedDict, total=False):
     rule_candidates: list[dict]               # Danh sách các candidates deterministic sinh từ Semantic Contract
     specialized_system_prompts: dict[str, str] # System prompt tĩnh đã được custom hóa ngữ cảnh theo từng bảng
     progress_state: str                       # Trạng thái tiến trình của Agent (PROFILING, etc.)
+
+
+class ExecutionGraphState(TypedDict, total=False):
+    request: dict
+    ruleset_snapshot: dict
+    validation_errors: list[dict]
+    compiled_tests: list[dict]
+    dbt_artifact_ref: dict
+    artifact_hash: str
+    compiler_version: str
+    dbt_validation: dict
+    execution_results: list[dict]
+    normalized_results: list[dict]
+    execution_status: str
+    error: dict | None
+    retry_history: list[dict]
+    metadata: dict
+
+
+class AnomalyGraphState(TypedDict, total=False):
+    anomaly_run_id: str
+    execution_run_id: str
+    dataset_id: str
+    dataset_version_id: str
+    ruleset_version_id: str
+    detector_config_version: str
+    current_features: dict
+    historical_features: dict
+    signal_observations: list[dict]
+    signal_errors: list[dict]
+    anomaly_decision: dict
+    hypotheses: list[dict]
+    hypothesis_validation: dict
+    anomaly_status: str
+    hypothesis_status: str
+    metadata: dict

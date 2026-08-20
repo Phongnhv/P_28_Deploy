@@ -1,23 +1,27 @@
 import logging
 import os
 
-try:
-    from openinference.instrumentation.langchain import LangChainInstrumentor
-    from opentelemetry import trace
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+import sys
 
-    phoenix_host = "localhost" if os.name == "nt" or not os.path.exists("/.dockerenv") else "host.docker.internal"
-    phoenix_endpoint = os.getenv("PHOENIX_COLLECTOR_ENDPOINT") or f"http://{phoenix_host}:6006/v1/traces"
-    tracer_provider = TracerProvider()
-    tracer_provider.add_span_processor(
-        SimpleSpanProcessor(OTLPSpanExporter(endpoint=phoenix_endpoint))
-    )
-    trace.set_tracer_provider(tracer_provider)
-    LangChainInstrumentor().instrument()
-except Exception:
-    pass
+# Disable OpenTelemetry instrumentation during unit tests to prevent connection hangs
+if "pytest" not in sys.modules and not os.getenv("DISABLE_TRACING"):
+    try:
+        from openinference.instrumentation.langchain import LangChainInstrumentor
+        from opentelemetry import trace
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+        phoenix_host = "localhost" if os.name == "nt" or not os.path.exists("/.dockerenv") else "host.docker.internal"
+        phoenix_endpoint = os.getenv("PHOENIX_COLLECTOR_ENDPOINT") or f"http://{phoenix_host}:6006/v1/traces"
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(
+            SimpleSpanProcessor(OTLPSpanExporter(endpoint=phoenix_endpoint))
+        )
+        trace.set_tracer_provider(tracer_provider)
+        LangChainInstrumentor().instrument()
+    except Exception:
+        pass
 
 from langgraph.graph import END, StateGraph
 
@@ -141,24 +145,21 @@ def build_dashboard_proposal_graph() -> StateGraph:
     graph.add_edge("rule_proposer", END)
     return graph.compile()
 
-
 # ---------------------------------------------------------------------------
-# Run 2: Execution Graph (Test Generator ➔ Validate ➔ Repair ➔ Run ➔ Anomaly ➔ Steward Insights ➔ Persist)
+# Run 2: Execution Graph (Test Generator ➔ Validate ➔ Run ➔ Persist)
 # ---------------------------------------------------------------------------
 
-def _should_repair_or_run(state: AgentState) -> str:
-    """Route the dbt artifact to execution, repair, or terminal failure."""
+def _should_run_or_fail(state: AgentState) -> str:
+    """Route the dbt artifact to execution or terminal failure."""
     if state.get("dbt_validation_valid") is True:
         return "run"
-    if int(state.get("dbt_validation_attempts", 0)) < 3:
-        return "repair"
     return "fail"
 
 
 async def _fail_dbt_validation_node(state: AgentState) -> dict:
     from src.services.rule_store import update_test_run_status
 
-    error = state.get("dbt_validation_error") or "dbt project validation failed after 3 repair attempts"
+    error = state.get("dbt_validation_error") or "dbt project validation failed"
     run_id = state.get("test_run_id") or state.get("rule_run_id")
     if run_id:
         update_test_run_status(str(run_id), "FAILED", error=error)
@@ -169,15 +170,12 @@ async def _fail_dbt_validation_node(state: AgentState) -> dict:
 
 
 def build_execution_graph() -> StateGraph:
-    """Xây dựng graph cho Run 2 (Execution Graph).
+    """Xây dựng graph cho Run 2 (Execution Graph - Deterministic).
 
     Luồng:
-      test_generator ➔ validate_dbt_project ➔ (repair loop nếu lỗi) ➔ test_runner ➔ anomaly_detector ➔ steward_insights ➔ persist_report ➔ END
+      test_generator ➔ validate_dbt_project ➔ (run or fail) ➔ test_runner ➔ persist_report ➔ END
     """
-    from src.agents.nodes.anomaly_detector_node import anomaly_detector_node
-    from src.agents.nodes.llm_dbt_repair_node import llm_dbt_repair_node
     from src.agents.nodes.persist_report_node import persist_report_node
-    from src.agents.nodes.steward_insights_node import steward_insights_node
     from src.agents.nodes.test_generator_node import test_generator_node
     from src.agents.nodes.test_runner_node import test_runner_node
     from src.agents.nodes.validate_dbt_project_node import validate_dbt_project_node
@@ -186,11 +184,8 @@ def build_execution_graph() -> StateGraph:
 
     graph.add_node("test_generator", test_generator_node)
     graph.add_node("validate_dbt_project", validate_dbt_project_node)
-    graph.add_node("llm_dbt_repair", llm_dbt_repair_node)
     graph.add_node("dbt_validation_failed", _fail_dbt_validation_node)
     graph.add_node("test_runner", test_runner_node)
-    graph.add_node("anomaly_detector", anomaly_detector_node)
-    graph.add_node("steward_insights", steward_insights_node)
     graph.add_node("persist_report", persist_report_node)
 
     graph.set_entry_point("test_generator")
@@ -198,22 +193,45 @@ def build_execution_graph() -> StateGraph:
     # test_generator -> validate the generated dbt project
     graph.add_edge("test_generator", "validate_dbt_project")
 
-    # Invalid projects are repaired at most three times; exhausted runs fail before execution.
+    # Route based on validation
     graph.add_conditional_edges(
         "validate_dbt_project",
-        _should_repair_or_run,
-        {"repair": "llm_dbt_repair", "run": "test_runner", "fail": "dbt_validation_failed"},
+        _should_run_or_fail,
+        {"run": "test_runner", "fail": "dbt_validation_failed"},
     )
 
-    # Repair updates YAML in state and routes back through the same dbt quality gate.
-    graph.add_edge("llm_dbt_repair", "validate_dbt_project")
     graph.add_edge("dbt_validation_failed", END)
-
-    # test_runner ➔ anomaly_detector ➔ steward_insights ➔ persist_report ➔ END
-    graph.add_edge("test_runner", "anomaly_detector")
-    graph.add_edge("anomaly_detector", "steward_insights")
-    graph.add_edge("steward_insights", "persist_report")
+    graph.add_edge("test_runner", "persist_report")
     graph.add_edge("persist_report", END)
+
+    return graph.compile()
+
+
+# ---------------------------------------------------------------------------
+# Run 3: Anomaly Graph (Detector ➔ Hypothesis ➔ Persist)
+# ---------------------------------------------------------------------------
+
+def build_anomaly_graph() -> StateGraph:
+    """Xây dựng graph cho Run 3 (Anomaly Analysis Graph).
+
+    Luồng:
+      anomaly_detector ➔ hypothesis_agent ➔ persist_analysis ➔ END
+    """
+    from src.agents.nodes.anomaly_detector_node import anomaly_detector_node
+    from src.agents.nodes.steward_insights_node import steward_insights_node
+    from src.agents.nodes.persist_analysis_node import persist_analysis_node
+    from src.agents.state import AnomalyGraphState
+
+    graph = StateGraph(AnomalyGraphState)
+
+    graph.add_node("anomaly_detector", anomaly_detector_node)
+    graph.add_node("hypothesis_agent", steward_insights_node)
+    graph.add_node("persist_analysis", persist_analysis_node)
+
+    graph.set_entry_point("anomaly_detector")
+    graph.add_edge("anomaly_detector", "hypothesis_agent")
+    graph.add_edge("hypothesis_agent", "persist_analysis")
+    graph.add_edge("persist_analysis", END)
 
     return graph.compile()
 
@@ -294,7 +312,7 @@ async def run_execution_graph(
     dataset_id: str = "dataset-nyc-yellow-taxi-50k",
     proposal_run_id: str | None = None,
 ) -> dict:
-    """Chạy toàn bộ pipeline Run 2 (Thực thi Test): Active Rules -> Generator -> Validate -> Runner -> Anomaly -> Steward Insights -> Report."""
+    """Chạy toàn bộ pipeline Run 2 (Thực thi Test): Active Rules -> Generator -> Validate -> Runner -> Report."""
     import uuid
 
     from src.services.rule_store import (
@@ -333,37 +351,88 @@ async def run_execution_graph(
 
         _test_run_rec = get_test_run(test_run_id)
         results = get_test_results(test_run_id)
-        anomalies = final_state.get("anomalies", [])
-        dq_score = final_state.get("dq_score", 100.0)
-        dq_grade = final_state.get("dq_grade", "A")
 
-        passed = sum(1 for r in results if r["status"] == "PASSED")
-        failed = sum(1 for r in results if r["status"] == "FAILED")
+        passed = sum(1 for r in results if r["status"] == "PASS")
+        failed = sum(1 for r in results if r["status"] == "FAIL")
         errors = sum(1 for r in results if r["status"] == "ERROR")
 
         print("\n" + "=" * 75)
         print(f"🎉 RUN 2 HOÀN THÀNH THÀNH CÔNG (test_run_id: {test_run_id})")
         print("=" * 75)
-        print(f"• DQ Health Score       : {dq_score}/100 (Grade {dq_grade})")
         print(f"• Tổng số rules đã test : {len(results)}")
         print(f"• Kết quả               : {passed} PASSED | {failed} FAILED | {errors} ERROR")
-        print(f"• Số điểm dị thường     : {len(anomalies)}")
         print(f"• File báo cáo JSON     : {final_state.get('metadata', {}).get('report_file_path', 'data/results/')}")
-        print(f"• File báo cáo Markdown : {final_state.get('metadata', {}).get('steward_report_path', 'N/A')}")
 
-        if anomalies:
-            print("\n🚨 CÁC ĐIỂM DỊ THƯỜNG PHÁT HIỆN ĐƯỢC:")
-            for idx, anom in enumerate(anomalies, 1):
-                print(f"   [{idx}] {anom.get('rule_id')} ({anom.get('anomaly_type')})")
-                print(f"       Lý do: {anom.get('reason')}")
+        # Trigger Graph 3 (Anomaly Analysis) dynamically for CLI/test parity
+        anomaly_state = await run_anomaly_graph(execution_run_id=test_run_id, dataset_id=dataset_id)
+        anomalies = anomaly_state.get("signal_observations", [])
+        decision_data = anomaly_state.get("anomaly_decision", {})
 
         print("\n" + "=" * 75 + "\n")
-        return {"test_run_id": test_run_id, "results": results, "anomalies": anomalies, "dq_score": dq_score}
+        return {
+            "test_run_id": test_run_id, 
+            "results": results, 
+            "anomalies": anomalies, 
+            "dq_score": final_state.get("dq_score", 100.0),
+            "anomaly_decision": decision_data
+        }
 
     except Exception as exc:
         logger.error("Run 2 thất bại: %s", exc, exc_info=True)
         update_test_run_status(test_run_id=test_run_id, status="FAILED", error=str(exc))
         print(f"\n❌ RUN 2 THẤT BẠI: {exc}\n")
+        raise
+
+
+async def run_anomaly_graph(
+    execution_run_id: str,
+    dataset_id: str = "dataset-nyc-yellow-taxi-50k",
+) -> dict:
+    """Chạy toàn bộ pipeline Run 3 (Anomaly Analysis & Hypothesis)."""
+    import uuid
+    anomaly_run_id = f"anom-{uuid.uuid4().hex[:12]}"
+    
+    anomaly_graph = build_anomaly_graph()
+    initial_state = {
+        "anomaly_run_id": anomaly_run_id,
+        "execution_run_id": execution_run_id,
+        "dataset_id": dataset_id,
+        "detector_config_version": "anomaly-v1",
+        "metadata": {
+            "model_name": "gemini-3.5-flash",
+        }
+    }
+    
+    logger.info("Bắt đầu Run 3 (Anomaly Analysis) | anomaly_run_id=%s | execution_run_id=%s", 
+                anomaly_run_id, execution_run_id)
+                
+    try:
+        final_state = await anomaly_graph.ainvoke(initial_state)
+        decision_data = final_state.get("anomaly_decision", {})
+        signals = final_state.get("signal_observations", [])
+        hypotheses = final_state.get("hypotheses", [])
+        
+        print("\n" + "=" * 75)
+        print(f"🎉 RUN 3 HOÀN THÀNH THÀNH CÔNG (anomaly_run_id: {anomaly_run_id})")
+        print("=" * 75)
+        print(f"• Kết luận bất thường   : {decision_data.get('decision', 'NORMAL')}")
+        print(f"• Điểm số bất thường    : {decision_data.get('score', 0.0)}")
+        print(f"• Độ tự tin             : {decision_data.get('confidence', 0.0)}")
+        print(f"• Số tín hiệu           : {len(signals)}")
+        print(f"• Số giả thuyết AI sinh : {len(hypotheses)}")
+        
+        if hypotheses:
+            print("\n💡 GIẢ THUYẾT NGUYÊN NHÂN AI ĐỀ XUẤT:")
+            for idx, h in enumerate(hypotheses, 1):
+                print(f"   [{idx}] Loại: {h.get('hypothesis_type')} (Độ tin cậy: {h.get('confidence'):.2f})")
+                print(f"       Tóm tắt: {h.get('summary')}")
+                print(f"       Khuyến nghị: {', '.join(h.get('recommended_checks', []))}")
+                
+        print("\n" + "=" * 75 + "\n")
+        return final_state
+    except Exception as exc:
+        logger.error("Run 3 thất bại: %s", exc, exc_info=True)
+        print(f"\n❌ RUN 3 THẤT BẠI: {exc}\n")
         raise
 
 

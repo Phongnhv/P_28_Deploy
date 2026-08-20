@@ -73,6 +73,81 @@ async def persist_report_node(state: AgentState) -> dict:
     err_str = "; ".join(errors) if errors else None
     await asyncio.to_thread(update_test_run_status, test_run_id, final_status, err_str)
 
+    # 1.1 Also persist to decoupled Graph 2/3 tables (dq_runs and dq_results)
+    def _save_decoupled_run():
+        from src.services.rule_store import get_engine
+        from sqlalchemy.orm import Session
+        from src.models.database import DqRunModel, DqResultModel
+        
+        engine = get_engine()
+        with Session(engine) as session:
+            # Idempotent: delete existing run and results
+            session.query(DqResultModel).filter_by(run_id=test_run_id).delete()
+            session.query(DqRunModel).filter_by(id=test_run_id).delete()
+            
+            # Map statuses
+            dq_status = "SUCCEEDED" if final_status == "DONE" else "FAILED"
+            
+            # Count details
+            failed_count = sum(1 for r in test_results if r.get("status") in ("FAIL", "FAILED"))
+            checked_count = sum(int(r.get("checked_count") or r.get("total_rows") or 0) for r in test_results)
+            
+            dq_run = DqRunModel(
+                id=test_run_id,
+                job_id=state.get("job_id") or test_run_id,
+                dataset_id=state.get("dataset_id") or "unknown",
+                rule_ids=json.dumps([r.get("rule_id") for r in test_results if r.get("rule_id")]),
+                status=dq_status,
+                total_failed=failed_count,
+                total_checked=checked_count,
+                created_at=datetime.now(),
+                completed_at=datetime.now(),
+                ruleset_version_id=state.get("ruleset_version_id"),
+                compiler_version=state.get("metadata", {}).get("compiler_version"),
+                artifact_hash=state.get("metadata", {}).get("artifact_hash"),
+                retry_history_json=json.dumps(state.get("metadata", {}).get("retry_history", [])),
+                error_message=err_str,
+                dbt_status=state.get("metadata", {}).get("dbt_status", "SUCCESS"),
+                metrics_status=state.get("metadata", {}).get("metrics_status", "SUCCESS"),
+            )
+            session.add(dq_run)
+            session.flush()
+            
+            for res in test_results:
+                r_status = res.get("status", "PASS")
+                if r_status == "PASSED":
+                    r_status = "PASS"
+                elif r_status == "FAILED":
+                    r_status = "FAIL"
+                
+                # Extract counts
+                c_count = int(res.get("checked_count") or res.get("total_rows") or 0)
+                f_count = int(res.get("failed_count") or res.get("violation_count") or 0)
+                
+                dq_res = DqResultModel(
+                    run_id=test_run_id,
+                    rule_id=res.get("rule_id", ""),
+                    rule_title=res.get("rule_id", "").split(".")[-1] or "Rule",
+                    status=r_status,
+                    checked_count=c_count,
+                    failed_count=f_count,
+                    failed_row_ids=json.dumps(res.get("sample_refs") or res.get("sample_failures") or []),
+                    violation_rate=float(res.get("violation_rate") or 0.0),
+                    duration_ms=float(res.get("duration_ms") or 0.0),
+                    dbt_status=res.get("dbt_status") or ("SUCCESS" if r_status == "PASS" else "FAIL"),
+                    metrics_status=res.get("metrics_status") or "SUCCESS",
+                    error_message=res.get("error"),
+                )
+                session.add(dq_res)
+                
+            session.commit()
+            logger.info("Đã lưu decoupled run và %d results cho run_id=%s vào dq_runs/dq_results", len(test_results), test_run_id)
+
+    try:
+        await asyncio.to_thread(_save_decoupled_run)
+    except Exception as db_exc:
+        logger.warning("Không thể lưu decoupled run thông tin vào dq_runs/dq_results: %s", db_exc)
+
     # Ghi file report
     report_payload = {
         "test_run_id": test_run_id,

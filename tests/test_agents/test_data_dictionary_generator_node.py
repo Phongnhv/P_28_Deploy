@@ -27,7 +27,7 @@ async def test_infers_dictionary_when_missing(monkeypatch):
         lambda *_args, **_kwargs: FakeLLM(),
     )
     state = {
-        "dataset_profile_digest": {"tables": {"orders": {"columns": []}}},
+        "dataset_profile_digest": {"orders": {"columns": []}},
         "metadata": {"domain_hint": "e-commerce"},
     }
     result = await data_dictionary_generator_node(state)

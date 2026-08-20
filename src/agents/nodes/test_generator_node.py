@@ -285,6 +285,149 @@ def generate_dbt_test_yaml(approved_rules: list[dict]) -> str:
     return yaml.dump(yaml_dict, sort_keys=False, allow_unicode=True)
 
 
+from sqlalchemy import inspect
+from sqlalchemy.orm import Session
+from src.models.database import RulesetVersionModel
+
+def validate_ruleset_contract(
+    engine,
+    approved_rules: list,
+    dataset_id: str,
+    ruleset_version_id: str | None,
+) -> tuple[list[dict], str]:
+    """Perform Phase 2.2 contract validation and calculate schema signature hash.
+    
+    Returns:
+        (validation_errors, live_schema_hash)
+    """
+    validation_errors = []
+    
+    # 1. Reflect database schema for target tables
+    try:
+        inspector = inspect(engine)
+        db_tables = inspector.get_table_names()
+    except Exception as exc:
+        return [{"type": "DB_CONNECTION_ERROR", "message": f"Cannot connect to database: {exc}"}], ""
+
+    # Group rules by table to inspect
+    tables_in_rules = set()
+    for rule in approved_rules:
+        t_name = rule.get("table_name")
+        if t_name:
+            tables_in_rules.add(t_name)
+            
+    # Compute live schema signature hash
+    schema_parts = []
+    table_columns = {}
+    
+    for t_name in sorted(tables_in_rules):
+        if t_name not in db_tables:
+            validation_errors.append({
+                "type": "MISSING_TABLE",
+                "table_name": t_name,
+                "message": f"Table '{t_name}' does not exist in the database catalog."
+            })
+            continue
+            
+        try:
+            cols = inspector.get_columns(t_name)
+            col_info = sorted([(c["name"], str(c["type"])) for c in cols], key=lambda x: x[0])
+            table_columns[t_name] = {c[0]: c[1] for c in col_info}
+            
+            # format table signature: table_name(col1:type1,col2:type2,...)
+            cols_str = ",".join(f"{name}:{type_str}" for name, type_str in col_info)
+            schema_parts.append(f"{t_name}({cols_str})")
+        except Exception as exc:
+            validation_errors.append({
+                "type": "REFLECTION_ERROR",
+                "table_name": t_name,
+                "message": f"Failed to reflect columns for table '{t_name}': {exc}"
+            })
+            
+    live_schema_str = ";".join(schema_parts)
+    live_schema_hash = hashlib.md5(live_schema_str.encode("utf-8")).hexdigest() if live_schema_str else ""
+    
+    # 2. Check schema drift if ruleset_version_id is provided
+    if ruleset_version_id:
+        try:
+            with Session(engine) as session:
+                ruleset_ver = session.query(RulesetVersionModel).filter(RulesetVersionModel.id == ruleset_version_id).first()
+                if ruleset_ver:
+                    ref_hash = ruleset_ver.ruleset_hash
+                    if ref_hash != live_schema_hash:
+                        validation_errors.append({
+                            "type": "SCHEMA_DRIFT",
+                            "message": f"Schema drift detected. Ruleset version reference schema hash '{ref_hash}' does not match live schema signature hash '{live_schema_hash}'."
+                        })
+                else:
+                    validation_errors.append({
+                        "type": "MISSING_RULESET_VERSION",
+                        "message": f"Ruleset version '{ruleset_version_id}' not found in ruleset_versions database."
+                    })
+        except Exception as exc:
+            validation_errors.append({
+                "type": "DATABASE_ERROR",
+                "message": f"Failed to query ruleset version: {exc}"
+            })
+
+    # 3. Validate columns and parameters for each rule
+    for rule in approved_rules:
+        t_name = rule.get("table_name")
+        col_name = rule.get("column")
+        rule_id = rule.get("rule_id", "unknown")
+        rule_type = rule.get("rule_type", "")
+        params = rule.get("effective_parameters") or rule.get("parameters") or {}
+        
+        if t_name not in table_columns:
+            # Table already marked as missing, skip column checks
+            continue
+            
+        # Check column existence (unless cross-field or table-level rule like ROW_COUNT)
+        if rule_type != "ROW_COUNT" and col_name:
+            if col_name not in table_columns[t_name]:
+                validation_errors.append({
+                    "type": "MISSING_COLUMN",
+                    "rule_id": rule_id,
+                    "table_name": t_name,
+                    "column_name": col_name,
+                    "message": f"Column '{col_name}' does not exist in table '{t_name}'."
+                })
+                
+        # Validate parameters for specific rules
+        if rule_type == "RANGE":
+            if params.get("min") is None and params.get("max") is None:
+                validation_errors.append({
+                    "type": "INVALID_PARAMETERS",
+                    "rule_id": rule_id,
+                    "message": f"Rule {rule_id} of type RANGE must contain at least a 'min' or 'max' parameter."
+                })
+        elif rule_type == "ACCEPTED_VALUES":
+            if not params.get("accepted_values"):
+                validation_errors.append({
+                    "type": "INVALID_PARAMETERS",
+                    "rule_id": rule_id,
+                    "message": f"Rule {rule_id} of type ACCEPTED_VALUES must contain a non-empty 'accepted_values' list."
+                })
+        elif rule_type == "CROSS_FIELD_COMPARISON":
+            target_col = params.get("target_column")
+            if not target_col:
+                validation_errors.append({
+                    "type": "INVALID_PARAMETERS",
+                    "rule_id": rule_id,
+                    "message": f"Rule {rule_id} of type CROSS_FIELD_COMPARISON must specify 'target_column'."
+                })
+            elif target_col not in table_columns[t_name]:
+                validation_errors.append({
+                    "type": "MISSING_COLUMN",
+                    "rule_id": rule_id,
+                    "table_name": t_name,
+                    "column_name": target_col,
+                    "message": f"Target column '{target_col}' in rule CROSS_FIELD_COMPARISON does not exist in table '{t_name}'."
+                })
+                
+    return validation_errors, live_schema_hash
+
+
 async def test_generator_node(state: AgentState) -> dict:
     """LangGraph Node: Sinh tệp dbt test YML từ approved rules, lưu DB, lưu vết local và chuẩn bị cho runner."""
     from src.services.rule_store import get_active_rules, save_generated_dbt_yaml
@@ -311,6 +454,31 @@ async def test_generator_node(state: AgentState) -> dict:
 
     engine = get_engine()
     dialect_name = engine.dialect.name
+
+    # Contract Validation (Phase 2.2)
+    ruleset_version_id = state.get("ruleset_version_id")
+    validation_errors, schema_hash = validate_ruleset_contract(
+        engine,
+        approved_rules,
+        state.get("dataset_id", "unknown"),
+        ruleset_version_id,
+    )
+
+    if validation_errors:
+        logger.error("Contract validation failed for ruleset (run_id=%s): %s", run_id, validation_errors)
+        return {
+            "approved_rules": approved_rules,
+            "generated_tests": [],
+            "generated_dbt_yaml": "",
+            "dbt_artifact_ref": None,
+            "dbt_trace_file_path": None,
+            "dbt_validation_valid": False,
+            "dbt_validation_error": f"Contract validation failed: {validation_errors}",
+            "dbt_validation_attempts": 0,
+            "dbt_repair_history": [],
+            "test_generation_errors": validation_errors,
+            "error": f"Contract validation failed: {validation_errors}",
+        }
 
     # Gom rules theo bảng
     by_table: dict[str, list[dict]] = {}

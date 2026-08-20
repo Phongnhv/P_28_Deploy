@@ -384,6 +384,38 @@ async def test_runner_node(state: AgentState) -> dict:
         for res_list in outputs:
             all_results.extend(res_list)
 
+    # Post-process and normalize results to match the canonical result format (Phase 2.7)
+    normalized_results = []
+    for r in all_results:
+        status_raw = r.get("status", "PASSED")
+        status = "PASS" if status_raw in ("PASSED", "PASS") else "FAIL" if status_raw in ("FAILED", "FAIL") else "ERROR" if status_raw == "ERROR" else "SKIPPED"
+        
+        checked_count = r.get("total_rows", 0)
+        failed_count = r.get("violation_count", 0)
+        violation_rate = r.get("violation_rate", 0.0)
+        
+        dbt_status = "PASS" if dbt_executed and status == "PASS" else "FAIL" if dbt_executed and status == "FAIL" else "NOT_RUN"
+        metrics_status = "PASS" if status == "PASS" else "FAIL" if status == "FAIL" else "ERROR"
+        
+        normalized_results.append({
+            "rule_id": r.get("rule_id", ""),
+            "rule_version": r.get("rule_version", "rule-v1"),
+            "table_name": r.get("table_name", ""),
+            "column": r.get("column"),
+            "status": status,
+            "checked_count": checked_count,
+            "failed_count": failed_count,
+            "violation_rate": violation_rate,
+            "severity": r.get("severity", "MEDIUM"),
+            "dimension": r.get("dimension", "VALIDITY"),
+            "duration_ms": r.get("duration_ms", 0.0),
+            "dbt_status": dbt_status,
+            "metrics_status": metrics_status,
+            "sample_refs": r.get("sample_failures", []),
+            "error": r.get("error"),
+            "evidence_refs": r.get("evidence_refs", []),
+        })
+
     test_run_id = state.get("test_run_id") or state.get("rule_run_id") or "test_run"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -395,7 +427,7 @@ async def test_runner_node(state: AgentState) -> dict:
         out_dir.mkdir(parents=True, exist_ok=True)
         dump_file = out_dir / f"debug_test_results_{timestamp}_{test_run_id}.json"
         dump_file.write_text(
-            json.dumps(all_results, ensure_ascii=False, indent=2, default=str),
+            json.dumps(normalized_results, ensure_ascii=False, indent=2, default=str),
             encoding="utf-8",
         )
         logger.info("Đã xuất trace test results ra: %s", dump_file)
@@ -403,13 +435,9 @@ async def test_runner_node(state: AgentState) -> dict:
         logger.warning("Không thể ghi file trace test results: %s", exc)
 
     return {
-        "test_results": all_results,
+        "test_results": normalized_results,
         "metadata": {**state.get("metadata", {}), "dbt_execution_mode": "dbt" if dbt_executed else "legacy_sql_fallback"},
     }
-
-
-
-# ---------------------------------------------------------------------------
 # Standalone Test Harness (Chạy từ file output thực tế)
 # ---------------------------------------------------------------------------
 

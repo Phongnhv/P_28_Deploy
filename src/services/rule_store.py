@@ -1028,7 +1028,7 @@ def publish_approved_rules(run_id: str) -> int:
             clean_params = _extract_clean_parameters(p.rule_type, spec)
             params_str = json.dumps(clean_params, ensure_ascii=False)
 
-            table_name = p.id.split(".")[0] if "." in p.id else "source_rows"
+            table_name = spec.get("table_name") or (p.id.split(".")[0] if "." in p.id else "source_rows")
             column_name = spec.get("column")
             proposed_source = (
                 session.query(ProposedRuleModel)
