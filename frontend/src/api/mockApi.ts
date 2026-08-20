@@ -237,7 +237,7 @@ function makeWorkflow(id: string, workflowDatasetId = datasetId): WorkflowRun {
   return { id, dataset_id: workflowDatasetId, current_step: "UPLOAD_PROFILE", iteration: 0, max_iterations: 3, steps };
 }
 
-function advanceWorkflow(workflow: WorkflowRun, completed: WorkflowStepKey) {
+function advanceWorkflow(workflow: WorkflowRun, completed: WorkflowStepKey, moveCurrent = true) {
   const index = workflow.steps.findIndex((step) => step.key === completed);
   workflow.steps = workflow.steps.map((step, stepIndex) => {
     if (step.key === completed) return { ...step, status: "COMPLETED", completed_at: now() };
@@ -245,7 +245,7 @@ function advanceWorkflow(workflow: WorkflowRun, completed: WorkflowStepKey) {
     return step;
   });
   const next = workflow.steps[index + 1];
-  if (next) workflow.current_step = next.key;
+  if (next && moveCurrent) workflow.current_step = next.key;
 }
 
 function addWorkflowArtifact(workflow: WorkflowRun, artifact: AgentArtifact) {
@@ -320,7 +320,7 @@ function completeWorkflowStep(workflowId: string, step: WorkflowStepKey) {
   } else if (waitingApproval) {
     workflow.steps = workflow.steps.map((item) => item.key === step ? { ...item, status: "WAITING_APPROVAL" } : item);
   } else {
-    advanceWorkflow(workflow, step);
+    advanceWorkflow(workflow, step, step !== "UNDERSTAND_DATA");
   }
   workflowRuns = workflowRuns.map((item) => item.id === workflowId ? workflow : item);
 }
@@ -542,6 +542,19 @@ export const mockApi: ApiClient = {
     const job = makeJob(step === "UPLOAD_PROFILE" ? "INGEST_PROFILE" : step === "PROPOSE_RULES" ? "PROPOSE_RULES" : "RUN_DQ");
     void finishJob(job.id, job.type).then(() => completeWorkflowStep(id, step));
     return { job_id: job.id, status: "PENDING" } satisfies CreateJobResponse;
+  },
+  async advanceWorkflowStep(id: string) {
+    await wait(120);
+    const workflow = workflowRuns.find((item) => item.id === id);
+    if (!workflow) throw new Error("Workflow run not found.");
+    const currentIndex = workflow.steps.findIndex((item) => item.key === workflow.current_step);
+    const current = workflow.steps[currentIndex];
+    const next = workflow.steps[currentIndex + 1];
+    if (!current || current.status !== "COMPLETED" || !next || next.status !== "READY") throw new Error("The next workflow step is not ready.");
+    workflow.current_step = next.key;
+    workflowRuns = workflowRuns.map((item) => item.id === id ? workflow : item);
+    addAudit("WORKFLOW_STEP_ADVANCED", "workflow", id, `Advanced from ${current.key} to ${next.key}.`);
+    return structuredClone(workflow);
   },
   async listWorkflowArtifacts(id: string) {
     await wait(120);

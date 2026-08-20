@@ -232,6 +232,11 @@ export const realApiClient: ApiClient = {
       headers: { "Idempotency-Key": crypto.randomUUID() },
     });
   },
+  advanceWorkflowStep(workflowRunId: string) {
+    return request<WorkflowRun>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}/advance`, {
+      method: "POST",
+    });
+  },
   listWorkflowArtifacts(workflowRunId: string) {
     return request<AgentArtifact[]>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}/artifacts`);
   },

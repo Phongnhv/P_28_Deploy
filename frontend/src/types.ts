@@ -353,6 +353,7 @@ export interface ApiClient {
   createWorkflow(datasetId: string): Promise<WorkflowRun>;
   getWorkflow(workflowRunId: string): Promise<WorkflowRun>;
   runWorkflowStep(workflowRunId: string, step: WorkflowStepKey): Promise<CreateJobResponse>;
+  advanceWorkflowStep(workflowRunId: string): Promise<WorkflowRun>;
   listWorkflowArtifacts(workflowRunId: string): Promise<AgentArtifact[]>;
   reviewArtifact(artifactId: string, input: ArtifactReviewInput): Promise<AgentArtifact>;
   continueLoop(workflowRunId: string, input: LoopDecisionInput): Promise<WorkflowRun>;
