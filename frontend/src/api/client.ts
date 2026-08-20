@@ -23,6 +23,11 @@ import type {
   UserAccount,
   UserCreateInput,
   UserUpdateInput,
+  WorkflowRun,
+  WorkflowStepKey,
+  AgentArtifact,
+  ArtifactReviewInput,
+  LoopDecisionInput,
 } from "../types";
 
 function resolveApiBaseUrl(configuredValue: string) {
@@ -211,5 +216,35 @@ export const realApiClient: ApiClient = {
   },
   revokeDatasetAccess(datasetId: string, username: string) {
     return request<void>(`/api/v1/admin/datasets/${encodeURIComponent(datasetId)}/access/${encodeURIComponent(username)}`, { method: "DELETE" });
+  },
+  createWorkflow(datasetId: string) {
+    return request<WorkflowRun>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/workflows`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  },
+  getWorkflow(workflowRunId: string) {
+    return request<WorkflowRun>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}`);
+  },
+  runWorkflowStep(workflowRunId: string, step: WorkflowStepKey) {
+    return request<CreateJobResponse>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}/steps/${step}`, {
+      method: "POST",
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+    });
+  },
+  listWorkflowArtifacts(workflowRunId: string) {
+    return request<AgentArtifact[]>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}/artifacts`);
+  },
+  reviewArtifact(artifactId: string, input: ArtifactReviewInput) {
+    return request<AgentArtifact>(`/api/v1/workflow-artifacts/${encodeURIComponent(artifactId)}/review`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+  continueLoop(workflowRunId: string, input: LoopDecisionInput) {
+    return request<WorkflowRun>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}/loop-decision`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
   },
 };

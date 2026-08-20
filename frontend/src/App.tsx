@@ -26,9 +26,14 @@ import type {
   UserCreateInput,
   UserUpdateInput,
   UserRole,
+  AgentArtifact,
+  ArtifactReviewInput,
+  LoopDecisionInput,
+  WorkflowRun,
+  WorkflowStepKey,
 } from "./types";
 
-type View = "overview" | "rules" | "runs" | "visualization" | "data" | "audit" | "admin";
+type View = "overview" | "workflow" | "rules" | "runs" | "visualization" | "data" | "audit" | "admin";
 
 const sleep = (duration: number) =>
   new Promise((resolve) => window.setTimeout(resolve, duration));
@@ -204,6 +209,62 @@ function LoginScreen({
   );
 }
 
+const workflowStepLabels: Record<WorkflowStepKey, { label: string; owner: string; description: string }> = {
+  UPLOAD_PROFILE: { label: "Upload and profile", owner: "System", description: "Register the dataset and build its aggregate profile." },
+  UNDERSTAND_DATA: { label: "Understand data", owner: "Agent 1", description: "Infer semantic meaning from schema, metadata and profile evidence." },
+  PROPOSE_RULES: { label: "Propose rules", owner: "Agent 1", description: "Generate typed rules with evidence and confidence." },
+  REVIEW_RULES: { label: "Review rules", owner: "Steward", description: "Approve, request changes or reject the rule set." },
+  PROPOSE_CODE: { label: "Propose standardization", owner: "Agent 2", description: "Create a deterministic code or transformation plan." },
+  REVIEW_EXECUTE: { label: "Review and execute", owner: "Steward", description: "Validate the code proposal before a bounded run." },
+  ANALYZE_IMPROVE: { label: "Analyze and improve", owner: "Loop Agent", description: "Explain results and propose a bounded next iteration." },
+};
+
+function workflowArtifactForStep(workflow: WorkflowRun, artifacts: AgentArtifact[], step: WorkflowStepKey) {
+  const ids = workflow.steps.find((item) => item.key === step)?.artifact_ids ?? [];
+  return [...artifacts].reverse().find((artifact) => ids.includes(artifact.id));
+}
+
+function WorkflowPage({
+  dataset,
+  workflow,
+  artifacts,
+  activeJob,
+  canOperate,
+  onStartStep,
+  onReviewArtifact,
+  onLoopDecision,
+}: {
+  dataset?: Dataset;
+  workflow: WorkflowRun | null;
+  artifacts: AgentArtifact[];
+  activeJob: Job | null;
+  canOperate: boolean;
+  onStartStep: (step: WorkflowStepKey) => void;
+  onReviewArtifact: (artifactId: string, input: ArtifactReviewInput) => void;
+  onLoopDecision: (input: LoopDecisionInput) => void;
+}) {
+  if (!dataset) {
+    return <div className="empty-state"><span className="eyebrow">WORKFLOW</span><h2>Select a dataset to begin.</h2><p className="muted">The workflow will keep every agent artifact scoped to the selected dataset.</p></div>;
+  }
+  if (!workflow) {
+    return <section className="workflow-intro panel"><div><span className="eyebrow">STEP-BY-STEP AGENT WORKFLOW</span><h1>Turn a dataset into an approved quality run.</h1><p className="muted">Agent 1 understands the data and proposes rules. Agent 2 prepares standardization code. You decide what runs, while the Loop Agent explains what to improve.</p></div><div className="workflow-intro-actions"><StatusPill label="Local preview" tone="info" /><button className="button primary" onClick={() => onStartStep("UPLOAD_PROFILE")} disabled={!canOperate || Boolean(activeJob)}>Create workflow</button>{!canOperate && <small>Steward access is required to start a workflow.</small>}</div></section>;
+  }
+  const currentStep = workflow.steps.find((step) => step.key === workflow.current_step);
+  const currentArtifact = currentStep ? workflowArtifactForStep(workflow, artifacts, currentStep.key) : undefined;
+  const payload = currentArtifact?.payload && typeof currentArtifact.payload === "object" ? currentArtifact.payload as Record<string, unknown> : null;
+  const isRunning = Boolean(activeJob) || currentStep?.status === "RUNNING";
+  const canRun = canOperate && currentStep?.status === "READY" && !isRunning;
+  const reviewable = currentStep?.status === "WAITING_APPROVAL" && currentArtifact && ["DRAFT", "VALIDATED"].includes(currentArtifact.status);
+  const renderArtifact = () => {
+    if (!currentArtifact || !payload) return <div className="workflow-artifact-empty">This step has not produced an artifact yet.</div>;
+    if (currentArtifact.type === "CODE_PROPOSAL") return <><div className="artifact-code"><code>{`-- ${String(payload.target ?? "standardized_dataset")}`}</code><code>select * from source_dataset</code><code>-- normalize timestamps to UTC</code><code>-- trim controlled categorical values</code></div><div className="artifact-meta"><span>Deterministic: {String((payload.validation as Record<string, unknown> | undefined)?.deterministic ?? true)}</span><span>Destructive: {String((payload.validation as Record<string, unknown> | undefined)?.destructive ?? false)}</span></div></>;
+    if (currentArtifact.type === "LOOP_RECOMMENDATION") return <><p className="hypothesis">{String(payload.hypothesis ?? "No hypothesis supplied.")}</p><div className="evidence-list">{Array.isArray(payload.supporting_signals) && payload.supporting_signals.map((signal) => <span key={String(signal)} className="evidence-chip">{String(signal)}</span>)}</div><p className="muted">Next action: {String(payload.next_action ?? "Review the latest run.")}</p></>;
+    return <><p>{String(payload.summary ?? `${currentArtifact.type.replaceAll("_", " ")} generated by ${currentArtifact.agent_role}.`)}</p><div className="artifact-meta"><span>Version {currentArtifact.version}</span><span>{currentArtifact.status}</span>{Array.isArray(payload.evidence) && <span>{payload.evidence.length} evidence references</span>}{typeof payload.proposal_count === "number" && <span>{payload.proposal_count} typed rules</span>}</div></>;
+  };
+  const nextActionLabel = currentStep?.key === "UPLOAD_PROFILE" ? "Build profile" : currentStep?.key === "UNDERSTAND_DATA" ? "Run Agent 1 understanding" : currentStep?.key === "PROPOSE_RULES" ? "Generate rule proposals" : currentStep?.key === "PROPOSE_CODE" ? "Generate standardization code" : "Run current step";
+  return <div className="workflow-page"><div className="page-heading"><div><span className="eyebrow">WORKFLOW RUN {workflow.id}</span><h1>Dataset to decision</h1><p>{dataset.name} · iteration {workflow.iteration} of {workflow.max_iterations}</p></div><StatusPill label={isMockMode ? "Preview adapter" : "Connected API"} tone={isMockMode ? "info" : "success"} /></div><div className="workflow-layout"><aside className="workflow-stepper" aria-label="Workflow steps">{workflow.steps.map((step, index) => { const meta = workflowStepLabels[step.key]; return <div className={`workflow-step ${step.key === workflow.current_step ? "current" : ""} ${step.status.toLowerCase()}`} key={step.key}><div className="workflow-step-index">{step.status === "COMPLETED" ? "✓" : index + 1}</div><div className="workflow-step-copy"><strong>{meta.label}</strong><span>{meta.owner}</span><small>{step.status.replaceAll("_", " ")}</small>{step.blocker && <em>{step.blocker}</em>}</div></div>; })}</aside><section className="workflow-detail panel"><div className="workflow-detail-heading"><div><span className="eyebrow">CURRENT STEP</span><h2>{currentStep ? workflowStepLabels[currentStep.key].label : "Complete"}</h2><p className="muted">{currentStep ? workflowStepLabels[currentStep.key].description : "The workflow is complete."}</p></div>{currentStep && <StatusPill label={currentStep.status.replaceAll("_", " ")} tone={currentStep.status === "FAILED" ? "danger" : currentStep.status === "WAITING_APPROVAL" ? "warning" : currentStep.status === "COMPLETED" ? "success" : "info"} />}</div>{activeJob && <ProgressPanel job={activeJob} title={`Running ${workflowStepLabels[workflow.current_step].label}`} />}<div className="workflow-artifact"><div className="panel-heading"><div><span className="eyebrow">AGENT ARTIFACT</span><h3>{currentArtifact ? currentArtifact.type.replaceAll("_", " ") : "Waiting for output"}</h3></div>{currentArtifact && <StatusPill label={currentArtifact.status} tone={currentArtifact.status === "APPROVED" ? "success" : currentArtifact.status === "REJECTED" ? "danger" : "info"} />}</div>{renderArtifact()}</div><div className="workflow-actions">{currentStep && ["READY", "FAILED"].includes(currentStep.status) && <button className="button primary" disabled={!canRun} onClick={() => onStartStep(currentStep.key)}>{nextActionLabel}</button>}{reviewable && <><button className="button primary" disabled={!canOperate} onClick={() => onReviewArtifact(currentArtifact.id, { action: "approve" })}>Approve artifact</button><button className="button ghost" disabled={!canOperate} onClick={() => onReviewArtifact(currentArtifact.id, { action: "request_revision" })}>Request revision</button><button className="button danger" disabled={!canOperate} onClick={() => onReviewArtifact(currentArtifact.id, { action: "reject" })}>Reject</button></>}{currentStep?.key === "ANALYZE_IMPROVE" && currentStep.status === "WAITING_APPROVAL" && <><button className="button primary" disabled={!canOperate} onClick={() => onLoopDecision({ action: "continue" })}>Continue loop</button><button className="button ghost" disabled={!canOperate} onClick={() => onLoopDecision({ action: "stop" })}>Stop loop</button></>}{!canOperate && <span className="muted">Read-only role: review is disabled.</span>}</div></section></div></div>;
+}
+
 function App() {
   const [authenticated, setAuthenticated] = useState(
     () =>
@@ -233,6 +294,8 @@ function App() {
   const [dqResults, setDqResults] = useState<DqResult[]>([]);
   const [dqAnomalies, setDqAnomalies] = useState<DqAnomaly[]>([]);
   const [qualityTrends, setQualityTrends] = useState<QualityTrendPoint[]>([]);
+  const [workflow, setWorkflow] = useState<WorkflowRun | null>(null);
+  const [workflowArtifacts, setWorkflowArtifacts] = useState<AgentArtifact[]>([]);
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
@@ -530,6 +593,62 @@ function App() {
     }
   }
 
+  async function refreshWorkflow(workflowId: string) {
+    const [nextWorkflow, nextArtifacts] = await Promise.all([
+      api.getWorkflow(workflowId),
+      api.listWorkflowArtifacts(workflowId),
+    ]);
+    setWorkflow(nextWorkflow);
+    setWorkflowArtifacts(nextArtifacts);
+  }
+
+  async function startWorkflowStep(step: WorkflowStepKey) {
+    if (!dataset || !canOperate) return;
+    setError("");
+    setRetryAction(null);
+    try {
+      let currentWorkflow = workflow;
+      if (!currentWorkflow) {
+        currentWorkflow = await api.createWorkflow(dataset.id);
+        setWorkflow(currentWorkflow);
+        setWorkflowArtifacts(await api.listWorkflowArtifacts(currentWorkflow.id));
+      }
+      const queuedJob = await api.runWorkflowStep(currentWorkflow.id, step);
+      await pollJob(queuedJob, async () => {
+        await refreshWorkflow(currentWorkflow!.id);
+        setProfile(await api.getProfile(dataset.id));
+        setProposals(await api.listProposals(dataset.id));
+        setAuditLogs(await api.listAuditLogs());
+      });
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to run workflow step."));
+    }
+  }
+
+  async function reviewWorkflowArtifact(id: string, input: ArtifactReviewInput) {
+    if (!canOperate) return;
+    try {
+      const updated = await api.reviewArtifact(id, input);
+      setWorkflowArtifacts((current) => current.map((artifact) => artifact.id === id ? updated : artifact));
+      if (workflow) await refreshWorkflow(workflow.id);
+      setToast(input.action === "approve" ? "Artifact approved. The next workflow step is ready." : input.action === "reject" ? "Artifact rejected and kept out of execution." : "Revision requested from the agent.");
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to review workflow artifact."));
+    }
+  }
+
+  async function decideWorkflowLoop(input: LoopDecisionInput) {
+    if (!workflow || !canOperate) return;
+    try {
+      setWorkflow(await api.continueLoop(workflow.id, input));
+      setWorkflowArtifacts(await api.listWorkflowArtifacts(workflow.id));
+      setAuditLogs(await api.listAuditLogs());
+      setToast(input.action === "continue" ? "Loop continued with a bounded next iteration." : "Loop stopped by the steward.");
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to update loop decision."));
+    }
+  }
+
   if (!authenticated)
     return (
       <LoginScreen onLogin={handleLogin} busy={loginBusy} error={loginError} />
@@ -545,7 +664,7 @@ function App() {
         </div>
         <div className="sidebar-label">WORKSPACE</div>
         <nav>
-          {(["overview", "rules", "runs", "visualization", "data", "audit", ...(canAdmin ? ["admin" as View] : [])] as View[]).map((item) => (
+          {(["overview", "workflow", "rules", "runs", "visualization", "data", "audit", ...(canAdmin ? ["admin" as View] : [])] as View[]).map((item) => (
             <button
               key={item}
               className={`nav-item ${view === item ? "active" : ""}`}
@@ -554,6 +673,8 @@ function App() {
               <span className="nav-icon">
                 {item === "overview"
                   ? "◈"
+                  : item === "workflow"
+                    ? "↯"
                   : item === "rules"
                     ? "✦"
                     : item === "runs"
@@ -566,6 +687,8 @@ function App() {
               </span>
               {item === "overview"
                 ? "Overview"
+                : item === "workflow"
+                  ? "Agent workflow"
                 : item === "rules"
                   ? "Rule proposals"
                   : item === "runs"
@@ -621,6 +744,8 @@ function App() {
             <strong>
               {view === "overview"
                 ? "Overview"
+                : view === "workflow"
+                  ? "Agent workflow"
                 : view === "rules"
                   ? "Rule proposals"
                   : view === "runs"
@@ -706,6 +831,18 @@ function App() {
               onStartAnalysis={() => void startAnalysis()}
               onRequestProposals={() => void requestProposals()}
               onNavigate={setView}
+            />
+          )}
+          {view === "workflow" && (
+            <WorkflowPage
+              dataset={dataset}
+              workflow={workflow}
+              artifacts={workflowArtifacts}
+              activeJob={activeJob}
+              canOperate={canOperate}
+              onStartStep={(step) => void startWorkflowStep(step)}
+              onReviewArtifact={(id, input) => void reviewWorkflowArtifact(id, input)}
+              onLoopDecision={(input) => void decideWorkflowLoop(input)}
             />
           )}
           {view === "rules" && (

@@ -24,6 +24,12 @@ import type {
   UserAccount,
   UserCreateInput,
   UserUpdateInput,
+  WorkflowRun,
+  WorkflowStep,
+  WorkflowStepKey,
+  AgentArtifact,
+  ArtifactReviewInput,
+  LoopDecisionInput,
 } from "../types";
 
 const datasetId = "dataset-nyc-yellow-taxi-50k";
@@ -150,6 +156,8 @@ let auditLogs: AuditLog[] = [];
 let configurations: RuleConfiguration[] = [];
 let currentUsername = "";
 let currentRole = "USER";
+let workflowRuns: WorkflowRun[] = [];
+let workflowArtifacts: AgentArtifact[] = [];
 let accounts: Array<UserAccount & { password: string }> = [
   { id: "user-user", username: "user", display_name: "User", password: "user", role: "USER", status: "ACTIVE", created_by: "system-seed", created_at: now(), updated_at: now() },
   { id: "user-steward", username: "steward", display_name: "Steward", password: "steward", role: "STEWARD", status: "ACTIVE", created_by: "system-seed", created_at: now(), updated_at: now() },
@@ -208,6 +216,101 @@ async function finishJob(jobId: string, type: Job["type"]) {
     jobs = jobs.map((item) => item.id === jobId ? { ...item, status: "RUNNING", progress: Math.round(((index + 1) / progressMessages.length) * 100), message: progressMessages[index], updated_at: now() } : item);
   }
   jobs = jobs.map((item) => item.id === jobId ? { ...item, status: "SUCCEEDED", progress: 100, message: "Completed", updated_at: now() } : item);
+}
+
+const workflowKeys: WorkflowStepKey[] = [
+  "UPLOAD_PROFILE",
+  "UNDERSTAND_DATA",
+  "PROPOSE_RULES",
+  "REVIEW_RULES",
+  "PROPOSE_CODE",
+  "REVIEW_EXECUTE",
+  "ANALYZE_IMPROVE",
+];
+
+function makeWorkflow(id: string): WorkflowRun {
+  const steps: WorkflowStep[] = workflowKeys.map((key, index) => ({
+    key,
+    status: index === 0 ? "READY" : "LOCKED",
+    artifact_ids: [],
+  }));
+  return { id, dataset_id: datasetId, current_step: "UPLOAD_PROFILE", iteration: 0, max_iterations: 3, steps };
+}
+
+function advanceWorkflow(workflow: WorkflowRun, completed: WorkflowStepKey) {
+  const index = workflow.steps.findIndex((step) => step.key === completed);
+  workflow.steps = workflow.steps.map((step, stepIndex) => {
+    if (step.key === completed) return { ...step, status: "COMPLETED", completed_at: now() };
+    if (stepIndex === index + 1) return { ...step, status: "READY" };
+    return step;
+  });
+  const next = workflow.steps[index + 1];
+  if (next) workflow.current_step = next.key;
+}
+
+function addWorkflowArtifact(workflow: WorkflowRun, artifact: AgentArtifact) {
+  workflowArtifacts = [...workflowArtifacts, artifact];
+  workflow.steps = workflow.steps.map((step) => step.key === workflow.current_step
+    ? { ...step, artifact_ids: [...step.artifact_ids, artifact.id] }
+    : step);
+}
+
+function createArtifact(workflow: WorkflowRun, type: AgentArtifact["type"], agentRole: AgentArtifact["agent_role"], payload: unknown, status: AgentArtifact["status"] = "VALIDATED") {
+  const artifact: AgentArtifact = {
+    id: `artifact-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    workflow_run_id: workflow.id,
+    agent_role: agentRole,
+    type,
+    version: 1,
+    status,
+    payload,
+    created_at: now(),
+  };
+  addWorkflowArtifact(workflow, artifact);
+  return artifact;
+}
+
+function completeWorkflowStep(workflowId: string, step: WorkflowStepKey) {
+  const workflow = workflowRuns.find((item) => item.id === workflowId);
+  if (!workflow || workflow.current_step !== step) return;
+  if (step === "UPLOAD_PROFILE") {
+    dataset.status = "PROFILE_READY";
+  } else if (step === "UNDERSTAND_DATA") {
+    createArtifact(workflow, "SEMANTIC_CONTRACT", "DATA_RULE_AGENT", {
+      summary: "Mobility trip dataset with timestamps, numeric measures and a controlled payment vocabulary.",
+      columns: profile.columns.map((column) => ({ name: column.name, semantic_type: column.data_type === "numeric" ? "measure" : column.data_type === "timestamp" ? "event_time" : "category", confidence: 0.9 })),
+      evidence: profile.evidence_keys,
+    });
+  } else if (step === "PROPOSE_RULES") {
+    createArtifact(workflow, "RULE_SET", "DATA_RULE_AGENT", {
+      proposal_count: proposals.length,
+      rules: proposals.map((proposal) => ({ id: proposal.id, title: proposal.title, evidence: proposal.evidence_refs, confidence: proposal.confidence })),
+    }, "DRAFT");
+  } else if (step === "PROPOSE_CODE") {
+    createArtifact(workflow, "CODE_PROPOSAL", "STANDARDIZATION_AGENT", {
+      language: "SQL",
+      target: "staging.normalized_dataset",
+      changes: ["trim categorical values", "normalize timestamps to UTC", "preserve raw columns"],
+      validation: { deterministic: true, destructive: false },
+    }, "DRAFT");
+  } else if (step === "ANALYZE_IMPROVE") {
+    createArtifact(workflow, "LOOP_RECOMMENDATION", "LOOP_AGENT", {
+      hypothesis: "Negative distance violations are concentrated in a small cohort and should be reviewed before relaxing the rule.",
+      supporting_signals: ["HIGH_VIOLATION_RATE", "profile.trip_distance.negative_rate"],
+      next_action: "Review the range rule and rerun the bounded check.",
+    }, "DRAFT");
+  }
+  const waitingApproval = step === "PROPOSE_RULES" || step === "PROPOSE_CODE" || step === "ANALYZE_IMPROVE";
+  if (waitingApproval && step !== "ANALYZE_IMPROVE") {
+    advanceWorkflow(workflow, step);
+    const reviewStep = step === "PROPOSE_RULES" ? "REVIEW_RULES" : "REVIEW_EXECUTE";
+    workflow.steps = workflow.steps.map((item) => item.key === reviewStep ? { ...item, status: "WAITING_APPROVAL" } : item);
+  } else if (waitingApproval) {
+    workflow.steps = workflow.steps.map((item) => item.key === step ? { ...item, status: "WAITING_APPROVAL" } : item);
+  } else {
+    advanceWorkflow(workflow, step);
+  }
+  workflowRuns = workflowRuns.map((item) => item.id === workflowId ? workflow : item);
 }
 
 export const mockApi: ApiClient = {
@@ -401,4 +504,69 @@ export const mockApi: ApiClient = {
     access = existing ? access.map((item) => item.id === existing.id ? grant : item) : [...access, grant]; addAudit("DATASET_ACCESS_GRANTED", "dataset_access", grant.id, `Updated access for '${account.username}'.`); return grant;
   },
   async revokeDatasetAccess(id: string, username: string) { ensureAdmin(); const grant = access.find((item) => item.dataset_id === id && item.username === username.toLowerCase()); if (!grant) throw new Error("Dataset access grant not found."); access = access.filter((item) => item.id !== grant.id); addAudit("DATASET_ACCESS_REVOKED", "dataset_access", grant.id, `Revoked access for '${username}'.`); },
+  async createWorkflow(id: string) {
+    await wait(180);
+    if (id !== datasetId) throw new Error("Dataset not found.");
+    const existing = workflowRuns.find((item) => item.dataset_id === id && item.steps.some((step) => !["COMPLETED", "STALE"].includes(step.status)));
+    if (existing) return structuredClone(existing);
+    const workflow = makeWorkflow(`workflow-${Date.now()}`);
+    workflowRuns = [...workflowRuns, workflow];
+    addAudit("WORKFLOW_CREATED", "workflow", workflow.id, "Created a step-by-step agent workflow in the local adapter.");
+    return structuredClone(workflow);
+  },
+  async getWorkflow(id: string) {
+    await wait(120);
+    const workflow = workflowRuns.find((item) => item.id === id);
+    if (!workflow) throw new Error("Workflow run not found.");
+    return structuredClone(workflow);
+  },
+  async runWorkflowStep(id: string, step: WorkflowStepKey) {
+    const workflow = workflowRuns.find((item) => item.id === id);
+    if (!workflow) throw new Error("Workflow run not found.");
+    if (workflow.current_step !== step) throw new Error(`Step ${step} is not ready. Complete ${workflow.current_step} first.`);
+    const current = workflow.steps.find((item) => item.key === step);
+    if (!current || !["READY", "FAILED"].includes(current.status)) throw new Error("This workflow step is waiting for review.");
+    workflow.steps = workflow.steps.map((item) => item.key === step ? { ...item, status: "RUNNING", started_at: now() } : item);
+    const job = makeJob(step === "UPLOAD_PROFILE" ? "INGEST_PROFILE" : step === "PROPOSE_RULES" ? "PROPOSE_RULES" : "RUN_DQ");
+    void finishJob(job.id, job.type).then(() => completeWorkflowStep(id, step));
+    return { job_id: job.id, status: "PENDING" } satisfies CreateJobResponse;
+  },
+  async listWorkflowArtifacts(id: string) {
+    await wait(120);
+    return workflowArtifacts.filter((item) => item.workflow_run_id === id).map((item) => structuredClone(item));
+  },
+  async reviewArtifact(id: string, input: ArtifactReviewInput) {
+    await wait(180);
+    const existing = workflowArtifacts.find((item) => item.id === id);
+    if (!existing) throw new Error("Workflow artifact not found.");
+    const workflow = workflowRuns.find((item) => item.id === existing.workflow_run_id);
+    if (!workflow) throw new Error("Workflow run not found.");
+    const status: AgentArtifact["status"] = input.action === "approve" ? "APPROVED" : input.action === "reject" ? "REJECTED" : "DRAFT";
+    const updated = { ...existing, status };
+    workflowArtifacts = workflowArtifacts.map((item) => item.id === id ? updated : item);
+    if (input.action === "approve") {
+      const approvalStep = existing.type === "RULE_SET" ? "REVIEW_RULES" : existing.type === "CODE_PROPOSAL" ? "REVIEW_EXECUTE" : existing.type === "LOOP_RECOMMENDATION" ? "ANALYZE_IMPROVE" : null;
+      if (approvalStep && workflow.current_step === approvalStep) advanceWorkflow(workflow, approvalStep);
+    }
+    workflowRuns = workflowRuns.map((item) => item.id === workflow.id ? workflow : item);
+    addAudit(`WORKFLOW_ARTIFACT_${status}`, "workflow_artifact", id, `${status} ${existing.type} artifact in the local workflow.`);
+    return structuredClone(updated);
+  },
+  async continueLoop(id: string, input: LoopDecisionInput) {
+    await wait(180);
+    const workflow = workflowRuns.find((item) => item.id === id);
+    if (!workflow || workflow.current_step !== "ANALYZE_IMPROVE") throw new Error("The workflow is not waiting for a loop decision.");
+    if (input.action === "continue") {
+      if (workflow.iteration >= workflow.max_iterations) throw new Error("The maximum number of loop iterations has been reached.");
+      workflow.iteration += 1;
+      workflow.steps = workflow.steps.map((item) => item.key === "ANALYZE_IMPROVE" ? { ...item, status: "COMPLETED", completed_at: now() } : item);
+      workflow.current_step = "REVIEW_RULES";
+      workflow.steps = workflow.steps.map((item) => item.key === "REVIEW_RULES" ? { ...item, status: "READY" } : item);
+    } else {
+      workflow.steps = workflow.steps.map((item) => item.key === "ANALYZE_IMPROVE" ? { ...item, status: "COMPLETED", completed_at: now() } : item);
+    }
+    workflowRuns = workflowRuns.map((item) => item.id === id ? workflow : item);
+    addAudit("LOOP_DECISION", "workflow", id, `${input.action} loop at iteration ${workflow.iteration}.`);
+    return structuredClone(workflow);
+  },
 };

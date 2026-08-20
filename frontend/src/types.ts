@@ -6,6 +6,27 @@ export type AccountStatus = "ACTIVE" | "SUSPENDED" | "DISABLED";
 export type DatasetAccessLevel = "READ" | "MANAGE";
 export type RuleExecutionStatus = "ACTIVE" | "PAUSED";
 export type RuleScheduleFrequency = "MANUAL" | "HOURLY" | "DAILY";
+export type WorkflowStepKey =
+  | "UPLOAD_PROFILE"
+  | "UNDERSTAND_DATA"
+  | "PROPOSE_RULES"
+  | "REVIEW_RULES"
+  | "PROPOSE_CODE"
+  | "REVIEW_EXECUTE"
+  | "ANALYZE_IMPROVE";
+export type WorkflowStepStatus =
+  | "LOCKED"
+  | "READY"
+  | "RUNNING"
+  | "WAITING_APPROVAL"
+  | "COMPLETED"
+  | "FAILED"
+  | "STALE";
+export type AgentArtifactType =
+  | "SEMANTIC_CONTRACT"
+  | "RULE_SET"
+  | "CODE_PROPOSAL"
+  | "LOOP_RECOMMENDATION";
 export type RuleType =
   | "not_null"
   | "numeric_range"
@@ -257,6 +278,45 @@ export interface ManualRuleInput {
   rule: RuleSpec;
 }
 
+export interface WorkflowStep {
+  key: WorkflowStepKey;
+  status: WorkflowStepStatus;
+  artifact_ids: string[];
+  blocker?: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+export interface AgentArtifact {
+  id: string;
+  workflow_run_id: string;
+  agent_role: "DATA_RULE_AGENT" | "STANDARDIZATION_AGENT" | "LOOP_AGENT";
+  type: AgentArtifactType;
+  version: number;
+  status: "DRAFT" | "VALIDATED" | "APPROVED" | "REJECTED" | "STALE";
+  payload: unknown;
+  created_at: string;
+}
+
+export interface WorkflowRun {
+  id: string;
+  dataset_id: string;
+  current_step: WorkflowStepKey;
+  iteration: number;
+  max_iterations: number;
+  steps: WorkflowStep[];
+}
+
+export interface ArtifactReviewInput {
+  action: "approve" | "request_revision" | "reject";
+  comment?: string;
+}
+
+export interface LoopDecisionInput {
+  action: "continue" | "request_changes" | "stop";
+  comment?: string;
+}
+
 export interface ApiClient {
   createSession(username: string, password: string): Promise<SessionResponse>;
   deleteSession(): Promise<void>;
@@ -285,4 +345,10 @@ export interface ApiClient {
   listDatasetAccess(datasetId: string): Promise<DatasetAccess[]>;
   grantDatasetAccess(datasetId: string, username: string, accessLevel: DatasetAccessLevel): Promise<DatasetAccess>;
   revokeDatasetAccess(datasetId: string, username: string): Promise<void>;
+  createWorkflow(datasetId: string): Promise<WorkflowRun>;
+  getWorkflow(workflowRunId: string): Promise<WorkflowRun>;
+  runWorkflowStep(workflowRunId: string, step: WorkflowStepKey): Promise<CreateJobResponse>;
+  listWorkflowArtifacts(workflowRunId: string): Promise<AgentArtifact[]>;
+  reviewArtifact(artifactId: string, input: ArtifactReviewInput): Promise<AgentArtifact>;
+  continueLoop(workflowRunId: string, input: LoopDecisionInput): Promise<WorkflowRun>;
 }
