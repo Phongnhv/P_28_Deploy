@@ -61,6 +61,63 @@ def _supabase_source_url() -> str | None:
     return source_url if is_postgres_database_url(source_url) else None
 
 
+def _uploaded_dataset_path(dataset_id: str) -> Path | None:
+    for suffix in (".parquet", ".csv"):
+        candidate = Path("data/uploads") / f"{dataset_id}{suffix}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _profile_uploaded_dataset(db: Session, dataset_id: str, path: Path) -> dict:
+    """Profile an imported CSV/Parquet without exposing its source rows to agents."""
+    df = pd.read_parquet(path) if path.suffix.lower() == ".parquet" else pd.read_csv(path)
+    if df.empty:
+        raise ValueError("The imported dataset has no rows.")
+    if len(df.columns) > 128:
+        raise ValueError("The imported dataset has too many columns.")
+    df.columns = [str(column).strip()[:128] for column in df.columns]
+    if any(not column for column in df.columns) or len(set(df.columns)) != len(df.columns):
+        raise ValueError("Column names must be non-empty and unique.")
+    row_count = int(len(df))
+    db.query(ColumnProfileModel).filter_by(profile_dataset_id=dataset_id).delete()
+    db.query(ProfileModel).filter_by(dataset_id=dataset_id).delete()
+    columns = []
+    total_nulls = 0
+    for name in df.columns:
+        series = df[name]
+        non_null = series.dropna()
+        null_count, non_null_count = int(series.isnull().sum()), int(len(non_null))
+        total_nulls += null_count
+        numeric = pd.api.types.is_numeric_dtype(series)
+        data_type = "numeric" if numeric else "timestamp" if pd.api.types.is_datetime64_any_dtype(series) else "string"
+        quantiles = _numeric_quantiles(non_null) if numeric and non_null_count else {}
+        columns.append(ColumnProfileModel(
+            profile_dataset_id=dataset_id, name=name, data_type=data_type,
+            null_rate=_rate(null_count, row_count), distinct_count=int(non_null.nunique()),
+            non_null_count=non_null_count, negative_rate=_rate(int((non_null < 0).sum()), non_null_count) if numeric and non_null_count else None,
+            quantiles_json=json.dumps(quantiles), out_of_domain_rate=None,
+            full_distinct_count=int(non_null.nunique()), uniqueness_rate=_rate(int(non_null.nunique()), non_null_count),
+            is_unique_full_table=bool(null_count == 0 and non_null_count == row_count and non_null.nunique() == row_count),
+            min_value=float(non_null.min()) if numeric and non_null_count else None,
+            max_value=float(non_null.max()) if numeric and non_null_count else None,
+            sample_value=str(non_null.iloc[0])[:256] if non_null_count else "",
+        ))
+    duplicate_rate = _rate(int(df.duplicated().sum()), row_count) * 100.0
+    completeness = (1.0 - _rate(total_nulls, row_count * len(df.columns))) * 100.0
+    evidence_keys = ["profile.row_count", "profile.completeness_score", "profile.duplicate_rate"]
+    evidence_keys.extend(f"profile.column.{column.name}.null_rate" for column in columns)
+    db.add(ProfileModel(dataset_id=dataset_id, row_count=row_count, completeness_score=round(completeness, 2),
+                        validity_score=100.0, duplicate_rate=round(duplicate_rate, 2),
+                        cross_field_metrics_json="[]", evidence_keys=json.dumps(evidence_keys), generated_at=utc_now()))
+    db.add_all(columns)
+    dataset = db.get(DatasetModel, dataset_id)
+    if dataset:
+        dataset.status, dataset.row_count, dataset.updated_at = "PROFILE_READY", row_count, utc_now()
+    db.commit()
+    return {"row_count": row_count, "completeness_score": completeness, "validity_score": 100.0, "duplicate_rate": duplicate_rate}
+
+
 def _profile_supabase_into_dashboard(db: Session, dataset_id: str) -> dict:
     """Profile canonical Supabase rows and persist only aggregate dashboard evidence."""
     policy = get_dataset_rule_policy(dataset_id)
@@ -226,6 +283,18 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
         db.commit()
 
         try:
+            uploaded_path = _uploaded_dataset_path(dataset_id)
+            if uploaded_path:
+                job.progress = 35.0
+                job.message = "Reading imported dataset..."
+                db.commit()
+                profile_payload = _profile_uploaded_dataset(db, dataset_id, uploaded_path)
+                job.status, job.progress, job.message = "SUCCEEDED", 100.0, "Imported dataset profiled"
+                db.commit()
+                add_audit_event(db, session_id=session_id, actor_role=actor_role, action_code="PROFILE_CREATED",
+                                entity_type="dataset", entity_id=dataset_id,
+                                detail={"job_id": job_id, "row_count": profile_payload["row_count"], "source": "uploaded-file"})
+                return
             if _supabase_source_url():
                 job.progress = 35.0
                 job.message = "Profiling canonical Supabase rows..."
@@ -544,6 +613,11 @@ def run_propose_rules(job_id: str, dataset_id: str, session_id: str | None = Non
                     evidence_summary=p.evidence_summary,
                     confidence=p.confidence,
                     model_name=p.model_name,
+                    rule_name=p.rule_name,
+                    business_rationale=p.business_rationale,
+                    proposal_basis=p.proposal_basis,
+                    evidence=json.dumps(p.evidence, ensure_ascii=False),
+                    confidence_breakdown=json.dumps(p.confidence_breakdown, ensure_ascii=False),
                     created_at=utc_now(),
                     updated_at=utc_now()
                 )
@@ -655,7 +729,15 @@ def compile_rule_to_sql(rule_type: str, spec: dict, columns_allowlist: set[str])
     else:
         raise ValueError(f"Unsupported rule template: {rule_type}")
 
-def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor_role: str = "STEWARD"):
+def run_dq_checks(
+    job_id: str,
+    run_id: str,
+    session_id: str | None = None,
+    actor_role: str = "STEWARD",
+    *,
+    trigger_anomaly: bool = True,
+    finalize_job: bool = True,
+):
     """
     Dashboard execution adapter.
 
@@ -783,14 +865,42 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
             dq_run.total_checked = total_checked
             dq_run.completed_at = utc_now()
 
-            job.status = "SUCCEEDED"
-            job.progress = 100.0
-            job.message = "Completed"
+            # The steward workflow owns the subsequent anomaly analysis.  Its
+            # single visible job must remain running until the report artifact
+            # is durable, otherwise the UI stops polling too early.
+            job.status = "SUCCEEDED" if finalize_job else "RUNNING"
+            job.progress = 100.0 if finalize_job else 90.0
+            job.message = "Completed" if finalize_job else "Checks completed; preparing analysis report..."
             completed_at = utc_now()
             db.query(RuleConfigurationModel).filter(
                 RuleConfigurationModel.rule_proposal_id.in_([rule.rule_proposal_id for rule in rule_versions])
             ).update({RuleConfigurationModel.last_run_at: completed_at}, synchronize_session=False)
             db.commit()
+
+            # Legacy callers get Graph 3 in the background.  The steward workflow
+            # invokes it in its own worker so it can persist a linked artifact.
+            if trigger_anomaly:
+                try:
+                    import asyncio
+                    import threading
+
+                    from src.agents.graph import run_anomaly_graph
+
+                    logger.info("Triggering Graph 3 Anomaly Analysis asynchronously for run_id=%s", run_id)
+
+                    def _trigger_anomaly():
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            loop.run_until_complete(run_anomaly_graph(execution_run_id=run_id, dataset_id=dataset_id))
+                        except Exception as ex:
+                            logger.error("Failed executing Graph 3 from background thread: %s", ex, exc_info=True)
+                        finally:
+                            loop.close()
+
+                    threading.Thread(target=_trigger_anomaly, daemon=True).start()
+                except Exception as ae:
+                    logger.error("Failed to trigger Graph 3 Anomaly Analysis: %s", ae, exc_info=True)
 
             add_audit_event(
                 db,

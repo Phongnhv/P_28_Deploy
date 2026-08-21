@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { api, isMockMode } from "./api";
+import { api, isMockMode, workflowApi } from "./api";
 import { ApiError, clearApiSession } from "./api/client";
 import ThemeControl from "./ThemeControl";
 import type {
@@ -26,9 +26,24 @@ import type {
   UserCreateInput,
   UserUpdateInput,
   UserRole,
+  AgentArtifact,
+  ArtifactReviewInput,
+  LoopDecisionInput,
+  WorkflowRun,
+  WorkflowStep,
+  WorkflowStepKey,
 } from "./types";
 
-type View = "overview" | "rules" | "runs" | "visualization" | "data" | "audit" | "admin";
+type View =
+  | "overview"
+  | "workflow"
+  | "datasets"
+  | "rules"
+  | "runs"
+  | "visualization"
+  | "data"
+  | "audit"
+  | "admin";
 
 const sleep = (duration: number) =>
   new Promise((resolve) => window.setTimeout(resolve, duration));
@@ -53,11 +68,17 @@ function formatRule(rule: RuleSpec) {
 
 function getErrorMessage(error: unknown, fallback: string) {
   if (!(error instanceof ApiError))
-    return error instanceof Error ? error.message : fallback;
+    return error instanceof TypeError
+      ? "Cannot reach the API service. Confirm that the local backend is running, then try again."
+      : error instanceof Error
+        ? error.message
+        : fallback;
   if (error.status === 401)
     return "Your session has expired. Please sign in again.";
   if (error.status === 409)
-    return "This operation is already in progress. Refresh the workspace before retrying.";
+    return (
+      error.message || "The workflow cannot continue from its current state."
+    );
   if (error.status === 422)
     return "The request is not valid for the current workflow state.";
   if (error.status === 429)
@@ -204,6 +225,934 @@ function LoginScreen({
   );
 }
 
+const workflowStepLabels: Record<
+  WorkflowStepKey,
+  { label: string; owner: string; description: string }
+> = {
+  UPLOAD_PROFILE: {
+    label: "Prepare dataset",
+    owner: "System",
+    description:
+      "Internal system step: register the dataset and build its deterministic aggregate profile before the agent starts.",
+  },
+  UNDERSTAND_DATA: {
+    label: "Understand data",
+    owner: "Agent",
+    description:
+      "Inspect the profiled rows, inferred schema and semantic contract before you continue to rule generation.",
+  },
+  PROPOSE_RULES: {
+    label: "Propose rules",
+    owner: "Agent",
+    description: "Generate typed rules with evidence and confidence.",
+  },
+  REVIEW_RULES: {
+    label: "Review rules",
+    owner: "Steward",
+    description: "Approve, request changes or reject the rule set.",
+  },
+  PUBLISH_RULESET: {
+    label: "Publish ruleset",
+    owner: "Steward",
+    description:
+      "Create an immutable ruleset version from the approved typed rules.",
+  },
+  RUN_CHECKS: {
+    label: "Run quality checks",
+    owner: "Runner",
+    description: "Run the approved checks.",
+  },
+  ANALYZE_REPORT: {
+    label: "Analyze and report",
+    owner: "Agent",
+    description: "Summarize the run results.",
+  },
+  PROPOSE_CODE: {
+    label: "Propose standardization",
+    owner: "Agent",
+    description: "Create a deterministic code or transformation plan.",
+  },
+  REVIEW_EXECUTE: {
+    label: "Review and execute",
+    owner: "Steward",
+    description: "Validate the code proposal before a bounded run.",
+  },
+  ANALYZE_IMPROVE: {
+    label: "Analyze and improve",
+    owner: "Loop Agent",
+    description: "Explain results and propose a bounded next iteration.",
+  },
+};
+
+const workflowPhases = [
+  {
+    label: "Profile data",
+    owner: "System",
+    steps: ["UPLOAD_PROFILE"] as WorkflowStepKey[],
+  },
+  {
+    label: "Understand data",
+    owner: "Agent",
+    steps: ["UNDERSTAND_DATA"] as WorkflowStepKey[],
+  },
+  {
+    label: "Propose & review",
+    owner: "Agent + steward",
+    steps: ["PROPOSE_RULES", "REVIEW_RULES"] as WorkflowStepKey[],
+  },
+  {
+    label: "Publish & monitor",
+    owner: "System + agent",
+    steps: [
+      "PUBLISH_RULESET",
+      "RUN_CHECKS",
+      "ANALYZE_REPORT",
+    ] as WorkflowStepKey[],
+  },
+];
+
+function workflowPhaseIndex(step: WorkflowStepKey) {
+  return workflowPhases.findIndex((phase) => phase.steps.includes(step));
+}
+
+function DatasetsPage({
+  datasets,
+  dataset,
+  onOpenExplorer,
+  onImportDataset,
+  canOperate,
+  importing,
+}: {
+  datasets: Dataset[];
+  dataset?: Dataset;
+  onOpenExplorer: (datasetId: string) => void;
+  onImportDataset: (file: File) => void;
+  canOperate: boolean;
+  importing: boolean;
+}) {
+  return (
+    <div className="datasets-page">
+      <div className="page-heading datasets-heading">
+        <div>
+          <span className="eyebrow">DATASET CATALOG</span>
+          <h1>Registered datasets</h1>
+          <p>Browse the registered artifacts and open a read-only data view.</p>
+        </div>
+        <label className="button primary dataset-import-button">
+          + Import dataset
+          <input type="file" accept=".csv,.parquet,text/csv,application/vnd.apache.parquet" disabled={!canOperate || importing} onChange={(event) => { const file = event.target.files?.[0]; if (file) onImportDataset(file); event.currentTarget.value = ""; }} />
+        </label>
+      </div>
+      {datasets.length ? (
+        <div className="dataset-catalog-grid">
+          <label className={`dataset-import-card ${importing ? "busy" : ""}`}>
+            <input type="file" accept=".csv,.parquet,text/csv,application/vnd.apache.parquet" disabled={!canOperate || importing} onChange={(event) => { const file = event.target.files?.[0]; if (file) onImportDataset(file); event.currentTarget.value = ""; }} />
+            <span className="dataset-import-plus">+</span>
+            <strong>{importing ? "Profiling dataset…" : "Import a dataset"}</strong>
+            <small>CSV or Parquet · profile automatically</small>
+          </label>
+          {datasets.map((item) => (
+            <article
+              className={`dataset-catalog-card ${item.id === dataset?.id ? "active" : ""}`}
+              key={item.id}
+            >
+              <div className="dataset-catalog-top">
+                <StatusPill
+                  label={item.status.replaceAll("_", " ")}
+                  tone={item.status === "PROFILE_READY" ? "success" : "info"}
+                />
+                <code>{item.manifest_version}</code>
+              </div>
+              <h2>{item.name}</h2>
+              <p>{item.description}</p>
+              <div className="dataset-catalog-stats">
+                <div>
+                  <span>Rows</span>
+                  <strong>{item.row_count.toLocaleString()}</strong>
+                </div>
+                <div>
+                  <span>Source</span>
+                  <strong>{item.source_label}</strong>
+                </div>
+                <div>
+                  <span>Updated</span>
+                  <strong>{formatTime(item.updated_at)}</strong>
+                </div>
+              </div>
+              <div className="dataset-catalog-actions">
+                <span className="dataset-catalog-hint">Read-only preview</span>
+                <button
+                  className="button primary"
+                  onClick={() => onOpenExplorer(item.id)}
+                >
+                  View data <span aria-hidden="true">→</span>
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state">
+          <h2>No datasets registered.</h2>
+          <p className="muted">
+            Registered artifacts will appear here when they are available.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function workflowArtifactForStep(
+  workflow: WorkflowRun,
+  artifacts: AgentArtifact[],
+  step: WorkflowStepKey,
+) {
+  const ids =
+    workflow.steps.find((item) => item.key === step)?.artifact_ids ?? [];
+  return [...artifacts].reverse().find((artifact) => ids.includes(artifact.id));
+}
+
+function WorkflowPage({
+  dataset,
+  profile,
+  datasets,
+  workflow,
+  artifacts,
+  proposals,
+  configurations,
+  activeJob,
+  busy,
+  canOperate,
+  onStartStep,
+  onAdvanceStep,
+  onReviewArtifact,
+  onLoopDecision,
+  onApproveRule,
+  onRejectRule,
+  onEditRule,
+  onDeleteRule,
+  onSaveConfiguration,
+  onCreateManualRule,
+  onRewindStep,
+  onSelectDataset,
+  onUploadPreview,
+  onBackToDatasetSelection,
+}: {
+  dataset?: Dataset;
+  profile: DatasetProfile | null;
+  datasets: Dataset[];
+  workflow: WorkflowRun | null;
+  artifacts: AgentArtifact[];
+  proposals: RuleProposal[];
+  configurations: RuleConfiguration[];
+  activeJob: Job | null;
+  busy: boolean;
+  canOperate: boolean;
+  onStartStep: (step: WorkflowStepKey, fresh?: boolean) => void;
+  onAdvanceStep: () => void;
+  onReviewArtifact: (artifactId: string, input: ArtifactReviewInput) => void;
+  onLoopDecision: (input: LoopDecisionInput) => void;
+  onApproveRule: (id: string) => void;
+  onRejectRule: (id: string) => void;
+  onEditRule: (proposal: RuleProposal) => void;
+  onDeleteRule: (id: string) => void;
+  onSaveConfiguration: (id: string, input: RuleConfigurationInput) => void;
+  onCreateManualRule: () => void;
+  onRewindStep: (step: WorkflowStepKey) => void;
+  onSelectDataset: (datasetId: string) => void;
+  onUploadPreview: (file: File) => void;
+  onBackToDatasetSelection: () => void;
+}) {
+  const [ruleDatasetId, setRuleDatasetId] = useState(dataset?.id ?? "");
+  useEffect(() => {
+    setRuleDatasetId(workflow?.dataset_id ?? dataset?.id ?? "");
+  }, [workflow?.dataset_id, dataset?.id]);
+  if (!workflow) {
+    const selectedRuleDataset = datasets.find(
+      (item) => item.id === ruleDatasetId,
+    );
+    return (
+      <section className="workflow-page">
+        <header className="workflow-page-header">
+          <div>
+            <span className="eyebrow">RULE PROPOSER WORKFLOW</span>
+            <h1>Dataset to decision</h1>
+            <p>
+              {selectedRuleDataset?.name ?? "Choose a registered dataset"} ·
+              each result is preserved as a versioned workflow artifact.
+            </p>
+          </div>
+          <span className="status-pill">
+            {selectedRuleDataset ? "READY" : "SELECT DATASET"}
+          </span>
+        </header>
+        <div className="workflow-layout">
+          <aside className="workflow-stepper" aria-label="Four workflow phases">
+            {workflowPhases.map((phase, index) => (
+              <button
+                type="button"
+                className={`workflow-step ${index === 0 ? "active" : "locked"}`}
+                key={phase.label}
+                disabled
+              >
+                <div className="workflow-step-index">{index + 1}</div>
+                <div>
+                  <strong>{phase.label}</strong>
+                  <span>{phase.owner}</span>
+                </div>
+              </button>
+            ))}
+          </aside>
+          <section className="workflow-detail panel workflow-selection-detail">
+            <div className="workflow-detail-heading">
+              <div>
+                <span className="eyebrow">STEP 0 · CHOOSE DATASET</span>
+                <h2>Select the dataset for this run</h2>
+                <p>Choose a profiled dataset to start.</p>
+              </div>
+              <span className="status-pill">
+                {selectedRuleDataset ? "DATASET SELECTED" : "READY"}
+              </span>
+            </div>
+            <div className="dataset-selection-holder">
+              <div className="section-heading">
+                <div>
+                  <span className="eyebrow">REGISTERED DATASETS</span>
+                  <h3>Select an input</h3>
+                </div>
+                <span className="muted">{datasets.length} available</span>
+              </div>
+              <div className="dataset-choice-list">
+                <label className="dataset-choice dataset-choice-import">
+                  <input type="file" accept=".csv,.parquet,text/csv,application/vnd.apache.parquet" disabled={!canOperate || busy} onChange={(event) => { const file = event.target.files?.[0]; if (file) onUploadPreview(file); event.currentTarget.value = ""; }} />
+                  <span className="dataset-choice-import-icon">+</span>
+                  <span><strong>Import dataset</strong><small>CSV or Parquet · profile automatically</small></span>
+                </label>
+                {datasets.map((item) => (
+                  <button
+                    type="button"
+                    className={`dataset-choice ${item.id === ruleDatasetId ? "selected" : ""}`}
+                    key={item.id}
+                    disabled={busy}
+                    onClick={() => {
+                      setRuleDatasetId(item.id);
+                      onSelectDataset(item.id);
+                    }}
+                  >
+                    <span>
+                      <strong>{item.name}</strong>
+                      <small>
+                        {item.row_count.toLocaleString()} rows ·{" "}
+                        {item.manifest_version}
+                      </small>
+                    </span>
+                    <span>{item.status.replaceAll("_", " ")}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="workflow-actions">
+              <button
+                className="button primary"
+                onClick={() =>
+                  onStartStep(
+                    selectedRuleDataset?.status === "PROFILE_READY"
+                      ? "UNDERSTAND_DATA"
+                      : "UPLOAD_PROFILE",
+                    true,
+                  )
+                }
+                disabled={
+                  !canOperate ||
+                  busy ||
+                  Boolean(activeJob) ||
+                  !selectedRuleDataset
+                }
+              >
+                Start new run <span aria-hidden="true">→</span>
+              </button>
+              <small>
+                {selectedRuleDataset?.status === "PROFILE_READY"
+                  ? "A completed profile is available; the new run opens at data understanding."
+                  : "Profile the selected dataset before data understanding."}
+              </small>
+              {!canOperate && (
+                <small>Steward access is required to start a workflow.</small>
+              )}
+            </div>
+          </section>
+        </div>
+      </section>
+    );
+  }
+  if (!dataset) {
+    return (
+      <div className="empty-state">
+        <span className="eyebrow">WORKFLOW</span>
+        <h2>Select a dataset to begin.</h2>
+        <p className="muted">
+          The workflow will keep every agent artifact scoped to the selected
+          dataset.
+        </p>
+      </div>
+    );
+  }
+  const currentStep = workflow.steps.find(
+    (step) => step.key === workflow.current_step,
+  );
+  const currentArtifact = currentStep
+    ? workflowArtifactForStep(workflow, artifacts, currentStep.key)
+    : undefined;
+  const isRunning =
+    Boolean(activeJob) || busy || currentStep?.status === "RUNNING";
+  const canRun =
+    canOperate &&
+    currentStep?.key !== "UPLOAD_PROFILE" &&
+    ["READY", "FAILED", "COMPLETED"].includes(currentStep?.status ?? "") &&
+    !isRunning;
+  const reviewable =
+    currentArtifact &&
+    currentStep &&
+    ["REVIEW_RULES", "REVIEW_EXECUTE", "ANALYZE_IMPROVE"].includes(
+      currentStep.key,
+    ) &&
+    ["WAITING_APPROVAL", "READY"].includes(currentStep.status) &&
+    ["DRAFT", "VALIDATED", "APPROVED"].includes(currentArtifact.status);
+  const rulesDecided =
+    proposals.length > 0 &&
+    proposals.some((proposal) => proposal.status === "APPROVED") &&
+    proposals.every((proposal) =>
+      ["APPROVED", "REJECTED"].includes(proposal.status),
+    );
+  const renderArtifact = (artifact = currentArtifact) => {
+    const payload =
+      artifact?.payload && typeof artifact.payload === "object"
+        ? (artifact.payload as Record<string, unknown>)
+        : null;
+    if (!artifact || !payload)
+      return (
+        <div className="workflow-artifact-empty">
+          This step has not produced an artifact yet.
+        </div>
+      );
+    if (artifact.type === "SEMANTIC_CONTRACT") {
+      const contractColumns = Array.isArray(payload.columns)
+        ? payload.columns.filter((column): column is Record<string, unknown> =>
+            Boolean(column && typeof column === "object"),
+          )
+        : [];
+      return (
+        <div className="understanding-holder">
+          <div className="understanding-summary">
+            <span className="eyebrow">
+              DATA UNDERSTANDING ·{" "}
+              {String(payload.agent_mode ?? "profile-backed")}
+            </span>
+            <p>
+              {String(
+                payload.summary ?? "Agent has not supplied a summary yet.",
+              )}
+            </p>
+          </div>
+          <div className="understanding-meta">
+            <div>
+              <span>Rows</span>
+              <strong>
+                {(profile?.row_count ?? dataset.row_count).toLocaleString()}
+              </strong>
+            </div>
+            <div>
+              <span>Columns</span>
+              <strong>
+                {(
+                  profile?.columns.length ?? contractColumns.length
+                ).toLocaleString()}
+              </strong>
+            </div>
+            <div>
+              <span>Completeness</span>
+              <strong>
+                {profile ? `${profile.completeness_score.toFixed(1)}%` : "—"}
+              </strong>
+            </div>
+            <div>
+              <span>Validity</span>
+              <strong>
+                {profile ? `${profile.validity_score.toFixed(1)}%` : "—"}
+              </strong>
+            </div>
+            <div>
+              <span>Source</span>
+              <strong>{dataset.source_label}</strong>
+            </div>
+            <div>
+              <span>Manifest</span>
+              <strong>{dataset.manifest_version}</strong>
+            </div>
+          </div>
+          <div className="understanding-section">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">INFERRED SCHEMA</span>
+                <h3>Semantic columns</h3>
+              </div>
+              <span className="muted">{contractColumns.length} mapped</span>
+            </div>
+            <div className="schema-list">
+              {contractColumns.map((column) => (
+                <div className="schema-row" key={String(column.name)}>
+                  <strong>{String(column.name ?? "Unnamed column")}</strong>
+                  <span>{String(column.semantic_type ?? "unknown")}</span>
+                  <small>
+                    {typeof column.confidence === "number"
+                      ? `${Math.round(column.confidence * 100)}% confidence`
+                      : "No confidence score"}
+                  </small>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="understanding-section">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">PROFILE EVIDENCE</span>
+                <h3>Signals used by Agent</h3>
+              </div>
+            </div>
+            <div className="evidence-list">
+              {Array.isArray(payload.evidence) &&
+                payload.evidence.map((evidence) => (
+                  <span key={String(evidence)} className="evidence-chip">
+                    {String(evidence)}
+                  </span>
+                ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+    if (artifact.type === "CODE_PROPOSAL")
+      return (
+        <>
+          <div className="artifact-code">
+            <code>{`-- ${String(payload.target ?? "standardized_dataset")}`}</code>
+            <code>select * from source_dataset</code>
+            <code>-- normalize timestamps to UTC</code>
+            <code>-- trim controlled categorical values</code>
+          </div>
+          <div className="artifact-meta">
+            <span>
+              Deterministic:{" "}
+              {String(
+                (payload.validation as Record<string, unknown> | undefined)
+                  ?.deterministic ?? true,
+              )}
+            </span>
+            <span>
+              Destructive:{" "}
+              {String(
+                (payload.validation as Record<string, unknown> | undefined)
+                  ?.destructive ?? false,
+              )}
+            </span>
+          </div>
+        </>
+      );
+    if (artifact.type === "PUBLISHED_RULESET")
+      return (
+        <div className="publish-result">
+          <div>
+            <span className="eyebrow">PUBLISHED</span>
+            <strong>{String(payload.rule_count ?? 0)} approved rules</strong>
+          </div>
+          <dl>
+            <div><dt>Ruleset</dt><dd>{String(payload.ruleset_id ?? "—")}</dd></div>
+            <div><dt>Version hash</dt><dd>{String(payload.ruleset_hash ?? "—").slice(0, 12)}</dd></div>
+          </dl>
+        </div>
+      );
+    if (artifact.type === "DQ_RUN")
+      return (
+        <>
+          <div className="understanding-meta">
+            <div>
+              <span>Checked</span>
+              <strong>
+                {Number(payload.total_checked ?? 0).toLocaleString()}
+              </strong>
+            </div>
+            <div>
+              <span>Failed</span>
+              <strong>
+                {Number(payload.total_failed ?? 0).toLocaleString()}
+              </strong>
+            </div>
+            <div>
+              <span>Run</span>
+              <strong>{String(payload.run_id ?? "—")}</strong>
+            </div>
+          </div>
+          <div className="check-result-list">
+            {Array.isArray(payload.results) &&
+              payload.results.map((item) => {
+                const row = item as Record<string, unknown>;
+                return (
+                  <div className={`check-result-row ${String(row.status).toLowerCase()}`} key={String(row.rule_id)}>
+                    <span className="check-result-status">{String(row.status)}</span>
+                    <strong>{String(row.title)}</strong>
+                    <span>{String(row.failed_count)} failed</span>
+                  </div>
+                );
+              })}
+          </div>
+        </>
+      );
+    if (artifact.type === "ANOMALY_REPORT")
+      return (
+        <>
+          <p className="hypothesis">
+            Decision: {payload.decision === "INSUFFICIENT_HISTORY" ? "Not enough history" : String(payload.decision ?? "UNAVAILABLE")} · confidence{" "}
+            {typeof payload.confidence === "number"
+              ? `${Math.round((payload.confidence as number) * 100)}%`
+              : "—"}
+          </p>
+          {Array.isArray(payload.hypotheses) &&
+            (payload.hypotheses as Record<string, unknown>[]).map(
+              (item, index) => (
+                <p key={index}>
+                  {String(item.summary ?? "No hypothesis supplied.")}
+                </p>
+              ),
+            )}
+          {payload.error ? (
+            <p className="muted">Analysis note: {String(payload.error)}</p>
+          ) : null}
+        </>
+      );
+    if (artifact.type === "LOOP_RECOMMENDATION")
+      return (
+        <>
+          <p className="hypothesis">
+            {String(payload.hypothesis ?? "No hypothesis supplied.")}
+          </p>
+          <div className="evidence-list">
+            {Array.isArray(payload.supporting_signals) &&
+              payload.supporting_signals.map((signal) => (
+                <span key={String(signal)} className="evidence-chip">
+                  {String(signal)}
+                </span>
+              ))}
+          </div>
+          <p className="muted">
+            Next action:{" "}
+            {String(payload.next_action ?? "Review the latest run.")}
+          </p>
+        </>
+      );
+    return (
+      <>
+        <p>
+          {String(
+            payload.summary ??
+              `${artifact.type.replaceAll("_", " ")} generated by ${artifact.agent_role}.`,
+          )}
+        </p>
+        <div className="artifact-meta">
+          <span>Version {artifact.version}</span>
+          <span>{artifact.status}</span>
+          {Array.isArray(payload.evidence) && (
+            <span>{payload.evidence.length} evidence references</span>
+          )}
+          {typeof payload.proposal_count === "number" && (
+            <span>{payload.proposal_count} typed rules</span>
+          )}
+        </div>
+      </>
+    );
+  };
+  const nextActionLabel =
+    currentStep?.key === "UPLOAD_PROFILE"
+      ? "Prepare dataset"
+      : currentStep?.key === "UNDERSTAND_DATA"
+        ? "Run agent understanding"
+        : currentStep?.key === "PROPOSE_RULES"
+          ? "Generate rule proposals"
+          : currentStep?.key === "PUBLISH_RULESET"
+            ? "Publish approved rules"
+            : currentStep?.key === "RUN_CHECKS"
+              ? "Run published checks"
+              : currentStep?.key === "PROPOSE_CODE"
+                ? "Generate standardization code"
+                : "Run current step";
+  const visibleWorkflowSteps = workflow.steps;
+  const currentPhaseIndex = workflowPhaseIndex(workflow.current_step);
+  const phaseStatus = (phaseIndex: number) => {
+    if (phaseIndex < currentPhaseIndex) return "COMPLETED";
+    if (phaseIndex > currentPhaseIndex) return "LOCKED";
+    return currentStep?.status ?? "READY";
+  };
+  const executionSteps = workflowPhases[3].steps
+    .map((key) => workflow.steps.find((step) => step.key === key))
+    .filter((step): step is WorkflowStep => Boolean(step));
+  const executionActionLabel = (step: WorkflowStepKey) =>
+    step === "PUBLISH_RULESET"
+      ? "Publish approved rules"
+      : step === "RUN_CHECKS"
+        ? "Run Graph 2 checks"
+        : "Run Graph 3 analysis";
+  const currentStepIndex = currentStep
+    ? visibleWorkflowSteps.findIndex((step) => step.key === currentStep.key)
+    : -1;
+  const nextWorkflowStep =
+    currentStepIndex >= 0
+      ? visibleWorkflowSteps[currentStepIndex + 1]
+      : undefined;
+  const canAdvance = Boolean(
+    currentStep &&
+    ["COMPLETED", "WAITING_APPROVAL"].includes(currentStep.status) &&
+    nextWorkflowStep &&
+    nextWorkflowStep.status !== "LOCKED" &&
+    canOperate &&
+    !isRunning,
+  );
+  const previousWorkflowStep =
+    currentStepIndex > 0
+      ? visibleWorkflowSteps[currentStepIndex - 1]
+      : undefined;
+  const canMoveBackward = Boolean(
+    previousWorkflowStep && canOperate && !isRunning,
+  );
+  const canMoveForward = canAdvance;
+  return (
+    <div className="workflow-page">
+      <div className="page-heading">
+        <div>
+          <span className="eyebrow">WORKFLOW RUN {workflow.id}</span>
+          <h1>Dataset to decision</h1>
+          <p>
+            {dataset.name} · revision {workflow.iteration}
+          </p>
+        </div>
+        <div className="page-heading-actions">
+          <button
+            type="button"
+            className="step-nav-button"
+            onClick={onBackToDatasetSelection}
+            disabled={isRunning}
+          >
+            Change dataset
+          </button>
+          <button
+            type="button"
+            className="step-nav-button backward"
+            onClick={() =>
+              previousWorkflowStep && onRewindStep(previousWorkflowStep.key)
+            }
+            disabled={!canMoveBackward}
+          >
+            ← Back
+          </button>
+          <button
+            type="button"
+            className="step-nav-button forward"
+            onClick={onAdvanceStep}
+            disabled={!canMoveForward}
+          >
+            Continue →
+          </button>
+        </div>
+      </div>
+      <div className="workflow-layout">
+        <aside className="workflow-stepper" aria-label="Four workflow phases">
+          {workflowPhases.map((phase, index) => {
+            const status = phaseStatus(index);
+            return (
+              <button
+                type="button"
+                disabled
+                className={`workflow-step ${index === currentPhaseIndex ? "current" : ""} ${status.toLowerCase()}`}
+                key={phase.label}
+                aria-label={phase.label}
+              >
+                <div className="workflow-step-index">
+                  {status === "COMPLETED" ? "✓" : index + 1}
+                </div>
+                <div className="workflow-step-copy">
+                  <strong>{phase.label}</strong>
+                  <span>{phase.owner}</span>
+                </div>
+              </button>
+            );
+          })}
+        </aside>
+        <section className="workflow-detail panel">
+          <div className="workflow-detail-heading">
+            <div>
+              <span className="eyebrow">
+                CURRENT ACTIVITY · PHASE {currentPhaseIndex + 1}
+              </span>
+              <h2>
+                {currentStep
+                  ? workflowStepLabels[currentStep.key].label
+                  : "Complete"}
+              </h2>
+              <p className="muted">
+                {currentStep
+                  ? workflowStepLabels[currentStep.key].description
+                  : "The workflow is complete."}
+              </p>
+            </div>
+            {currentStep && (
+              <StatusPill
+                label={currentStep.status.replaceAll("_", " ")}
+                tone={
+                  currentStep.status === "FAILED"
+                    ? "danger"
+                    : currentStep.status === "WAITING_APPROVAL"
+                      ? "warning"
+                      : currentStep.status === "COMPLETED"
+                        ? "success"
+                        : "info"
+                }
+              />
+            )}
+          </div>
+          {busy && !activeJob && (
+            <div className="workflow-pending" role="status" aria-live="polite">
+              <span className="workflow-pending-indicator" aria-hidden="true" />
+              <div>
+                <span className="eyebrow">AGENT IS WORKING</span>
+                <strong>
+                  Preparing {workflowStepLabels[workflow.current_step].label}
+                </strong>
+                <p>Agent is running…</p>
+              </div>
+            </div>
+          )}
+          {activeJob && (
+            <ProgressPanel
+              job={activeJob}
+              title={`Running ${workflowStepLabels[workflow.current_step].label}`}
+            />
+          )}
+          {currentPhaseIndex === 3 ? (
+            <div className="execution-mini-steps" aria-label="Publish and monitor mini-steps">
+              {executionSteps.map((step) => {
+                const artifact = workflowArtifactForStep(workflow, artifacts, step.key);
+                const isCurrent = step.key === currentStep?.key;
+                const stepCanRun =
+                  isCurrent &&
+                  ["READY", "FAILED"].includes(step.status) &&
+                  canRun;
+                return (
+                  <article className={`execution-mini-step ${isCurrent ? "current" : ""} ${step.status.toLowerCase()}`} key={step.key}>
+                    <div className="execution-mini-heading">
+                      <div>
+                        <span className="eyebrow">{step.key === "RUN_CHECKS" ? "QUALITY CHECKS" : step.key === "ANALYZE_REPORT" ? "ANALYSIS" : "PUBLISHED RULES"}</span>
+                        <h3>{workflowStepLabels[step.key].label}</h3>
+                        <p>{workflowStepLabels[step.key].description}</p>
+                      </div>
+                      <StatusPill label={step.status.replaceAll("_", " ")} tone={step.status === "FAILED" ? "danger" : step.status === "COMPLETED" ? "success" : step.status === "READY" ? "info" : "neutral"} />
+                    </div>
+                    {artifact ? <div className="execution-mini-result">{renderArtifact(artifact)}</div> : <div className="workflow-artifact-empty">{step.status === "LOCKED" ? "Waiting for agent." : step.status === "RUNNING" ? "Agent is running…" : "Ready to run."}</div>}
+                    {isCurrent && step.status !== "COMPLETED" && (
+                      <div className="execution-next-holder">
+                        <div>
+                          <span className="eyebrow">NEXT OPERATION</span>
+                          <strong>{stepCanRun ? executionActionLabel(step.key) : "Agent is running…"}</strong>
+                          <p>{stepCanRun ? "Ready when you are." : "Please wait."}</p>
+                        </div>
+                        {stepCanRun && <button className="button primary" disabled={!canRun} onClick={() => onStartStep(step.key)}>{executionActionLabel(step.key)} <span>→</span></button>}
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="workflow-artifact">
+              <div className="panel-heading">
+                <div>
+                  <span className="eyebrow">AGENT ARTIFACT</span>
+                  <h3>{currentArtifact ? currentArtifact.type.replaceAll("_", " ") : "Waiting for output"}</h3>
+                </div>
+                {currentArtifact && <StatusPill label={currentArtifact.status} tone={currentArtifact.status === "APPROVED" ? "success" : currentArtifact.status === "REJECTED" ? "danger" : "info"} />}
+              </div>
+              {renderArtifact()}
+            </div>
+          )}
+          {currentStep?.key === "REVIEW_RULES" && (
+            <RulesPage
+              proposals={proposals}
+              configurations={configurations}
+              profileReady
+              busy={isRunning}
+              canOperate={canOperate && !currentStep.temporary}
+              onRequestProposals={() => undefined}
+              onApprove={onApproveRule}
+              onReject={onRejectRule}
+              onEdit={onEditRule}
+              onDelete={onDeleteRule}
+              onSaveConfiguration={onSaveConfiguration}
+              onCreateManual={onCreateManualRule}
+              onRun={() => undefined}
+              pipelineMode
+            />
+          )}
+          {currentPhaseIndex !== 3 && <div className="workflow-actions">
+            {currentStep &&
+              ["READY", "FAILED", "COMPLETED"].includes(currentStep.status) &&
+              !["UPLOAD_PROFILE"].includes(
+                currentStep.key,
+              ) && (
+                <button
+                  className="button primary"
+                  disabled={
+                    !canRun ||
+                    (currentStep.key === "REVIEW_RULES" &&
+                      Boolean(currentArtifact))
+                  }
+                  onClick={() => onStartStep(currentStep.key)}
+                >
+                  {currentStep.status === "COMPLETED"
+                    ? `Re-run ${workflowStepLabels[currentStep.key].label}`
+                    : nextActionLabel}
+                </button>
+              )}
+            {reviewable && !currentStep?.temporary && (
+              <>
+                <button
+                  className="button primary"
+                  disabled={
+                    !canOperate ||
+                    isRunning ||
+                    (currentStep?.key === "REVIEW_RULES" && !rulesDecided)
+                  }
+                  onClick={() =>
+                    onReviewArtifact(currentArtifact.id, { action: "approve" })
+                  }
+                >
+                  Confirm stage and continue
+                </button>
+                {currentStep?.key === "REVIEW_RULES" && !rulesDecided && (
+                  <span className="muted">
+                    Decide every rule and keep at least one approved rule before
+                    continuing.
+                  </span>
+                )}
+              </>
+            )}
+            {!canOperate && (
+              <span className="muted">Read-only role: review is disabled.</span>
+            )}
+          </div>}
+        </section>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [authenticated, setAuthenticated] = useState(
     () =>
@@ -221,18 +1170,31 @@ function App() {
   const [loginError, setLoginError] = useState("");
   const [view, setView] = useState<View>("overview");
   const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(
+    () => sessionStorage.getItem("ridepulse.dataset") ?? null,
+  );
   const [profile, setProfile] = useState<DatasetProfile | null>(null);
+  const [datasetProfiles, setDatasetProfiles] = useState<
+    Record<string, DatasetProfile>
+  >({});
   const [proposals, setProposals] = useState<RuleProposal[]>([]);
-  const [ruleConfigurations, setRuleConfigurations] = useState<RuleConfiguration[]>([]);
+  const [ruleConfigurations, setRuleConfigurations] = useState<
+    RuleConfiguration[]
+  >([]);
   const [adminUsers, setAdminUsers] = useState<UserAccount[]>([]);
   const [datasetAccess, setDatasetAccess] = useState<DatasetAccess[]>([]);
   const [adminLoading, setAdminLoading] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [activeJob, setActiveJob] = useState<Job | null>(null);
+  const [workflowActionBusy, setWorkflowActionBusy] = useState(false);
   const [activeRun, setActiveRun] = useState<DqRun | null>(null);
   const [dqResults, setDqResults] = useState<DqResult[]>([]);
   const [dqAnomalies, setDqAnomalies] = useState<DqAnomaly[]>([]);
   const [qualityTrends, setQualityTrends] = useState<QualityTrendPoint[]>([]);
+  const [workflow, setWorkflow] = useState<WorkflowRun | null>(null);
+  const [workflowArtifacts, setWorkflowArtifacts] = useState<AgentArtifact[]>(
+    [],
+  );
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
@@ -242,7 +1204,10 @@ function App() {
   );
   const [manualRuleOpen, setManualRuleOpen] = useState(false);
 
-  const dataset = datasets[0];
+  const dataset = useMemo(
+    () => datasets.find((item) => item.id === selectedDatasetId) ?? datasets[0],
+    [datasets, selectedDatasetId],
+  );
   const approvedRules = useMemo(
     () => proposals.filter((proposal) => proposal.status === "APPROVED"),
     [proposals],
@@ -260,15 +1225,35 @@ function App() {
       ]);
       setDatasets(nextDatasets);
       setAuditLogs(nextAudit);
-      const nextDataset = nextDatasets[0];
+      const profileEntries = await Promise.all(
+        nextDatasets
+          .filter((item) => item.status === "PROFILE_READY")
+          .map(
+            async (item) => [item.id, await api.getProfile(item.id)] as const,
+          ),
+      );
+      const nextProfiles = Object.fromEntries(
+        profileEntries.filter((entry): entry is [string, DatasetProfile] =>
+          Boolean(entry[1]),
+        ),
+      ) as Record<string, DatasetProfile>;
+      setDatasetProfiles(nextProfiles);
+      const rememberedDatasetId = sessionStorage.getItem("ridepulse.dataset");
+      const nextDataset =
+        nextDatasets.find((item) => item.id === rememberedDatasetId) ??
+        nextDatasets[0];
+      setSelectedDatasetId(nextDataset?.id ?? null);
+      if (nextDataset)
+        sessionStorage.setItem("ridepulse.dataset", nextDataset.id);
       if (nextDataset?.status === "PROFILE_READY") {
-        const [nextProfile, nextProposals, nextConfigurations, latestRun, nextTrends] = await Promise.all([
-          api.getProfile(nextDataset.id),
-          api.listProposals(nextDataset.id),
-          api.listRuleConfigurations(nextDataset.id),
-          api.getLatestDqRun(nextDataset.id),
-          api.getQualityTrends(nextDataset.id),
-        ]);
+        const [nextProposals, nextConfigurations, latestRun, nextTrends] =
+          await Promise.all([
+            api.listProposals(nextDataset.id),
+            api.listRuleConfigurations(nextDataset.id),
+            api.getLatestDqRun(nextDataset.id),
+            api.getQualityTrends(nextDataset.id),
+          ]);
+        const nextProfile = nextProfiles[nextDataset.id] ?? null;
         setProfile(nextProfile);
         setProposals(nextProposals);
         setRuleConfigurations(nextConfigurations);
@@ -282,6 +1267,10 @@ function App() {
           setDqResults(latestResults);
           setDqAnomalies(latestAnomalies);
         }
+      } else {
+        setProfile(null);
+        setProposals([]);
+        setRuleConfigurations([]);
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -301,7 +1290,10 @@ function App() {
     if (!dataset || !canAdmin) return;
     setAdminLoading(true);
     try {
-      const [users, access] = await Promise.all([api.listUsers(), api.listDatasetAccess(dataset.id)]);
+      const [users, access] = await Promise.all([
+        api.listUsers(),
+        api.listDatasetAccess(dataset.id),
+      ]);
       setAdminUsers(users);
       setDatasetAccess(access);
     } catch (err) {
@@ -311,10 +1303,20 @@ function App() {
     }
   }, [canAdmin, dataset]);
 
+  async function selectDataset(datasetId: string) {
+    sessionStorage.setItem("ridepulse.dataset", datasetId);
+    setSelectedDatasetId(datasetId);
+    setWorkflow(null);
+    setWorkflowArtifacts([]);
+    await refreshWorkspace();
+  }
+
   useEffect(() => {
     if (authenticated) void refreshWorkspace();
   }, [authenticated, refreshWorkspace]);
-  useEffect(() => { if (view === "admin") void refreshAdmin(); }, [refreshAdmin, view]);
+  useEffect(() => {
+    if (view === "admin") void refreshAdmin();
+  }, [refreshAdmin, view]);
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(""), 3500);
@@ -344,23 +1346,25 @@ function App() {
     sessionStorage.removeItem("ridepulse.auth");
     sessionStorage.removeItem("ridepulse.role");
     sessionStorage.removeItem("ridepulse.username");
+    sessionStorage.removeItem("ridepulse.dataset");
     setAuthenticated(false);
   }
 
   async function pollJob(
     acceptedJob: CreateJobResponse,
     onComplete: () => Promise<void>,
+    jobApi: typeof api = api,
   ) {
-    let current = await api.getJob(acceptedJob.job_id);
+    let current = await jobApi.getJob(acceptedJob.job_id);
     setActiveJob(current);
     for (
       let attempt = 0;
-      attempt < 30 &&
+      attempt < 120 &&
       !["SUCCEEDED", "FAILED", "FAILED_RETRYABLE"].includes(current.status);
       attempt += 1
     ) {
       await sleep(450);
-      current = await api.getJob(acceptedJob.job_id);
+      current = await jobApi.getJob(acceptedJob.job_id);
       setActiveJob(current);
     }
     const finalStatus = current.status as Job["status"];
@@ -370,7 +1374,7 @@ function App() {
       setRetryAction(null);
       setToast("Job completed successfully.");
     } else {
-      setRetryAction(() => () => void pollJob(acceptedJob, onComplete));
+      setRetryAction(() => () => void pollJob(acceptedJob, onComplete, jobApi));
       setError(
         current.error ??
           "The job did not complete. Retry the operation when ready.",
@@ -386,10 +1390,34 @@ function App() {
       const job = await api.startIngestion(dataset.id, crypto.randomUUID());
       await pollJob(job, async () => {
         setDatasets(await api.listDatasets());
-        setProfile(await api.getProfile(dataset.id));
+        const nextProfile = await api.getProfile(dataset.id);
+        setProfile(nextProfile);
+        if (nextProfile)
+          setDatasetProfiles((current) => ({
+            ...current,
+            [dataset.id]: nextProfile,
+          }));
       });
     } catch (err) {
       setError(getErrorMessage(err, "Unable to start analysis."));
+    }
+  }
+
+  async function importDataset(file: File) {
+    if (!canOperate || activeJob) return;
+    setError("");
+    setRetryAction(null);
+    try {
+      const imported = await api.importDataset(file);
+      sessionStorage.setItem("ridepulse.dataset", imported.dataset.id);
+      setSelectedDatasetId(imported.dataset.id);
+      setDatasets((current) => [imported.dataset, ...current]);
+      setView("datasets");
+      await pollJob(imported.job, async () => {
+        await refreshWorkspace();
+      });
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to import dataset."));
     }
   }
 
@@ -400,7 +1428,7 @@ function App() {
     try {
       const job = await api.startRuleProposals(dataset.id, crypto.randomUUID());
       await pollJob(job, async () => {
-        setProposals(await api.listProposals(dataset.id));
+        setProposals(await api.listProposals(dataset.id, workflow?.id));
         setAuditLogs(await api.listAuditLogs());
         setView("rules");
       });
@@ -410,9 +1438,10 @@ function App() {
   }
 
   async function reviewProposal(id: string, action: "approve" | "reject") {
+    setError("");
     try {
       await api.reviewProposal(id, { action });
-      setProposals(await api.listProposals(dataset.id));
+      setProposals(await api.listProposals(dataset.id, workflow?.id));
       setRuleConfigurations(await api.listRuleConfigurations(dataset.id));
       setAuditLogs(await api.listAuditLogs());
       setToast(
@@ -420,6 +1449,7 @@ function App() {
           ? "Rule approved for execution."
           : "Proposal rejected and kept out of execution.",
       );
+      setError("");
     } catch (err) {
       setError(getErrorMessage(err, "Unable to update proposal."));
     }
@@ -427,45 +1457,77 @@ function App() {
 
   async function deleteProposal(id: string) {
     if (!dataset) return;
+    setError("");
     try {
       await api.deleteProposal(id);
-      setProposals(await api.listProposals(dataset.id));
+      setProposals(await api.listProposals(dataset.id, workflow?.id));
       setRuleConfigurations(await api.listRuleConfigurations(dataset.id));
       setAuditLogs(await api.listAuditLogs());
       setToast("Proposal removed. Audit history was retained.");
-    } catch (err) { setError(getErrorMessage(err, "Unable to delete proposal.")); }
+      setError("");
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to delete proposal."));
+    }
   }
 
-  async function saveRuleConfiguration(id: string, input: RuleConfigurationInput) {
+  async function saveRuleConfiguration(
+    id: string,
+    input: RuleConfigurationInput,
+  ) {
     if (!dataset) return;
     try {
       await api.updateRuleConfiguration(id, input);
       setRuleConfigurations(await api.listRuleConfigurations(dataset.id));
       setAuditLogs(await api.listAuditLogs());
       setToast("Execution settings saved.");
-    } catch (err) { setError(getErrorMessage(err, "Unable to update rule settings.")); }
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to update rule settings."));
+    }
   }
 
   async function createAdminUser(input: UserCreateInput) {
-    try { await api.createUser(input); await refreshAdmin(); setToast(`Account '${input.username}' created.`); }
-    catch (err) { setError(getErrorMessage(err, "Unable to create account.")); }
+    try {
+      await api.createUser(input);
+      await refreshAdmin();
+      setToast(`Account '${input.username}' created.`);
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to create account."));
+    }
   }
 
   async function updateAdminUser(username: string, input: UserUpdateInput) {
-    try { await api.updateUser(username, input); await refreshAdmin(); setToast(`Account '${username}' updated.`); }
-    catch (err) { setError(getErrorMessage(err, "Unable to update account.")); }
+    try {
+      await api.updateUser(username, input);
+      await refreshAdmin();
+      setToast(`Account '${username}' updated.`);
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to update account."));
+    }
   }
 
-  async function grantAdminAccess(username: string, accessLevel: DatasetAccessLevel) {
+  async function grantAdminAccess(
+    username: string,
+    accessLevel: DatasetAccessLevel,
+  ) {
     if (!dataset) return;
-    try { await api.grantDatasetAccess(dataset.id, username, accessLevel); await refreshAdmin(); setToast(`Dataset access updated for '${username}'.`); }
-    catch (err) { setError(getErrorMessage(err, "Unable to grant dataset access.")); }
+    try {
+      await api.grantDatasetAccess(dataset.id, username, accessLevel);
+      await refreshAdmin();
+      setToast(`Dataset access updated for '${username}'.`);
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to grant dataset access."));
+    }
   }
 
   async function revokeAdminAccess(username: string) {
     if (!dataset) return;
-    try { await api.revokeDatasetAccess(dataset.id, username); await refreshAdmin(); setToast(`Dataset access revoked for '${username}'.`); }
-    catch (err) { setError(getErrorMessage(err, "Unable to revoke dataset access.")); }
+    try {
+      await api.revokeDatasetAccess(dataset.id, username);
+      await refreshAdmin();
+      setToast(`Dataset access revoked for '${username}'.`);
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to revoke dataset access."));
+    }
   }
 
   async function saveEdit(input: {
@@ -480,7 +1542,7 @@ function App() {
         action: "edit",
         ...input,
       });
-      setProposals(await api.listProposals(dataset.id));
+      setProposals(await api.listProposals(dataset.id, workflow?.id));
       setAuditLogs(await api.listAuditLogs());
       setEditingProposal(null);
       setToast("Proposal edited and marked ready for approval.");
@@ -493,7 +1555,7 @@ function App() {
     if (!dataset) return;
     try {
       await api.createManualRule(dataset.id, input);
-      setProposals(await api.listProposals(dataset.id));
+      setProposals(await api.listProposals(dataset.id, workflow?.id));
       setAuditLogs(await api.listAuditLogs());
       setManualRuleOpen(false);
       setToast("Manual rule created and queued for approval.");
@@ -530,6 +1592,171 @@ function App() {
     }
   }
 
+  async function refreshWorkflow(workflowId: string) {
+    const [nextWorkflow, nextArtifacts] = await Promise.all([
+      workflowApi.getWorkflow(workflowId),
+      workflowApi.listWorkflowArtifacts(workflowId),
+    ]);
+    setWorkflow(nextWorkflow);
+    setWorkflowArtifacts(nextArtifacts);
+  }
+
+  async function startWorkflowStep(step: WorkflowStepKey, fresh = false) {
+    if (!dataset || !canOperate || workflowActionBusy || activeJob) return;
+    setError("");
+    setRetryAction(null);
+    setWorkflowActionBusy(true);
+    try {
+      if (!workflow && step === "UPLOAD_PROFILE") {
+        const ingestion = await api.startIngestion(
+          dataset.id,
+          crypto.randomUUID(),
+        );
+        await pollJob(ingestion, async () => {
+          const [nextDatasets, currentWorkflow] = await Promise.all([
+            api.listDatasets(),
+            workflowApi.createWorkflow(dataset.id, true),
+          ]);
+          setDatasets(nextDatasets);
+          setProfile(await api.getProfile(dataset.id));
+          setWorkflow(currentWorkflow);
+          setWorkflowArtifacts(
+            await workflowApi.listWorkflowArtifacts(currentWorkflow.id),
+          );
+          setAuditLogs(await api.listAuditLogs());
+        });
+        return;
+      }
+      let currentWorkflow = workflow;
+      if (!currentWorkflow) {
+        currentWorkflow = await workflowApi.createWorkflow(dataset.id, fresh);
+        setWorkflow(currentWorkflow);
+        setWorkflowArtifacts(
+          await workflowApi.listWorkflowArtifacts(currentWorkflow.id),
+        );
+        setProposals(await api.listProposals(dataset.id, currentWorkflow.id));
+        // Entering from dataset selection must never execute a ready stage.
+        // The steward first sees the selected current activity and explicitly
+        // chooses its primary action (notably Understand data).
+        setToast(
+          `Ready to ${workflowStepLabels[currentWorkflow.current_step].label.toLowerCase()}.`,
+        );
+        return;
+      }
+      const queuedJob = await workflowApi.runWorkflowStep(
+        currentWorkflow.id,
+        step,
+      );
+      await pollJob(
+        queuedJob,
+        async () => {
+          await refreshWorkflow(currentWorkflow!.id);
+          setProfile(await api.getProfile(dataset.id));
+          setProposals(
+            await api.listProposals(dataset.id, currentWorkflow!.id),
+          );
+          setAuditLogs(await api.listAuditLogs());
+        },
+        workflowApi,
+      );
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to run workflow step."));
+    } finally {
+      setWorkflowActionBusy(false);
+    }
+  }
+
+  async function advanceWorkflowStep() {
+    if (!workflow || !canOperate || activeJob || workflowActionBusy) return;
+    try {
+      const nextWorkflow = await workflowApi.advanceWorkflowStep(workflow.id);
+      setWorkflow(nextWorkflow);
+      setToast(
+        `Moved to ${workflowStepLabels[nextWorkflow.current_step].label}.`,
+      );
+    } catch (err) {
+      setError(
+        getErrorMessage(err, "Unable to move to the next workflow step."),
+      );
+    }
+  }
+
+  async function navigateForwardWorkflowStep() {
+    if (!workflow || !canOperate || activeJob || workflowActionBusy) return;
+    const currentIndex = workflow.steps.findIndex(
+      (step) => step.key === workflow.current_step,
+    );
+    const nextStep = workflow.steps[currentIndex + 1];
+    if (nextStep?.temporary) {
+      await rewindWorkflowStage(nextStep.key);
+      return;
+    }
+    await advanceWorkflowStep();
+  }
+
+  async function reviewWorkflowArtifact(
+    id: string,
+    input: ArtifactReviewInput,
+  ) {
+    if (!canOperate || workflowActionBusy || activeJob) return;
+    setError("");
+    try {
+      const updated = await workflowApi.reviewArtifact(id, input);
+      setWorkflowArtifacts((current) =>
+        current.map((artifact) => (artifact.id === id ? updated : artifact)),
+      );
+      if (workflow) await refreshWorkflow(workflow.id);
+      setToast(
+        input.action === "approve"
+          ? "Artifact approved. The next workflow step is ready."
+          : input.action === "reject"
+            ? "Artifact rejected and kept out of execution."
+            : "Revision requested from the agent.",
+      );
+      setError("");
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to review workflow artifact."));
+    }
+  }
+
+  async function decideWorkflowLoop(input: LoopDecisionInput) {
+    if (!workflow || !canOperate) return;
+    try {
+      setWorkflow(await workflowApi.continueLoop(workflow.id, input));
+      setWorkflowArtifacts(
+        await workflowApi.listWorkflowArtifacts(workflow.id),
+      );
+      setAuditLogs(await api.listAuditLogs());
+      setToast(
+        input.action === "continue"
+          ? "Loop continued with a bounded next iteration."
+          : "Loop stopped by the steward.",
+      );
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to update loop decision."));
+    }
+  }
+
+  async function rewindWorkflowStage(targetStep: WorkflowStepKey) {
+    if (!workflow || !canOperate || activeJob || workflowActionBusy) return;
+    const label = workflowStepLabels[targetStep].label;
+    try {
+      const nextWorkflow = await workflowApi.rewindWorkflow(
+        workflow.id,
+        targetStep,
+      );
+      setWorkflow(nextWorkflow);
+      setWorkflowArtifacts(
+        await workflowApi.listWorkflowArtifacts(workflow.id),
+      );
+      setToast(
+        `Returned to ${label}. Later stage sessions are kept temporarily until this stage changes.`,
+      );
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to return to workflow stage."));
+    }
+  }
+
   if (!authenticated)
     return (
       <LoginScreen onLogin={handleLogin} busy={loginBusy} error={loginError} />
@@ -545,7 +1772,15 @@ function App() {
         </div>
         <div className="sidebar-label">WORKSPACE</div>
         <nav>
-          {(["overview", "rules", "runs", "visualization", "data", "audit", ...(canAdmin ? ["admin" as View] : [])] as View[]).map((item) => (
+          {(
+            [
+              "overview",
+              "workflow",
+              "datasets",
+              "audit",
+              ...(canAdmin ? ["admin" as View] : []),
+            ] as View[]
+          ).map((item) => (
             <button
               key={item}
               className={`nav-item ${view === item ? "active" : ""}`}
@@ -554,27 +1789,39 @@ function App() {
               <span className="nav-icon">
                 {item === "overview"
                   ? "◈"
-                  : item === "rules"
-                    ? "✦"
-                    : item === "runs"
-                    ? "↗"
-                    : item === "visualization"
-                      ? "⌁"
-                      : item === "data"
-                        ? "▦"
-                      : item === "admin" ? "⚙" : "≡"}
+                  : item === "workflow"
+                    ? "↯"
+                    : item === "datasets"
+                      ? "▦"
+                      : item === "rules"
+                        ? "✦"
+                        : item === "runs"
+                          ? "↗"
+                          : item === "visualization"
+                            ? "⌁"
+                            : item === "data"
+                              ? "▦"
+                              : item === "admin"
+                                ? "⚙"
+                                : "≡"}
               </span>
               {item === "overview"
                 ? "Overview"
-                : item === "rules"
-                  ? "Rule proposals"
-                  : item === "runs"
-                    ? "DQ runs"
-                    : item === "visualization"
-                      ? "Visualizations"
-                      : item === "data"
-                        ? "Data explorer"
-                    : item === "admin" ? "Admin control" : "Audit history"}
+                : item === "workflow"
+                  ? "Rule proposer"
+                  : item === "datasets"
+                    ? "Datasets"
+                    : item === "rules"
+                      ? "Rule proposals"
+                      : item === "runs"
+                        ? "DQ runs"
+                        : item === "visualization"
+                          ? "Visualizations"
+                          : item === "data"
+                            ? "Data explorer"
+                            : item === "admin"
+                              ? "Admin control"
+                              : "Audit history"}
               {item === "rules" &&
                 proposals.some((proposal) =>
                   ["PROPOSED", "EDITED"].includes(proposal.status),
@@ -621,22 +1868,24 @@ function App() {
             <strong>
               {view === "overview"
                 ? "Overview"
-                : view === "rules"
-                  ? "Rule proposals"
-                  : view === "runs"
-                    ? "DQ runs"
-                    : view === "visualization"
-                      ? "Visualizations"
-                      : view === "data"
-                        ? "Data explorer"
-                    : view === "admin" ? "Admin control" : "Audit history"}
+                : view === "workflow"
+                  ? "Rule proposer"
+                  : view === "datasets"
+                    ? "Datasets"
+                    : view === "rules"
+                      ? "Rule proposals"
+                      : view === "runs"
+                        ? "DQ runs"
+                        : view === "visualization"
+                          ? "Visualizations"
+                          : view === "data"
+                            ? "Data explorer"
+                            : view === "admin"
+                              ? "Admin control"
+                              : "Audit history"}
             </strong>
           </div>
           <div className="topbar-actions">
-            <span className={`mode-badge ${isMockMode ? "mock" : "live"}`}>
-              <span />
-              {isMockMode ? "LOCAL MOCK ADAPTER" : "CONNECTED API"}
-            </span>
             <span className="role-badge">{role}</span>
             <button className="icon-button" aria-label="Notifications">
               ♢
@@ -670,8 +1919,8 @@ function App() {
           )}
           {error && (
             <div className="alert error">
-              <strong>Action needs attention</strong>
-              <span>{getErrorMessage(error, "Action needs attention")}</span>
+              <strong>Action failed</strong>
+              <span>{error}</span>
               <button onClick={() => setError("")}>×</button>
             </div>
           )}
@@ -697,7 +1946,10 @@ function App() {
           {view === "overview" && (
             <OverviewPage
               dataset={dataset}
+              datasets={datasets}
               profile={profile}
+              datasetProfiles={datasetProfiles}
+              qualityTrends={qualityTrends}
               proposals={proposals}
               approvedRules={approvedRules.length}
               loading={loading}
@@ -706,6 +1958,54 @@ function App() {
               onStartAnalysis={() => void startAnalysis()}
               onRequestProposals={() => void requestProposals()}
               onNavigate={setView}
+            />
+          )}
+          {view === "workflow" && (
+            <WorkflowPage
+              dataset={dataset}
+              profile={profile}
+              datasets={datasets}
+              workflow={workflow}
+              artifacts={workflowArtifacts}
+              proposals={proposals}
+              configurations={ruleConfigurations}
+              activeJob={activeJob}
+              busy={workflowActionBusy}
+              canOperate={canOperate}
+              onStartStep={(step, fresh) => void startWorkflowStep(step, fresh)}
+              onAdvanceStep={() => void navigateForwardWorkflowStep()}
+              onReviewArtifact={(id, input) =>
+                void reviewWorkflowArtifact(id, input)
+              }
+              onLoopDecision={(input) => void decideWorkflowLoop(input)}
+              onApproveRule={(id) => void reviewProposal(id, "approve")}
+              onRejectRule={(id) => void reviewProposal(id, "reject")}
+              onEditRule={setEditingProposal}
+              onDeleteRule={(id) => void deleteProposal(id)}
+              onSaveConfiguration={(id, input) =>
+                void saveRuleConfiguration(id, input)
+              }
+              onCreateManualRule={() => setManualRuleOpen(true)}
+              onRewindStep={(step) => void rewindWorkflowStage(step)}
+              onSelectDataset={(id) => void selectDataset(id)}
+              onUploadPreview={(file) => void importDataset(file)}
+              onBackToDatasetSelection={() => {
+                setWorkflow(null);
+                setView("workflow");
+              }}
+            />
+          )}
+          {view === "datasets" && (
+            <DatasetsPage
+              datasets={datasets}
+              dataset={dataset}
+              onOpenExplorer={(datasetId) => {
+                if (datasetId !== dataset?.id) void selectDataset(datasetId);
+                setView("data");
+              }}
+              onImportDataset={(file) => void importDataset(file)}
+              canOperate={canOperate}
+              importing={Boolean(activeJob)}
             />
           )}
           {view === "rules" && (
@@ -720,7 +2020,9 @@ function App() {
               onEdit={setEditingProposal}
               configurations={ruleConfigurations}
               onDelete={(id) => void deleteProposal(id)}
-              onSaveConfiguration={(id, input) => void saveRuleConfiguration(id, input)}
+              onSaveConfiguration={(id, input) =>
+                void saveRuleConfiguration(id, input)
+              }
               onCreateManual={() => setManualRuleOpen(true)}
               onRun={() => void runApprovedRules()}
             />
@@ -746,7 +2048,17 @@ function App() {
           )}
           {view === "data" && <DataExplorerPage dataset={dataset} />}
           {view === "audit" && <AuditPage logs={auditLogs} />}
-          {view === "admin" && canAdmin && <AdminPage users={adminUsers} access={datasetAccess} loading={adminLoading} onCreate={createAdminUser} onUpdate={updateAdminUser} onGrant={grantAdminAccess} onRevoke={revokeAdminAccess} />}
+          {view === "admin" && canAdmin && (
+            <AdminPage
+              users={adminUsers}
+              access={datasetAccess}
+              loading={adminLoading}
+              onCreate={createAdminUser}
+              onUpdate={updateAdminUser}
+              onGrant={grantAdminAccess}
+              onRevoke={revokeAdminAccess}
+            />
+          )}
         </div>
       </main>
       {editingProposal && (
@@ -768,7 +2080,10 @@ function App() {
 
 function OverviewPage({
   dataset,
+  datasets,
   profile,
+  datasetProfiles,
+  qualityTrends,
   proposals,
   approvedRules,
   loading,
@@ -779,7 +2094,10 @@ function OverviewPage({
   onNavigate,
 }: {
   dataset?: Dataset;
+  datasets: Dataset[];
   profile: DatasetProfile | null;
+  datasetProfiles: Record<string, DatasetProfile>;
+  qualityTrends: QualityTrendPoint[];
   proposals: RuleProposal[];
   approvedRules: number;
   loading: boolean;
@@ -792,12 +2110,52 @@ function OverviewPage({
   const proposalCount = proposals.filter((proposal) =>
     ["PROPOSED", "EDITED"].includes(proposal.status),
   ).length;
+  const qualityRows = datasets.map((item) => {
+    const itemProfile =
+      datasetProfiles[item.id] ?? (item.id === dataset?.id ? profile : null);
+    const score = itemProfile
+      ? (itemProfile.completeness_score + itemProfile.validity_score) / 2
+      : null;
+    return { dataset: item, profile: itemProfile, score };
+  });
+  const profiledRows = qualityRows.filter((row) => row.score !== null);
+  const averageQuality = profiledRows.length
+    ? profiledRows.reduce((sum, row) => sum + (row.score ?? 0), 0) /
+      profiledRows.length
+    : null;
+  const averageCompleteness = profiledRows.length
+    ? profiledRows.reduce((sum, row) => sum + (row.profile?.completeness_score ?? 0), 0) / profiledRows.length
+    : null;
+  const averageDuplicateRate = profiledRows.length
+    ? profiledRows.reduce((sum, row) => sum + (row.profile?.duplicate_rate ?? 0), 0) / profiledRows.length
+    : null;
+  const attentionCount = qualityRows.filter((row) => row.score !== null && row.score < 85).length;
+  const totalRows = datasets.reduce((sum, item) => sum + item.row_count, 0);
+  const profileReadyCount = datasets.filter(
+    (item) => item.status === "PROFILE_READY",
+  ).length;
+  const statusRows = [
+    {
+      label: "Profile ready",
+      count: datasets.filter((item) => item.status === "PROFILE_READY").length,
+    },
+    {
+      label: "Ingested",
+      count: datasets.filter((item) => item.status === "INGESTED").length,
+    },
+    {
+      label: "Registered",
+      count: datasets.filter((item) => item.status === "REGISTERED").length,
+    },
+    { label: "Needs attention", count: attentionCount },
+  ];
+  const statusMax = Math.max(1, ...statusRows.map((row) => row.count));
   if (!dataset)
     return (
       <>
         <div className="page-heading">
           <div>
-            <span className="eyebrow">DATA STEWARD WORKSPACE</span>
+            <span className="eyebrow">QUALITY COMMAND CENTER</span>
             <h1>No registered dataset</h1>
             <p>The backend has not registered a Gate 2 dataset yet.</p>
           </div>
@@ -806,58 +2164,217 @@ function OverviewPage({
           <div className="empty-illustration">▦</div>
           <h2>Dataset catalog is empty</h2>
           <p>
-            Connect the dataset registration API to show the approved NYC Yellow
-            Taxi artifact here.
+            Upload or register a dataset to populate the multi-dataset quality
+            dashboard.
           </p>
         </section>
       </>
     );
   return (
     <>
-      <div className="page-heading">
+      <div className="page-heading overview-heading">
         <div>
-          <span className="eyebrow">DATA STEWARD WORKSPACE</span>
-          <h1>Good morning, Steward.</h1>
+          <span className="eyebrow">QUALITY COMMAND CENTER</span>
+          <h1>Dataset quality overview</h1>
           <p>
-            One clear view of your dataset’s quality signals and the decisions
-            waiting for review.
+            Compare quality signals across the catalog before opening an
+            individual pipeline.
           </p>
         </div>
-        <div className="heading-date">
-          <span>LAST SYNC</span>
-          <strong>{formatTime(dataset.updated_at)}</strong>
+        <div className="heading-actions">
+          <button
+            className="button ghost"
+            onClick={() => onNavigate("datasets")}
+          >
+            Dataset catalog →
+          </button>
+          <button
+            className="button primary"
+            onClick={() => onNavigate("visualization")}
+          >
+            Open observatory →
+          </button>
         </div>
       </div>
-      <section className="dataset-hero">
-        <div className="dataset-icon">⌁</div>
-        <div className="dataset-copy">
-          <div className="title-line">
-            <h2>{dataset.name}</h2>
-            <StatusPill
-              label={
-                dataset.status === "PROFILE_READY"
-                  ? "PROFILE READY"
-                  : "REGISTERED"
-              }
-              tone={dataset.status === "PROFILE_READY" ? "success" : "info"}
-            />
+      <section className="stat-grid overview-kpis">
+        <StatCard
+          label="Datasets"
+          value={`${datasets.length}`}
+          detail="Registered in workspace"
+          tone="green"
+        />
+        <StatCard
+          label="Profile ready"
+          value={`${profileReadyCount}/${datasets.length}`}
+          detail="Datasets with aggregate profile"
+          tone="blue"
+        />
+        <StatCard
+          label="Rows tracked"
+          value={totalRows.toLocaleString()}
+          detail="Across registered datasets"
+          tone="amber"
+        />
+        <StatCard
+          label="Average quality"
+          value={
+            averageQuality === null ? "—" : `${averageQuality.toFixed(1)}%`
+          }
+          detail={
+            profiledRows.length
+              ? `${profiledRows.length} profiled dataset${profiledRows.length === 1 ? "" : "s"}`
+              : "Awaiting profile data"
+          }
+          tone="violet"
+        />
+        <StatCard
+          label="Completeness"
+          value={averageCompleteness === null ? "—" : `${averageCompleteness.toFixed(1)}%`}
+          detail="Average across profiles"
+          tone="blue"
+        />
+        <StatCard
+          label="Duplicate rate"
+          value={averageDuplicateRate === null ? "—" : `${averageDuplicateRate.toFixed(2)}%`}
+          detail={attentionCount ? `${attentionCount} dataset${attentionCount === 1 ? "" : "s"} need attention` : "No quality alerts"}
+          tone={attentionCount ? "amber" : "green"}
+        />
+      </section>
+      <section className="overview-grid">
+        <article className="panel overview-dataset-panel">
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">CATALOG QUALITY MAP</span>
+              <h3>Quality by dataset</h3>
+            </div>
+            <span className="panel-caption">{datasets.length} registered</span>
           </div>
-          <p>{dataset.description}</p>
-          <div className="dataset-meta">
-            <span>▦ {dataset.row_count.toLocaleString()} rows</span>
-            <span>◌ {dataset.source_label}</span>
-            <span>◇ {dataset.manifest_version}</span>
+          <div className="overview-dataset-list">
+            {qualityRows.map((row) => (
+              <div
+                className={`overview-dataset-row ${row.dataset.id === dataset.id ? "active" : ""}`}
+                key={row.dataset.id}
+              >
+                <div className="overview-dataset-id">
+                  <span className="dataset-mini-icon">⌁</span>
+                  <div>
+                    <strong>{row.dataset.name}</strong>
+                    <small>
+                      {row.dataset.source_label} ·{" "}
+                      {row.dataset.row_count.toLocaleString()} rows
+                    </small>
+                  </div>
+                </div>
+                <StatusPill
+                  label={row.dataset.status.replaceAll("_", " ")}
+                  tone={
+                    row.dataset.status === "PROFILE_READY" ? "success" : "info"
+                  }
+                />
+                <div className="overview-dataset-score">
+                  {row.score === null ? (
+                    <span className="muted">Profile pending</span>
+                  ) : (
+                    <>
+                      <div className="overview-score-track">
+                        <span style={{ width: `${row.score}%` }} />
+                      </div>
+                      <strong>{row.score.toFixed(1)}%</strong>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
+        </article>
+        <article className="panel overview-status-panel">
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">CATALOG STATUS</span>
+              <h3>Readiness distribution</h3>
+            </div>
+            <span className="panel-caption">
+              {approvedRules} approved rules active
+            </span>
+          </div>
+          <div className="overview-status-list">
+            {statusRows.map((row) => (
+              <div className="overview-status-row" key={row.label}>
+                <div>
+                  <span>{row.label}</span>
+                  <strong>{row.count}</strong>
+                </div>
+                <div className="overview-status-track">
+                  <span
+                    style={{ width: `${(row.count / statusMax) * 100}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="overview-status-footer">
+            <span>Review queue</span>
+            <strong>{proposalCount} pending</strong>
+          </div>
+        </article>
+      </section>
+      <section className="overview-chart-grid">
+        <article className="panel overview-trend-panel">
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">ACTIVE DATASET TREND</span>
+              <h3>Quality score over time</h3>
+            </div>
+            <button
+              className="text-button"
+              onClick={() => onNavigate("visualization")}
+            >
+              Open full view →
+            </button>
+          </div>
+          <TrendChart points={qualityTrends} />
+        </article>
+        <article className="panel overview-compare-panel">
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">QUALITY COMPARISON</span>
+              <h3>Completeness vs validity</h3>
+            </div>
+            <span className="panel-caption">Profiled datasets only</span>
+          </div>
+          <OverviewQualityBars rows={qualityRows} />
+        </article>
+      </section>
+      <section className="overview-action-panel next-panel">
+        <div>
+          <span className="eyebrow">NEXT ACTION</span>
+          <h3>
+            {profile
+              ? "Continue the active pipeline"
+              : "Build the first profile"}
+          </h3>
+          <p>
+            {profile
+              ? "The active dataset is profiled. Move into Rule proposer to review the next agent step."
+              : "Run ingestion and profiling to make this dataset available for cross-dataset comparison."}
+          </p>
         </div>
-        <div className="dataset-action">
+        <div className="overview-action-buttons">
           {canOperate &&
             (!profile ? (
               <button
-                className="button primary"
+                className="button secondary"
                 onClick={onStartAnalysis}
-                disabled={busy}
+                disabled={loading || busy}
               >
-                Start analysis <span>→</span>
+                Start profiling →
+              </button>
+            ) : proposalCount ? (
+              <button
+                className="button secondary"
+                onClick={() => onNavigate("rules")}
+              >
+                Open review queue →
               </button>
             ) : (
               <button
@@ -865,153 +2382,68 @@ function OverviewPage({
                 onClick={onRequestProposals}
                 disabled={busy}
               >
-                Request rule proposals <span>→</span>
+                Generate proposals →
               </button>
             ))}
+          <button className="button ghost" onClick={() => onNavigate("audit")}>
+            View audit trail
+          </button>
         </div>
       </section>
-      {!profile ? (
-        <section className="empty-state large">
-          <div className="empty-illustration">◌</div>
-          <span className="eyebrow">READY WHEN YOU ARE</span>
-          <h2>Start with a trusted profile</h2>
-          <p>
-            The Cloud Run job will validate the manifest, run the fixed dbt
-            stage and persist aggregate evidence for review.
-          </p>
-          {canOperate && (
-            <button
-              className="button primary"
-              onClick={onStartAnalysis}
-              disabled={loading || busy}
-            >
-              Start analysis →
-            </button>
-          )}
-          <div className="empty-steps">
-            <span>
-              <b>01</b> Ingest
-            </span>
-            <span>
-              <b>02</b> dbt build
-            </span>
-            <span>
-              <b>03</b> Profile
-            </span>
-          </div>
-        </section>
-      ) : (
-        <>
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">QUALITY SNAPSHOT</span>
-              <h2>Profile at a glance</h2>
-            </div>
-            <button className="text-button" onClick={() => onNavigate("audit")}>
-              View audit trail →
-            </button>
-          </div>
-          <section className="stat-grid">
-            <StatCard
-              label="Completeness"
-              value={`${profile.completeness_score}%`}
-              detail="Across profiled columns"
-              tone="green"
-            />
-            <StatCard
-              label="Validity"
-              value={`${profile.validity_score}%`}
-              detail="Contract checks passing"
-              tone="blue"
-            />
-            <StatCard
-              label="Duplicate rate"
-              value={`${profile.duplicate_rate}%`}
-              detail="Fingerprint collisions"
-              tone="amber"
-            />
-            <StatCard
-              label="Review queue"
-              value={`${proposalCount}`}
-              detail="Proposals awaiting Steward"
-              tone="violet"
-            />
-          </section>
-          <section className="two-column">
-            <div className="panel">
-              <div className="panel-heading">
-                <div>
-                  <span className="eyebrow">PROFILE EVIDENCE</span>
-                  <h3>Column quality</h3>
-                </div>
-                <span className="panel-caption">
-                  {profile.columns.length} tracked fields
-                </span>
-              </div>
-              <div className="column-list">
-                {profile.columns.map((column) => (
-                  <div className="column-row" key={column.name}>
-                    <div className="column-name">
-                      <strong>{column.name}</strong>
-                      <small>{column.data_type}</small>
-                    </div>
-                    <div className="column-bar">
-                      <span
-                        style={{
-                          width: `${Math.max(4, 100 - column.null_rate * 100)}%`,
-                        }}
-                      />
-                    </div>
-                    <strong
-                      className={column.null_rate > 0.01 ? "metric-warn" : ""}
-                    >
-                      {(100 - column.null_rate * 100).toFixed(1)}%
-                    </strong>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="panel next-panel">
-              <div className="panel-heading">
-                <div>
-                  <span className="eyebrow">NEXT ACTION</span>
-                  <h3>Review AI proposals</h3>
-                </div>
-                <span className="spark">✦</span>
-              </div>
-              <p>
-                Proposals are grounded in the aggregate evidence above. You
-                remain in control of every executable rule.
-              </p>
-              {proposalCount ? (
-                <>
-                  <div className="next-stat">
-                    <strong>{proposalCount}</strong>
-                    <span>typed proposals are ready</span>
-                  </div>
-                  <button
-                    className="button secondary full"
-                    onClick={() => onNavigate("rules")}
-                  >
-                    Open review queue →
-                  </button>
-                </>
-              ) : (
-                canOperate && (
-                  <button
-                    className="button secondary full"
-                    onClick={onRequestProposals}
-                    disabled={busy}
-                  >
-                    Generate proposals →
-                  </button>
-                )
-              )}
-            </div>
-          </section>
-        </>
-      )}
     </>
+  );
+}
+
+function OverviewQualityBars({
+  rows,
+}: {
+  rows: Array<{
+    dataset: Dataset;
+    profile: DatasetProfile | null;
+    score: number | null;
+  }>;
+}) {
+  return (
+    <div className="overview-quality-bars">
+      {rows.map((row) => (
+        <div className="overview-quality-bar" key={row.dataset.id}>
+          <div className="overview-quality-label">
+            <strong>{row.dataset.name}</strong>
+            <span>
+              {row.score === null
+                ? "Profile pending"
+                : `${row.score.toFixed(1)}% overall`}
+            </span>
+          </div>
+          <div className="overview-quality-lines">
+            <div>
+              <span>Completeness</span>
+              <div className="overview-line-track">
+                <i
+                  style={{ width: `${row.profile?.completeness_score ?? 0}%` }}
+                />
+              </div>
+              <strong>
+                {row.profile
+                  ? `${row.profile.completeness_score.toFixed(1)}%`
+                  : "—"}
+              </strong>
+            </div>
+            <div>
+              <span>Validity</span>
+              <div className="overview-line-track validity">
+                <i style={{ width: `${row.profile?.validity_score ?? 0}%` }} />
+              </div>
+              <strong>
+                {row.profile
+                  ? `${row.profile.validity_score.toFixed(1)}%`
+                  : "—"}
+              </strong>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -1049,6 +2481,7 @@ function RulesPage({
   onSaveConfiguration,
   onCreateManual,
   onRun,
+  pipelineMode = false,
 }: {
   proposals: RuleProposal[];
   configurations: RuleConfiguration[];
@@ -1063,8 +2496,11 @@ function RulesPage({
   onSaveConfiguration: (id: string, input: RuleConfigurationInput) => void;
   onCreateManual: () => void;
   onRun: () => void;
+  pipelineMode?: boolean;
 }) {
-  const [expandedConfigurationId, setExpandedConfigurationId] = useState<string | null>(null);
+  const [expandedConfigurationId, setExpandedConfigurationId] = useState<
+    string | null
+  >(null);
   const pending = proposals.filter((proposal) =>
     ["PROPOSED", "EDITED"].includes(proposal.status),
   );
@@ -1075,9 +2511,19 @@ function RulesPage({
     <>
       <div className="page-heading">
         <div>
-          <span className="eyebrow">HUMAN-IN-THE-LOOP</span>
-          <h1>Rule proposals</h1>
-          <p>Review agent suggestions or author a typed rule manually.</p>
+          <span className="eyebrow">
+            {pipelineMode ? "PIPELINE STAGE 4" : "HUMAN-IN-THE-LOOP"}
+          </span>
+          <h1>
+            {pipelineMode
+              ? "Review rules before code generation"
+              : "Rule proposals"}
+          </h1>
+          <p>
+            {pipelineMode
+              ? "Accept, edit, reject or add a manual rule. Agent stays locked until this set is approved."
+              : "Review agent suggestions or author a typed rule manually."}
+          </p>
         </div>
         <div className="heading-actions">
           {canOperate && (
@@ -1085,13 +2531,15 @@ function RulesPage({
               + Add manual rule
             </button>
           )}
-          <button
-            className="button primary"
-            onClick={onRun}
-            disabled={!approved.length || busy || !canOperate}
-          >
-            Run approved rules <span>→</span>
-          </button>
+          {!pipelineMode && (
+            <button
+              className="button primary"
+              onClick={onRun}
+              disabled={!approved.length || busy || !canOperate}
+            >
+              Run approved rules <span>→</span>
+            </button>
+          )}
         </div>
       </div>
       {!profileReady ? (
@@ -1161,10 +2609,18 @@ function RulesPage({
                 onReject={() => onReject(proposal.id)}
                 onEdit={() => onEdit(proposal)}
                 onDelete={() => onDelete(proposal.id)}
-                configuration={configurations.find((item) => item.rule_id === proposal.id)}
-                onSaveConfiguration={(input) => onSaveConfiguration(proposal.id, input)}
+                configuration={configurations.find(
+                  (item) => item.rule_id === proposal.id,
+                )}
+                onSaveConfiguration={(input) =>
+                  onSaveConfiguration(proposal.id, input)
+                }
                 configurationExpanded={expandedConfigurationId === proposal.id}
-                onToggleConfiguration={() => setExpandedConfigurationId((current) => current === proposal.id ? null : proposal.id)}
+                onToggleConfiguration={() =>
+                  setExpandedConfigurationId((current) =>
+                    current === proposal.id ? null : proposal.id,
+                  )
+                }
               />
             ))}
           </div>
@@ -1214,6 +2670,9 @@ function ProposalCard({
           <span>✦</span>
           {proposal.rule.type.replaceAll("_", " ")}
         </div>
+        <span className="proposal-source">
+          {proposal.source === "MANUAL" ? "Manual rule" : "Agent proposal"}
+        </span>
         <StatusPill label={proposal.status} tone={tone} />
         <span className={`severity ${proposal.severity.toLowerCase()}`}>
           {proposal.severity} severity
@@ -1246,13 +2705,13 @@ function ProposalCard({
       {(editable || proposal.status === "REJECTED") && canOperate && (
         <div className="proposal-actions">
           {canReject && (
-            <button className="button ghost" onClick={onReject}>
+            <button className="button ghost proposal-action reject" onClick={onReject}>
               {proposal.status === "APPROVED"
                 ? "Reject approved rule"
                 : "Reject"}
             </button>
           )}
-          <button className="button secondary" onClick={onEdit}>
+          <button className="button secondary proposal-action edit" onClick={onEdit}>
             {pending
               ? "Edit"
               : proposal.status === "APPROVED"
@@ -1260,7 +2719,7 @@ function ProposalCard({
                 : "Edit rejected rule"}
           </button>
           {canApprove && (
-            <button className="button primary" onClick={onApprove}>
+            <button className="button primary proposal-action approve" onClick={onApprove}>
               {proposal.status === "REJECTED"
                 ? "Re-approve rule"
                 : "Approve rule"}{" "}
@@ -1268,7 +2727,9 @@ function ProposalCard({
             </button>
           )}
           {proposal.status !== "APPROVED" && (
-            <button className="button ghost" onClick={onDelete}>Delete</button>
+            <button className="button ghost proposal-action delete" onClick={onDelete}>
+              Delete
+            </button>
           )}
         </div>
       )}
@@ -1284,16 +2745,35 @@ function ProposalCard({
   );
 }
 
-function RuleConfigurationControl({ configuration, expanded, onToggle, onSave }: { configuration?: RuleConfiguration; expanded: boolean; onToggle: () => void; onSave: (input: RuleConfigurationInput) => void }) {
-  const [executionStatus, setExecutionStatus] = useState<RuleConfiguration["execution_status"]>(configuration?.execution_status ?? "ACTIVE");
-  const [frequency, setFrequency] = useState<RuleConfiguration["schedule_frequency"]>(configuration?.schedule_frequency ?? "MANUAL");
+function RuleConfigurationControl({
+  configuration,
+  expanded,
+  onToggle,
+  onSave,
+}: {
+  configuration?: RuleConfiguration;
+  expanded: boolean;
+  onToggle: () => void;
+  onSave: (input: RuleConfigurationInput) => void;
+}) {
+  const [executionStatus, setExecutionStatus] = useState<
+    RuleConfiguration["execution_status"]
+  >(configuration?.execution_status ?? "ACTIVE");
+  const [frequency, setFrequency] = useState<
+    RuleConfiguration["schedule_frequency"]
+  >(configuration?.schedule_frequency ?? "MANUAL");
   const [timezone, setTimezone] = useState(configuration?.timezone ?? "UTC");
   useEffect(() => {
     setExecutionStatus(configuration?.execution_status ?? "ACTIVE");
     setFrequency(configuration?.schedule_frequency ?? "MANUAL");
     setTimezone(configuration?.timezone ?? "UTC");
   }, [configuration]);
-  const frequencyLabel = frequency === "MANUAL" ? "Manual only" : frequency === "HOURLY" ? "Hourly" : "Daily";
+  const frequencyLabel =
+    frequency === "MANUAL"
+      ? "Manual only"
+      : frequency === "HOURLY"
+        ? "Hourly"
+        : "Daily";
   const panelId = `rule-settings-${configuration?.rule_id ?? "default"}`;
   return (
     <section className={`rule-settings-shell ${expanded ? "expanded" : ""}`}>
@@ -1304,17 +2784,76 @@ function RuleConfigurationControl({ configuration, expanded, onToggle, onSave }:
         aria-expanded={expanded}
         aria-controls={panelId}
       >
-        <span className={`configuration-state ${executionStatus.toLowerCase()}`}><i />{executionStatus === "ACTIVE" ? "Active" : "Paused"}</span>
-        <span className="configuration-summary"><strong>Execution settings</strong><small>{frequencyLabel} · {timezone}</small></span>
-        <span className="configuration-action">{expanded ? "Hide options" : "Configure"}<i aria-hidden="true">⌄</i></span>
+        <span
+          className={`configuration-state ${executionStatus.toLowerCase()}`}
+        >
+          <i />
+          {executionStatus === "ACTIVE" ? "Active" : "Paused"}
+        </span>
+        <span className="configuration-summary">
+          <strong>Execution settings</strong>
+          <small>
+            {frequencyLabel} · {timezone}
+          </small>
+        </span>
+        <span className="configuration-action">
+          {expanded ? "Hide options" : "Configure"}
+          <i aria-hidden="true">⌄</i>
+        </span>
       </button>
       {expanded && (
         <div className="rule-settings" id={panelId}>
           <div className="rule-settings-fields">
-            <label>Status<select value={executionStatus} onChange={(event) => setExecutionStatus(event.target.value as RuleConfiguration["execution_status"])}><option value="ACTIVE">Active</option><option value="PAUSED">Paused</option></select></label>
-            <label>Schedule<select value={frequency} onChange={(event) => setFrequency(event.target.value as RuleConfiguration["schedule_frequency"])}><option value="MANUAL">Manual only</option><option value="HOURLY">Hourly</option><option value="DAILY">Daily</option></select></label>
-            <label>Timezone<input value={timezone} onChange={(event) => setTimezone(event.target.value)} aria-label="Timezone" /></label>
-            <button className="button ghost" onClick={() => onSave({ execution_status: executionStatus, schedule_frequency: frequency, timezone })}>Save settings</button>
+            <label>
+              Status
+              <select
+                value={executionStatus}
+                onChange={(event) =>
+                  setExecutionStatus(
+                    event.target.value as RuleConfiguration["execution_status"],
+                  )
+                }
+              >
+                <option value="ACTIVE">Active</option>
+                <option value="PAUSED">Paused</option>
+              </select>
+            </label>
+            <label>
+              Schedule
+              <select
+                value={frequency}
+                onChange={(event) =>
+                  setFrequency(
+                    event.target
+                      .value as RuleConfiguration["schedule_frequency"],
+                  )
+                }
+              >
+                <option value="MANUAL">Manual only</option>
+                <option value="HOURLY">Hourly</option>
+                <option value="DAILY">Daily</option>
+              </select>
+            </label>
+            <label>
+              Timezone
+              <input
+                value={timezone}
+                onChange={(event) => setTimezone(event.target.value)}
+                aria-label="Timezone"
+              />
+            </label>
+            <button
+              className="button ghost"
+              onClick={() =>
+                onSave({
+                  execution_status: executionStatus,
+                  schedule_frequency: frequency,
+                  timezone,
+                })
+              }
+            >
+              Save settings
+            </button>
           </div>
         </div>
       )}
@@ -1421,14 +2960,22 @@ function RunsPage({
             </div>
           )}
           {activeRun.status === "SUCCEEDED" && (
-            <section className={`panel anomaly-panel ${anomalies.length ? "has-anomalies" : "is-clear"}`}>
+            <section
+              className={`panel anomaly-panel ${anomalies.length ? "has-anomalies" : "is-clear"}`}
+            >
               <div className="panel-heading">
                 <div>
                   <span className="eyebrow">ANOMALY DETECTION</span>
-                  <h3>{anomalies.length ? "Signals requiring attention" : "No anomalous shifts detected"}</h3>
+                  <h3>
+                    {anomalies.length
+                      ? "Signals requiring attention"
+                      : "No anomalous shifts detected"}
+                  </h3>
                 </div>
                 <StatusPill
-                  label={anomalies.length ? `${anomalies.length} detected` : "CLEAR"}
+                  label={
+                    anomalies.length ? `${anomalies.length} detected` : "CLEAR"
+                  }
                   tone={anomalies.length ? "warning" : "success"}
                 />
               </div>
@@ -1440,15 +2987,41 @@ function RunsPage({
               {anomalies.length > 0 && (
                 <div className="anomaly-list">
                   {anomalies.map((anomaly) => (
-                    <article className="anomaly-card" key={`${anomaly.rule_id}-${anomaly.anomaly_type}`}>
+                    <article
+                      className="anomaly-card"
+                      key={`${anomaly.rule_id}-${anomaly.anomaly_type}`}
+                    >
                       <div className="anomaly-card-top">
                         <strong>{anomaly.rule_title}</strong>
-                        <span>{anomaly.anomaly_type === "Z_SCORE_SPIKE" ? "Historical spike" : "High failure rate"}</span>
+                        <span>
+                          {anomaly.anomaly_type === "Z_SCORE_SPIKE"
+                            ? "Historical spike"
+                            : "High failure rate"}
+                        </span>
                       </div>
                       <div className="anomaly-metrics">
-                        <div><small>CURRENT</small><strong>{(anomaly.current_rate * 100).toFixed(2)}%</strong></div>
-                        <div><small>BASELINE</small><strong>{anomaly.historical_mean == null ? "Cold start" : `${(anomaly.historical_mean * 100).toFixed(2)}%`}</strong></div>
-                        <div><small>Z-SCORE</small><strong>{anomaly.z_score == null ? "—" : anomaly.z_score.toFixed(2)}</strong></div>
+                        <div>
+                          <small>CURRENT</small>
+                          <strong>
+                            {(anomaly.current_rate * 100).toFixed(2)}%
+                          </strong>
+                        </div>
+                        <div>
+                          <small>BASELINE</small>
+                          <strong>
+                            {anomaly.historical_mean == null
+                              ? "Cold start"
+                              : `${(anomaly.historical_mean * 100).toFixed(2)}%`}
+                          </strong>
+                        </div>
+                        <div>
+                          <small>Z-SCORE</small>
+                          <strong>
+                            {anomaly.z_score == null
+                              ? "—"
+                              : anomaly.z_score.toFixed(2)}
+                          </strong>
+                        </div>
                       </div>
                       <p>{anomaly.reason}</p>
                     </article>
@@ -1509,7 +3082,11 @@ function RunsPage({
 
 function TrendChart({ points }: { points: QualityTrendPoint[] }) {
   if (!points.length) {
-    return <div className="chart-empty">Run approved rules to establish the first quality trend.</div>;
+    return (
+      <div className="chart-empty">
+        Run approved rules to establish the first quality trend.
+      </div>
+    );
   }
   const width = 760;
   const height = 260;
@@ -1522,21 +3099,36 @@ function TrendChart({ points }: { points: QualityTrendPoint[] }) {
   const maximum = Math.min(100, Math.ceil(Math.max(...scores) + 4));
   const range = Math.max(maximum - minimum, 1);
   const coordinates = points.map((point, index) => ({
-    x: points.length === 1 ? width / 2 : insetLeft + (index / (points.length - 1)) * (width - insetLeft - insetRight),
-    y: height - insetBottom - ((point.quality_score - minimum) / range) * (height - insetTop - insetBottom),
+    x:
+      points.length === 1
+        ? width / 2
+        : insetLeft +
+          (index / (points.length - 1)) * (width - insetLeft - insetRight),
+    y:
+      height -
+      insetBottom -
+      ((point.quality_score - minimum) / range) *
+        (height - insetTop - insetBottom),
     point,
   }));
   const line = coordinates.map(({ x, y }) => `${x},${y}`).join(" ");
-  const areaPath = coordinates.length > 1
-    ? `M ${coordinates[0].x} ${height - insetBottom} L ${coordinates.map(({ x, y }) => `${x} ${y}`).join(" L ")} L ${coordinates.at(-1)!.x} ${height - insetBottom} Z`
-    : "";
-  const dateLabel = (value: string) => new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-  }).format(new Date(value));
+  const areaPath =
+    coordinates.length > 1
+      ? `M ${coordinates[0].x} ${height - insetBottom} L ${coordinates.map(({ x, y }) => `${x} ${y}`).join(" L ")} L ${coordinates.at(-1)!.x} ${height - insetBottom} Z`
+      : "";
+  const dateLabel = (value: string) =>
+    new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+    }).format(new Date(value));
   return (
     <div className="trend-chart-wrap">
-      <svg className="trend-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Quality score trend across completed DQ runs">
+      <svg
+        className="trend-chart"
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label="Quality score trend across completed DQ runs"
+      >
         <defs>
           <linearGradient id="quality-area" x1="0" x2="0" y1="0" y2="1">
             <stop offset="0%" stopColor="currentColor" stopOpacity="0.2" />
@@ -1544,27 +3136,63 @@ function TrendChart({ points }: { points: QualityTrendPoint[] }) {
           </linearGradient>
         </defs>
         {[0, 1, 2, 3].map((lineIndex) => {
-          const y = insetTop + (lineIndex / 3) * (height - insetTop - insetBottom);
+          const y =
+            insetTop + (lineIndex / 3) * (height - insetTop - insetBottom);
           const value = maximum - (lineIndex / 3) * range;
           return (
             <g key={lineIndex}>
-              <line x1={insetLeft} y1={y} x2={width - insetRight} y2={y} className="chart-grid-line" />
-              <text x={insetLeft - 10} y={y + 4} className="chart-tick" textAnchor="end">{value.toFixed(0)}%</text>
+              <line
+                x1={insetLeft}
+                y1={y}
+                x2={width - insetRight}
+                y2={y}
+                className="chart-grid-line"
+              />
+              <text
+                x={insetLeft - 10}
+                y={y + 4}
+                className="chart-tick"
+                textAnchor="end"
+              >
+                {value.toFixed(0)}%
+              </text>
             </g>
           );
         })}
         {areaPath && <path d={areaPath} className="chart-area" />}
-        {coordinates.length > 1 && <polyline points={line} className="chart-line" />}
+        {coordinates.length > 1 && (
+          <polyline points={line} className="chart-line" />
+        )}
         {coordinates.map(({ x, y, point }) => (
           <g key={point.run_id}>
             <circle cx={x} cy={y} r="12" className="chart-point-halo" />
             <circle cx={x} cy={y} r="5" className="chart-point" />
-            {coordinates.length === 1 && <text x={x} y={y - 22} className="chart-value" textAnchor="middle">{point.quality_score.toFixed(2)}%</text>}
+            {coordinates.length === 1 && (
+              <text
+                x={x}
+                y={y - 22}
+                className="chart-value"
+                textAnchor="middle"
+              >
+                {point.quality_score.toFixed(2)}%
+              </text>
+            )}
             <title>{`${point.quality_score.toFixed(2)}% · ${new Date(point.created_at).toLocaleString()}`}</title>
           </g>
         ))}
-        <text x={insetLeft} y={height - 12} className="chart-date">{dateLabel(points[0].created_at)}</text>
-        {points.length > 1 && <text x={width - insetRight} y={height - 12} className="chart-date" textAnchor="end">{dateLabel(points.at(-1)!.created_at)}</text>}
+        <text x={insetLeft} y={height - 12} className="chart-date">
+          {dateLabel(points[0].created_at)}
+        </text>
+        {points.length > 1 && (
+          <text
+            x={width - insetRight}
+            y={height - 12}
+            className="chart-date"
+            textAnchor="end"
+          >
+            {dateLabel(points.at(-1)!.created_at)}
+          </text>
+        )}
       </svg>
     </div>
   );
@@ -1578,9 +3206,11 @@ function AnomalyMonitoringPanel({
   trends: QualityTrendPoint[];
 }) {
   const historicalReady = trends.length >= 6;
-  const detectionMode = anomalies[0]?.detection_mode === "HISTORICAL" || (!anomalies.length && historicalReady)
-    ? "Historical baseline"
-    : "Cold-start screen";
+  const detectionMode =
+    anomalies[0]?.detection_mode === "HISTORICAL" ||
+    (!anomalies.length && historicalReady)
+      ? "Historical baseline"
+      : "Cold-start screen";
   return (
     <article className="panel anomaly-monitor">
       <div className="panel-heading">
@@ -1588,33 +3218,104 @@ function AnomalyMonitoringPanel({
           <span className="eyebrow">AUTOMATED ANOMALY DETECTION</span>
           <h3>Violation-rate monitoring</h3>
         </div>
-        <StatusPill label={anomalies.length ? `${anomalies.length} SIGNAL${anomalies.length === 1 ? "" : "S"}` : "NO SIGNALS"} tone={anomalies.length ? "warning" : "success"} />
+        <StatusPill
+          label={
+            anomalies.length
+              ? `${anomalies.length} SIGNAL${anomalies.length === 1 ? "" : "S"}`
+              : "NO SIGNALS"
+          }
+          tone={anomalies.length ? "warning" : "success"}
+        />
       </div>
       <div className="anomaly-monitor-layout">
         <div className="anomaly-engine">
           <span className="monitor-label">WHEN IT RUNS</span>
           <strong>After every completed DQ run</strong>
-          <p>It compares each approved rule’s failure rate without reading raw values in the browser.</p>
-          <div className="anomaly-engine-state"><i /><span>{detectionMode}</span></div>
+          <p>
+            It compares each approved rule’s failure rate without reading raw
+            values in the browser.
+          </p>
+          <div className="anomaly-engine-state">
+            <i />
+            <span>{detectionMode}</span>
+          </div>
         </div>
         <div className="anomaly-evaluation">
           <div className="anomaly-spec-grid">
-            <div><span>Minimum sample</span><strong>100 rows</strong><small>small checks are ignored</small></div>
-            <div><span>Cold start</span><strong>≥ 5.0%</strong><small>until 5 prior runs exist</small></div>
-            <div><span>Historical mode</span><strong>z ≥ 2.5</strong><small>also requires rate &gt; 1.0%</small></div>
+            <div>
+              <span>Minimum sample</span>
+              <strong>100 rows</strong>
+              <small>small checks are ignored</small>
+            </div>
+            <div>
+              <span>Cold start</span>
+              <strong>≥ 5.0%</strong>
+              <small>until 5 prior runs exist</small>
+            </div>
+            <div>
+              <span>Historical mode</span>
+              <strong>z ≥ 2.5</strong>
+              <small>also requires rate &gt; 1.0%</small>
+            </div>
           </div>
           {anomalies.length ? (
             <div className="anomaly-signal-list">
               {anomalies.map((anomaly) => (
-                <article className="anomaly-monitor-signal" key={`${anomaly.rule_id}-${anomaly.anomaly_type}`}>
-                  <div><strong>{anomaly.rule_title}</strong><span>{anomaly.anomaly_type === "Z_SCORE_SPIKE" ? "Historical spike" : "High violation rate"}</span></div>
-                  <div className="anomaly-monitor-metrics"><span>Current <strong>{(anomaly.current_rate * 100).toFixed(2)}%</strong></span><span>{anomaly.historical_mean == null ? "Baseline unavailable" : <>Baseline <strong>{(anomaly.historical_mean * 100).toFixed(2)}%</strong></>}</span><span>{anomaly.z_score == null ? `${anomaly.history_size} prior runs` : <>z-score <strong>{anomaly.z_score.toFixed(2)}</strong></>}</span></div>
+                <article
+                  className="anomaly-monitor-signal"
+                  key={`${anomaly.rule_id}-${anomaly.anomaly_type}`}
+                >
+                  <div>
+                    <strong>{anomaly.rule_title}</strong>
+                    <span>
+                      {anomaly.anomaly_type === "Z_SCORE_SPIKE"
+                        ? "Historical spike"
+                        : "High violation rate"}
+                    </span>
+                  </div>
+                  <div className="anomaly-monitor-metrics">
+                    <span>
+                      Current{" "}
+                      <strong>
+                        {(anomaly.current_rate * 100).toFixed(2)}%
+                      </strong>
+                    </span>
+                    <span>
+                      {anomaly.historical_mean == null ? (
+                        "Baseline unavailable"
+                      ) : (
+                        <>
+                          Baseline{" "}
+                          <strong>
+                            {(anomaly.historical_mean * 100).toFixed(2)}%
+                          </strong>
+                        </>
+                      )}
+                    </span>
+                    <span>
+                      {anomaly.z_score == null ? (
+                        `${anomaly.history_size} prior runs`
+                      ) : (
+                        <>
+                          z-score <strong>{anomaly.z_score.toFixed(2)}</strong>
+                        </>
+                      )}
+                    </span>
+                  </div>
                   <p>{anomaly.reason}</p>
                 </article>
               ))}
             </div>
           ) : (
-            <div className="anomaly-clear-state"><span>Latest evaluation</span><strong>No unusual violation-rate movement detected.</strong><p>{historicalReady ? "Current rule rates remain within their stored historical baselines." : `Collect ${Math.max(0, 6 - trends.length)} more completed run${6 - trends.length === 1 ? "" : "s"} to enable historical z-score detection.`}</p></div>
+            <div className="anomaly-clear-state">
+              <span>Latest evaluation</span>
+              <strong>No unusual violation-rate movement detected.</strong>
+              <p>
+                {historicalReady
+                  ? "Current rule rates remain within their stored historical baselines."
+                  : `Collect ${Math.max(0, 6 - trends.length)} more completed run${6 - trends.length === 1 ? "" : "s"} to enable historical z-score detection.`}
+              </p>
+            </div>
           )}
         </div>
       </div>
@@ -1633,19 +3334,26 @@ function VisualizationPage({
   anomalies: DqAnomaly[];
   trends: QualityTrendPoint[];
 }) {
-  const latestScore = trends.at(-1)?.quality_score ?? profile?.validity_score ?? 0;
-  const failedRules = results.filter((result) => result.status === "FAIL").length;
+  const latestScore =
+    trends.at(-1)?.quality_score ?? profile?.validity_score ?? 0;
+  const failedRules = results.filter(
+    (result) => result.status === "FAIL",
+  ).length;
   const previousScore = trends.at(-2)?.quality_score;
-  const scoreDelta = previousScore === undefined ? null : latestScore - previousScore;
+  const scoreDelta =
+    previousScore === undefined ? null : latestScore - previousScore;
   const sortedColumns = [...(profile?.columns ?? [])]
     .sort((left, right) => right.null_rate - left.null_rate)
     .slice(0, 8);
   const maximumViolation = results.reduce((maximum, result) => {
-    const rate = result.checked_count ? result.failed_count / result.checked_count : 0;
+    const rate = result.checked_count
+      ? result.failed_count / result.checked_count
+      : 0;
     return Math.max(maximum, rate);
   }, 0);
   const circumference = 2 * Math.PI * 52;
-  const scoreOffset = circumference * (1 - Math.min(100, Math.max(0, latestScore)) / 100);
+  const scoreOffset =
+    circumference * (1 - Math.min(100, Math.max(0, latestScore)) / 100);
   const latestRunAt = trends.at(-1)?.created_at;
   return (
     <>
@@ -1653,54 +3361,194 @@ function VisualizationPage({
         <div>
           <span className="eyebrow">QUALITY CONTROL ROOM</span>
           <h1>Data quality observatory</h1>
-          <p>Monitor run health, surface rule drift, and focus review on the signals that need attention.</p>
+          <p>
+            Monitor run health, surface rule drift, and focus review on the
+            signals that need attention.
+          </p>
         </div>
-        <div className="quality-dial" aria-label={`Latest quality score ${latestScore.toFixed(1)} percent`}>
+        <div
+          className="quality-dial"
+          aria-label={`Latest quality score ${latestScore.toFixed(1)} percent`}
+        >
           <svg viewBox="0 0 120 120" aria-hidden="true">
             <circle cx="60" cy="60" r="52" className="quality-dial-track" />
-            <circle cx="60" cy="60" r="52" className="quality-dial-progress" strokeDasharray={circumference} strokeDashoffset={scoreOffset} />
+            <circle
+              cx="60"
+              cy="60"
+              r="52"
+              className="quality-dial-progress"
+              strokeDasharray={circumference}
+              strokeDashoffset={scoreOffset}
+            />
           </svg>
-          <div><strong>{latestScore.toFixed(1)}</strong><span>quality score</span></div>
+          <div>
+            <strong>{latestScore.toFixed(1)}</strong>
+            <span>quality score</span>
+          </div>
         </div>
       </div>
-      <section className="visual-kpi-rail" aria-label="Latest quality indicators">
-        <div><span>Profiled records</span><strong>{(profile?.row_count ?? 0).toLocaleString()}</strong><small>current dataset</small></div>
-        <div><span>Latest movement</span><strong className={scoreDelta !== null && scoreDelta < 0 ? "metric-warn" : ""}>{scoreDelta === null ? "Baseline" : `${scoreDelta >= 0 ? "+" : ""}${scoreDelta.toFixed(2)} pts`}</strong><small>{trends.length} completed {trends.length === 1 ? "run" : "runs"}</small></div>
-        <div><span>Rules requiring review</span><strong className={failedRules ? "metric-warn" : ""}>{failedRules} / {results.length}</strong><small>{(maximumViolation * 100).toFixed(1)}% peak violation</small></div>
-        <div><span>Signal status</span><strong className={anomalies.length ? "metric-warn" : ""}>{anomalies.length ? "Attention" : "Stable"}</strong><small>{anomalies.length} detected {anomalies.length === 1 ? "anomaly" : "anomalies"}</small></div>
+      <section
+        className="visual-kpi-rail"
+        aria-label="Latest quality indicators"
+      >
+        <div>
+          <span>Profiled records</span>
+          <strong>{(profile?.row_count ?? 0).toLocaleString()}</strong>
+          <small>current dataset</small>
+        </div>
+        <div>
+          <span>Latest movement</span>
+          <strong
+            className={
+              scoreDelta !== null && scoreDelta < 0 ? "metric-warn" : ""
+            }
+          >
+            {scoreDelta === null
+              ? "Baseline"
+              : `${scoreDelta >= 0 ? "+" : ""}${scoreDelta.toFixed(2)} pts`}
+          </strong>
+          <small>
+            {trends.length} completed {trends.length === 1 ? "run" : "runs"}
+          </small>
+        </div>
+        <div>
+          <span>Rules requiring review</span>
+          <strong className={failedRules ? "metric-warn" : ""}>
+            {failedRules} / {results.length}
+          </strong>
+          <small>{(maximumViolation * 100).toFixed(1)}% peak violation</small>
+        </div>
+        <div>
+          <span>Signal status</span>
+          <strong className={anomalies.length ? "metric-warn" : ""}>
+            {anomalies.length ? "Attention" : "Stable"}
+          </strong>
+          <small>
+            {anomalies.length} detected{" "}
+            {anomalies.length === 1 ? "anomaly" : "anomalies"}
+          </small>
+        </div>
       </section>
       <section className="visual-grid">
         <article className="panel trend-panel">
-          <div className="panel-heading"><div><span className="eyebrow">RUN HISTORY</span><h3>Quality score trend</h3></div><span className="panel-caption">{latestRunAt ? `Updated ${formatTime(latestRunAt)}` : "No completed run"}</span></div>
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">RUN HISTORY</span>
+              <h3>Quality score trend</h3>
+            </div>
+            <span className="panel-caption">
+              {latestRunAt
+                ? `Updated ${formatTime(latestRunAt)}`
+                : "No completed run"}
+            </span>
+          </div>
           <TrendChart points={trends} />
-          <div className="chart-legend"><span><i />Quality score</span><small>Calculated from bounded rule results</small></div>
+          <div className="chart-legend">
+            <span>
+              <i />
+              Quality score
+            </span>
+            <small>Calculated from bounded rule results</small>
+          </div>
         </article>
         <article className="panel signal-summary">
-          <div className="signal-heading"><span className="eyebrow">LATEST SIGNALS</span><span className={`signal-state ${anomalies.length ? "attention" : "stable"}`}>{anomalies.length ? "Review" : "Stable"}</span></div>
-          <div className="signal-number"><strong>{anomalies.length}</strong><span>anomalies detected</span></div>
-          <div className="signal-row"><span>Failed rules</span><strong>{failedRules}</strong></div>
-          <div className="signal-row"><span>Checks available</span><strong>{results.length}</strong></div>
-          <div className="signal-row"><span>Detection mode</span><strong>{anomalies[0]?.detection_mode === "HISTORICAL" ? "Historical" : "Cold start"}</strong></div>
-          <p className="signal-insight">{anomalies[0]?.reason ?? "No abnormal violation-rate movement detected in the latest completed run."}</p>
+          <div className="signal-heading">
+            <span className="eyebrow">LATEST SIGNALS</span>
+            <span
+              className={`signal-state ${anomalies.length ? "attention" : "stable"}`}
+            >
+              {anomalies.length ? "Review" : "Stable"}
+            </span>
+          </div>
+          <div className="signal-number">
+            <strong>{anomalies.length}</strong>
+            <span>anomalies detected</span>
+          </div>
+          <div className="signal-row">
+            <span>Failed rules</span>
+            <strong>{failedRules}</strong>
+          </div>
+          <div className="signal-row">
+            <span>Checks available</span>
+            <strong>{results.length}</strong>
+          </div>
+          <div className="signal-row">
+            <span>Detection mode</span>
+            <strong>
+              {anomalies[0]?.detection_mode === "HISTORICAL"
+                ? "Historical"
+                : "Cold start"}
+            </strong>
+          </div>
+          <p className="signal-insight">
+            {anomalies[0]?.reason ??
+              "No abnormal violation-rate movement detected in the latest completed run."}
+          </p>
         </article>
         <article className="panel completeness-panel">
-          <div className="panel-heading"><div><span className="eyebrow">PROFILE HEALTH</span><h3>Column completeness</h3></div><span className="panel-caption">lowest coverage first</span></div>
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">PROFILE HEALTH</span>
+              <h3>Column completeness</h3>
+            </div>
+            <span className="panel-caption">lowest coverage first</span>
+          </div>
           <div className="viz-bars">
             {sortedColumns.map((column) => {
               const completeness = Math.max(0, 100 - column.null_rate * 100);
-              return <div className="viz-bar-row" key={column.name}><span>{column.name}</span><div><i style={{ width: `${completeness}%` }} /></div><strong>{completeness.toFixed(1)}%</strong></div>;
+              return (
+                <div className="viz-bar-row" key={column.name}>
+                  <span>{column.name}</span>
+                  <div>
+                    <i style={{ width: `${completeness}%` }} />
+                  </div>
+                  <strong>{completeness.toFixed(1)}%</strong>
+                </div>
+              );
             })}
-            {!profile && <div className="chart-empty">Create a dataset profile to visualize completeness.</div>}
+            {!profile && (
+              <div className="chart-empty">
+                Create a dataset profile to visualize completeness.
+              </div>
+            )}
           </div>
         </article>
         <article className="panel failure-panel">
-          <div className="panel-heading"><div><span className="eyebrow">RULE EXECUTION</span><h3>Violation rates</h3></div><span className="panel-caption">latest completed run</span></div>
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">RULE EXECUTION</span>
+              <h3>Violation rates</h3>
+            </div>
+            <span className="panel-caption">latest completed run</span>
+          </div>
           <div className="failure-list">
             {results.map((result) => {
-              const rate = result.checked_count ? result.failed_count / result.checked_count : 0;
-              return <div className="failure-item" key={result.rule_id}><div className="failure-copy"><strong title={result.rule_title}>{result.rule_title}</strong><span>{result.failed_count.toLocaleString()} of {result.checked_count.toLocaleString()} rows</span></div><strong className={rate ? "metric-warn" : ""}>{(rate * 100).toFixed(2)}%</strong><div className="failure-track"><i style={{ width: `${Math.min(100, rate * 100)}%` }} /></div></div>;
+              const rate = result.checked_count
+                ? result.failed_count / result.checked_count
+                : 0;
+              return (
+                <div className="failure-item" key={result.rule_id}>
+                  <div className="failure-copy">
+                    <strong title={result.rule_title}>
+                      {result.rule_title}
+                    </strong>
+                    <span>
+                      {result.failed_count.toLocaleString()} of{" "}
+                      {result.checked_count.toLocaleString()} rows
+                    </span>
+                  </div>
+                  <strong className={rate ? "metric-warn" : ""}>
+                    {(rate * 100).toFixed(2)}%
+                  </strong>
+                  <div className="failure-track">
+                    <i style={{ width: `${Math.min(100, rate * 100)}%` }} />
+                  </div>
+                </div>
+              );
             })}
-            {!results.length && <div className="chart-empty">No persisted rule results yet.</div>}
+            {!results.length && (
+              <div className="chart-empty">No persisted rule results yet.</div>
+            )}
           </div>
         </article>
         <AnomalyMonitoringPanel anomalies={anomalies} trends={trends} />
@@ -1710,69 +3558,400 @@ function VisualizationPage({
 }
 
 function rowHasQualityIssue(row: DatasetRow) {
-  return (row.trip_distance ?? 0) < 0
-    || (row.fare_amount ?? 0) < 0
-    || Boolean(row.payment_type?.startsWith("Invalid"))
-    || Boolean(row.pickup_at && row.dropoff_at && row.pickup_at > row.dropoff_at)
-    || !row.vendor_id;
+  return (
+    (row.trip_distance ?? 0) < 0 ||
+    (row.fare_amount ?? 0) < 0 ||
+    Boolean(row.payment_type?.startsWith("Invalid")) ||
+    Boolean(
+      row.pickup_at && row.dropoff_at && row.pickup_at > row.dropoff_at,
+    ) ||
+    !row.vendor_id
+  );
 }
 
 function DataExplorerPage({ dataset }: { dataset?: Dataset }) {
-  const [query, setQuery] = useState<DatasetRowQuery>({ quality_status: "ALL", sort_by: "pickup_at", sort_direction: "desc", limit: 25, offset: 0 });
+  const [query, setQuery] = useState<DatasetRowQuery>({
+    quality_status: "ALL",
+    sort_by: "pickup_at",
+    sort_direction: "desc",
+    limit: 25,
+    offset: 0,
+  });
   const [response, setResponse] = useState<DatasetRowsResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [queryError, setQueryError] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const loadRows = useCallback(async (nextQuery: DatasetRowQuery) => {
-    if (!dataset) return;
-    setBusy(true);
-    setQueryError("");
-    try {
-      setResponse(await api.queryDatasetRows(dataset.id, nextQuery));
-      setQuery(nextQuery);
-    } catch (requestError) {
-      setQueryError(getErrorMessage(requestError, "Unable to query dataset rows."));
-    } finally {
-      setBusy(false);
-    }
-  }, [dataset]);
+  const loadRows = useCallback(
+    async (nextQuery: DatasetRowQuery) => {
+      if (!dataset) return;
+      setBusy(true);
+      setQueryError("");
+      try {
+        setResponse(await api.queryDatasetRows(dataset.id, nextQuery));
+        setQuery(nextQuery);
+      } catch (requestError) {
+        setQueryError(
+          getErrorMessage(requestError, "Unable to query dataset rows."),
+        );
+      } finally {
+        setBusy(false);
+      }
+    },
+    [dataset],
+  );
 
-  useEffect(() => { if (dataset) void loadRows(query); }, [dataset, loadRows]);
+  useEffect(() => {
+    if (dataset) void loadRows(query);
+  }, [dataset, loadRows]);
   const page = response ? Math.floor(response.offset / response.limit) + 1 : 1;
-  const pageCount = response ? Math.max(1, Math.ceil(response.total / response.limit)) : 1;
-  const updateFilter = (key: keyof DatasetRowQuery, value: string | number | undefined) => setQuery((current) => ({ ...current, [key]: value, offset: 0 }));
+  const pageCount = response
+    ? Math.max(1, Math.ceil(response.total / response.limit))
+    : 1;
+  const updateFilter = (
+    key: keyof DatasetRowQuery,
+    value: string | number | undefined,
+  ) => setQuery((current) => ({ ...current, [key]: value, offset: 0 }));
+  const activeFilterCount = [
+    query.quality_status !== "ALL",
+    Boolean(query.vendor_id),
+    Boolean(query.payment_type),
+    query.min_distance !== undefined,
+    query.max_distance !== undefined,
+    query.sort_by !== "pickup_at",
+  ].filter(Boolean).length;
+  const filterSummary = [
+    query.quality_status === "ALL"
+      ? "All rows"
+      : query.quality_status === "ISSUE"
+        ? "Issues only"
+        : "Valid only",
+    query.vendor_id ? `Vendor: ${query.vendor_id}` : "Any vendor",
+    query.payment_type ? `Payment: ${query.payment_type}` : "Any payment",
+  ].join(" · ");
 
   return (
     <>
-      <div className="page-heading">
-        <div><span className="eyebrow">BOUNDED READ ACCESS</span><h1>Data explorer</h1><p>Inspect a safe field projection with server-side filters and pagination.</p></div>
-        <span className="data-count">{response?.total.toLocaleString() ?? "—"}<small>matching rows</small></span>
+      <div className="page-heading data-explorer-heading">
+        <div>
+          <span className="eyebrow">BOUNDED READ ACCESS</span>
+          <h1>Data explorer</h1>
+          <p>
+            Inspect a safe field projection with server-side filters and
+            pagination.
+          </p>
+        </div>
+        <span className="data-count">
+          {response?.total.toLocaleString() ?? "—"}
+          <small>matching rows</small>
+        </span>
       </div>
-      <section className="panel filter-panel">
-        <form onSubmit={(event) => { event.preventDefault(); void loadRows({ ...query, offset: 0 }); }}>
-          <label>Quality<select value={query.quality_status} onChange={(event) => updateFilter("quality_status", event.target.value)}><option value="ALL">All rows</option><option value="ISSUE">Issues only</option><option value="VALID">Valid only</option></select></label>
-          <label>Vendor<select value={query.vendor_id ?? ""} onChange={(event) => updateFilter("vendor_id", event.target.value || undefined)}><option value="">Any vendor</option><option>Curb Mobility, LLC</option><option>Creative Mobile Technologies, LLC</option><option>Unknown Vendor</option></select></label>
-          <label>Payment<select value={query.payment_type ?? ""} onChange={(event) => updateFilter("payment_type", event.target.value || undefined)}><option value="">Any payment</option><option>Flex Fare trip</option><option>Credit card</option><option>Cash</option><option>No charge</option><option>Dispute</option><option>Invalid Payment (Dispute/Test)</option></select></label>
-          <label>Min distance<input type="number" step="0.1" value={query.min_distance ?? ""} onChange={(event) => updateFilter("min_distance", event.target.value === "" ? undefined : Number(event.target.value))} placeholder="No minimum" /></label>
-          <label>Max distance<input type="number" step="0.1" value={query.max_distance ?? ""} onChange={(event) => updateFilter("max_distance", event.target.value === "" ? undefined : Number(event.target.value))} placeholder="No maximum" /></label>
-          <label>Sort by<select value={query.sort_by} onChange={(event) => updateFilter("sort_by", event.target.value)}><option value="pickup_at">Pickup time</option><option value="trip_distance">Distance</option><option value="fare_amount">Fare</option><option value="total_amount">Total</option></select></label>
-          <button className="button primary" disabled={busy}>{busy ? "Querying…" : "Apply filters"}</button>
-        </form>
-        <div className="filter-note">Maximum 100 rows per request · allow-listed fields · read-only query</div>
+      <section
+        className={`panel filter-panel ${filtersOpen ? "is-open" : "is-collapsed"}`}
+      >
+        <div className="filter-toolbar">
+          <div className="filter-toolbar-copy">
+            <span className="eyebrow">QUERY CONTROLS</span>
+            <button
+              type="button"
+              className="filter-toggle"
+              aria-expanded={filtersOpen}
+              aria-controls="data-explorer-filters"
+              onClick={() => setFiltersOpen((open) => !open)}
+            >
+              <span className="filter-toggle-icon" aria-hidden="true">
+                {filtersOpen ? "−" : "+"}
+              </span>
+              <span>{filtersOpen ? "Hide filters" : "Filter rows"}</span>
+            </button>
+            {!filtersOpen && (
+              <span className="filter-summary">{filterSummary}</span>
+            )}
+          </div>
+          <div className="filter-toolbar-state">
+            <span
+              className={
+                activeFilterCount
+                  ? "filter-active-count"
+                  : "filter-default-state"
+              }
+            >
+              {activeFilterCount
+                ? `${activeFilterCount} active`
+                : "Default view"}
+            </span>
+            <span>Read-only</span>
+          </div>
+        </div>
+        {filtersOpen && (
+          <form
+            id="data-explorer-filters"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void loadRows({ ...query, offset: 0 });
+            }}
+          >
+            <label>
+              Quality
+              <select
+                value={query.quality_status}
+                onChange={(event) =>
+                  updateFilter("quality_status", event.target.value)
+                }
+              >
+                <option value="ALL">All rows</option>
+                <option value="ISSUE">Issues only</option>
+                <option value="VALID">Valid only</option>
+              </select>
+            </label>
+            <label>
+              Vendor
+              <select
+                value={query.vendor_id ?? ""}
+                onChange={(event) =>
+                  updateFilter("vendor_id", event.target.value || undefined)
+                }
+              >
+                <option value="">Any vendor</option>
+                <option>Curb Mobility, LLC</option>
+                <option>Creative Mobile Technologies, LLC</option>
+                <option>Unknown Vendor</option>
+              </select>
+            </label>
+            <label>
+              Payment
+              <select
+                value={query.payment_type ?? ""}
+                onChange={(event) =>
+                  updateFilter("payment_type", event.target.value || undefined)
+                }
+              >
+                <option value="">Any payment</option>
+                <option>Flex Fare trip</option>
+                <option>Credit card</option>
+                <option>Cash</option>
+                <option>No charge</option>
+                <option>Dispute</option>
+                <option>Invalid Payment (Dispute/Test)</option>
+              </select>
+            </label>
+            <label>
+              Min distance
+              <input
+                type="number"
+                step="0.1"
+                value={query.min_distance ?? ""}
+                onChange={(event) =>
+                  updateFilter(
+                    "min_distance",
+                    event.target.value === ""
+                      ? undefined
+                      : Number(event.target.value),
+                  )
+                }
+                placeholder="No minimum"
+              />
+            </label>
+            <label>
+              Max distance
+              <input
+                type="number"
+                step="0.1"
+                value={query.max_distance ?? ""}
+                onChange={(event) =>
+                  updateFilter(
+                    "max_distance",
+                    event.target.value === ""
+                      ? undefined
+                      : Number(event.target.value),
+                  )
+                }
+                placeholder="No maximum"
+              />
+            </label>
+            <label>
+              Sort by
+              <select
+                value={query.sort_by}
+                onChange={(event) =>
+                  updateFilter("sort_by", event.target.value)
+                }
+              >
+                <option value="pickup_at">Pickup time</option>
+                <option value="trip_distance">Distance</option>
+                <option value="fare_amount">Fare</option>
+                <option value="total_amount">Total</option>
+              </select>
+            </label>
+            <button className="button primary filter-apply" disabled={busy}>
+              {busy ? "Querying…" : "Apply filters"}
+            </button>
+          </form>
+        )}
+        {filtersOpen && (
+          <div className="filter-note">
+            Read-only · up to 100 rows
+          </div>
+        )}
       </section>
-      {queryError && <div className="alert error"><strong>Query failed</strong><span>{queryError}</span></div>}
+      {queryError && (
+        <div className="alert error">
+          <strong>Query failed</strong>
+          <span>{queryError}</span>
+        </div>
+      )}
       <section className="panel data-panel">
-        <div className="panel-heading"><div><span className="eyebrow">QUERY RESULT</span><h3>Dataset rows</h3></div><span className="panel-caption">page {page} / {pageCount}</span></div>
-        {busy && !response ? <div className="data-skeleton">Loading bounded dataset projection…</div> : response?.rows.length ? (
-          <div className="data-table-wrap"><table className="data-table"><colgroup><col className="data-col-status" /><col className="data-col-row-id" /><col className="data-col-pickup" /><col className="data-col-vendor" /><col className="data-col-payment" /><col className="data-col-number" /><col className="data-col-number" /><col className="data-col-number" /></colgroup><thead><tr><th>Status</th><th>Row ID</th><th>Pickup</th><th>Vendor</th><th>Payment</th><th>Distance</th><th>Fare</th><th>Total</th></tr></thead><tbody>{response.rows.map((row) => { const issue = rowHasQualityIssue(row); return <tr key={row.source_row_id}><td><StatusPill label={issue ? "ISSUE" : "VALID"} tone={issue ? "warning" : "success"} /></td><td><code>{row.source_row_id}</code></td><td title={row.pickup_at ? new Date(row.pickup_at).toLocaleString() : undefined}>{row.pickup_at ? new Date(row.pickup_at).toLocaleString() : "—"}</td><td title={row.vendor_id}>{row.vendor_id ?? "—"}</td><td title={row.payment_type}>{row.payment_type ?? "—"}</td><td className={(row.trip_distance ?? 0) < 0 ? "metric-warn" : ""}>{row.trip_distance?.toFixed(2) ?? "—"}</td><td className={(row.fare_amount ?? 0) < 0 ? "metric-warn" : ""}>{row.fare_amount?.toFixed(2) ?? "—"}</td><td>{row.total_amount?.toFixed(2) ?? "—"}</td></tr>; })}</tbody></table></div>
-        ) : <div className="table-empty">No rows match the current filters.</div>}
-        <div className="pagination"><button className="button ghost" disabled={!response || response.offset === 0 || busy} onClick={() => void loadRows({ ...query, offset: Math.max(0, (response?.offset ?? 0) - (response?.limit ?? 25)) })}>← Previous</button><span>{response ? `${response.offset + 1}–${Math.min(response.offset + response.limit, response.total)} of ${response.total.toLocaleString()}` : "No result"}</span><button className="button ghost" disabled={!response || response.offset + response.limit >= response.total || busy} onClick={() => void loadRows({ ...query, offset: (response?.offset ?? 0) + (response?.limit ?? 25) })}>Next →</button></div>
+        <div className="panel-heading">
+          <div>
+            <span className="eyebrow">QUERY RESULT</span>
+            <h3>Dataset rows</h3>
+          </div>
+          <span className="panel-caption">
+            page {page} / {pageCount}
+          </span>
+        </div>
+        {busy && !response ? (
+          <div className="data-skeleton">
+            Loading bounded dataset projection…
+          </div>
+        ) : response?.rows.length ? (
+          <div className="data-table-wrap">
+            <table className="data-table">
+              <colgroup>
+                <col className="data-col-status" />
+                <col className="data-col-row-id" />
+                <col className="data-col-pickup" />
+                <col className="data-col-vendor" />
+                <col className="data-col-payment" />
+                <col className="data-col-number" />
+                <col className="data-col-number" />
+                <col className="data-col-number" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Row ID</th>
+                  <th>Pickup</th>
+                  <th>Vendor</th>
+                  <th>Payment</th>
+                  <th>Distance</th>
+                  <th>Fare</th>
+                  <th>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {response.rows.map((row) => {
+                  const issue = rowHasQualityIssue(row);
+                  return (
+                    <tr key={row.source_row_id}>
+                      <td>
+                        <StatusPill
+                          label={issue ? "ISSUE" : "VALID"}
+                          tone={issue ? "warning" : "success"}
+                        />
+                      </td>
+                      <td>
+                        <code>{row.source_row_id}</code>
+                      </td>
+                      <td
+                        title={
+                          row.pickup_at
+                            ? new Date(row.pickup_at).toLocaleString()
+                            : undefined
+                        }
+                      >
+                        {row.pickup_at
+                          ? new Date(row.pickup_at).toLocaleString()
+                          : "—"}
+                      </td>
+                      <td title={row.vendor_id}>{row.vendor_id ?? "—"}</td>
+                      <td title={row.payment_type}>
+                        {row.payment_type ?? "—"}
+                      </td>
+                      <td
+                        className={
+                          (row.trip_distance ?? 0) < 0 ? "metric-warn" : ""
+                        }
+                      >
+                        {row.trip_distance?.toFixed(2) ?? "—"}
+                      </td>
+                      <td
+                        className={
+                          (row.fare_amount ?? 0) < 0 ? "metric-warn" : ""
+                        }
+                      >
+                        {row.fare_amount?.toFixed(2) ?? "—"}
+                      </td>
+                      <td>{row.total_amount?.toFixed(2) ?? "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="table-empty">No rows match the current filters.</div>
+        )}
+        <div className="pagination">
+          <button
+            className="button ghost"
+            disabled={!response || response.offset === 0 || busy}
+            onClick={() =>
+              void loadRows({
+                ...query,
+                offset: Math.max(
+                  0,
+                  (response?.offset ?? 0) - (response?.limit ?? 25),
+                ),
+              })
+            }
+          >
+            ← Previous
+          </button>
+          <span>
+            {response
+              ? `${response.offset + 1}–${Math.min(response.offset + response.limit, response.total)} of ${response.total.toLocaleString()}`
+              : "No result"}
+          </span>
+          <button
+            className="button ghost"
+            disabled={
+              !response ||
+              response.offset + response.limit >= response.total ||
+              busy
+            }
+            onClick={() =>
+              void loadRows({
+                ...query,
+                offset: (response?.offset ?? 0) + (response?.limit ?? 25),
+              })
+            }
+          >
+            Next →
+          </button>
+        </div>
       </section>
     </>
   );
 }
 
-function AdminPage({ users, access, loading, onCreate, onUpdate, onGrant, onRevoke }: { users: UserAccount[]; access: DatasetAccess[]; loading: boolean; onCreate: (input: UserCreateInput) => void; onUpdate: (username: string, input: UserUpdateInput) => void; onGrant: (username: string, level: DatasetAccessLevel) => void; onRevoke: (username: string) => void }) {
+function AdminPage({
+  users,
+  access,
+  loading,
+  onCreate,
+  onUpdate,
+  onGrant,
+  onRevoke,
+}: {
+  users: UserAccount[];
+  access: DatasetAccess[];
+  loading: boolean;
+  onCreate: (input: UserCreateInput) => void;
+  onUpdate: (username: string, input: UserUpdateInput) => void;
+  onGrant: (username: string, level: DatasetAccessLevel) => void;
+  onRevoke: (username: string) => void;
+}) {
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
@@ -1780,13 +3959,186 @@ function AdminPage({ users, access, loading, onCreate, onUpdate, onGrant, onRevo
   const [grantUsername, setGrantUsername] = useState("");
   const [grantLevel, setGrantLevel] = useState<DatasetAccessLevel>("READ");
   const grantedNames = new Set(access.map((item) => item.username));
-  return <><div className="page-heading"><div><span className="eyebrow">ADMINISTRATION</span><h1>Accounts and access</h1><p>Provision local demo users and grant read or manage access to the registered dataset.</p></div></div><div className="admin-grid"><section className="panel"><div className="panel-heading"><div><span className="eyebrow">ACCOUNT DIRECTORY</span><h3>Local users</h3></div><span className="panel-caption">{users.length} accounts</span></div><form className="admin-form" onSubmit={(event) => { event.preventDefault(); onCreate({ username, display_name: displayName, password, role }); setUsername(""); setDisplayName(""); setPassword(""); }}><input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="username" required /><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="display name" required /><input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="password (8+ chars)" type="password" minLength={8} required /><select value={role} onChange={(event) => setRole(event.target.value as UserRole)}><option>USER</option><option>STEWARD</option><option>ADMIN</option></select><button className="button primary">Create account</button></form><div className="admin-list">{loading ? <div className="table-empty">Loading accounts…</div> : users.map((user) => <AdminUserRow key={user.id} user={user} onUpdate={onUpdate} />)}</div></section><section className="panel"><div className="panel-heading"><div><span className="eyebrow">DATASET ACCESS</span><h3>Registered artifact</h3></div><span className="panel-caption">{access.length} grants</span></div><form className="admin-form grant" onSubmit={(event) => { event.preventDefault(); if (grantUsername) onGrant(grantUsername, grantLevel); }}><select value={grantUsername} onChange={(event) => setGrantUsername(event.target.value)} required><option value="">Select account</option>{users.filter((user) => !grantedNames.has(user.username)).map((user) => <option key={user.username} value={user.username}>{user.username} · {user.role}</option>)}</select><select value={grantLevel} onChange={(event) => setGrantLevel(event.target.value as DatasetAccessLevel)}><option value="READ">Read</option><option value="MANAGE">Manage</option></select><button className="button primary">Grant access</button></form><div className="admin-list">{access.map((grant) => <div className="admin-row" key={grant.id}><div><strong>{grant.display_name}</strong><small>{grant.username} · {grant.role}</small></div><span className="status-pill info"><span className="status-dot" />{grant.access_level}</span><button className="button ghost" onClick={() => onRevoke(grant.username)}>Revoke</button></div>)}</div></section></div></>;
+  return (
+    <>
+      <div className="page-heading">
+        <div>
+          <span className="eyebrow">ADMINISTRATION</span>
+          <h1>Accounts and access</h1>
+          <p>
+            Provision local demo users and grant read or manage access to the
+            registered dataset.
+          </p>
+        </div>
+      </div>
+      <div className="admin-grid">
+        <section className="panel">
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">ACCOUNT DIRECTORY</span>
+              <h3>Local users</h3>
+            </div>
+            <span className="panel-caption">{users.length} accounts</span>
+          </div>
+          <form
+            className="admin-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onCreate({ username, display_name: displayName, password, role });
+              setUsername("");
+              setDisplayName("");
+              setPassword("");
+            }}
+          >
+            <input
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              placeholder="username"
+              required
+            />
+            <input
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+              placeholder="display name"
+              required
+            />
+            <input
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="password (8+ chars)"
+              type="password"
+              minLength={8}
+              required
+            />
+            <select
+              value={role}
+              onChange={(event) => setRole(event.target.value as UserRole)}
+            >
+              <option>USER</option>
+              <option>STEWARD</option>
+              <option>ADMIN</option>
+            </select>
+            <button className="button primary">Create account</button>
+          </form>
+          <div className="admin-list">
+            {loading ? (
+              <div className="table-empty">Loading accounts…</div>
+            ) : (
+              users.map((user) => (
+                <AdminUserRow key={user.id} user={user} onUpdate={onUpdate} />
+              ))
+            )}
+          </div>
+        </section>
+        <section className="panel">
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">DATASET ACCESS</span>
+              <h3>Registered artifact</h3>
+            </div>
+            <span className="panel-caption">{access.length} grants</span>
+          </div>
+          <form
+            className="admin-form grant"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (grantUsername) onGrant(grantUsername, grantLevel);
+            }}
+          >
+            <select
+              value={grantUsername}
+              onChange={(event) => setGrantUsername(event.target.value)}
+              required
+            >
+              <option value="">Select account</option>
+              {users
+                .filter((user) => !grantedNames.has(user.username))
+                .map((user) => (
+                  <option key={user.username} value={user.username}>
+                    {user.username} · {user.role}
+                  </option>
+                ))}
+            </select>
+            <select
+              value={grantLevel}
+              onChange={(event) =>
+                setGrantLevel(event.target.value as DatasetAccessLevel)
+              }
+            >
+              <option value="READ">Read</option>
+              <option value="MANAGE">Manage</option>
+            </select>
+            <button className="button primary">Grant access</button>
+          </form>
+          <div className="admin-list">
+            {access.map((grant) => (
+              <div className="admin-row" key={grant.id}>
+                <div>
+                  <strong>{grant.display_name}</strong>
+                  <small>
+                    {grant.username} · {grant.role}
+                  </small>
+                </div>
+                <span className="status-pill info">
+                  <span className="status-dot" />
+                  {grant.access_level}
+                </span>
+                <button
+                  className="button ghost"
+                  onClick={() => onRevoke(grant.username)}
+                >
+                  Revoke
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </>
+  );
 }
 
-function AdminUserRow({ user, onUpdate }: { user: UserAccount; onUpdate: (username: string, input: UserUpdateInput) => void }) {
+function AdminUserRow({
+  user,
+  onUpdate,
+}: {
+  user: UserAccount;
+  onUpdate: (username: string, input: UserUpdateInput) => void;
+}) {
   const [role, setRole] = useState<UserRole>(user.role);
   const [status, setStatus] = useState(user.status);
-  return <div className="admin-row"><div><strong>{user.display_name}</strong><small>{user.username} · created {formatTime(user.created_at)}</small></div><select value={role} onChange={(event) => setRole(event.target.value as UserRole)}><option>USER</option><option>STEWARD</option><option>ADMIN</option></select><select value={status} onChange={(event) => setStatus(event.target.value as typeof status)}><option>ACTIVE</option><option>SUSPENDED</option><option>DISABLED</option></select><button className="button ghost" onClick={() => onUpdate(user.username, { role, status })}>Save</button></div>;
+  return (
+    <div className="admin-row">
+      <div>
+        <strong>{user.display_name}</strong>
+        <small>
+          {user.username} · created {formatTime(user.created_at)}
+        </small>
+      </div>
+      <select
+        value={role}
+        onChange={(event) => setRole(event.target.value as UserRole)}
+      >
+        <option>USER</option>
+        <option>STEWARD</option>
+        <option>ADMIN</option>
+      </select>
+      <select
+        value={status}
+        onChange={(event) => setStatus(event.target.value as typeof status)}
+      >
+        <option>ACTIVE</option>
+        <option>SUSPENDED</option>
+        <option>DISABLED</option>
+      </select>
+      <button
+        className="button ghost"
+        onClick={() => onUpdate(user.username, { role, status })}
+      >
+        Save
+      </button>
+    </div>
+  );
 }
 
 function AuditPage({ logs }: { logs: AuditLog[] }) {

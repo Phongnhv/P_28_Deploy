@@ -1,0 +1,170 @@
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from src.agents.nodes.rule_proposer_node import _build_coverage_requirements, _stamp_rule
+from src.models.rule_schemas import ProposedRule
+
+
+def _range_payload() -> dict:
+    return {
+        "column": "amount",
+        "rule_type": "RANGE",
+        "parameters": {"min": 0.0},
+        "rule_name": "Amount must be non-negative",
+        "business_rationale": "Negative amounts distort financial totals.",
+        "proposal_basis": "MIXED",
+        "selected_evidence_refs": ["policy.nonnegative_column.amount"],
+        "parameter_provenance": [{
+            "parameter_name": "min",
+            "source_type": "POLICY",
+            "source_ref": "policy.nonnegative_column.amount",
+            "derivation_method": "configured non-negative policy",
+        }],
+        "assumptions": [],
+        "confidence": {
+            "overall": 0.9,
+            "evidence_strength": 1.0,
+            "business_support": 0.9,
+            "sample_representativeness": 0.8,
+            "explanation": "Policy-backed threshold with supporting profile evidence.",
+        },
+        "severity": "HIGH",
+        "dimension": "VALIDITY",
+        "rule_description": "Amount must be greater than or equal to zero.",
+        "ai_reasoning": "Dataset policy defines amount as non-negative.",
+    }
+
+
+def test_new_schema_requires_core_evidence_fields():
+    payload = _range_payload()
+    del payload["rule_name"]
+    with pytest.raises(ValidationError):
+        ProposedRule.model_validate(payload)
+
+
+def test_parameter_provenance_must_cover_all_parameters():
+    payload = _range_payload()
+    payload["parameters"]["max"] = 100.0
+    with pytest.raises(ValidationError, match="parameter_provenance"):
+        ProposedRule.model_validate(payload)
+
+
+def test_dashboard_candidate_repairs_only_a_missing_provenance_array():
+    payload = _range_payload()
+    payload["candidate_id"] = "nonnegative:amount"
+    payload["parameter_provenance"] = []
+
+    rule = ProposedRule.model_validate(payload)
+
+    assert rule.parameter_provenance[0].parameter_name == "min"
+    assert rule.parameter_provenance[0].source_ref == "policy.nonnegative_column.amount"
+
+
+def test_dashboard_candidate_repairs_duplicate_or_incomplete_provenance():
+    payload = _range_payload()
+    payload["candidate_id"] = "nonnegative:amount"
+    payload["parameters"]["max"] = 100.0
+    payload["parameter_provenance"].append(dict(payload["parameter_provenance"][0]))
+
+    rule = ProposedRule.model_validate(payload)
+
+    assert [item.parameter_name for item in rule.parameter_provenance] == ["min", "max"]
+
+
+def test_empty_optional_parameters_do_not_require_provenance():
+    payload = _range_payload()
+    payload["parameters"]["accepted_values"] = []
+
+    rule = ProposedRule.model_validate(payload)
+
+    assert rule.parameters.accepted_values == []
+
+
+def test_parameter_provenance_rejects_duplicate_entries():
+    payload = _range_payload()
+    payload["parameter_provenance"].append(dict(payload["parameter_provenance"][0]))
+
+    with pytest.raises(ValidationError, match="parameter_provenance"):
+        ProposedRule.model_validate(payload)
+
+
+def test_confidence_breakdown_rejects_inconsistent_overall():
+    payload = _range_payload()
+    payload["confidence"]["overall"] = 0.1
+    with pytest.raises(ValidationError, match="confidence.overall"):
+        ProposedRule.model_validate(payload)
+
+
+def test_stamp_resolves_only_allowlisted_evidence_from_digest():
+    digest = {
+        "rows": 100,
+        "sample": {"rate": 1.0, "n": 100},
+        "dashboard_candidate_mode": True,
+        "dashboard_rule_candidates": [{
+            "candidate_id": "nonnegative:amount",
+            "column": "amount",
+            "rule_type": "RANGE",
+            "parameters": {"min": 0.0},
+            "dimension": "VALIDITY",
+            "evidence": ["policy.nonnegative_column.amount", "profile.column.amount.min_value"],
+        }],
+        "columns": [{"name": "amount", "range": [-1.0, 50.0], "signals": ["has_negative_values"]}],
+    }
+    requirement = _build_coverage_requirements(digest)[0]
+    payload = _range_payload()
+    payload["candidate_id"] = "nonnegative:amount"
+    rule = ProposedRule.model_validate(payload)
+    stamped = _stamp_rule(rule, "source_rows", "run-1", requirement=requirement, table_digest=digest)
+
+    assert stamped["evidence"]["observed_metrics"] == {
+        "policy.nonnegative_column.amount": None
+    }
+    assert "status" not in stamped
+    assert stamped["confidence_score"] == 0.9
+
+
+def test_stamp_normalizes_evidence_reference_to_matched_candidate():
+    payload = _range_payload()
+    payload["selected_evidence_refs"] = ["policy.nonnegative_column.other"]
+    payload["parameter_provenance"][0]["source_ref"] = "policy.nonnegative_column.other"
+    rule = ProposedRule.model_validate(payload)
+    requirement = {
+        "evidence_items": [{"id": "policy.nonnegative_column.amount", "value": None}]
+    }
+    stamped = _stamp_rule(rule, "source_rows", "run-1", requirement=requirement)
+    assert stamped["selected_evidence_refs"] == ["policy.nonnegative_column.amount"]
+    assert stamped["parameter_provenance"][0]["source_ref"] == "policy.nonnegative_column.amount"
+    assert stamped["parameter_provenance"][0]["source_type"] == "POLICY"
+
+
+@pytest.mark.parametrize(
+    ("rule_type", "column", "parameters"),
+    [
+        ("FRESHNESS", "created_at", {}),
+        ("NULL_RATE", "name", {}),
+        ("ROW_COUNT", None, {}),
+        ("ROW_COUNT", "name", {"min_row_count": 1}),
+    ],
+)
+def test_rule_specific_required_parameters_and_scope(rule_type, column, parameters):
+    payload = _range_payload()
+    payload.update({"rule_type": rule_type, "column": column, "parameters": parameters})
+    payload["parameter_provenance"] = []
+    with pytest.raises(ValidationError):
+        ProposedRule.model_validate(payload)
+
+
+def test_row_count_requirement_supplies_deterministic_parameter():
+    requirements = _build_coverage_requirements({"rows": 50_000, "columns": []})
+
+    row_count = next(item for item in requirements if item["rule_type"] == "ROW_COUNT")
+    assert row_count["column"] is None
+    assert row_count["parameters"] == {"min_row_count": 40_000}
+    assert row_count["evidence_items"] == [{
+        "id": "profile:_table:rows",
+        "source_type": "DATA_PROFILE",
+        "metric": "rows",
+        "value": 50_000,
+    }]

@@ -98,6 +98,11 @@ class ProposedRuleModel(Base):
     dimension: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     rule_description: Mapped[str] = mapped_column(Text, nullable=False)
     ai_reasoning: Mapped[str] = mapped_column(Text, nullable=False)
+    rule_name: Mapped[str] = mapped_column(String(256), nullable=False, default="Rule proposal")
+    business_rationale: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    proposal_basis: Mapped[str] = mapped_column(String(32), nullable=False, default="DATA_PROFILE")
+    evidence: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    confidence_breakdown: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
 
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=RuleStatus.PENDING.value, index=True)
     reviewer: Mapped[str | None] = mapped_column(String(256), nullable=True)
@@ -136,6 +141,11 @@ class ProposedRuleModel(Base):
             "dimension": self.dimension,
             "rule_description": self.rule_description,
             "ai_reasoning": self.ai_reasoning,
+            "rule_name": self.rule_name,
+            "business_rationale": self.business_rationale,
+            "proposal_basis": self.proposal_basis,
+            "evidence": json.loads(self.evidence or "{}"),
+            "confidence": json.loads(self.confidence_breakdown or "{}"),
             "status": self.status,
             "reviewer": self.reviewer,
             "review_note": self.review_note,
@@ -250,7 +260,7 @@ class TestResultModel(Base):
     violation_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     violation_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    sample_failures: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list[dict]
+    sample_failures: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list[str] — chỉ ID dòng vi phạm
     sql_text: Mapped[str] = mapped_column(Text, nullable=False)
     duration_ms: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -286,6 +296,8 @@ def init_db() -> None:
     engine = get_engine()
     Base.metadata.create_all(engine)
     _migrate_local_profile_columns(engine)
+    _migrate_local_proposal_columns(engine)
+    _migrate_local_workflow_columns(engine)
     logger.info("Database đã được khởi tạo tại: %s", get_settings().database_url)
 
     # Seed default demo dataset if not present
@@ -386,6 +398,120 @@ def _migrate_local_profile_columns(engine) -> None:
             connection.exec_driver_sql("ALTER TABLE profiles ADD COLUMN cross_field_metrics_json TEXT")
 
 
+def _migrate_local_proposal_columns(engine) -> None:
+    """Add core evidence fields to existing proposal tables.
+
+    Deployments historically initialized metadata with ``create_all`` only, so
+    additive proposal columns must be reconciled at startup for both local
+    SQLite and the compose PostgreSQL database.
+    """
+    if engine.dialect.name == "postgresql":
+        statements = (
+            "ALTER TABLE proposed_rules ADD COLUMN IF NOT EXISTS rule_name VARCHAR(256) DEFAULT 'Rule proposal'",
+            "ALTER TABLE proposed_rules ADD COLUMN IF NOT EXISTS business_rationale TEXT DEFAULT ''",
+            "ALTER TABLE proposed_rules ADD COLUMN IF NOT EXISTS proposal_basis VARCHAR(32) DEFAULT 'DATA_PROFILE'",
+            "ALTER TABLE proposed_rules ADD COLUMN IF NOT EXISTS evidence TEXT DEFAULT '{}'",
+            "ALTER TABLE proposed_rules ADD COLUMN IF NOT EXISTS parameter_provenance TEXT DEFAULT '[]'",
+            "ALTER TABLE proposed_rules ADD COLUMN IF NOT EXISTS assumptions TEXT DEFAULT '[]'",
+            "ALTER TABLE proposed_rules ADD COLUMN IF NOT EXISTS confidence_breakdown TEXT DEFAULT '{}'",
+            "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS rule_name VARCHAR(256) DEFAULT 'Rule proposal'",
+            "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS business_rationale TEXT DEFAULT ''",
+            "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS proposal_basis VARCHAR(32) DEFAULT 'DATA_PROFILE'",
+            "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS evidence TEXT DEFAULT '{}'",
+            "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS parameter_provenance TEXT DEFAULT '[]'",
+            "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS assumptions TEXT DEFAULT '[]'",
+            "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS confidence_breakdown TEXT DEFAULT '{}'",
+        )
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.exec_driver_sql(statement)
+        return
+    if engine.dialect.name != "sqlite":
+        return
+    inspector = inspect(engine)
+    additions = {
+        "workflow_run_id": "VARCHAR(64)",
+        "rule_name": "VARCHAR(256) NOT NULL DEFAULT 'Rule proposal'",
+        "business_rationale": "TEXT NOT NULL DEFAULT ''",
+        "proposal_basis": "VARCHAR(32) NOT NULL DEFAULT 'DATA_PROFILE'",
+        "evidence": "TEXT NOT NULL DEFAULT '{}'",
+        "parameter_provenance": "TEXT NOT NULL DEFAULT '[]'",
+        "assumptions": "TEXT NOT NULL DEFAULT '[]'",
+        "confidence_breakdown": "TEXT NOT NULL DEFAULT '{}'",
+    }
+    with engine.begin() as connection:
+        for table_name in ("proposed_rules", "rule_proposals"):
+            if table_name not in inspector.get_table_names():
+                continue
+            columns = {column["name"] for column in inspector.get_columns(table_name)}
+            for name, sql_type in additions.items():
+                if name not in columns:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE {table_name} ADD COLUMN {name} {sql_type}"
+                    )
+
+
+def _migrate_local_workflow_columns(engine) -> None:
+    """Reconcile additive workflow provenance columns on existing databases."""
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as connection:
+            for statement in (
+                "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS workflow_run_id VARCHAR(64)",
+                "ALTER TABLE ruleset_versions ADD COLUMN IF NOT EXISTS workflow_run_id VARCHAR(64)",
+                "ALTER TABLE ruleset_versions ADD COLUMN IF NOT EXISTS stale BOOLEAN NOT NULL DEFAULT FALSE",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS workflow_run_id VARCHAR(64)",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS stale BOOLEAN NOT NULL DEFAULT FALSE",
+                "ALTER TABLE rule_configurations ADD COLUMN IF NOT EXISTS model_name VARCHAR(128) NOT NULL DEFAULT 'unspecified'",
+                "ALTER TABLE rule_configurations ADD COLUMN IF NOT EXISTS created_at TIMESTAMP",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS compiler_version VARCHAR(64)",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS ruleset_version_id VARCHAR(64)",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS artifact_hash VARCHAR(256)",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS retry_history_json TEXT",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS error_message TEXT",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS dbt_status VARCHAR(32)",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS metrics_status VARCHAR(32)",
+                "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS violation_rate DOUBLE PRECISION",
+                "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS duration_ms DOUBLE PRECISION",
+                "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS dbt_status VARCHAR(32)",
+                "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS metrics_status VARCHAR(32)",
+                "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS error_message TEXT",
+            ):
+                connection.exec_driver_sql(statement)
+        return
+    if engine.dialect.name != "sqlite":
+        return
+    inspector = inspect(engine)
+    additions = {
+        "rule_proposals": {"workflow_run_id": "VARCHAR(64)"},
+        "ruleset_versions": {"workflow_run_id": "VARCHAR(64)", "stale": "BOOLEAN NOT NULL DEFAULT 0"},
+        "dq_runs": {
+            "workflow_run_id": "VARCHAR(64)", "stale": "BOOLEAN NOT NULL DEFAULT 0",
+            "ruleset_version_id": "VARCHAR(64)", "compiler_version": "VARCHAR(64)", "artifact_hash": "VARCHAR(256)",
+            "retry_history_json": "TEXT", "error_message": "TEXT",
+            "dbt_status": "VARCHAR(32)", "metrics_status": "VARCHAR(32)",
+        },
+        # Existing local databases predate the provenance field on the ORM
+        # model.  Without this additive migration, approving a proposal fails
+        # when SQLAlchemy selects RuleConfigurationModel.
+        "rule_configurations": {
+            "model_name": "VARCHAR(128) NOT NULL DEFAULT 'unspecified'",
+            "created_at": "DATETIME",
+        },
+        "dq_results": {
+            "violation_rate": "FLOAT", "duration_ms": "FLOAT", "dbt_status": "VARCHAR(32)",
+            "metrics_status": "VARCHAR(32)", "error_message": "TEXT",
+        },
+    }
+    with engine.begin() as connection:
+        for table_name, columns_to_add in additions.items():
+            if table_name not in inspector.get_table_names():
+                continue
+            columns = {column["name"] for column in inspector.get_columns(table_name)}
+            for name, sql_type in columns_to_add.items():
+                if name not in columns:
+                    connection.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {name} {sql_type}")
+
+
 # ---------------------------------------------------------------------------
 # CRUD — ProposalRun (Mapped to JobModel)
 # ---------------------------------------------------------------------------
@@ -484,7 +610,8 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
 
         for rule in rules:
             rule_id = rule.get("rule_id", f"rule_{uuid.uuid4().hex}")
-            status_val = rule.get("status", "PENDING")
+            # HITL owns review state; raw proposer output intentionally has no review fields.
+            status_val = rule.get("status") or "PENDING"
 
             # Map for RuleProposalModel: if it is PENDING or PROPOSED, map to PROPOSED. Otherwise keep it.
             rp_status = "PROPOSED" if status_val in ("PENDING", "PROPOSED") else status_val
@@ -508,15 +635,29 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
             row = RuleProposalModel(
                 id=rule_id,
                 dataset_id=dataset_id,
-                title=rule.get("rule_description", "Rule proposal"),
+                title=rule.get("rule_name") or rule.get("rule_description", "Rule proposal"),
                 description=rule.get("rule_description", ""),
                 severity=rule.get("severity", "MEDIUM").upper(),
                 status=rp_status,
                 rule_type=rule.get("rule_type", "not_null"),
                 rule_spec=json.dumps(rule_spec),
-                evidence_refs=json.dumps([rule.get("dimension", "VALIDITY")]),
+                evidence_refs=json.dumps(rule.get("selected_evidence_refs", []), ensure_ascii=False),
                 evidence_summary=rule.get("ai_reasoning", ""),
                 confidence=rule.get("confidence_score", 1.0),
+                rule_name=rule.get("rule_name") or rule.get("rule_description", "Rule proposal"),
+                business_rationale=rule.get("business_rationale") or rule.get("ai_reasoning", ""),
+                proposal_basis=rule.get("proposal_basis", "DATA_PROFILE"),
+                evidence=json.dumps(rule.get("evidence", {}), ensure_ascii=False),
+                confidence_breakdown=json.dumps(
+                    rule.get("confidence") or {
+                        "overall": rule.get("confidence_score", 1.0),
+                        "evidence_strength": rule.get("confidence_score", 1.0),
+                        "business_support": rule.get("confidence_score", 1.0),
+                        "sample_representativeness": rule.get("confidence_score", 1.0),
+                        "explanation": "Legacy confidence score",
+                    },
+                    ensure_ascii=False,
+                ),
                 model_name="agent-proposer",
                 created_at=utc_now(),
                 updated_at=utc_now(),
@@ -538,6 +679,20 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
                 dimension=rule.get("dimension", "VALIDITY"),
                 rule_description=rule.get("rule_description", ""),
                 ai_reasoning=rule.get("ai_reasoning", ""),
+                rule_name=rule.get("rule_name") or rule.get("rule_description", "Rule proposal"),
+                business_rationale=rule.get("business_rationale") or rule.get("ai_reasoning", ""),
+                proposal_basis=rule.get("proposal_basis", "DATA_PROFILE"),
+                evidence=json.dumps(rule.get("evidence", {}), ensure_ascii=False),
+                confidence_breakdown=json.dumps(
+                    rule.get("confidence") or {
+                        "overall": rule.get("confidence_score", 1.0),
+                        "evidence_strength": rule.get("confidence_score", 1.0),
+                        "business_support": rule.get("confidence_score", 1.0),
+                        "sample_representativeness": rule.get("confidence_score", 1.0),
+                        "explanation": "Legacy confidence score",
+                    },
+                    ensure_ascii=False,
+                ),
                 status=status_val,
             )
             session.add(proposed_row)
@@ -589,6 +744,11 @@ def list_rules(
                     "dimension": r.dimension,
                     "rule_description": r.rule_description,
                     "ai_reasoning": r.ai_reasoning,
+                    "rule_name": r.rule_name,
+                    "business_rationale": r.business_rationale,
+                    "proposal_basis": r.proposal_basis,
+                    "evidence": json.loads(r.evidence or "{}"),
+                    "confidence": json.loads(r.confidence_breakdown or "{}"),
                     "status": r.status,
                     "reviewer": r.reviewer,
                     "review_note": r.review_note,
@@ -710,7 +870,7 @@ def review_rule(
             "effective_parameters": effective_params,
             "confidence_score": row.confidence,
             "severity": row.severity,
-            "dimension": json.loads(row.evidence_refs)[0] if row.evidence_refs else "VALIDITY",
+            "dimension": proposed_row.dimension if proposed_row else "VALIDITY",
             "rule_description": row.description,
             "ai_reasoning": row.evidence_summary,
             "status": "PENDING" if row.status == "PROPOSED" else row.status,
@@ -776,6 +936,22 @@ def get_approved_rules(run_id: str) -> list[dict]:
 def create_test_run(test_run_id: str, dataset_id: str) -> dict:
     """Tạo bản ghi test run mới với status=QUEUED."""
     with Session(get_engine()) as session:
+        # Check if job exists, if not create dummy job to satisfy foreign key constraint
+        job = session.get(JobModel, test_run_id)
+        if not job:
+            job = JobModel(
+                id=test_run_id,
+                type="RUN_DQ",
+                status="RUNNING",
+                progress=0.0,
+                attempt_count=0,
+                linked_entity=dataset_id,
+                idempotency_key=f"run-dq-job-{test_run_id}",
+                created_at=utc_now(),
+                updated_at=utc_now(),
+            )
+            session.add(job)
+
         run = TestRunModel(
             test_run_id=test_run_id,
             dataset_id=dataset_id,
@@ -825,10 +1001,20 @@ def save_test_results(test_run_id: str, results: list[dict]) -> int:
 
         for res in results:
             row_samples = res.get("sample_failures")
+            if row_samples is None:
+                row_samples = res.get("sample_refs")
             if row_samples is not None and not isinstance(row_samples, str):
                 sample_fail_str = json.dumps(row_samples, default=str, ensure_ascii=False)
             else:
                 sample_fail_str = row_samples
+
+            v_count = res.get("violation_count")
+            if v_count is None:
+                v_count = res.get("failed_count", 0)
+
+            t_rows = res.get("total_rows")
+            if t_rows is None:
+                t_rows = res.get("checked_count", 0)
 
             row = TestResultModel(
                 test_run_id=test_run_id,
@@ -837,8 +1023,8 @@ def save_test_results(test_run_id: str, results: list[dict]) -> int:
                 column_name=res.get("column"),
                 rule_type=res.get("rule_type", ""),
                 status=res.get("status", "PASSED"),
-                violation_count=res.get("violation_count", 0),
-                total_rows=res.get("total_rows", 0),
+                violation_count=v_count,
+                total_rows=t_rows,
                 violation_rate=res.get("violation_rate", 0.0),
                 sample_failures=sample_fail_str,
                 sql_text=res.get("sql_text", ""),
@@ -931,9 +1117,15 @@ def publish_approved_rules(run_id: str) -> int:
             clean_params = _extract_clean_parameters(p.rule_type, spec)
             params_str = json.dumps(clean_params, ensure_ascii=False)
 
-            table_name = p.id.split(".")[0] if "." in p.id else "source_rows"
+            table_name = spec.get("table_name") or (p.id.split(".")[0] if "." in p.id else "source_rows")
             column_name = spec.get("column")
-            dimension = json.loads(p.evidence_refs)[0] if p.evidence_refs else "VALIDITY"
+            proposed_source = (
+                session.query(ProposedRuleModel)
+                .filter(ProposedRuleModel.rule_id == p.id)
+                .order_by(ProposedRuleModel.created_at.desc())
+                .first()
+            )
+            dimension = proposed_source.dimension if proposed_source else "VALIDITY"
 
             active_rule = session.get(ActiveRuleModel, p.id)
             if active_rule:

@@ -1,9 +1,11 @@
 import asyncio
+import hashlib
 import json
 import logging
 import uuid
+from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -24,6 +26,8 @@ from src.models.database import (
     SessionModel,
     SourceRowModel,
     UserAccountModel,
+    WorkflowArtifactModel,
+    WorkflowRunModel,
 )
 from src.models.schemas import (
     ActiveRuleResponse,
@@ -47,6 +51,21 @@ from src.services.job_runner import (
     run_dq_checks,
     run_ingest_profile,
     run_propose_rules,
+)
+from src.services.rule_proposer_workflow import (
+    WorkflowError,
+    complete_rule_review,
+    execute_step,
+    get_or_create_run,
+    navigate_forward,
+    queue_check_run,
+    run_analysis_report,
+    run_checks_and_prepare_analysis,
+    serialize_artifact,
+    serialize_run,
+)
+from src.services.rule_proposer_workflow import (
+    rewind as rewind_workflow,
 )
 from src.services.rule_store import get_engine
 from src.services.session_service import (
@@ -182,6 +201,7 @@ class RuleSpecSchema(BaseModel):
 class RuleProposalSchema(BaseModel):
     id: str
     dataset_id: str
+    workflow_run_id: str | None = None
     title: str
     description: str
     severity: str
@@ -191,6 +211,13 @@ class RuleProposalSchema(BaseModel):
     evidence_summary: str
     confidence: float
     model_name: str
+    rule_name: str
+    business_rationale: str
+    proposal_basis: str
+    evidence: dict
+    parameter_provenance: list[dict] = []
+    assumptions: list[str] = []
+    confidence_breakdown: dict
     created_at: str
     updated_at: str
 
@@ -208,6 +235,15 @@ class ReviewInput(BaseModel):
     description: str | None = None
     severity: str | None = None
     rule: RuleSpecSchema | None = None
+
+
+class WorkflowRewindInput(BaseModel):
+    target_step: str
+
+
+class ArtifactReviewInput(BaseModel):
+    action: str
+    comment: str | None = None
 
 
 class DqRunCreateRequest(BaseModel):
@@ -490,6 +526,57 @@ def list_datasets(
     ]
 
 
+@router.post("/datasets/import")
+async def import_dataset(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """Persist a CSV/Parquet artifact and immediately queue its aggregate profile."""
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in {".csv", ".parquet"}:
+        raise HTTPException(status_code=415, detail="Only CSV and Parquet files are supported.")
+    payload = await file.read()
+    if not payload:
+        raise HTTPException(status_code=422, detail="The uploaded file is empty.")
+    if len(payload) > 100 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="The upload exceeds the 100 MB limit.")
+    dataset_id = f"dataset-import-{uuid.uuid4().hex[:20]}"
+    upload_dir = Path("data/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    upload_path = upload_dir / f"{dataset_id}{suffix}"
+    upload_path.write_bytes(payload)
+    display_name = Path(file.filename or "Imported dataset").stem.replace("_", " ").strip() or "Imported dataset"
+    dataset = DatasetModel(
+        id=dataset_id,
+        name=display_name[:256],
+        description="Imported CSV/Parquet dataset. Aggregate profiling is in progress.",
+        status="REGISTERED",
+        row_count=0,
+        source_label=file.filename or f"imported{suffix}",
+        manifest_version="import-v1",
+        checksum=hashlib.sha256(payload).hexdigest(),
+    )
+    job_id = str(uuid.uuid4())
+    job = JobModel(id=job_id, type="INGEST_PROFILE", status="PENDING", progress=0.0,
+                   message="Queued for profiling", idempotency_key=f"import-{dataset_id}",
+                   linked_entity=dataset_id, correlation_id=str(uuid.uuid4()), attempt_count=1)
+    db.add_all([dataset, job])
+    db.add(DatasetAccessModel(id=str(uuid.uuid4()), dataset_id=dataset_id, username=session.username,
+                              access_level="MANAGE", granted_by=session.username))
+    db.commit()
+    add_audit_event(db, session_id=session.id, actor_role=session.role, action_code="DATASET_IMPORTED",
+                    entity_type="dataset", entity_id=dataset_id,
+                    detail={"filename": file.filename, "job_id": job_id})
+    background_tasks.add_task(run_ingest_profile, job_id, dataset_id, session.id, session.role)
+    return {"dataset": {"id": dataset.id, "name": dataset.name, "description": dataset.description,
+                         "status": dataset.status, "row_count": dataset.row_count, "source_label": dataset.source_label,
+                         "manifest_version": dataset.manifest_version, "checksum": dataset.checksum,
+                         "updated_at": dataset.updated_at.isoformat()},
+            "job": {"job_id": job_id, "status": "PENDING"}}
+
+
 @router.post("/datasets/{id}/ingestions", status_code=202, response_model=CreateJobResponse)
 def start_ingestion(
     id: str,
@@ -615,6 +702,264 @@ def get_dataset_profile(
         evidence_keys=json.loads(profile.evidence_keys),
         generated_at=profile.generated_at.isoformat(),
     )
+
+
+@router.post("/datasets/{id}/workflows")
+def create_workflow(
+    id: str,
+    fresh: bool = Query(False),
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    dataset = db.get(DatasetModel, id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    require_dataset_access(db, session, id, manage=True)
+    run = get_or_create_run(db, dataset, force_new=fresh)
+    db.commit()
+    return serialize_run(run)
+
+
+@router.get("/workflows/{workflow_run_id}")
+def get_workflow(
+    workflow_run_id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    run = db.get(WorkflowRunModel, workflow_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+    require_dataset_access(db, session, run.dataset_id)
+    return serialize_run(run)
+
+
+@router.get("/workflows/{workflow_run_id}/artifacts")
+def list_workflow_artifacts(
+    workflow_run_id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    run = db.get(WorkflowRunModel, workflow_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+    require_dataset_access(db, session, run.dataset_id)
+    artifacts = db.query(WorkflowArtifactModel).filter_by(workflow_run_id=run.id).order_by(WorkflowArtifactModel.created_at).all()
+    return [serialize_artifact(artifact) for artifact in artifacts]
+
+
+@router.post("/workflows/{workflow_run_id}/steps/{step}", response_model=CreateJobResponse)
+def run_workflow_step(
+    workflow_run_id: str,
+    step: str,
+    background_tasks: BackgroundTasks,
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    run = db.get(WorkflowRunModel, workflow_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+    require_dataset_access(db, session, run.dataset_id, manage=True)
+    collision = verify_idempotency(db, idempotency_key)
+    if collision:
+        return CreateJobResponse(job_id=collision, status="SUCCEEDED")
+    job = JobModel(
+        id=str(uuid.uuid4()), type="UNDERSTAND_DATA" if step == "UNDERSTAND_DATA" else "RUN_DQ" if step in {"RUN_CHECKS", "ANALYZE_REPORT"} else "PROPOSE_RULES",
+        status="RUNNING", progress=10.0, message=f"Running {step}", idempotency_key=idempotency_key or "",
+        linked_entity=run.dataset_id, correlation_id=run.id, attempt_count=1,
+    )
+    db.add(job)
+    try:
+        if step == "RUN_CHECKS":
+            dq_run = queue_check_run(db, run, job)
+            db.commit()
+            background_tasks.add_task(
+                run_checks_and_prepare_analysis,
+                run.id,
+                dq_run.id,
+                job.id,
+                session.id,
+                session.role,
+            )
+            return CreateJobResponse(job_id=job.id, status="PENDING")
+        if step == "ANALYZE_REPORT":
+            if run.current_step != "ANALYZE_REPORT":
+                raise WorkflowError("Complete Graph 2 before starting Graph 3 analysis.")
+            db.commit()
+            background_tasks.add_task(
+                run_analysis_report,
+                run.id,
+                job.id,
+                session.id,
+                session.role,
+            )
+            return CreateJobResponse(job_id=job.id, status="PENDING")
+        execute_step(db, run, step)
+        job.status, job.progress, job.message = "SUCCEEDED", 100.0, "Completed"
+        db.commit()
+    except WorkflowError as exc:
+        job.status, job.error, job.message = "FAILED", str(exc), "Workflow step failed"
+        db.commit()
+        raise HTTPException(status_code=409, detail={"code": "WORKFLOW_STATE", "message": str(exc)})
+    except Exception:
+        job.status, job.error, job.message = "FAILED", "Workflow execution failed", "Workflow step failed"
+        db.commit()
+        raise
+    return CreateJobResponse(job_id=job.id, status="PENDING")
+
+
+@router.post("/workflows/{workflow_run_id}/rewind")
+def rewind_workflow_stage(
+    workflow_run_id: str,
+    body: WorkflowRewindInput,
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    run = db.get(WorkflowRunModel, workflow_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+    require_dataset_access(db, session, run.dataset_id, manage=True)
+    try:
+        rewind_workflow(db, run, body.target_step)
+        db.commit()
+    except WorkflowError as exc:
+        raise HTTPException(status_code=409, detail={"code": "WORKFLOW_STATE", "message": str(exc)})
+    return serialize_run(run)
+
+
+@router.post("/workflow-artifacts/{artifact_id}/review")
+def review_workflow_artifact(
+    artifact_id: str,
+    body: ArtifactReviewInput,
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    artifact = db.get(WorkflowArtifactModel, artifact_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Workflow artifact not found")
+    run = db.get(WorkflowRunModel, artifact.workflow_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+    require_dataset_access(db, session, run.dataset_id, manage=True)
+    if body.action != "approve" or artifact.artifact_type != "RULE_SET":
+        raise HTTPException(status_code=422, detail="Only the current rule set can be confirmed here")
+    try:
+        reviewed = complete_rule_review(db, run)
+        db.commit()
+    except WorkflowError as exc:
+        raise HTTPException(status_code=409, detail={"code": "WORKFLOW_STATE", "message": str(exc)})
+    return serialize_artifact(reviewed)
+
+
+@router.post("/workflows/{workflow_run_id}/advance")
+def advance_workflow_stage(
+    workflow_run_id: str,
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    run = db.get(WorkflowRunModel, workflow_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+    require_dataset_access(db, session, run.dataset_id, manage=True)
+    try:
+        navigate_forward(run)
+        db.commit()
+    except WorkflowError as exc:
+        raise HTTPException(status_code=409, detail={"code": "WORKFLOW_STATE", "message": str(exc)})
+    return serialize_run(run)
+
+
+@router.get("/datasets/{id}/semantic-contract")
+def get_semantic_contract(
+    id: str, session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])), db: Session = Depends(get_db)
+):
+    """
+    GET /api/v1/datasets/{id}/semantic-contract - Returns the latest semantic contract draft or confirmed version.
+    """
+    from pathlib import Path
+    dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    require_dataset_access(db, session, id)
+
+    # Find the latest PROPOSE_RULES job for this dataset
+    job = db.query(JobModel).filter(
+        JobModel.linked_entity == id,
+        JobModel.type == "PROPOSE_RULES"
+    ).order_by(JobModel.created_at.desc()).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="No rule proposal job found for this dataset")
+
+    run_id = job.id
+    settings = get_settings()
+    semantic_dir = Path(settings.output_dir) / "semantic"
+    semantic_file = semantic_dir / f"debug_semantic_contract_{run_id}.json"
+
+    if not semantic_file.exists():
+        raise HTTPException(status_code=404, detail=f"Semantic Contract not generated yet for run {run_id}")
+
+    try:
+        with open(semantic_file, encoding="utf-8") as f:
+            data = json.load(f)
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read semantic contract: {str(e)}")
+
+
+@router.post("/datasets/{id}/semantic-contract/confirm")
+def confirm_semantic_contract(
+    id: str,
+    body: dict,
+    background_tasks: BackgroundTasks,
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db)
+):
+    """
+    POST /api/v1/datasets/{id}/semantic-contract/confirm - Allows Steward to confirm/update the semantic contract.
+    Resumes rule proposal graph execution in background.
+    """
+    from pathlib import Path
+    dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    require_dataset_access(db, session, id, manage=True)
+
+    # Find the latest PROPOSE_RULES job
+    job = db.query(JobModel).filter(
+        JobModel.linked_entity == id,
+        JobModel.type == "PROPOSE_RULES"
+    ).order_by(JobModel.created_at.desc()).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="No rule proposal job found to confirm")
+
+    run_id = job.id
+    settings = get_settings()
+    semantic_dir = Path(settings.output_dir) / "semantic"
+    semantic_dir.mkdir(parents=True, exist_ok=True)
+    semantic_file = semantic_dir / f"debug_semantic_contract_{run_id}.json"
+
+    # Set status to confirmed in the payload
+    body["status"] = "confirmed"
+    body["dataset_id"] = id
+
+    try:
+        with open(semantic_file, "w", encoding="utf-8") as f:
+            json.dump(body, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save semantic contract: {str(e)}")
+
+    # Update job status back to PENDING to resume the job
+    job.status = "PENDING"
+    job.progress = 30.0
+    job.message = "Semantic contract confirmed. Resuming rule proposals generation..."
+    db.commit()
+
+    # Trigger background task to continue
+    background_tasks.add_task(run_propose_rules, job.id, id, session.id, session.role)
+
+    return {"message": "Semantic contract confirmed successfully. Resumed proposals job.", "job_id": job.id}
 
 
 @router.get("/datasets/{id}/rows", response_model=DatasetRowsResponse)
@@ -852,6 +1197,7 @@ def start_rule_proposals(
 @router.get("/rule-proposals", response_model=list[RuleProposalSchema])
 def list_proposals(
     dataset_id: str,
+    workflow_run_id: str | None = None,
     session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
@@ -859,11 +1205,16 @@ def list_proposals(
     GET /api/v1/rule-proposals - Returns rule proposals for a dataset.
     """
     require_dataset_access(db, session, dataset_id)
-    proposals = db.query(RuleProposalModel).filter(RuleProposalModel.dataset_id == dataset_id).all()
+    query = db.query(RuleProposalModel).filter(RuleProposalModel.dataset_id == dataset_id)
+    if workflow_run_id:
+        query = query.filter(RuleProposalModel.workflow_run_id == workflow_run_id)
+        query = query.filter(RuleProposalModel.status != "STALE")
+    proposals = query.all()
     return [
         RuleProposalSchema(
             id=p.id,
             dataset_id=p.dataset_id,
+            workflow_run_id=p.workflow_run_id,
             title=p.title,
             description=p.description,
             severity=p.severity,
@@ -873,6 +1224,13 @@ def list_proposals(
             evidence_summary=p.evidence_summary,
             confidence=p.confidence,
             model_name=p.model_name,
+            rule_name=p.rule_name,
+            business_rationale=p.business_rationale,
+            proposal_basis=p.proposal_basis,
+            evidence=json.loads(p.evidence or "{}"),
+            parameter_provenance=json.loads(p.parameter_provenance or "[]"),
+            assumptions=json.loads(p.assumptions or "[]"),
+            confidence_breakdown=json.loads(p.confidence_breakdown or "{}"),
             created_at=p.created_at.isoformat(),
             updated_at=p.updated_at.isoformat(),
         )
@@ -909,6 +1267,13 @@ def create_manual_rule(
         evidence_summary="Manually added by data steward",
         confidence=1.0,
         model_name="data-steward",
+        rule_name=body.title,
+        business_rationale=body.description,
+        proposal_basis="POLICY",
+        evidence=json.dumps({"source_refs": ["manual"]}),
+        parameter_provenance="[]",
+        assumptions="[]",
+        confidence_breakdown=json.dumps({"overall": 1.0, "evidence_strength": 1.0, "business_support": 1.0, "sample_representativeness": 1.0, "explanation": "Manually authored by data steward"}),
         created_at=utc_now(),
         updated_at=utc_now(),
     )
@@ -937,6 +1302,13 @@ def create_manual_rule(
         evidence_summary=prop.evidence_summary,
         confidence=prop.confidence,
         model_name=prop.model_name,
+        rule_name=prop.rule_name,
+        business_rationale=prop.business_rationale,
+        proposal_basis=prop.proposal_basis,
+        evidence=json.loads(prop.evidence or "{}"),
+        parameter_provenance=json.loads(prop.parameter_provenance or "[]"),
+        assumptions=json.loads(prop.assumptions or "[]"),
+        confidence_breakdown=json.loads(prop.confidence_breakdown or "{}"),
         created_at=prop.created_at.isoformat(),
         updated_at=prop.updated_at.isoformat(),
     )
@@ -1089,6 +1461,13 @@ def review_proposal(
         evidence_summary=prop.evidence_summary,
         confidence=prop.confidence,
         model_name=prop.model_name,
+        rule_name=prop.rule_name,
+        business_rationale=prop.business_rationale,
+        proposal_basis=prop.proposal_basis,
+        evidence=json.loads(prop.evidence or "{}"),
+        parameter_provenance=json.loads(prop.parameter_provenance or "[]"),
+        assumptions=json.loads(prop.assumptions or "[]"),
+        confidence_breakdown=json.loads(prop.confidence_breakdown or "{}"),
         created_at=prop.created_at.isoformat(),
         updated_at=prop.updated_at.isoformat(),
     )
@@ -1116,9 +1495,15 @@ def delete_proposal(
             },
         )
 
-    db.query(RuleConfigurationModel).filter(RuleConfigurationModel.rule_proposal_id == proposal.id).delete()
-    db.query(RuleVersionModel).filter(RuleVersionModel.rule_proposal_id == proposal.id).delete()
-    db.delete(proposal)
+    if proposal.workflow_run_id:
+        # A workflow decision is an auditable state transition, not a physical
+        # erase.  The current batch view hides stale rows while the artifact
+        # snapshot remains available after navigating backwards.
+        proposal.status = "STALE"
+    else:
+        db.query(RuleConfigurationModel).filter(RuleConfigurationModel.rule_proposal_id == proposal.id).delete()
+        db.query(RuleVersionModel).filter(RuleVersionModel.rule_proposal_id == proposal.id).delete()
+        db.delete(proposal)
     db.commit()
     add_audit_event(
         db, session.id, session.role, "PROPOSAL_DELETED", "rule_proposal", id, {"message": "Rule proposal deleted."}

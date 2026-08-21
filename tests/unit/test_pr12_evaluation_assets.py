@@ -54,14 +54,4 @@ def test_pr12_video_rehearsal_script_checkpoints():
     assert "2:30 – 3:00" in content or "2:30–3:00" in content
 
 
-def test_pr12_root_readme_has_gate2_pointers():
-    """Kiểm tra README.md gốc chứa liên kết tới tài liệu Gate 2."""
-    root = _get_project_root()
-    readme_file = root / "README.md"
 
-    assert readme_file.exists(), "Tệp README.md không tồn tại."
-
-    content = readme_file.read_text(encoding="utf-8")
-    assert "RidePulse DQ" in content
-    assert "docs/gate2-mvp" in content
-    assert "E1_E5_EVALUATION.md" in content

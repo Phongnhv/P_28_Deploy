@@ -15,6 +15,9 @@ class AgentState(TypedDict, total=False):
     analysis: str
     response: str
     error: str
+    # Lý do tạm dừng có chủ đích (ví dụ chờ Steward duyệt Semantic Contract).
+    # Tách khỏi `error` để routing và trạng thái run phân biệt được "lỗi" với "đang chờ người".
+    pause_reason: str
     metadata: dict
     profiler_result: dict
     dataset_profile_digest: dict
@@ -37,6 +40,7 @@ class AgentState(TypedDict, total=False):
     dbt_trace_file_path: str     # Exact local/test fallback path for this run
     dbt_validation_valid: bool   # Whether the generated dbt project passed the quality gate
     dbt_validation_error: str | None
+    dbt_validation_skipped: bool   # True khi chốt chặn dbt không thực sự chạy
     dbt_validation_attempts: int
     dbt_validation_trace_path: str
     dbt_repair_history: list
@@ -50,4 +54,48 @@ class AgentState(TypedDict, total=False):
     steward_summary: str         # Báo cáo tổng kết Markdown cho Data Steward
     remediation_actions: list    # Danh sách hành động khuyến nghị dạng structured
 
+    # Generalised scope expansion fields
+    target_tables: list[str]                  # Bảng mục tiêu cần chạy phân tích và đề xuất
+    normalized_data_dictionary: dict           # User-supplied or LLM-inferred dictionary
+    data_dictionary_source: str               # supplied | inferred
+    semantic_contract: dict                   # Hợp đồng ngữ nghĩa (Semantic Contract) được đề xuất hoặc đã duyệt
+    rule_candidates: list[dict]               # Danh sách các candidates deterministic sinh từ Semantic Contract
+    specialized_system_prompts: dict[str, str] # System prompt tĩnh đã được custom hóa ngữ cảnh theo từng bảng
+    progress_state: str                       # Trạng thái tiến trình của Agent (PROFILING, etc.)
 
+
+class ExecutionGraphState(TypedDict, total=False):
+    request: dict
+    ruleset_snapshot: dict
+    validation_errors: list[dict]
+    compiled_tests: list[dict]
+    dbt_artifact_ref: dict
+    artifact_hash: str
+    compiler_version: str
+    dbt_validation: dict
+    execution_results: list[dict]
+    normalized_results: list[dict]
+    execution_status: str
+    error: dict | None
+    retry_history: list[dict]
+    metadata: dict
+
+
+class AnomalyGraphState(TypedDict, total=False):
+    anomaly_run_id: str
+    execution_run_id: str
+    dataset_id: str
+    dataset_version_id: str
+    ruleset_version_id: str
+    detector_config_version: str
+    current_features: dict
+    historical_features: dict
+    signal_observations: list[dict]
+    signal_errors: list[dict]
+    anomaly_decision: dict
+    hypotheses: list[dict]
+    hypothesis_validation: dict
+    anomaly_status: str
+    hypothesis_status: str
+    metadata: dict
+    steward_report_path: str      # Đường dẫn file báo cáo MD cho Data Steward (Graph 3 output)

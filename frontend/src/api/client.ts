@@ -3,6 +3,7 @@ import type {
   AuditLog,
   CreateJobResponse,
   Dataset,
+  DatasetImportResponse,
   DatasetProfile,
   DqRunCreateResponse,
   DqResult,
@@ -23,6 +24,11 @@ import type {
   UserAccount,
   UserCreateInput,
   UserUpdateInput,
+  WorkflowRun,
+  WorkflowStepKey,
+  AgentArtifact,
+  ArtifactReviewInput,
+  LoopDecisionInput,
 } from "../types";
 
 function resolveApiBaseUrl(configuredValue: string) {
@@ -75,7 +81,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const method = options.method ?? "GET";
   const headers = new Headers(options.headers);
   headers.set("Accept", "application/json");
-  if (options.body) headers.set("Content-Type", "application/json");
+  if (options.body && !(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
   if (method !== "GET" && method !== "HEAD" && csrfToken) {
     headers.set("X-CSRF-Token", csrfToken);
   }
@@ -88,17 +94,40 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as
-      | { code?: string; message?: string }
+      | { code?: string; message?: string; detail?: { code?: string; message?: string } | string }
       | null;
+    const detail = payload && typeof payload.detail === "object" && payload.detail !== null
+      ? payload.detail
+      : null;
     throw new ApiError(
       response.status,
-      payload?.code ?? "API_ERROR",
-      payload?.message ?? `Request failed with status ${response.status}.`,
+      detail?.code ?? payload?.code ?? "API_ERROR",
+      detail?.message ?? payload?.message ?? (typeof payload?.detail === "string" ? payload.detail : undefined) ?? `Request failed with status ${response.status}.`,
     );
   }
 
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+async function requestWithTransientRetry<T>(path: string, options: RequestInit): Promise<T> {
+  try {
+    return await request<T>(path, options);
+  } catch (error) {
+    // A workflow-step request supplies an idempotency key, so one short retry
+    // is safe when the local API briefly drops a TCP connection while starting
+    // or recovering. HTTP errors are deliberately not retried.
+    if (!(error instanceof TypeError)) throw error;
+    await new Promise((resolve) => window.setTimeout(resolve, 500));
+    try {
+      return await request<T>(path, options);
+    } catch (retryError) {
+      if (retryError instanceof TypeError) {
+        throw new ApiError(503, "API_UNREACHABLE", "Cannot reach the API service. Confirm that the local backend is running, then try again.");
+      }
+      throw retryError;
+    }
+  }
 }
 
 export const realApiClient: ApiClient = {
@@ -116,6 +145,11 @@ export const realApiClient: ApiClient = {
   },
   async listDatasets() {
     return request<Dataset[]>("/api/v1/datasets");
+  },
+  async importDataset(file) {
+    const body = new FormData();
+    body.append("file", file);
+    return request<DatasetImportResponse>("/api/v1/datasets/import", { method: "POST", body });
   },
   async startIngestion(datasetId, idempotencyKey) {
     return request<CreateJobResponse>(`/api/v1/datasets/${datasetId}/ingestions`, {
@@ -135,8 +169,10 @@ export const realApiClient: ApiClient = {
       headers: { "Idempotency-Key": idempotencyKey },
     });
   },
-  listProposals(datasetId) {
-    return request<RuleProposal[]>(`/api/v1/rule-proposals?dataset_id=${encodeURIComponent(datasetId)}`);
+  listProposals(datasetId, workflowRunId) {
+    const query = new URLSearchParams({ dataset_id: datasetId });
+    if (workflowRunId) query.set("workflow_run_id", workflowRunId);
+    return request<RuleProposal[]>(`/api/v1/rule-proposals?${query.toString()}`);
   },
   createManualRule(datasetId, input: ManualRuleInput) {
     return request<RuleProposal>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/rule-proposals/manual`, { method: "POST", body: JSON.stringify(input) });
@@ -211,5 +247,48 @@ export const realApiClient: ApiClient = {
   },
   revokeDatasetAccess(datasetId: string, username: string) {
     return request<void>(`/api/v1/admin/datasets/${encodeURIComponent(datasetId)}/access/${encodeURIComponent(username)}`, { method: "DELETE" });
+  },
+  createWorkflow(datasetId: string, fresh = false) {
+    const query = fresh ? "?fresh=true" : "";
+    return request<WorkflowRun>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/workflows${query}`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  },
+  getWorkflow(workflowRunId: string) {
+    return request<WorkflowRun>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}`);
+  },
+  runWorkflowStep(workflowRunId: string, step: WorkflowStepKey) {
+    const idempotencyKey = crypto.randomUUID();
+    return requestWithTransientRetry<CreateJobResponse>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}/steps/${step}`, {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+    });
+  },
+  advanceWorkflowStep(workflowRunId: string) {
+    return request<WorkflowRun>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}/advance`, {
+      method: "POST",
+    });
+  },
+  listWorkflowArtifacts(workflowRunId: string) {
+    return request<AgentArtifact[]>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}/artifacts`);
+  },
+  reviewArtifact(artifactId: string, input: ArtifactReviewInput) {
+    return request<AgentArtifact>(`/api/v1/workflow-artifacts/${encodeURIComponent(artifactId)}/review`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+  continueLoop(workflowRunId: string, input: LoopDecisionInput) {
+    return request<WorkflowRun>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}/loop-decision`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+  rewindWorkflow(workflowRunId: string, targetStep: WorkflowStepKey) {
+    return request<WorkflowRun>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}/rewind`, {
+      method: "POST",
+      body: JSON.stringify({ target_step: targetStep }),
+    });
   },
 };

@@ -22,6 +22,8 @@ def get_llm(provider: Provider_type, temperature: float | None = None):
             model=settings.openai_model_name,
             api_key=settings.openai_api_key,
             temperature=temp,
+            timeout=settings.llm_request_timeout_seconds,
+            max_retries=1,
         )
     elif provider == "anthropic":
         from langchain_anthropic import ChatAnthropic

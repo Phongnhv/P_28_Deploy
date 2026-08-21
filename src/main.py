@@ -1,22 +1,26 @@
 
 import os
-try:
-    from openinference.instrumentation.langchain import LangChainInstrumentor
-    from opentelemetry import trace
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+import sys
 
-    phoenix_host = "localhost" if os.name == "nt" or not os.path.exists("/.dockerenv") else "host.docker.internal"
-    phoenix_endpoint = os.getenv("PHOENIX_COLLECTOR_ENDPOINT") or f"http://{phoenix_host}:6006/v1/traces"
-    tracer_provider = TracerProvider()
-    tracer_provider.add_span_processor(
-        SimpleSpanProcessor(OTLPSpanExporter(endpoint=phoenix_endpoint))
-    )
-    trace.set_tracer_provider(tracer_provider)
-    LangChainInstrumentor().instrument()
-except Exception:
-    pass
+# Disable OpenTelemetry instrumentation during unit tests to prevent connection hangs
+if "pytest" not in sys.modules and not os.getenv("DISABLE_TRACING"):
+    try:
+        from openinference.instrumentation.langchain import LangChainInstrumentor
+        from opentelemetry import trace
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+        phoenix_host = "localhost" if os.name == "nt" or not os.path.exists("/.dockerenv") else "host.docker.internal"
+        phoenix_endpoint = os.getenv("PHOENIX_COLLECTOR_ENDPOINT") or f"http://{phoenix_host}:6006/v1/traces"
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(
+            SimpleSpanProcessor(OTLPSpanExporter(endpoint=phoenix_endpoint))
+        )
+        trace.set_tracer_provider(tracer_provider)
+        LangChainInstrumentor().instrument()
+    except Exception:
+        pass
 
 
 import logging
