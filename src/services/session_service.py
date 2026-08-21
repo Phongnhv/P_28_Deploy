@@ -86,7 +86,14 @@ def get_current_session(request: Request, db: Session) -> SessionModel:
     session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
     if not session:
         raise HTTPException(status_code=401, detail={"code": "SESSION_REQUIRED", "message": "A session is required."})
-    if session.expires_at < utc_now():
+    session_expires = session.expires_at
+    current_time = utc_now()
+    if session_expires.tzinfo is None and current_time.tzinfo is not None:
+        current_time = current_time.replace(tzinfo=None)
+    elif session_expires.tzinfo is not None and current_time.tzinfo is None:
+        session_expires = session_expires.replace(tzinfo=None)
+
+    if session_expires < current_time:
         db.delete(session)
         db.commit()
         raise HTTPException(status_code=401, detail={"code": "SESSION_REQUIRED", "message": "The session has expired."})
