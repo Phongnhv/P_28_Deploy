@@ -331,7 +331,7 @@ function WorkflowPage({
   const nextActionLabel = currentStep?.key === "UPLOAD_PROFILE" ? "Prepare dataset" : currentStep?.key === "UNDERSTAND_DATA" ? "Run Agent 1 understanding" : currentStep?.key === "PROPOSE_RULES" ? "Generate rule proposals" : currentStep?.key === "PROPOSE_CODE" ? "Generate standardization code" : "Run current step";
   const currentStepIndex = currentStep ? workflow.steps.findIndex((step) => step.key === currentStep.key) : -1;
   const nextWorkflowStep = currentStepIndex >= 0 ? workflow.steps[currentStepIndex + 1] : undefined;
-  const canAdvance = Boolean(currentStep && currentStep.status === "COMPLETED" && !currentStep.temporary && nextWorkflowStep?.status === "READY" && canOperate && !activeJob);
+  const canAdvance = Boolean(currentStep && currentStep.status === "COMPLETED" && nextWorkflowStep && (nextWorkflowStep.status === "READY" || nextWorkflowStep.temporary) && canOperate && !activeJob);
   const visibleWorkflowSteps = workflow.steps;
   const previousWorkflowStep = currentStepIndex > 0 ? visibleWorkflowSteps[currentStepIndex - 1] : undefined;
   const canMoveBackward = Boolean(previousWorkflowStep && canOperate && !activeJob);
@@ -739,6 +739,17 @@ function App() {
     }
   }
 
+  async function navigateForwardWorkflowStep() {
+    if (!workflow || !canOperate || activeJob) return;
+    const currentIndex = workflow.steps.findIndex((step) => step.key === workflow.current_step);
+    const nextStep = workflow.steps[currentIndex + 1];
+    if (nextStep?.temporary) {
+      await rewindWorkflowStage(nextStep.key);
+      return;
+    }
+    await advanceWorkflowStep();
+  }
+
   async function reviewWorkflowArtifact(id: string, input: ArtifactReviewInput) {
     if (!canOperate) return;
     try {
@@ -981,7 +992,7 @@ function App() {
               activeJob={activeJob}
               canOperate={canOperate}
               onStartStep={(step) => void startWorkflowStep(step)}
-              onAdvanceStep={() => void advanceWorkflowStep()}
+              onAdvanceStep={() => void navigateForwardWorkflowStep()}
               onReviewArtifact={(id, input) => void reviewWorkflowArtifact(id, input)}
               onLoopDecision={(input) => void decideWorkflowLoop(input)}
               onApproveRule={(id) => void reviewProposal(id, "approve")}
