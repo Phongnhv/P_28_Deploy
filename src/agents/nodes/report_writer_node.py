@@ -234,12 +234,12 @@ def _write_report_file(
     except Exception:
         base_dir = Path(output_dir or "./output")
 
-    report_dir = base_dir / "reports"
+    report_dir = base_dir / "steward_reports"
     report_dir.mkdir(parents=True, exist_ok=True)
 
-    # Tên file KHÔNG chứa timestamp: docstring của node cam kết idempotent theo
-    # execution_run_id (ghi đè khi retry). Có timestamp thì mỗi lần chạy lại đẻ ra một file mới.
-    out_path = report_dir / f"steward_report_{execution_run_id}.md"
+    # Tên file chứa cả timestamp để lưu trace chính xác theo thời gian chạy:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_path = report_dir / f"steward_report_{timestamp}_{execution_run_id}.md"
     tmp_path = out_path.with_suffix(".md.tmp")
     try:
         tmp_path.write_text(content, encoding="utf-8")

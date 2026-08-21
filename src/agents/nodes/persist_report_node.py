@@ -64,7 +64,9 @@ def _dump_report_file(test_run_id: str, payload: dict, steward_summary: str | No
     # Ghi file Markdown tổng kết cho Data Steward
     md_path = None
     if steward_summary:
-        md_file = out_dir / f"steward_report_{timestamp}_{test_run_id}.md"
+        steward_dir = base_dir / "steward_reports"
+        steward_dir.mkdir(parents=True, exist_ok=True)
+        md_file = steward_dir / f"steward_report_{timestamp}_{test_run_id}.md"
         with open(md_file, "w", encoding="utf-8") as f:
             f.write(steward_summary)
         md_path = str(md_file)
