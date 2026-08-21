@@ -173,6 +173,11 @@ class RuleProposalModel(Base):
     business_rationale: Mapped[str] = mapped_column(Text, nullable=False, default="")
     proposal_basis: Mapped[str] = mapped_column(String(32), nullable=False, default="DATA_PROFILE")
     evidence: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    # Hai cột dưới đây được `_migrate_local_proposal_columns` tạo trong bảng vật lý và được
+    # routes.py đọc/ghi (parameter_provenance, assumptions), nhưng trước đây không được khai
+    # báo trong ORM model — mọi truy cập `prop.parameter_provenance` đều ném AttributeError.
+    parameter_provenance: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    assumptions: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     confidence_breakdown: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
@@ -202,10 +207,10 @@ class RuleConfigurationModel(Base):
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=utc_now, onupdate=utc_now
-    )
-    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Cột NOT NULL nhưng không call site nào truyền giá trị (routes.py:1108, 1178, 1302) và
+    # RuleConfigurationSchema cũng không phơi ra — mọi lần tạo cấu hình đều ném IntegrityError.
+    # Đặt default để insert hợp lệ trên cả schema cũ (đã NOT NULL) lẫn schema mới.
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False, default="unspecified")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=utc_now, onupdate=utc_now

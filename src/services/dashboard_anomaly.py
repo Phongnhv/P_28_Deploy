@@ -71,6 +71,17 @@ def detect_dashboard_anomalies(
             
         checked_count = res_model.checked_count
         failed_count = res_model.failed_count
+
+        # Mẫu quá nhỏ thì tỷ lệ vi phạm không đủ tin cậy để báo động cho Steward.
+        # `minimum_checked_count` đã được khai báo trong chữ ký hàm từ đầu nhưng không
+        # dòng nào dùng tới — một rule chạy trên 50 dòng vẫn nổi lên như bất thường thật.
+        if checked_count < minimum_checked_count:
+            logger.debug(
+                "Bỏ qua signal %s: chỉ kiểm tra %d dòng (< %d), độ tin cậy không đủ.",
+                rule_id, checked_count, minimum_checked_count,
+            )
+            continue
+
         current_rate = failed_count / checked_count if checked_count > 0 else 0.0
         
         baseline = sig.get("baseline", {})

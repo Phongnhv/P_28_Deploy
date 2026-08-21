@@ -132,3 +132,40 @@ def test_detect_anomalies_critical_override(test_db):
         result = detect_anomalies(session, "run_over")
         assert result["decision"] == "CRITICAL"
         assert "Vi phạm nghiêm trọng luật nghiệp vụ" in result["override_reason"]
+
+
+def test_volume_signal_does_not_dilute_rule_anomaly(test_db):
+    """Regression: một family khỏe mạnh (VOLUME=0.0) KHÔNG được kéo tụt điểm của family đang báo động.
+
+    Kịch bản production thật: sau bước ingest luôn tồn tại bản ghi `profiles`, nên
+    VOLUME_DRIFT_DETECTOR luôn sinh một signal. Trước khi sửa, phép trung bình có trọng số
+    biến score 0.80 (ANOMALY) thành 0.3429 (NORMAL).
+    """
+    from src.models.database import ProfileModel
+
+    with Session(test_db) as session:
+        run = DqRunModel(id="run_dilute", job_id="job_1", dataset_id="dataset_1", rule_ids="[]", status="SUCCEEDED")
+        res_fail = DqResultModel(
+            run_id="run_dilute", rule_id="rule_fail", rule_title="Fail check", status="FAIL",
+            checked_count=100, failed_count=8, failed_row_ids="[]", violation_rate=0.08,
+        )
+        # Bản ghi profile khiến VOLUME_DRIFT_DETECTOR sinh signal score = 0.0 (không đủ lịch sử)
+        profile = ProfileModel(
+            dataset_id="dataset_1", row_count=100, completeness_score=100.0,
+            validity_score=100.0, duplicate_rate=0.0, evidence_keys="[]",
+        )
+        session.add_all([run, res_fail, profile])
+        session.commit()
+
+        result = detect_anomalies(session, "run_dilute")
+
+        families = {s["family"] for s in result["signals"]}
+        assert "VOLUME" in families, "Fixture phải sinh được signal VOLUME"
+
+        stat_scores = [s["score"] for s in result["signals"] if s["family"] == "STATISTICAL"]
+        assert max(stat_scores) == 0.80
+
+        assert result["score"] >= 0.70, (
+            f"Điểm tổng hợp bị pha loãng: {result['score']} (kỳ vọng >= 0.70)"
+        )
+        assert result["decision"] == "ANOMALY"

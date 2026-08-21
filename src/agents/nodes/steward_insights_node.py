@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -177,6 +178,7 @@ async def steward_insights_node(state: AnomalyGraphState) -> dict:
     settings = get_settings()
     fallback_used = False
     hypotheses_list = []
+    latency_ms = 0
     
     try:
         llm = get_llm(settings.llm_provider, temperature=0.1)
@@ -202,7 +204,9 @@ async def steward_insights_node(state: AnomalyGraphState) -> dict:
         )
         
         logger.info("Invoking LLM for structured hypotheses...")
+        llm_started_at = time.perf_counter()
         response = await structured_llm.ainvoke(prompt)
+        latency_ms = int((time.perf_counter() - llm_started_at) * 1000)
         
         # Parse output list of items
         raw_list = [h.model_dump() for h in response.hypotheses]
@@ -223,7 +227,17 @@ async def steward_insights_node(state: AnomalyGraphState) -> dict:
         hypotheses_list = _generate_fallback_hypotheses(dataset_id, decision, signals, failed_rules)
         fallback_used = True
         
+    # Ghi lại model thật và độ trễ thật để persist_analysis_node lưu đúng vào
+    # anomaly_hypotheses thay vì hằng số hardcode.
+    model_name = str(
+        getattr(settings, f"{settings.llm_provider}_model_name", settings.llm_provider)
+    )
     return {
         "hypotheses": hypotheses_list,
-        "hypothesis_status": "FALLBACK_USED" if fallback_used else "SUCCEEDED"
+        "hypothesis_status": "FALLBACK_USED" if fallback_used else "SUCCEEDED",
+        "metadata": {
+            **(state.get("metadata") or {}),
+            "model_name": model_name,
+            "hypothesis_latency_ms": latency_ms,
+        },
     }

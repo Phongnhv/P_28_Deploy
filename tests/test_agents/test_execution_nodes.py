@@ -268,9 +268,9 @@ async def test_execution_graph_end_to_end():
     cross_res = res_map["mock_trips.pickup_datetime.VS.dropoff_datetime.CROSS_FIELD_COMPARISON"]
     assert cross_res["violation_count"] == 1
     assert cross_res["status"] == "FAIL"
-    assert cross_res["sample_failures"] is not None
-    assert len(cross_res["sample_failures"]) == 1
-    assert cross_res["sample_failures"][0]["trip_id"] == "TRIP_5"
+    # Mẫu vi phạm chỉ chứa ID dòng (list[str]), không phải nguyên bản ghi:
+    # kết quả này được ghi vào cột dq_results.failed_row_ids và hiển thị trên UI.
+    assert cross_res["sample_failures"] == ["TRIP_5"]
 
     # UNIQUE: 'TRIP_1' bị lặp lại 1 lần -> violation_count == 1
     assert res_map["mock_trips.trip_id.UNIQUE"]["violation_count"] == 1

@@ -15,6 +15,9 @@ class AgentState(TypedDict, total=False):
     analysis: str
     response: str
     error: str
+    # Lý do tạm dừng có chủ đích (ví dụ chờ Steward duyệt Semantic Contract).
+    # Tách khỏi `error` để routing và trạng thái run phân biệt được "lỗi" với "đang chờ người".
+    pause_reason: str
     metadata: dict
     profiler_result: dict
     dataset_profile_digest: dict
@@ -37,6 +40,7 @@ class AgentState(TypedDict, total=False):
     dbt_trace_file_path: str     # Exact local/test fallback path for this run
     dbt_validation_valid: bool   # Whether the generated dbt project passed the quality gate
     dbt_validation_error: str | None
+    dbt_validation_skipped: bool   # True khi chốt chặn dbt không thực sự chạy
     dbt_validation_attempts: int
     dbt_validation_trace_path: str
     dbt_repair_history: list

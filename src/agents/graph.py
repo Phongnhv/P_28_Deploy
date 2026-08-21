@@ -47,7 +47,10 @@ def build_proposal_graph() -> StateGraph:
     from src.agents.nodes.prompt_customizer_node import prompt_customizer_node
 
     def _should_continue_proposal(state: AgentState) -> str:
-        if state.get("error"):
+        # Dừng khi có lỗi thật HOẶC khi một gate chủ động tạm dừng chờ người duyệt.
+        # Hai trường hợp này dẫn tới cùng một điểm kết thúc graph nhưng runner sẽ ghi
+        # trạng thái run khác nhau (FAILED vs AWAITING_SEMANTIC_REVIEW).
+        if state.get("error") or state.get("pause_reason"):
             return END
         return "next"
 
@@ -245,8 +248,13 @@ def build_anomaly_graph() -> StateGraph:
 
 logger = logging.getLogger("graph_runner")
 
+#: Dataset mặc định CHỈ dùng cho CLI (`python -m src.agents.graph`). Các hàm runner bên
+#: dưới bắt buộc truyền dataset_id — trước đây cả ba đều mặc định về dataset NYC taxi nên
+#: caller quên truyền sẽ âm thầm chạy trên dataset sai mà không có cảnh báo nào.
+DEFAULT_CLI_DATASET_ID = "dataset-nyc-yellow-taxi-50k"
+
 async def run_proposal_graph(
-    dataset_id: str = "dataset-nyc-yellow-taxi-50k",
+    dataset_id: str,
     connection_string: str | None = None,
     sampling_rate: float = 1.0,
     auto_confirm_semantic: bool = True,
@@ -279,6 +287,37 @@ async def run_proposal_graph(
 
     try:
         final_state = await proposal_graph.ainvoke(initial_state)
+
+        # `ainvoke` KHÔNG ném exception khi một node trả về {"error": ...} — graph chỉ
+        # định tuyến sang END. Trước đây runner ghi "DONE" vô điều kiện nên một Run 1
+        # thất bại hoàn toàn (LLM hết quota → 0 rules) vẫn được báo là thành công, và
+        # trạng thái AWAITING_SEMANTIC_REVIEW do gate ghi cũng bị ghi đè ngay lập tức.
+        pause_reason = final_state.get("pause_reason")
+        graph_error = final_state.get("error")
+
+        if pause_reason:
+            update_run_status(run_id=run_id, status=str(pause_reason))
+            logger.info("Run 1 tạm dừng chờ người duyệt | run_id=%s | lý do=%s", run_id, pause_reason)
+            print(f"\n⏸️  RUN 1 TẠM DỪNG — {pause_reason} (Proposal run_id: {run_id})\n")
+            return {
+                "run_id": run_id,
+                "status": str(pause_reason),
+                "rules": list_rules(run_id=run_id),
+                "summary": get_review_summary(run_id=run_id),
+            }
+
+        if graph_error:
+            update_run_status(run_id=run_id, status="FAILED", error=str(graph_error))
+            logger.error("Run 1 thất bại trong graph | run_id=%s | error=%s", run_id, graph_error)
+            print(f"\n❌ RUN 1 THẤT BẠI: {graph_error}\n")
+            return {
+                "run_id": run_id,
+                "status": "FAILED",
+                "error": str(graph_error),
+                "rules": list_rules(run_id=run_id),
+                "summary": get_review_summary(run_id=run_id),
+            }
+
         update_run_status(run_id=run_id, status="DONE")
 
         rules = list_rules(run_id=run_id)
@@ -302,7 +341,7 @@ async def run_proposal_graph(
             print(f"    Tham số    : {rule.get('parameters')}")
 
         print("\n" + "=" * 75 + "\n")
-        return {"run_id": run_id, "rules": rules, "summary": summary}
+        return {"run_id": run_id, "status": "DONE", "rules": rules, "summary": summary}
 
     except Exception as exc:
         logger.error("Run 1 thất bại: %s", exc, exc_info=True)
@@ -312,7 +351,7 @@ async def run_proposal_graph(
 
 
 async def run_execution_graph(
-    dataset_id: str = "dataset-nyc-yellow-taxi-50k",
+    dataset_id: str,
     proposal_run_id: str | None = None,
 ) -> dict:
     """Chạy toàn bộ pipeline Run 2 (Thực thi Test): Active Rules -> Generator -> Validate -> Runner -> Report."""
@@ -389,7 +428,7 @@ async def run_execution_graph(
 
 async def run_anomaly_graph(
     execution_run_id: str,
-    dataset_id: str = "dataset-nyc-yellow-taxi-50k",
+    dataset_id: str,
 ) -> dict:
     """Chạy toàn bộ pipeline Run 3 (Anomaly Analysis & Hypothesis)."""
     import uuid
@@ -401,9 +440,9 @@ async def run_anomaly_graph(
         "execution_run_id": execution_run_id,
         "dataset_id": dataset_id,
         "detector_config_version": "anomaly-v1",
-        "metadata": {
-            "model_name": "gemini-3.5-flash",
-        }
+        # KHÔNG hardcode model ở đây: steward_insights_node ghi lại model thật nó đã gọi
+        # (theo settings.llm_provider) vào metadata để persist_analysis_node lưu chính xác.
+        "metadata": {},
     }
     
     logger.info("Bắt đầu Run 3 (Anomaly Analysis) | anomaly_run_id=%s | execution_run_id=%s", 
@@ -459,7 +498,7 @@ async def main():
 
     args = sys.argv[1:]
     mode = args[0] if args else "all"
-    dataset_id = args[1] if len(args) > 1 else "dataset-nyc-yellow-taxi-50k"
+    dataset_id = args[1] if len(args) > 1 else DEFAULT_CLI_DATASET_ID
 
     if mode == "1" or mode == "proposal":
         print(f"🚀 Lựa chọn: CHẠY RUN 1 (Proposal Graph) cho dataset {dataset_id}")

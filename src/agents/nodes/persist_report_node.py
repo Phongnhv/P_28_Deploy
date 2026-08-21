@@ -19,8 +19,26 @@ from src.services.rule_store import (
     save_test_results,
     update_test_run_status,
 )
+from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
+
+# test_runner_node chuẩn hoá status về PASS/FAIL/ERROR/SKIPPED, nhưng dữ liệu cũ (và các
+# harness chạy tay) vẫn dùng PASSED/FAILED. Đọc thì chấp nhận cả hai, ghi thì chỉ một dạng.
+_PASS_STATUSES = ("PASS", "PASSED")
+_FAIL_STATUSES = ("FAIL", "FAILED")
+
+
+def _normalize_status(raw: str | None) -> str:
+    """Quy mọi biến thể status về đúng một từ vựng: PASS / FAIL / ERROR / SKIPPED."""
+    value = (raw or "PASS").upper()
+    if value in _PASS_STATUSES:
+        return "PASS"
+    if value in _FAIL_STATUSES:
+        return "FAIL"
+    if value == "ERROR":
+        return "ERROR"
+    return "SKIPPED"
 
 
 def _dump_report_file(test_run_id: str, payload: dict, steward_summary: str | None = None) -> tuple[str, str | None]:
@@ -87,9 +105,22 @@ async def persist_report_node(state: AgentState) -> dict:
             
             # Map statuses
             dq_status = "SUCCEEDED" if final_status == "DONE" else "FAILED"
+
+            # Tiêu đề rule lấy từ luật đã duyệt. Trước đây cắt đuôi rule_id
+            # ("yellow_tripdata.fare_amount.RANGE" -> "RANGE") nên steward_insights_node
+            # gửi cho LLM một tiêu đề vô nghĩa thay vì mô tả nghiệp vụ thật.
+            titles_by_rule_id = {
+                rule.get("rule_id"): (
+                    rule.get("rule_name")
+                    or rule.get("rule_description")
+                    or rule.get("title")
+                )
+                for rule in (state.get("approved_rules") or [])
+                if rule.get("rule_id")
+            }
             
             # Count details
-            failed_count = sum(1 for r in test_results if r.get("status") in ("FAIL", "FAILED"))
+            failed_count = sum(1 for r in test_results if _normalize_status(r.get("status")) == "FAIL")
             checked_count = sum(int(r.get("checked_count") or r.get("total_rows") or 0) for r in test_results)
             
             dq_run = DqRunModel(
@@ -100,34 +131,40 @@ async def persist_report_node(state: AgentState) -> dict:
                 status=dq_status,
                 total_failed=failed_count,
                 total_checked=checked_count,
-                created_at=datetime.now(),
-                completed_at=datetime.now(),
+                created_at=utc_now(),
+                completed_at=utc_now(),
                 ruleset_version_id=state.get("ruleset_version_id"),
                 compiler_version=state.get("metadata", {}).get("compiler_version"),
                 artifact_hash=state.get("metadata", {}).get("artifact_hash"),
                 retry_history_json=json.dumps(state.get("metadata", {}).get("retry_history", [])),
                 error_message=err_str,
-                dbt_status=state.get("metadata", {}).get("dbt_status", "SUCCESS"),
+                dbt_status=(
+                    "SKIPPED"
+                    if state.get("dbt_validation_skipped")
+                    else state.get("metadata", {}).get("dbt_status", "SUCCESS")
+                ),
                 metrics_status=state.get("metadata", {}).get("metrics_status", "SUCCESS"),
             )
             session.add(dq_run)
             session.flush()
             
             for res in test_results:
-                r_status = res.get("status", "PASS")
-                if r_status == "PASSED":
-                    r_status = "PASS"
-                elif r_status == "FAILED":
-                    r_status = "FAIL"
-                
+                r_status = _normalize_status(res.get("status"))
+
                 # Extract counts
                 c_count = int(res.get("checked_count") or res.get("total_rows") or 0)
                 f_count = int(res.get("failed_count") or res.get("violation_count") or 0)
                 
+                rule_id_value = res.get("rule_id", "")
                 dq_res = DqResultModel(
                     run_id=test_run_id,
-                    rule_id=res.get("rule_id", ""),
-                    rule_title=res.get("rule_id", "").split(".")[-1] or "Rule",
+                    rule_id=rule_id_value,
+                    rule_title=(
+                        titles_by_rule_id.get(rule_id_value)
+                        or res.get("rule_title")
+                        or rule_id_value
+                        or "Rule"
+                    ),
                     status=r_status,
                     checked_count=c_count,
                     failed_count=f_count,
@@ -157,9 +194,9 @@ async def persist_report_node(state: AgentState) -> dict:
         "dq_grade": dq_grade,
         "dq_dimensions": dq_dimensions,
         "total_rules_tested": len(test_results),
-        "passed_count": sum(1 for r in test_results if r.get("status") == "PASSED"),
-        "failed_count": sum(1 for r in test_results if r.get("status") == "FAILED"),
-        "error_count": sum(1 for r in test_results if r.get("status") == "ERROR"),
+        "passed_count": sum(1 for r in test_results if _normalize_status(r.get("status")) == "PASS"),
+        "failed_count": sum(1 for r in test_results if _normalize_status(r.get("status")) == "FAIL"),
+        "error_count": sum(1 for r in test_results if _normalize_status(r.get("status")) == "ERROR"),
         "anomalies": anomalies,
         "remediation_actions": remediation_actions,
         "test_results": test_results,

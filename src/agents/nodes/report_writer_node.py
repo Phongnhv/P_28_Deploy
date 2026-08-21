@@ -237,8 +237,9 @@ def _write_report_file(
     report_dir = base_dir / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = report_dir / f"steward_report_{timestamp}_{execution_run_id}.md"
+    # Tên file KHÔNG chứa timestamp: docstring của node cam kết idempotent theo
+    # execution_run_id (ghi đè khi retry). Có timestamp thì mỗi lần chạy lại đẻ ra một file mới.
+    out_path = report_dir / f"steward_report_{execution_run_id}.md"
     tmp_path = out_path.with_suffix(".md.tmp")
     try:
         tmp_path.write_text(content, encoding="utf-8")
@@ -290,7 +291,13 @@ async def report_writer_node(state: AnomalyGraphState) -> dict:
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        llm = get_llm("openai", temperature=0.2)
+        # Dùng provider đã cấu hình (settings.llm_provider) như mọi node LLM khác.
+        # Hardcode "openai" khiến node phớt lờ cấu hình: khi đội chuyển sang Gemini/Mistral
+        # hoặc không có OPENAI_API_KEY, exception bị nuốt ở dưới và báo cáo LLM âm thầm
+        # rơi về template fallback mà người dùng không hề biết.
+        from src.config import get_settings
+
+        llm = get_llm(get_settings().llm_provider, temperature=0.2)
         messages = [
             SystemMessage(content=_SYSTEM_PROMPT),
             HumanMessage(content=user_prompt),

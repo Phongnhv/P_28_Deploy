@@ -260,7 +260,7 @@ class TestResultModel(Base):
     violation_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     violation_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    sample_failures: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list[dict]
+    sample_failures: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list[str] — chỉ ID dòng vi phạm
     sql_text: Mapped[str] = mapped_column(Text, nullable=False)
     duration_ms: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

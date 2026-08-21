@@ -53,8 +53,9 @@ async def hitl_semantic_gate_node(state: AgentState) -> dict:
     except Exception as e:
         logger.warning(f"Không thể cập nhật trạng thái run: {e}")
 
-    # Set error đặc biệt để conditional edge dẫn tới END
+    # Tạm dừng có chủ đích — KHÔNG phải lỗi. Dùng `pause_reason` để conditional edge dẫn
+    # tới END mà runner vẫn phân biệt được "chờ Steward duyệt" với "chạy thất bại".
     return {
-        "error": "AWAITING_SEMANTIC_REVIEW",
+        "pause_reason": "AWAITING_SEMANTIC_REVIEW",
         "progress_state": "WAITING_FOR_SEMANTIC_REVIEW"
     }

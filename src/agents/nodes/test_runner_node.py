@@ -2,7 +2,7 @@
 
 Thu thập:
 - total_rows, violation_count, violation_rate
-- sample_failures (5 dòng vi phạm mẫu)
+- sample_failures (tối đa SAMPLE_FAILURE_LIMIT ID dòng vi phạm — chỉ ID, không phải nội dung dòng)
 - duration_ms
 - status: PASSED / FAILED / ERROR / SKIPPED
 """
@@ -19,6 +19,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import text
 
 from src.agents.nodes.dbt_validation import get_state_dbt_yaml, materialize_dbt_project, validate_dbt_yaml_structure
@@ -26,6 +27,7 @@ from src.agents.state import AgentState
 from src.config import get_settings
 from src.models.rule_schemas import RuleType
 from src.services.rule_store import get_engine
+from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -35,14 +37,73 @@ def _quote_ident(ident: str, dialect_name: str = "sqlite") -> str:
     return f'"{clean_ident}"'
 
 
+# Số ID vi phạm tối đa được gom cho mỗi rule. Khớp với `failed_id_limit` của đường
+# thực thi Supabase (src/services/supabase_dataset.py) để hai pipeline cùng một giới hạn.
+SAMPLE_FAILURE_LIMIT = 20
+
+# Thứ tự ưu tiên khi dò cột định danh của bảng.
+_IDENTITY_COLUMN_PREFERENCES = ("source_row_id", "id", "row_id")
+
+
+def _resolve_identity_column(table_name: str) -> str | None:
+    """Tìm cột định danh của bảng để trích ID dòng vi phạm.
+
+    Ưu tiên: source_row_id → khóa chính → id/row_id → cột đầu tiên có hậu tố `_id`.
+    Trả về None nếu không xác định được (khi đó bỏ qua việc lấy mẫu thay vì đọc cả dòng).
+    """
+    try:
+        inspector = sa_inspect(get_engine())
+        columns = [col["name"] for col in inspector.get_columns(table_name)]
+    except Exception as exc:
+        logger.warning("Không thể đọc schema của bảng %s: %s", table_name, exc)
+        return None
+
+    if not columns:
+        return None
+
+    lookup = {name.lower(): name for name in columns}
+    for preferred in _IDENTITY_COLUMN_PREFERENCES:
+        if preferred in lookup:
+            return lookup[preferred]
+
+    try:
+        pk_columns = inspector.get_pk_constraint(table_name).get("constrained_columns") or []
+        if pk_columns:
+            return pk_columns[0]
+    except Exception:
+        pass
+
+    for name in columns:
+        if name.lower().endswith("_id"):
+            return name
+    return None
+
+
+def _assert_safe_predicate(predicate: str) -> None:
+    """Chốt chặn chống SQL injection cho predicate do hệ thống tự sinh.
+
+    Dùng `raise` chứ KHÔNG dùng `assert`: Python xoá mọi câu lệnh assert khi chạy với
+    cờ -O / PYTHONOPTIMIZE=1 (nhiều image production bật mặc định), tức chốt chặn bảo mật
+    sẽ biến mất đúng lúc cần nhất.
+    """
+    if "--" in predicate or ";" in predicate or "/*" in predicate or "*/" in predicate:
+        raise ValueError(
+            "Security violation: potential SQL injection detected in predicate"
+        )
+
+
 def _fetch_sample_failures(
     table_name: str,
     predicate: str | None,
     bind_params: dict,
     dialect_name: str = "sqlite",
-    limit: int = 5,
-) -> list[dict]:
-    """Lấy tối đa 5 bản ghi mẫu vi phạm điều kiện.
+    limit: int = SAMPLE_FAILURE_LIMIT,
+) -> list[str]:
+    """Lấy tối đa `limit` ID của các dòng vi phạm điều kiện.
+
+    Chỉ trả về ID, KHÔNG trả về nội dung dòng: kết quả này được ghi vào cột
+    `dq_results.failed_row_ids` và hiển thị trên UI. Bản trước dùng `SELECT *` nên lưu
+    nguyên bản ghi (toạ độ, thời gian, số tiền...) vào một cột mang tên "row_ids".
 
     CRITICAL SAFETY GUARD: predicate MUST be programmatically constructed (e.g. from _build_row_predicate)
     and must not accept raw user input directly.
@@ -50,19 +111,27 @@ def _fetch_sample_failures(
     if not predicate or predicate == "1=0":
         return []
 
-    # Basic runtime safety guards
-    assert "--" not in predicate and ";" not in predicate, "Security violation: potential SQL injection detected in predicate"
+    _assert_safe_predicate(predicate)
+
+    identity_column = _resolve_identity_column(table_name)
+    if not identity_column:
+        logger.warning(
+            "Bỏ qua lấy mẫu vi phạm cho %s: không xác định được cột định danh", table_name
+        )
+        return []
 
     quoted_table = _quote_ident(table_name, dialect_name)
-    sample_sql = f"SELECT * FROM {quoted_table} WHERE {predicate} LIMIT {limit}"
+    quoted_id = _quote_ident(identity_column, dialect_name)
+    sample_sql = (
+        f"SELECT {quoted_id} FROM {quoted_table} WHERE {predicate} "
+        f"ORDER BY {quoted_id} LIMIT {limit}"
+    )
 
     engine = get_engine()
     try:
         with engine.connect() as conn:
-            result = conn.execute(text(sample_sql), bind_params)
-            columns = result.keys()
-            rows = result.fetchall()
-            return [dict(zip(columns, row)) for row in rows]
+            rows = conn.execute(text(sample_sql), bind_params).fetchall()
+            return [str(row[0]) for row in rows if row[0] is not None]
     except Exception as exc:
         logger.warning("Không thể lấy sample failures cho %s: %s", table_name, exc)
         return []
@@ -72,26 +141,32 @@ def _fetch_unique_samples(
     table_name: str,
     col_name: str,
     dialect_name: str = "sqlite",
-    limit: int = 5,
-) -> list[dict]:
-    """Lấy mẫu các giá trị bị trùng lặp cho rule UNIQUE."""
+    limit: int = SAMPLE_FAILURE_LIMIT,
+) -> list[str]:
+    """Lấy tối đa `limit` ID của các dòng có giá trị bị trùng lặp (rule UNIQUE)."""
+    identity_column = _resolve_identity_column(table_name)
+    if not identity_column:
+        logger.warning(
+            "Bỏ qua lấy mẫu trùng lặp cho %s: không xác định được cột định danh", table_name
+        )
+        return []
+
     quoted_table = _quote_ident(table_name, dialect_name)
     quoted_col = _quote_ident(col_name, dialect_name)
+    quoted_id = _quote_ident(identity_column, dialect_name)
     sample_sql = (
-        f"SELECT {quoted_col} AS duplicated_value, COUNT(*) AS occurrences "
-        f"FROM {quoted_table} "
+        f"SELECT {quoted_id} FROM {quoted_table} "
+        f"WHERE {quoted_col} IN ("
+        f"SELECT {quoted_col} FROM {quoted_table} "
         f"WHERE {quoted_col} IS NOT NULL "
-        f"GROUP BY {quoted_col} "
-        f"HAVING COUNT(*) > 1 "
-        f"LIMIT {limit}"
+        f"GROUP BY {quoted_col} HAVING COUNT(*) > 1"
+        f") ORDER BY {quoted_id} LIMIT {limit}"
     )
     engine = get_engine()
     try:
         with engine.connect() as conn:
-            result = conn.execute(text(sample_sql))
-            columns = result.keys()
-            rows = result.fetchall()
-            return [dict(zip(columns, row)) for row in rows]
+            rows = conn.execute(text(sample_sql)).fetchall()
+            return [str(row[0]) for row in rows if row[0] is not None]
     except Exception as exc:
         logger.warning("Không thể lấy duplicate samples cho %s.%s: %s", table_name, col_name, exc)
         return []
@@ -292,8 +367,11 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
                     ts_val = max_ts
 
                 if ts_val.tzinfo is None:
-                    # Giả định UTC nếu không có timezone
-                    now_t = datetime.now()
+                    # Timestamp không mang timezone → theo hợp đồng naive-UTC của
+                    # src/time_utils.py, phải so với ĐỒNG HỒ UTC. Bản trước dùng
+                    # datetime.now() (giờ địa phương) nên ở múi UTC+7 tuổi dữ liệu bị
+                    # thổi phồng thêm 7 giờ → FRESHNESS báo FAILED giả.
+                    now_t = utc_now()
                 else:
                     now_t = datetime.now(UTC)
 
@@ -302,6 +380,10 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
                     status = "FAILED"
                     v_count = 1
                     v_rate = 1.0
+                    err_msg = (
+                        f"Dữ liệu đã cũ {age_delta.total_seconds() / 3600:.1f} giờ "
+                        f"(ngưỡng {max_age_hours} giờ); mốc mới nhất: {max_ts}."
+                    )
             except Exception as exc:
                 logger.warning("Không thể parse timestamp freshness: %s", exc)
 
@@ -316,7 +398,9 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
             "violation_count": v_count,
             "total_rows": total_rows,
             "violation_rate": v_rate,
-            "sample_failures": [{"max_timestamp": str(max_ts)}] if max_ts else None,
+            # Freshness là kiểm tra cấp bảng, không có dòng vi phạm cụ thể. Mốc thời gian
+            # đã nằm trong `error`; giữ danh sách rỗng để đúng hợp đồng list[str].
+            "sample_failures": [],
             "sql_text": sql,
             "duration_ms": round(duration_ms, 2),
             "error": err_msg,
@@ -489,23 +573,28 @@ async def main():
         "dataset_id": "yellow_tripdata",
         "test_run_id": "exec_standalone_test",
         "generated_tests": valid_tests,
+        # Harness chạy tay bỏ qua chốt chặn dbt một cách CÓ CHỦ ĐÍCH: nó đọc thẳng file
+        # test đã sinh sẵn. Thiếu cờ này, test_runner_node ném RuntimeError ngay dòng đầu
+        # nên toàn bộ harness là code chết, không ai chạy được.
+        "dbt_validation_valid": True,
     }
 
     res = await test_runner_node(state)
 
+    # test_runner_node trả về status ĐÃ chuẩn hoá (PASS/FAIL), không phải PASSED/FAILED.
     results = res.get("test_results", [])
-    passed_count = sum(1 for r in results if r["status"] == "PASSED")
-    failed_count = sum(1 for r in results if r["status"] == "FAILED")
+    passed_count = sum(1 for r in results if r["status"] == "PASS")
+    failed_count = sum(1 for r in results if r["status"] == "FAIL")
     error_count = sum(1 for r in results if r["status"] == "ERROR")
 
     print(f"\n📊 Kết quả thực thi ({len(results)} rules): {passed_count} PASSED | {failed_count} FAILED | {error_count} ERROR")
     for idx, r in enumerate(results[:10], 1):
-        status_icon = "✅ PASSED" if r["status"] == "PASSED" else ("❌ FAILED" if r["status"] == "FAILED" else "⚠️ ERROR")
-        print(f"\n[{idx}] Rule: {r['rule_id']} ➔ {status_icon}")
-        print(f"    Tổng dòng: {r['total_rows']} | Vi phạm: {r['violation_count']} | Tỷ lệ lỗi: {r['violation_rate']:.2%}")
-        print(f"    Thời gian: {r['duration_ms']} ms")
-        if r.get("sample_failures"):
-            print(f"    Dòng lỗi mẫu (tối đa 5 dòng): {json.dumps(r['sample_failures'], ensure_ascii=False, default=str)}")
+        status_icon = "PASS" if r["status"] == "PASS" else ("FAIL" if r["status"] == "FAIL" else "ERROR")
+        print(f"\n[{idx}] Rule: {r['rule_id']} -> {status_icon}")
+        print(f"    Tong dong: {r['checked_count']} | Vi pham: {r['failed_count']} | Ty le loi: {r['violation_rate']:.2%}")
+        print(f"    Thoi gian: {r['duration_ms']} ms")
+        if r.get("sample_refs"):
+            print(f"    ID dong loi mau (toi da {SAMPLE_FAILURE_LIMIT}): {json.dumps(r['sample_refs'], ensure_ascii=False, default=str)}")
 
     if len(results) > 10:
         print(f"\n... và còn {len(results) - 10} kết quả khác được lưu trong file trace.")

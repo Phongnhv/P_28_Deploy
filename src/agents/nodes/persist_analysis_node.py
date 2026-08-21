@@ -19,6 +19,20 @@ from src.models.database import (
 
 logger = logging.getLogger(__name__)
 
+#: Phiên bản prompt sinh giả thuyết — tăng khi đổi nội dung prompt trong steward_insights_node.
+HYPOTHESIS_PROMPT_VERSION = "1.0.0"
+
+
+def _resolve_model_name() -> str:
+    """Tên model thực tế theo cấu hình provider hiện hành."""
+    try:
+        from src.config import get_settings
+
+        settings = get_settings()
+        return str(getattr(settings, f"{settings.llm_provider}_model_name", settings.llm_provider))
+    except Exception:
+        return "unknown"
+
 
 async def persist_analysis_node(state: AnomalyGraphState) -> dict:
     """LangGraph Node: Persists anomaly execution runs, signals, and hypotheses to the database."""
@@ -91,6 +105,13 @@ async def persist_analysis_node(state: AnomalyGraphState) -> dict:
                 )
                 session.add(sig_record)
                 
+            # Model thật do steward_insights_node dùng, KHÔNG phải hằng số hardcode.
+            # Bản cũ luôn ghi "gemini-3.5-flash" trong khi hệ thống gọi provider cấu hình
+            # trong settings (mặc định OpenAI) — toàn bộ cột observability là dữ liệu bịa.
+            metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+            model_name = metadata.get("model_name") or _resolve_model_name()
+            hypothesis_latency_ms = int(metadata.get("hypothesis_latency_ms") or 0)
+
             # Create AnomalyHypotheses
             for h in hypotheses:
                 hyp_record = AnomalyHypothesisModel(
@@ -105,9 +126,9 @@ async def persist_analysis_node(state: AnomalyGraphState) -> dict:
                     recommended_checks=json.dumps(h.get("recommended_checks", [])),
                     missing_evidence=h.get("missing_evidence"),
                     limitations=h.get("limitations"),
-                    model_name=state.get("metadata", {}).get("model_name", "gemini-3.5-flash") if isinstance(state.get("metadata"), dict) else "gemini-3.5-flash",
-                    prompt_version="1.0.0",
-                    latency_ms=0,
+                    model_name=model_name,
+                    prompt_version=HYPOTHESIS_PROMPT_VERSION,
+                    latency_ms=hypothesis_latency_ms,
                     fallback_used=state.get("hypothesis_status") == "FALLBACK_USED"
                 )
                 session.add(hyp_record)

@@ -25,6 +25,18 @@ from src.models.database import (
 
 logger = logging.getLogger(__name__)
 
+# Số đợt chạy gần nhất dùng làm baseline cho mỗi rule (cửa sổ trượt).
+# Không giới hạn cửa sổ thì median/MAD bị pha loãng bởi toàn bộ lịch sử từ đầu,
+# khiến detector ngày càng chai lì với drift mới.
+_HISTORY_WINDOW = 30
+
+# Số bản ghi profile gần nhất dùng làm baseline cho VOLUME_DRIFT_DETECTOR.
+_VOLUME_HISTORY_WINDOW = 20
+
+# Khi MAD = 0 (lịch sử hoàn toàn phẳng), dùng thang đo dự phòng thay cho hằng số cứng.
+_MAD_ZERO_FLOOR = 0.005  # 0.5 điểm phần trăm
+_MAX_ROBUST_Z = 10.0
+
 
 def compute_median(values: list[float]) -> float:
     if not values:
@@ -57,9 +69,16 @@ def calculate_robust_zscore(current: float, history: list[float]) -> tuple[float
     mad = compute_mad(history, median)
     
     if mad == 0.0:
-        # If MAD is 0, deviation of 0 has robust_z = 0.0, otherwise 3.0 (or higher if vastly different)
-        return (0.0 if current == median else 3.0), median, 0.0
-        
+        # MAD = 0 nghĩa là lịch sử hoàn toàn phẳng — rất phổ biến khi mọi đợt chạy đều 0% vi phạm.
+        # Trả về hằng số 3.0 cho mọi sai lệch khiến lệch 0.001% và lệch 100% nhận cùng một điểm.
+        # Thay bằng thang đo dự phòng theo độ lớn baseline để phản hồi có phân cấp.
+        if current == median:
+            return 0.0, median, 0.0
+        fallback_scale = max(abs(median) * 0.1, _MAD_ZERO_FLOOR)
+        robust_z = 0.6745 * (current - median) / fallback_scale
+        return max(-_MAX_ROBUST_Z, min(_MAX_ROBUST_Z, robust_z)), median, 0.0
+
+
     robust_z = 0.6745 * (current - median) / mad
     return robust_z, median, mad
 
@@ -93,35 +112,44 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
     
     signals: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
-    
+
+    # 1.1 Nạp lịch sử của TẤT CẢ rules trong một query duy nhất (trước đây là N+1: mỗi
+    # rule một query). Sắp xếp mới nhất trước rồi cắt cửa sổ trượt _HISTORY_WINDOW cho
+    # từng rule — baseline chỉ phản ánh giai đoạn gần đây thay vì toàn bộ lịch sử.
+    # Loại trừ: đợt chạy hiện tại, đợt chạy lỗi, và đợt đã được Steward gán TRUE_ANOMALY.
+    history_by_rule: dict[str, list[float]] = {}
+    rule_ids = [res.rule_id for res in current_results]
+    if rule_ids:
+        history_rows = (
+            db.query(DqResultModel)
+            .join(DqRunModel, DqRunModel.id == DqResultModel.run_id)
+            .filter(
+                DqResultModel.rule_id.in_(rule_ids),
+                DqResultModel.run_id != execution_run_id,
+                DqRunModel.dataset_id == current_run.dataset_id,
+                or_(DqRunModel.status == "SUCCEEDED", DqRunModel.status == "DONE"),
+            )
+            .order_by(DqRunModel.created_at.desc())
+            .all()
+        )
+        for row in history_rows:
+            if row.run_id in excluded_run_ids:
+                continue
+            bucket = history_by_rule.setdefault(row.rule_id, [])
+            if len(bucket) < _HISTORY_WINDOW:
+                bucket.append(
+                    row.failed_count / row.checked_count if row.checked_count > 0 else 0.0
+                )
+
     # 2. Iterate through rules and run detectors
     for res in current_results:
         rule_id = res.rule_id
         checked_count = res.checked_count
         failed_count = res.failed_count
         current_rate = failed_count / checked_count if checked_count > 0 else 0.0
-        
-        # 2.1 Fetch historical results for this rule
-        # Exclude: current run, failed runs (not SUCCEEDED/DONE), and true anomalies
-        history_rows = (
-            db.query(DqResultModel)
-            .join(DqRunModel, DqRunModel.id == DqResultModel.run_id)
-            .filter(
-                DqResultModel.rule_id == rule_id,
-                DqResultModel.run_id != execution_run_id,
-                DqRunModel.dataset_id == current_run.dataset_id,
-                or_(DqRunModel.status == "SUCCEEDED", DqRunModel.status == "DONE"),
-            )
-            .all()
-        )
-        # Filter true anomalies in memory
-        history_rows = [r for r in history_rows if r.run_id not in excluded_run_ids]
-        
-        history_rates = [
-            (r.failed_count / r.checked_count if r.checked_count > 0 else 0.0)
-            for r in history_rows
-        ]
-        
+
+        history_rates = history_by_rule.get(rule_id, [])
+
         sufficient_history = len(history_rates) >= 5
         
         # Detector 1 & 2 & 3: Invariant / Cold-start / Robust historical on Rule Level
@@ -205,13 +233,16 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
     if profile:
         current_rows = profile.row_count
         # Fetch historical row counts
+        # LIMIT không kèm ORDER BY là hành vi không xác định trong SQL — DB được quyền
+        # trả về 20 dòng bất kỳ, khiến baseline thay đổi giữa các lần chạy trên cùng dữ liệu.
         hist_profiles = (
             db.query(ProfileModel)
             .filter(
                 ProfileModel.dataset_id == current_run.dataset_id,
                 ProfileModel.generated_at < profile.generated_at
             )
-            .limit(20)
+            .order_by(ProfileModel.generated_at.desc())
+            .limit(_VOLUME_HISTORY_WINDOW)
             .all()
         )
         hist_rows = [p.row_count for p in hist_profiles]
@@ -297,7 +328,16 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
     family_reps: dict[str, float] = {}
     for fam, scs in family_scores.items():
         family_reps[fam] = max(scs) if scs else 0.0
-        
+
+    # Family "chủ đạo": điểm cao nhất, hoà điểm thì ưu tiên family đáng tin cậy hơn.
+    dominant_family = ""
+    if family_reps:
+        dominant_family = max(
+            family_reps,
+            key=lambda fam: (family_reps[fam], family_weights.get(fam, 0.5)),
+        )
+
+
     # Check for priority overrides
     has_critical_override = False
     override_reason = ""
@@ -315,16 +355,18 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
         confidence = 0.95
         severity = "HIGH"
     else:
-        # Weighted family aggregation
-        weighted_sum = 0.0
-        weight_sum = 0.0
-        for fam, rep_score in family_reps.items():
-            w = family_weights.get(fam, 0.5)
-            weighted_sum += w * rep_score
-            weight_sum += w
-            
-        final_score = (weighted_sum / weight_sum) if weight_sum > 0 else 0.0
-        
+        # Family aggregation — MAX, không phải trung bình.
+        #
+        # Bất thường là quan hệ HOẶC: chỉ cần MỘT family báo động là đợt chạy đáng ngờ.
+        # Bản cũ lấy trung bình có trọng số nên một family khỏe mạnh (score 0.0) kéo tụt
+        # điểm của family đang báo động — ví dụ STATISTICAL=0.80 + VOLUME=0.00 cho ra
+        # 0.3429 (NORMAL) thay vì 0.80 (ANOMALY). Với dataset đã ingest, signal VOLUME
+        # luôn tồn tại nên trần điểm của family STATISTICAL chỉ còn 0.6/1.4 = 0.4286,
+        # thấp hơn cả ngưỡng WATCH → detector thống kê bị vô hiệu hoá hoàn toàn.
+        #
+        # MAX đảm bảo tính đơn điệu: thêm một signal không bao giờ làm giảm điểm tổng hợp.
+        final_score = max(family_reps.values()) if family_reps else 0.0
+
         # Reliability sum
         rel_sum = sum(sig["reliability"] for sig in signals)
         avg_reliability = (rel_sum / len(signals)) if signals else 0.0
@@ -358,4 +400,5 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
         "signals": signals,
         "errors": errors,
         "override_reason": override_reason,
+        "dominant_family": dominant_family,
     }
