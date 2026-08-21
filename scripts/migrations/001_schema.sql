@@ -4,17 +4,25 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE TABLE IF NOT EXISTS datasets (
     id VARCHAR(256) PRIMARY KEY,
     name VARCHAR(256) NOT NULL,
-    description TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    description TEXT NOT NULL,
+    status VARCHAR(64) NOT NULL DEFAULT 'REGISTERED',
+    row_count INT NOT NULL DEFAULT 0,
+    source_label VARCHAR(256) NOT NULL,
+    manifest_version VARCHAR(64) NOT NULL,
+    checksum VARCHAR(256) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS jobs (
     id VARCHAR(64) PRIMARY KEY,
     type VARCHAR(64) NOT NULL,
+    status VARCHAR(32) DEFAULT 'PENDING',
+    progress FLOAT NOT NULL DEFAULT 0.0,
+    message TEXT,
+    error TEXT,
     idempotency_key VARCHAR(256) UNIQUE,
     linked_entity VARCHAR(256),
-    status VARCHAR(32) DEFAULT 'PENDING',
-    error TEXT,
     attempt_count INT DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()

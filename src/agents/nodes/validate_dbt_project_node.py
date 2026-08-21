@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.agents.nodes.dbt_validation import (
+    dbt_parse_was_skipped,
     get_state_dbt_yaml,
     materialize_dbt_project,
     run_dbt_parse,
@@ -25,6 +26,7 @@ async def validate_dbt_project_node(state: AgentState) -> dict:
     valid = False
     error = None
     return_code = None
+    dbt_skipped = False
     try:
         content = get_state_dbt_yaml(state)
         validate_dbt_yaml_structure(content)
@@ -32,6 +34,11 @@ async def validate_dbt_project_node(state: AgentState) -> dict:
         with tempfile.TemporaryDirectory(prefix=f"dbt-parse-{run_id}-") as workspace:
             dbt_dir = materialize_dbt_project(root_dir / "dbt_project", Path(workspace), content)
             valid, output, return_code = run_dbt_parse(dbt_dir)
+            dbt_skipped = dbt_parse_was_skipped(output)
+            if dbt_skipped:
+                logger.warning(
+                    "Chốt chặn dbt BỊ BỎ QUA (không tìm thấy executable dbt): %s", output
+                )
             if not valid:
                 error = output or "dbt parse failed"
     except Exception as exc:
@@ -49,6 +56,9 @@ async def validate_dbt_project_node(state: AgentState) -> dict:
     updates: dict = {
         "generated_dbt_yaml": content,
         "dbt_validation_valid": valid,
+        # Phân biệt "đã chạy dbt parse và đạt" với "chưa hề chạy dbt" — nếu không,
+        # báo cáo ghi dbt_status=SUCCESS cho một lần kiểm tra chưa từng diễn ra.
+        "dbt_validation_skipped": dbt_skipped,
         "dbt_validation_error": error,
         "dbt_validation_attempts": int(state.get("dbt_validation_attempts", 0)),
         "dbt_validation_trace_path": str(trace_path),

@@ -114,6 +114,17 @@ def load_dataset_rows(manifest_name: str) -> list[dict[str, Any]]:
     verify_checksum(local_path, expected_sha256)
 
     full_csv_path = _get_project_root() / local_path
+
+    if str(local_path).endswith(".parquet"):
+        import pandas as pd
+        df = pd.read_parquet(full_csv_path)
+        df = df.astype(object).where(pd.notnull(df), None)
+        for col in df.columns:
+            # Convert timestamp or datetime fields to string format to be consistent with CSV loaders
+            if hasattr(df[col], "dt") or pd.api.types.is_datetime64_any_dtype(df[col]):
+                df[col] = df[col].apply(lambda x: x.isoformat() if hasattr(x, "isoformat") else x)
+        return df.to_dict(orient="records")
+
     rows: list[dict[str, Any]] = []
 
     with open(full_csv_path, encoding="utf-8", newline="") as f:

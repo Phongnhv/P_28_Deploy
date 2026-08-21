@@ -1,13 +1,18 @@
-"""Deterministic anomaly detection for persisted dashboard DQ runs."""
+"""Deterministic anomaly detection for persisted dashboard DQ runs.
+Consolidated to use the canonical anomaly service via an adapter.
+"""
 
 from __future__ import annotations
 
-import math
+import logging
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from src.models.database import DqResultModel, DqRunModel
+from src.models.database import DqResultModel
+from src.services.anomaly_service import detect_anomalies
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -25,15 +30,6 @@ class DashboardAnomaly:
     reason: str
 
 
-def _z_score(current: float, history: list[float]) -> tuple[float, float]:
-    mean = sum(history) / len(history)
-    variance = sum((value - mean) ** 2 for value in history) / len(history)
-    standard_deviation = math.sqrt(variance)
-    if standard_deviation == 0:
-        return (0.0 if current == mean else 3.0), mean
-    return (current - mean) / standard_deviation, mean
-
-
 def detect_dashboard_anomalies(
     db: Session,
     run_id: str,
@@ -43,71 +39,75 @@ def detect_dashboard_anomalies(
     z_score_threshold: float = 2.5,
     minimum_checked_count: int = 100,
 ) -> list[DashboardAnomaly]:
-    current_run = db.query(DqRunModel).filter(DqRunModel.id == run_id).first()
-    if current_run is None:
-        raise LookupError("DQ run not found")
+    """Adapter that delegates dashboard anomaly detection to the canonical anomaly_service."""
+    try:
+        result = detect_anomalies(db, run_id)
+    except LookupError as exc:
+        logger.warning("Could not calculate anomalies for dashboard: %s", exc)
+        return []
+    except Exception as exc:
+        logger.error("Error in canonical anomaly detection: %s", exc, exc_info=True)
+        return []
 
-    current_results = db.query(DqResultModel).filter(DqResultModel.run_id == run_id).all()
     anomalies: list[DashboardAnomaly] = []
-    for result in current_results:
-        if result.checked_count < minimum_checked_count:
+
+    # Map signals with high scores (anomaly decisions) back to DashboardAnomaly
+    for sig in result.get("signals", []):
+        # Only surface signals that indicate anomalies (score >= 0.70)
+        # Or if the family is execution health / business invariant and failed
+        if sig.get("score", 0.0) < 0.70:
             continue
-        current_rate = result.failed_count / result.checked_count if result.checked_count else 0.0
-        history_rows = (
-            db.query(DqResultModel)
-            .join(DqRunModel, DqRunModel.id == DqResultModel.run_id)
-            .filter(
-                DqResultModel.rule_id == result.rule_id,
-                DqResultModel.run_id != run_id,
-                DqRunModel.dataset_id == current_run.dataset_id,
-                DqRunModel.status == "SUCCEEDED",
+
+        rule_id = sig["target_id"]
+
+        # We need rule_title, checked_count, and failed_count from DqResultModel
+        res_model = db.query(DqResultModel).filter(
+            DqResultModel.run_id == run_id,
+            DqResultModel.rule_id == rule_id
+        ).first()
+
+        if not res_model:
+            # Skip if the target is table/dataset volume/freshness which doesn't map directly to a rule row
+            continue
+
+        checked_count = res_model.checked_count
+        failed_count = res_model.failed_count
+
+        # Mẫu quá nhỏ thì tỷ lệ vi phạm không đủ tin cậy để báo động cho Steward.
+        # `minimum_checked_count` đã được khai báo trong chữ ký hàm từ đầu nhưng không
+        # dòng nào dùng tới — một rule chạy trên 50 dòng vẫn nổi lên như bất thường thật.
+        if checked_count < minimum_checked_count:
+            logger.debug(
+                "Bỏ qua signal %s: chỉ kiểm tra %d dòng (< %d), độ tin cậy không đủ.",
+                rule_id, checked_count, minimum_checked_count,
             )
-            .order_by(DqRunModel.created_at.desc())
-            .limit(20)
-            .all()
+            continue
+
+        current_rate = failed_count / checked_count if checked_count > 0 else 0.0
+
+        baseline = sig.get("baseline", {})
+
+        anomaly_type = "Z_SCORE_SPIKE" if sig["detector_name"] == "ROBUST_MAD_DETECTOR" else "HIGH_VIOLATION_RATE"
+        if sig["detector_name"] == "BUSINESS_INVARIANT_DETECTOR":
+            anomaly_type = "BUSINESS_RULE_VIOLATION"
+
+        detection_mode = "HISTORICAL" if sig["sufficient_history"] else "COLD_START"
+
+        # Map back to DashboardAnomaly structure
+        anomalies.append(
+            DashboardAnomaly(
+                rule_id=rule_id,
+                rule_title=res_model.rule_title,
+                anomaly_type=anomaly_type,
+                current_rate=round(current_rate, 6),
+                historical_mean=round(baseline.get("median", 0.0), 6) if sig["sufficient_history"] else None,
+                z_score=round(sig["score"] * 3.0, 2),  # Scaled back for UI representation
+                history_size=baseline.get("history_size", 0),
+                detection_mode=detection_mode,
+                checked_count=checked_count,
+                failed_count=failed_count,
+                reason=sig["explanation_code"],
+            )
         )
-        history = [
-            row.failed_count / row.checked_count if row.checked_count else 0.0
-            for row in history_rows
-        ]
-        if len(history) >= minimum_history:
-            score, mean = _z_score(current_rate, history)
-            if score >= z_score_threshold and current_rate > 0.01:
-                anomalies.append(
-                    DashboardAnomaly(
-                        rule_id=result.rule_id,
-                        rule_title=result.rule_title,
-                        anomaly_type="Z_SCORE_SPIKE",
-                        current_rate=round(current_rate, 6),
-                        historical_mean=round(mean, 6),
-                        z_score=round(score, 2),
-                        history_size=len(history),
-                        detection_mode="HISTORICAL",
-                        checked_count=result.checked_count,
-                        failed_count=result.failed_count,
-                        reason=(
-                            f"Violation rate {current_rate:.2%} is above the historical "
-                            f"baseline {mean:.2%} (z-score {score:.2f})."
-                        ),
-                    )
-                )
-        elif result.status == "FAIL" and current_rate >= static_threshold:
-            anomalies.append(
-                DashboardAnomaly(
-                    rule_id=result.rule_id,
-                    rule_title=result.rule_title,
-                    anomaly_type="HIGH_VIOLATION_RATE",
-                    current_rate=round(current_rate, 6),
-                    historical_mean=None,
-                    z_score=None,
-                    history_size=len(history),
-                    detection_mode="COLD_START",
-                    checked_count=result.checked_count,
-                    failed_count=result.failed_count,
-                    reason=(
-                        f"Violation rate {current_rate:.2%} exceeds the "
-                        f"{static_threshold:.0%} cold-start threshold."
-                    ),
-                )
-            )
+
     return anomalies

@@ -6,7 +6,6 @@ from src.agents.nodes.dbt_validation import validate_dbt_yaml_structure
 from src.agents.nodes.llm_dbt_repair_node import llm_dbt_repair_node
 from src.agents.nodes.validate_dbt_project_node import validate_dbt_project_node
 
-
 VALID_YAML = """version: 2
 models:
   - name: trips

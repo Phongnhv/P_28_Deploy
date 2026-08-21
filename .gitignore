@@ -33,6 +33,10 @@ data/
 /data/yellow_tripdata_2025/raw/
 # *.db
 # *.sqlite3
+*.db
+*.db-wal
+*.db-shm
+pytest_tmp/
 ui_local_mvp.db*
 agent_integration_smoke.db*
 
@@ -73,6 +77,8 @@ data/
 docs_kien-01033/
 output/
 output_pytest/
+scratch/
+
 
 # dbt generated artifacts
 dbt_project/target/
@@ -85,4 +91,5 @@ dbt_project/models/generated_dq_tests.yml
 /PR12_Report.md
 /agent_Workflow.md
 presentation/VIDEO_REHEARSAL.md
-
+/evalgate/
+/message.txt

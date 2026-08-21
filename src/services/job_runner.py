@@ -544,6 +544,11 @@ def run_propose_rules(job_id: str, dataset_id: str, session_id: str | None = Non
                     evidence_summary=p.evidence_summary,
                     confidence=p.confidence,
                     model_name=p.model_name,
+                    rule_name=p.rule_name,
+                    business_rationale=p.business_rationale,
+                    proposal_basis=p.proposal_basis,
+                    evidence=json.dumps(p.evidence, ensure_ascii=False),
+                    confidence_breakdown=json.dumps(p.confidence_breakdown, ensure_ascii=False),
                     created_at=utc_now(),
                     updated_at=utc_now()
                 )
@@ -791,6 +796,29 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
                 RuleConfigurationModel.rule_proposal_id.in_([rule.rule_proposal_id for rule in rule_versions])
             ).update({RuleConfigurationModel.last_run_at: completed_at}, synchronize_session=False)
             db.commit()
+
+            # Trigger Graph 3 Anomaly Analysis asynchronously (Phase 2.9 & 3.7)
+            try:
+                import asyncio
+                import threading
+
+                from src.agents.graph import run_anomaly_graph
+
+                logger.info("Triggering Graph 3 Anomaly Analysis asynchronously for run_id=%s", run_id)
+
+                def _trigger_anomaly():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(run_anomaly_graph(execution_run_id=run_id, dataset_id=dataset_id))
+                    except Exception as ex:
+                        logger.error("Failed executing Graph 3 from background thread: %s", ex, exc_info=True)
+                    finally:
+                        loop.close()
+
+                threading.Thread(target=_trigger_anomaly, daemon=True).start()
+            except Exception as ae:
+                logger.error("Failed to trigger Graph 3 Anomaly Analysis: %s", ae, exc_info=True)
 
             add_audit_event(
                 db,

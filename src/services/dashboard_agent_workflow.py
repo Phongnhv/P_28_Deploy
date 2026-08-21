@@ -165,6 +165,7 @@ class ProposalEvidence(BaseModel):
                 "type": column.data_type,
                 "role": role,
                 "null_pct": round(column.null_rate * 100, 4),
+                "distinct_count": column.distinct_count,
                 "signals": ["no_nulls"] if column.null_rate == 0 else [],
             }
             if column.min_value is not None or column.max_value is not None:
@@ -219,6 +220,11 @@ class DashboardProposal:
     evidence_summary: str
     confidence: float
     model_name: str
+    rule_name: str
+    business_rationale: str
+    proposal_basis: str
+    evidence: dict[str, Any]
+    confidence_breakdown: dict[str, Any]
 
 
 def _parse_json_dict(raw: str | None) -> dict[str, float]:
@@ -433,7 +439,8 @@ def _normalise_graph_rules(raw_rules: list[dict[str, Any]], evidence: ProposalEv
 def _normalise_graph_rule(
     raw: dict[str, Any], evidence: ProposalEvidence, candidate: DashboardRuleCandidate
 ) -> DashboardProposal | None:
-    confidence = _finite_float(raw.get("confidence_score"))
+    confidence_payload = raw.get("confidence") or {}
+    confidence = _finite_float(confidence_payload.get("overall", raw.get("confidence_score")))
     if confidence is None or not 0.0 <= confidence <= 1.0:
         return None
     severity = str(raw.get("severity", "MEDIUM")).upper()
@@ -447,6 +454,18 @@ def _normalise_graph_rule(
     model_name = f"langgraph-{get_settings().llm_provider}"
     if not set(candidate.evidence_refs).issubset(evidence.evidence_keys):
         return None
+    selected_refs = raw.get("selected_evidence_refs") or candidate.evidence_refs
+    if not set(selected_refs).issubset(candidate.evidence_refs):
+        return None
+    capped_confidence = min(confidence, candidate.confidence_ceiling)
+    normalized_breakdown = dict(confidence_payload or {
+        "overall": capped_confidence,
+        "evidence_strength": capped_confidence,
+        "business_support": capped_confidence,
+        "sample_representativeness": 1.0,
+        "explanation": "Dashboard candidate confidence ceiling",
+    })
+    normalized_breakdown["overall"] = capped_confidence
     return DashboardProposal(
         id=f"proposal-{uuid.uuid4().hex}",
         title=candidate.title,
@@ -459,8 +478,19 @@ def _normalise_graph_rule(
             f"{_safe_evidence_summary(evidence, candidate.evidence_refs)} "
             f"Selection basis: {candidate.selection_reason}"
         ),
-        confidence=min(confidence, candidate.confidence_ceiling),
+        confidence=capped_confidence,
         model_name=model_name,
+        rule_name=str(raw.get("rule_name") or candidate.title),
+        business_rationale=str(raw.get("business_rationale") or candidate.description),
+        proposal_basis=str(raw.get("proposal_basis") or "MIXED"),
+        evidence={
+            "sample_row_count": evidence.row_count,
+            "sample_rate": 1.0,
+            "sampling_caveat": None,
+            "observed_metrics": {},
+            "source_refs": candidate.evidence_refs,
+        },
+        confidence_breakdown=normalized_breakdown,
     )
 
 
@@ -660,6 +690,30 @@ def _dimension_for_rule_type(rule_type: str) -> str:
     }.get(rule_type, "VALIDITY")
 
 
+def _fallback_core_fields(
+    candidate: DashboardRuleCandidate, evidence: ProposalEvidence, confidence: float
+) -> dict[str, Any]:
+    return {
+        "rule_name": candidate.title,
+        "business_rationale": candidate.description,
+        "proposal_basis": "MIXED",
+        "evidence": {
+            "sample_row_count": evidence.row_count,
+            "sample_rate": 1.0,
+            "sampling_caveat": None,
+            "observed_metrics": {},
+            "source_refs": candidate.evidence_refs,
+        },
+        "confidence_breakdown": {
+            "overall": confidence,
+            "evidence_strength": confidence,
+            "business_support": confidence,
+            "sample_representativeness": 1.0,
+            "explanation": "Deterministic policy candidate fallback",
+        },
+    }
+
+
 def _complete_with_policy_candidates(
     proposals: list[DashboardProposal], evidence: ProposalEvidence
 ) -> list[DashboardProposal]:
@@ -676,6 +730,7 @@ def _complete_with_policy_candidates(
     for candidate in _build_dashboard_rule_candidates(evidence):
         if candidate.dashboard_rule_type in present_types:
             continue
+        fallback_confidence = max(0.0, candidate.confidence_ceiling - 0.15)
         completed.append(
             DashboardProposal(
                 id=f"proposal-{uuid.uuid4().hex}",
@@ -686,8 +741,9 @@ def _complete_with_policy_candidates(
                 rule_spec=candidate.rule_spec,
                 evidence_refs=candidate.evidence_refs,
                 evidence_summary=_safe_evidence_summary(evidence, candidate.evidence_refs),
-                confidence=max(0.0, candidate.confidence_ceiling - 0.15),
+                confidence=fallback_confidence,
                 model_name="agent-policy-fallback-v1",
+                **_fallback_core_fields(candidate, evidence, fallback_confidence),
             )
         )
         present_types.add(candidate.dashboard_rule_type)
@@ -733,6 +789,7 @@ def _mock_proposals(evidence: ProposalEvidence) -> list[DashboardProposal]:
             evidence_summary=_safe_evidence_summary(evidence, candidate.evidence_refs),
             confidence=candidate.confidence_ceiling,
             model_name="agent-mock-v1",
+            **_fallback_core_fields(candidate, evidence, candidate.confidence_ceiling),
         )
         for candidate in _build_dashboard_rule_candidates(evidence)
     ]
@@ -755,6 +812,11 @@ def _mock_proposals(evidence: ProposalEvidence) -> list[DashboardProposal]:
                 evidence_summary=_safe_evidence_summary(evidence, duplicate_refs),
                 confidence=0.8,
                 model_name="agent-mock-v1",
+                rule_name="Duplicate fingerprint detection",
+                business_rationale="Duplicate business keys can double-count trips and financial measures.",
+                proposal_basis="MIXED",
+                evidence={"sample_row_count": evidence.row_count, "sample_rate": 1.0, "sampling_caveat": None, "observed_metrics": {}, "source_refs": duplicate_refs},
+                confidence_breakdown={"overall": 0.8, "evidence_strength": 0.8, "business_support": 0.8, "sample_representativeness": 1.0, "explanation": "Policy-backed duplicate candidate"},
             )
         )
     if not 2 <= len(result) <= 5:

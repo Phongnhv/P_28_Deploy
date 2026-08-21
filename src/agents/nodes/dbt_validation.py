@@ -68,12 +68,28 @@ def materialize_dbt_project(template_dir: Path, workspace: Path, content: str) -
     return dbt_dir
 
 
+#: Giá trị `dbt_status` khi chốt chặn dbt không thực sự chạy được.
+DBT_PARSE_SKIPPED = "SKIPPED"
+
+
 def run_dbt_parse(dbt_dir: Path) -> tuple[bool, str, int | None]:
+    """Chạy `dbt parse` để kiểm tra artifact YAML đã sinh.
+
+    Trả về (valid, output, return_code). Khi không có executable `dbt` trong môi trường
+    local/dev/test, hàm vẫn cho pipeline đi tiếp (valid=True) nhưng đánh dấu rõ trong
+    `output` rằng chốt chặn đã bị BỎ QUA — gọi `dbt_parse_was_skipped(output)` để phân
+    biệt "đã kiểm tra và đạt" với "chưa hề kiểm tra". Trước đây hai tình huống này không
+    thể phân biệt: báo cáo ghi dbt_status="SUCCESS" cho một lần kiểm tra chưa từng chạy.
+    """
     dbt_cmd = shutil.which("dbt")
     settings = get_settings()
     if not dbt_cmd:
         if settings.app_env in ("local", "development", "test"):
-            return True, "dbt executable unavailable; structural validation used", None
+            return (
+                True,
+                f"{DBT_PARSE_SKIPPED}: dbt executable unavailable; only structural YAML validation ran",
+                None,
+            )
         return False, "dbt executable is required in production", None
     try:
         result = subprocess.run(
@@ -86,3 +102,8 @@ def run_dbt_parse(dbt_dir: Path) -> tuple[bool, str, int | None]:
         return False, f"dbt parse could not run: {exc}", None
     output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
     return result.returncode == 0, output, result.returncode
+
+
+def dbt_parse_was_skipped(output: str | None) -> bool:
+    """True khi `run_dbt_parse` cho qua mà KHÔNG thực sự chạy dbt."""
+    return bool(output) and output.startswith(DBT_PARSE_SKIPPED)

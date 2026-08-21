@@ -182,7 +182,8 @@ class TestResultResponse(BaseModel):
     violation_count: int
     total_rows: int
     violation_rate: float
-    sample_failures: list[dict[str, Any]] | None = None
+    # Chỉ chứa ID dòng vi phạm, không phải nội dung bản ghi (xem test_runner_node).
+    sample_failures: list[str] | None = None
     sql_text: str
     duration_ms: float
     error: str | None = None
