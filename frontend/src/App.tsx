@@ -1843,6 +1843,7 @@ function DataExplorerPage({ dataset }: { dataset?: Dataset }) {
   const [response, setResponse] = useState<DatasetRowsResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [queryError, setQueryError] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const loadRows = useCallback(async (nextQuery: DatasetRowQuery) => {
     if (!dataset) return;
@@ -1862,15 +1863,39 @@ function DataExplorerPage({ dataset }: { dataset?: Dataset }) {
   const page = response ? Math.floor(response.offset / response.limit) + 1 : 1;
   const pageCount = response ? Math.max(1, Math.ceil(response.total / response.limit)) : 1;
   const updateFilter = (key: keyof DatasetRowQuery, value: string | number | undefined) => setQuery((current) => ({ ...current, [key]: value, offset: 0 }));
+  const activeFilterCount = [
+    query.quality_status !== "ALL",
+    Boolean(query.vendor_id),
+    Boolean(query.payment_type),
+    query.min_distance !== undefined,
+    query.max_distance !== undefined,
+    query.sort_by !== "pickup_at",
+  ].filter(Boolean).length;
+  const filterSummary = [
+    query.quality_status === "ALL" ? "All rows" : query.quality_status === "ISSUE" ? "Issues only" : "Valid only",
+    query.vendor_id ? `Vendor: ${query.vendor_id}` : "Any vendor",
+    query.payment_type ? `Payment: ${query.payment_type}` : "Any payment",
+  ].join(" · ");
 
   return (
     <>
-      <div className="page-heading">
+      <div className="page-heading data-explorer-heading">
         <div><span className="eyebrow">BOUNDED READ ACCESS</span><h1>Data explorer</h1><p>Inspect a safe field projection with server-side filters and pagination.</p></div>
         <span className="data-count">{response?.total.toLocaleString() ?? "—"}<small>matching rows</small></span>
       </div>
-      <section className="panel filter-panel">
-        <form onSubmit={(event) => { event.preventDefault(); void loadRows({ ...query, offset: 0 }); }}>
+      <section className={`panel filter-panel ${filtersOpen ? "is-open" : "is-collapsed"}`}>
+        <div className="filter-toolbar">
+          <div className="filter-toolbar-copy">
+            <span className="eyebrow">QUERY CONTROLS</span>
+            <button type="button" className="filter-toggle" aria-expanded={filtersOpen} aria-controls="data-explorer-filters" onClick={() => setFiltersOpen((open) => !open)}>
+              <span className="filter-toggle-icon" aria-hidden="true">{filtersOpen ? "−" : "+"}</span>
+              <span>{filtersOpen ? "Hide filters" : "Filter rows"}</span>
+            </button>
+            {!filtersOpen && <span className="filter-summary">{filterSummary}</span>}
+          </div>
+          <div className="filter-toolbar-state"><span className={activeFilterCount ? "filter-active-count" : "filter-default-state"}>{activeFilterCount ? `${activeFilterCount} active` : "Default view"}</span><span>Read-only</span></div>
+        </div>
+        {filtersOpen && <form id="data-explorer-filters" onSubmit={(event) => { event.preventDefault(); void loadRows({ ...query, offset: 0 }); }}>
           <label>Quality<select value={query.quality_status} onChange={(event) => updateFilter("quality_status", event.target.value)}><option value="ALL">All rows</option><option value="ISSUE">Issues only</option><option value="VALID">Valid only</option></select></label>
           <label>Vendor<select value={query.vendor_id ?? ""} onChange={(event) => updateFilter("vendor_id", event.target.value || undefined)}><option value="">Any vendor</option><option>Curb Mobility, LLC</option><option>Creative Mobile Technologies, LLC</option><option>Unknown Vendor</option></select></label>
           <label>Payment<select value={query.payment_type ?? ""} onChange={(event) => updateFilter("payment_type", event.target.value || undefined)}><option value="">Any payment</option><option>Flex Fare trip</option><option>Credit card</option><option>Cash</option><option>No charge</option><option>Dispute</option><option>Invalid Payment (Dispute/Test)</option></select></label>
@@ -1878,8 +1903,8 @@ function DataExplorerPage({ dataset }: { dataset?: Dataset }) {
           <label>Max distance<input type="number" step="0.1" value={query.max_distance ?? ""} onChange={(event) => updateFilter("max_distance", event.target.value === "" ? undefined : Number(event.target.value))} placeholder="No maximum" /></label>
           <label>Sort by<select value={query.sort_by} onChange={(event) => updateFilter("sort_by", event.target.value)}><option value="pickup_at">Pickup time</option><option value="trip_distance">Distance</option><option value="fare_amount">Fare</option><option value="total_amount">Total</option></select></label>
           <button className="button primary" disabled={busy}>{busy ? "Querying…" : "Apply filters"}</button>
-        </form>
-        <div className="filter-note">Maximum 100 rows per request · allow-listed fields · read-only query</div>
+        </form>}
+        {filtersOpen && <div className="filter-note">Maximum 100 rows per request · allow-listed fields · read-only query</div>}
       </section>
       {queryError && <div className="alert error"><strong>Query failed</strong><span>{queryError}</span></div>}
       <section className="panel data-panel">
