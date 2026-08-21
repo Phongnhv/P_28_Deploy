@@ -1,5 +1,5 @@
 export type JobStatus = "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED_RETRYABLE" | "FAILED";
-export type JobType = "INGEST_PROFILE" | "PROPOSE_RULES" | "RUN_DQ";
+export type JobType = "INGEST_PROFILE" | "UNDERSTAND_DATA" | "PROPOSE_RULES" | "RUN_DQ";
 export type ProposalStatus = "PROPOSED" | "APPROVED" | "EDITED" | "REJECTED";
 export type UserRole = "USER" | "STEWARD" | "ADMIN";
 export type AccountStatus = "ACTIVE" | "SUSPENDED" | "DISABLED";
@@ -11,6 +11,9 @@ export type WorkflowStepKey =
   | "UNDERSTAND_DATA"
   | "PROPOSE_RULES"
   | "REVIEW_RULES"
+  | "PUBLISH_RULESET"
+  | "RUN_CHECKS"
+  | "ANALYZE_REPORT"
   | "PROPOSE_CODE"
   | "REVIEW_EXECUTE"
   | "ANALYZE_IMPROVE";
@@ -25,6 +28,9 @@ export type WorkflowStepStatus =
 export type AgentArtifactType =
   | "SEMANTIC_CONTRACT"
   | "RULE_SET"
+  | "PUBLISHED_RULESET"
+  | "DQ_RUN"
+  | "ANOMALY_REPORT"
   | "CODE_PROPOSAL"
   | "LOOP_RECOMMENDATION";
 export type RuleType =
@@ -90,6 +96,11 @@ export interface Dataset {
   updated_at: string;
 }
 
+export interface DatasetImportResponse {
+  dataset: Dataset;
+  job: CreateJobResponse;
+}
+
 export interface Job {
   id: string;
   type: JobType;
@@ -140,6 +151,7 @@ export interface RuleSpec {
 export interface RuleProposal {
   id: string;
   dataset_id: string;
+  workflow_run_id?: string;
   title: string;
   description: string;
   severity: "LOW" | "MEDIUM" | "HIGH";
@@ -333,11 +345,12 @@ export interface ApiClient {
   createSession(username: string, password: string): Promise<SessionResponse>;
   deleteSession(): Promise<void>;
   listDatasets(): Promise<Dataset[]>;
+  importDataset(file: File): Promise<DatasetImportResponse>;
   startIngestion(datasetId: string, idempotencyKey: string): Promise<CreateJobResponse>;
   getJob(jobId: string): Promise<Job>;
   getProfile(datasetId: string): Promise<DatasetProfile | null>;
   startRuleProposals(datasetId: string, idempotencyKey: string): Promise<CreateJobResponse>;
-  listProposals(datasetId: string): Promise<RuleProposal[]>;
+  listProposals(datasetId: string, workflowRunId?: string): Promise<RuleProposal[]>;
   createManualRule(datasetId: string, input: ManualRuleInput): Promise<RuleProposal>;
   reviewProposal(proposalId: string, input: ReviewInput): Promise<RuleProposal>;
   deleteProposal(proposalId: string): Promise<void>;
@@ -357,7 +370,7 @@ export interface ApiClient {
   listDatasetAccess(datasetId: string): Promise<DatasetAccess[]>;
   grantDatasetAccess(datasetId: string, username: string, accessLevel: DatasetAccessLevel): Promise<DatasetAccess>;
   revokeDatasetAccess(datasetId: string, username: string): Promise<void>;
-  createWorkflow(datasetId: string): Promise<WorkflowRun>;
+  createWorkflow(datasetId: string, fresh?: boolean): Promise<WorkflowRun>;
   getWorkflow(workflowRunId: string): Promise<WorkflowRun>;
   runWorkflowStep(workflowRunId: string, step: WorkflowStepKey): Promise<CreateJobResponse>;
   advanceWorkflowStep(workflowRunId: string): Promise<WorkflowRun>;

@@ -223,9 +223,9 @@ const workflowKeys: WorkflowStepKey[] = [
   "UNDERSTAND_DATA",
   "PROPOSE_RULES",
   "REVIEW_RULES",
-  "PROPOSE_CODE",
-  "REVIEW_EXECUTE",
-  "ANALYZE_IMPROVE",
+  "PUBLISH_RULESET",
+  "RUN_CHECKS",
+  "ANALYZE_REPORT",
 ];
 
 function makeWorkflow(id: string, workflowDatasetId = datasetId): WorkflowRun {
@@ -306,6 +306,28 @@ function completeWorkflowStep(workflowId: string, step: WorkflowStepKey) {
       proposal_count: proposals.length,
       rules: proposals.map((proposal) => ({ id: proposal.id, title: proposal.title, evidence: proposal.evidence_refs, confidence: proposal.confidence })),
     }, "DRAFT");
+  } else if (step === "PUBLISH_RULESET") {
+    generatedArtifact = createArtifact(workflow, "PUBLISHED_RULESET", "DATA_RULE_AGENT", {
+      ruleset_id: `ruleset-${Date.now()}`,
+      ruleset_hash: "mock-published-ruleset",
+      rule_count: proposals.filter((proposal) => proposal.status === "APPROVED").length,
+    }, "APPROVED");
+  } else if (step === "RUN_CHECKS") {
+    const approved = proposals.filter((proposal) => proposal.status === "APPROVED");
+    generatedArtifact = createArtifact(workflow, "DQ_RUN", "DATA_RULE_AGENT", {
+      run_id: `run-${Date.now()}`,
+      total_checked: approved.length * mockRows.length,
+      total_failed: approved.reduce((count, proposal) => count + (proposal.rule.type === "numeric_range" ? 7 : 0), 0),
+      results: approved.map((proposal) => ({ rule_id: proposal.id, title: proposal.title, status: "PASS", failed_count: 0 })),
+    });
+    advanceWorkflow(workflow, step);
+    createArtifact(workflow, "ANOMALY_REPORT", "DATA_RULE_AGENT", {
+      decision: "WATCH", confidence: 0.74,
+      hypotheses: [{ summary: "The mock run found a bounded set of profile-consistent violations." }],
+    }, "APPROVED");
+    advanceWorkflow(workflow, "ANALYZE_REPORT", false);
+    workflowRuns = workflowRuns.map((item) => item.id === workflowId ? workflow : item);
+    return;
   } else if (step === "PROPOSE_CODE") {
     generatedArtifact = createArtifact(workflow, "CODE_PROPOSAL", "STANDARDIZATION_AGENT", {
       language: "SQL",
@@ -376,7 +398,7 @@ export const mockApi: ApiClient = {
     void finishJob(job.id, job.type).then(() => addAudit("PROPOSALS_CREATED", "dataset", datasetId, "Generated typed proposals from aggregate evidence."));
     return { job_id: job.id, status: "PENDING" } satisfies CreateJobResponse;
   },
-  async listProposals(id) {
+  async listProposals(id, _workflowRunId?) {
     await wait(200);
     return id === datasetId ? proposals : [];
   },
@@ -544,6 +566,11 @@ export const mockApi: ApiClient = {
     workflowRuns = [...workflowRuns, workflow];
     addAudit("WORKFLOW_CREATED", "workflow", workflow.id, "Created a step-by-step agent workflow in the local adapter.");
     return structuredClone(workflow);
+  },
+  async importDataset(file) {
+    const imported = { ...dataset, id: `dataset-import-${Date.now()}`, name: file.name.replace(/\.[^.]+$/, ""), source_label: file.name, status: "PROFILE_READY" as const, updated_at: new Date().toISOString() };
+    const job = makeJob("INGEST_PROFILE");
+    return { dataset: imported, job: { job_id: job.id, status: "PENDING" as const } };
   },
   async getWorkflow(id: string) {
     await wait(120);

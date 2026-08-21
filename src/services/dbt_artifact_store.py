@@ -6,8 +6,6 @@ from dataclasses import asdict, dataclass
 from functools import lru_cache
 from typing import Any
 
-from botocore.config import Config
-
 from src.config import Settings, get_settings
 
 _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -45,6 +43,7 @@ class DbtArtifactStore:
     def client(self) -> Any:
         if self._client is None:
             import boto3
+            from botocore.config import Config
 
             kwargs: dict[str, Any] = {
                 "service_name": "s3",

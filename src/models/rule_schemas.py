@@ -183,11 +183,9 @@ class ProposedRule(BaseModel):
         The generated JSON schema still requires the new fields; this adapter only
         keeps old artifacts and fixtures readable during rollout.
         """
-        if not isinstance(value, dict) or "confidence_score" not in value:
+        if not isinstance(value, dict):
             return value
         upgraded = dict(value)
-        score = upgraded.pop("confidence_score")
-        description = str(upgraded.get("rule_description") or "Rule proposal")
         params = upgraded.get("parameters") or {}
         if isinstance(params, RuleParameters):
             params = params.model_dump(exclude_none=True)
@@ -195,6 +193,56 @@ class ProposedRule(BaseModel):
             pass
         else:
             params = {}
+        if "confidence_score" not in upgraded:
+            # Dashboard candidate mode supplies an allow-listed candidate and its
+            # evidence references.  Structured models occasionally omit the
+            # mechanically derivable provenance array; derive it only in that
+            # bounded mode, then let the later candidate normalizer verify the
+            # exact parameter values.  General/legacy payloads remain strict.
+            if upgraded.get("candidate_id"):
+                refs = [ref for ref in upgraded.get("selected_evidence_refs", []) if isinstance(ref, str) and ref]
+                if refs:
+                    parsed = RuleParameters.model_validate(params).model_dump()
+                    active = [
+                        name for name, parameter_value in parsed.items()
+                        if parameter_value is not None
+                        and not (isinstance(parameter_value, (list, dict, set, tuple, str)) and len(parameter_value) == 0)
+                    ]
+                    supplied = upgraded.get("parameter_provenance")
+                    supplied_names = [
+                        item.get("parameter_name") for item in supplied
+                        if isinstance(item, dict) and isinstance(item.get("parameter_name"), str)
+                    ] if isinstance(supplied, list) else []
+                    # Keep valid LLM provenance untouched.  Only repair a missing,
+                    # duplicate, malformed, or incomplete list in candidate mode.
+                    if len(supplied_names) == len(set(supplied_names)) and set(supplied_names) == set(active):
+                        return upgraded
+                    source_ref = refs[0]
+                    source_type = (
+                        EvidenceSourceType.POLICY if source_ref.startswith(("policy.", "policy:"))
+                        else EvidenceSourceType.SCHEMA_CONSTRAINT if source_ref.startswith(("schema.", "schema:"))
+                        else EvidenceSourceType.DATA_DICTIONARY if source_ref.startswith("dictionary.")
+                        else EvidenceSourceType.HISTORICAL_RULE if source_ref.startswith("history.")
+                        else EvidenceSourceType.DATA_PROFILE
+                    )
+                    upgraded["parameter_provenance"] = [
+                        {
+                            "parameter_name": name,
+                            "source_type": source_type,
+                            "source_ref": source_ref,
+                            "derivation_method": "candidate evidence reference (system-repaired omission)",
+                        }
+                        for name in active
+                    ]
+                    assumptions = list(upgraded.get("assumptions") or [])
+                    note = "Parameter provenance was derived from selected candidate evidence after a structured-output repair."
+                    if note not in assumptions:
+                        assumptions.append(note)
+                    upgraded["assumptions"] = assumptions
+            return upgraded
+
+        score = upgraded.pop("confidence_score")
+        description = str(upgraded.get("rule_description") or "Rule proposal")
         reference = "history:legacy:proposal"
         upgraded.setdefault("rule_name", description)
         upgraded.setdefault("business_rationale", str(upgraded.get("ai_reasoning") or description))
