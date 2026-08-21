@@ -576,6 +576,7 @@ function App() {
   }
 
   async function reviewProposal(id: string, action: "approve" | "reject") {
+    setError("");
     try {
       await api.reviewProposal(id, { action });
       setProposals(await api.listProposals(dataset.id));
@@ -586,6 +587,7 @@ function App() {
           ? "Rule approved for execution."
           : "Proposal rejected and kept out of execution.",
       );
+      setError("");
     } catch (err) {
       setError(getErrorMessage(err, "Unable to update proposal."));
     }
@@ -593,12 +595,14 @@ function App() {
 
   async function deleteProposal(id: string) {
     if (!dataset) return;
+    setError("");
     try {
       await api.deleteProposal(id);
       setProposals(await api.listProposals(dataset.id));
       setRuleConfigurations(await api.listRuleConfigurations(dataset.id));
       setAuditLogs(await api.listAuditLogs());
       setToast("Proposal removed. Audit history was retained.");
+      setError("");
     } catch (err) { setError(getErrorMessage(err, "Unable to delete proposal.")); }
   }
 
@@ -752,11 +756,13 @@ function App() {
 
   async function reviewWorkflowArtifact(id: string, input: ArtifactReviewInput) {
     if (!canOperate) return;
+    setError("");
     try {
       const updated = await workflowApi.reviewArtifact(id, input);
       setWorkflowArtifacts((current) => current.map((artifact) => artifact.id === id ? updated : artifact));
       if (workflow) await refreshWorkflow(workflow.id);
       setToast(input.action === "approve" ? "Artifact approved. The next workflow step is ready." : input.action === "reject" ? "Artifact rejected and kept out of execution." : "Revision requested from the agent.");
+      setError("");
     } catch (err) {
       setError(getErrorMessage(err, "Unable to review workflow artifact."));
     }
