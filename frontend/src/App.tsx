@@ -935,8 +935,8 @@ function App() {
           )}
           {error && (
             <div className="alert error">
-              <strong>{getErrorMessage(error, "Action needs attention") === "Action needs attention" ? "Action needs attention" : "Action failed"}</strong>
-              <span>{getErrorMessage(error, "Action needs attention") === "Action needs attention" ? "Retry the current step or open the audit log for details." : getErrorMessage(error, "Action needs attention")}</span>
+              <strong>Action failed</strong>
+              <span>{error}</span>
               <button onClick={() => setError("")}>×</button>
             </div>
           )}
