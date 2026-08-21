@@ -1,9 +1,9 @@
 # RIDEPULSE DQ — KẾ HOẠCH HOÀN THIỆN MVP VÀ SẢN PHẨM CUỐI KỲ
 
-> **Phiên bản:** Revised MVP Plan  
-> **Ngày cập nhật:** 19/08/2026  
-> **Mốc nộp hồ sơ MVP:** 24/08/2026  
-> **Mốc hoàn thiện sản phẩm:** 23:59 ngày 01/09/2026  
+> **Phiên bản:** Revised MVP Plan
+> **Ngày cập nhật:** 19/08/2026
+> **Mốc nộp hồ sơ MVP:** 24/08/2026
+> **Mốc hoàn thiện sản phẩm:** 23:59 ngày 01/09/2026
 > **Thành viên:** Kiên · Chiến · Phong · Đạt
 
 ---
