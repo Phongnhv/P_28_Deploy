@@ -266,6 +266,14 @@ function clearTemporaryDownstreamSessions(workflow: WorkflowRun, targetStep: Wor
   addAudit("WORKFLOW_TEMP_SESSIONS_CLEARED", "workflow", workflow.id, `Cleared temporary sessions after ${targetStep}.`);
 }
 
+function clearRuleChangeDownstreamSessions() {
+  workflowRuns.forEach((workflow) => {
+    if (workflow.current_step === "PROPOSE_RULES" || workflow.current_step === "REVIEW_RULES") {
+      clearTemporaryDownstreamSessions(workflow, workflow.current_step);
+    }
+  });
+}
+
 function createArtifact(workflow: WorkflowRun, type: AgentArtifact["type"], agentRole: AgentArtifact["agent_role"], payload: unknown, status: AgentArtifact["status"] = "VALIDATED") {
   const artifact: AgentArtifact = {
     id: `artifact-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -383,6 +391,7 @@ export const mockApi: ApiClient = {
     await wait(220);
     const existing = proposals.find((proposal) => proposal.id === id);
     if (!existing) throw new Error("Proposal not found.");
+    clearRuleChangeDownstreamSessions();
     const status: RuleProposal["status"] = input.action === "approve" ? "APPROVED" : input.action === "reject" ? "REJECTED" : "EDITED";
     const updated = { ...existing, ...input, status, rule: input.rule ?? existing.rule, updated_at: now() };
     delete (updated as Partial<ReviewInput>).action;
@@ -395,6 +404,7 @@ export const mockApi: ApiClient = {
     const proposal = proposals.find((item) => item.id === id);
     if (!proposal) throw new Error("Proposal not found.");
     if (proposal.status === "APPROVED") throw new Error("Reject an approved proposal before deleting it.");
+    clearRuleChangeDownstreamSessions();
     proposals = proposals.filter((item) => item.id !== id);
     configurations = configurations.filter((item) => item.rule_id !== id);
     addAudit("PROPOSAL_DELETED", "rule_proposal", id, `Deleted rule proposal “${proposal.title}”.`);
@@ -521,6 +531,16 @@ export const mockApi: ApiClient = {
     const existing = workflowRuns.find((item) => item.dataset_id === id && item.steps.some((step) => !["COMPLETED", "STALE"].includes(step.status)));
     if (existing) return structuredClone(existing);
     const workflow = makeWorkflow(`workflow-${Date.now()}`, id);
+    // Dataset preparation is a deterministic system prerequisite. Complete it
+    // automatically when the user starts the agent workflow so it does not
+    // become a manual stage that must be rerun during navigation.
+    workflow.steps = workflow.steps.map((step, index) => index === 0
+      ? { ...step, status: "COMPLETED", completed_at: now() }
+      : index === 1
+        ? { ...step, status: "READY" }
+        : step);
+    workflow.current_step = "UNDERSTAND_DATA";
+    dataset.status = "PROFILE_READY";
     workflowRuns = [...workflowRuns, workflow];
     addAudit("WORKFLOW_CREATED", "workflow", workflow.id, "Created a step-by-step agent workflow in the local adapter.");
     return structuredClone(workflow);
@@ -618,7 +638,7 @@ export const mockApi: ApiClient = {
     if (targetIndex < currentIndex && !["COMPLETED", "READY"].includes(target.status)) throw new Error("This workflow stage is not available for navigation.");
     const temporaryArtifactIds = new Set(workflow.steps.slice(targetIndex + 1).flatMap((item) => item.artifact_ids));
     workflow.steps = workflow.steps.map((item, index) => index === targetIndex
-      ? { ...item, status: "READY", temporary: false, blocker: undefined }
+      ? { ...item, temporary: false, blocker: undefined }
       : index > targetIndex
         ? { ...item, temporary: true, blocker: undefined }
         : item);
