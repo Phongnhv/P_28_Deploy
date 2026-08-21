@@ -221,18 +221,14 @@ const workflowStepLabels: Record<WorkflowStepKey, { label: string; owner: string
 
 function DatasetsPage({
   datasets,
-  profile,
-  onOpenPipeline,
+  dataset,
   onOpenExplorer,
-  onUploadPreview,
 }: {
   datasets: Dataset[];
-  profile: DatasetProfile | null;
-  onOpenPipeline: () => void;
-  onOpenExplorer: () => void;
-  onUploadPreview: (fileName: string) => void;
+  dataset?: Dataset;
+  onOpenExplorer: (datasetId: string) => void;
 }) {
-  return <div className="datasets-page"><div className="page-heading"><div><span className="eyebrow">DATASET CATALOG</span><h1>Registered datasets</h1><p>Choose an artifact to inspect its profile or start a pipeline run.</p></div><label className="button secondary upload-button">+ Add dataset<input type="file" accept=".csv,.parquet" onChange={(event) => { const file = event.target.files?.[0]; if (file) onUploadPreview(file.name); event.currentTarget.value = ""; }} /></label></div>{datasets.length ? <div className="dataset-catalog-grid">{datasets.map((item) => <article className="dataset-catalog-card" key={item.id}><div className="dataset-catalog-top"><StatusPill label={item.status.replaceAll("_", " ")} tone={item.status === "PROFILE_READY" ? "success" : "info"} /><code>{item.manifest_version}</code></div><h2>{item.name}</h2><p>{item.description}</p><div className="dataset-catalog-stats"><div><span>Rows</span><strong>{item.row_count.toLocaleString()}</strong></div><div><span>Source</span><strong>{item.source_label}</strong></div><div><span>Updated</span><strong>{formatTime(item.updated_at)}</strong></div></div><div className="dataset-catalog-actions"><button className="button primary" onClick={onOpenPipeline}>Open pipeline</button><button className="button ghost" onClick={onOpenExplorer}>View data</button></div></article>)}</div> : <div className="empty-state"><h2>No datasets registered.</h2><p className="muted">Upload a CSV or Parquet artifact to begin.</p><label className="button primary upload-button">Upload dataset<input type="file" accept=".csv,.parquet" onChange={(event) => { const file = event.target.files?.[0]; if (file) onUploadPreview(file.name); event.currentTarget.value = ""; }} /></label></div>}{profile && <section className="panel dataset-profile-summary"><div className="panel-heading"><div><span className="eyebrow">ACTIVE DATASET PROFILE</span><h3>Aggregate signals</h3></div><button className="button ghost" onClick={onOpenPipeline}>Run pipeline</button></div><div className="dataset-catalog-stats"><div><span>Completeness</span><strong>{profile.completeness_score.toFixed(1)}%</strong></div><div><span>Validity</span><strong>{profile.validity_score.toFixed(1)}%</strong></div><div><span>Duplicate rate</span><strong>{profile.duplicate_rate.toFixed(2)}%</strong></div><div><span>Columns</span><strong>{profile.columns.length}</strong></div></div></section>}</div>;
+  return <div className="datasets-page"><div className="page-heading datasets-heading"><div><span className="eyebrow">DATASET CATALOG</span><h1>Registered datasets</h1><p>Browse the registered artifacts and open a read-only data view.</p></div><span className="panel-caption">{datasets.length} registered</span></div>{datasets.length ? <div className="dataset-catalog-grid">{datasets.map((item) => <article className={`dataset-catalog-card ${item.id === dataset?.id ? "active" : ""}`} key={item.id}><div className="dataset-catalog-top"><StatusPill label={item.status.replaceAll("_", " ")} tone={item.status === "PROFILE_READY" ? "success" : "info"} /><code>{item.manifest_version}</code></div><h2>{item.name}</h2><p>{item.description}</p><div className="dataset-catalog-stats"><div><span>Rows</span><strong>{item.row_count.toLocaleString()}</strong></div><div><span>Source</span><strong>{item.source_label}</strong></div><div><span>Updated</span><strong>{formatTime(item.updated_at)}</strong></div></div><div className="dataset-catalog-actions"><span className="dataset-catalog-hint">Read-only preview</span><button className="button primary" onClick={() => onOpenExplorer(item.id)}>View data <span aria-hidden="true">→</span></button></div></article>)}</div> : <div className="empty-state"><h2>No datasets registered.</h2><p className="muted">Registered artifacts will appear here when they are available.</p></div>}</div>;
 }
 
 function workflowArtifactForStep(workflow: WorkflowRun, artifacts: AgentArtifact[], step: WorkflowStepKey) {
@@ -289,11 +285,16 @@ function WorkflowPage({
   onUploadPreview: (fileName: string) => void;
   onBackToDatasets: () => void;
 }) {
+  const [ruleDatasetId, setRuleDatasetId] = useState(dataset?.id ?? "");
+  useEffect(() => {
+    setRuleDatasetId(workflow?.dataset_id ?? dataset?.id ?? "");
+  }, [workflow?.dataset_id, dataset?.id]);
   if (!dataset) {
     return <div className="empty-state"><span className="eyebrow">WORKFLOW</span><h2>Select a dataset to begin.</h2><p className="muted">The workflow will keep every agent artifact scoped to the selected dataset.</p></div>;
   }
   if (!workflow) {
-    return <section className="rule-proposer-start panel"><div className="rule-proposer-copy"><span className="eyebrow">RULE PROPOSER</span><h1>Choose a dataset to start.</h1><p className="muted">Select a registered dataset or add a new CSV/Parquet artifact. The system prepares a deterministic profile first; Agent 1 then reads it to understand the data and propose rules.</p></div><div className="dataset-choice-list">{datasets.map((item) => <button className={`dataset-choice ${item.id === dataset?.id ? "selected" : ""}`} key={item.id} onClick={() => onSelectDataset(item.id)}><span><strong>{item.name}</strong><small>{item.row_count.toLocaleString()} rows · {item.manifest_version}</small></span><span>{item.status.replaceAll("_", " ")}</span></button>)}</div><div className="rule-proposer-actions"><label className="button secondary upload-button">+ Add dataset<input type="file" accept=".csv,.parquet" onChange={(event) => { const file = event.target.files?.[0]; if (file) onUploadPreview(file.name); event.currentTarget.value = ""; }} /></label><button className="button primary" onClick={() => onStartStep("UPLOAD_PROFILE")} disabled={!canOperate || Boolean(activeJob) || !dataset}>Start Rule Proposer</button>{!canOperate && <small>Steward access is required to start a workflow.</small>}</div></section>;
+    const selectedRuleDataset = datasets.find((item) => item.id === ruleDatasetId);
+    return <section className="rule-proposer-start panel"><div className="rule-proposer-copy"><span className="eyebrow">RULE PROPOSER</span><h1>Select dataset for Rule Proposer</h1><p className="muted">Choose a registered dataset. After selection, the system prepares its profile and starts the agent workflow.</p></div><div className="dataset-choice-list">{datasets.map((item) => <button type="button" className={`dataset-choice ${item.id === ruleDatasetId ? "selected" : ""}`} key={item.id} onClick={() => { setRuleDatasetId(item.id); onSelectDataset(item.id); }}><span><strong>{item.name}</strong><small>{item.row_count.toLocaleString()} rows · {item.manifest_version}</small></span><span>{item.status.replaceAll("_", " ")}</span></button>)}</div><div className="rule-proposer-actions"><label className="button secondary upload-button">+ Add dataset<input type="file" accept=".csv,.parquet" onChange={(event) => { const file = event.target.files?.[0]; if (file) onUploadPreview(file.name); event.currentTarget.value = ""; }} /></label><button className="button primary" onClick={() => onStartStep("UPLOAD_PROFILE")} disabled={!canOperate || Boolean(activeJob) || !selectedRuleDataset}>Run Rule Proposer <span aria-hidden="true">→</span></button>{selectedRuleDataset ? <small>Selected: {selectedRuleDataset.name}</small> : <small>Select a dataset to enable the run.</small>}{!canOperate && <small>Steward access is required to start a workflow.</small>}</div></section>;
   }
   const currentStep = workflow.steps.find((step) => step.key === workflow.current_step);
   const currentArtifact = currentStep ? workflowArtifactForStep(workflow, artifacts, currentStep.key) : undefined;
@@ -994,10 +995,8 @@ function App() {
           {view === "datasets" && (
             <DatasetsPage
               datasets={datasets}
-              profile={profile}
-              onOpenPipeline={() => setView("workflow")}
-              onOpenExplorer={() => setView("data")}
-              onUploadPreview={(fileName) => setToast(`Selected ${fileName}. Upload is ready for the backend contract; this preview keeps the catalog unchanged.`)}
+              dataset={dataset}
+              onOpenExplorer={(datasetId) => { if (datasetId !== dataset?.id) void selectDataset(datasetId); setView("data"); }}
             />
           )}
           {view === "rules" && (
