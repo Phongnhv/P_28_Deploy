@@ -1,12 +1,13 @@
 import asyncio
 import json
 import logging
-from src.agents.state import AgentState
-from src.models.semantic_contract import TableSemanticContract
+
 from src.agents.nodes.templates import dataset_understanding_prompt
+from src.agents.state import AgentState
 from src.agents.tools.profile_digest import split_digest_by_table
-from src.services.llm import get_llm
 from src.config import get_settings
+from src.models.semantic_contract import TableSemanticContract
+from src.services.llm import get_llm
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +32,9 @@ async def _understand_table(
         result.table_name = table_name
         return result
 
-async def dataset_understanding_node(state: AgentState) -> dict:    
+async def dataset_understanding_node(state: AgentState) -> dict:
     """Dataset Understanding Agent Node.
-    
+
     Phân tích digest profile của từng bảng trong dataset và suy luận ra Hợp đồng ngữ nghĩa (Semantic Contract).
     """
     digest = state.get("dataset_profile_digest", {})

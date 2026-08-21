@@ -801,10 +801,11 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
             try:
                 import asyncio
                 import threading
+
                 from src.agents.graph import run_anomaly_graph
-                
+
                 logger.info("Triggering Graph 3 Anomaly Analysis asynchronously for run_id=%s", run_id)
-                
+
                 def _trigger_anomaly():
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
@@ -814,7 +815,7 @@ def run_dq_checks(job_id: str, run_id: str, session_id: str | None = None, actor
                         logger.error("Failed executing Graph 3 from background thread: %s", ex, exc_info=True)
                     finally:
                         loop.close()
-                
+
                 threading.Thread(target=_trigger_anomaly, daemon=True).start()
             except Exception as ae:
                 logger.error("Failed to trigger Graph 3 Anomaly Analysis: %s", ae, exc_info=True)

@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
-from src.models.data_dictionary import InferredDictionaryTable
 from src.agents.nodes.templates import data_dictionary_generator_prompt
 from src.agents.state import AgentState
 from src.agents.tools.profile_digest import split_digest_by_table
 from src.config import get_settings
+from src.models.data_dictionary import InferredDictionaryTable
 from src.services.llm import get_llm
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ async def data_dictionary_generator_node(state: AgentState) -> dict[str, Any]:
     structured = llm.with_structured_output(InferredDictionaryTable)
     tables: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
-    
+
     for table_name, table_digest in per_table.items():
         prompt = data_dictionary_generator_prompt.format_messages(
             table_name=table_name,

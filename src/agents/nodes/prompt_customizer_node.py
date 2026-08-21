@@ -1,10 +1,11 @@
 import asyncio
 import json
 import logging
-from src.agents.state import AgentState
+
 from src.agents.nodes.templates import prompt_customizer_prompt
-from src.services.llm import get_llm
+from src.agents.state import AgentState
 from src.config import get_settings
+from src.services.llm import get_llm
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ async def _customize_prompt_for_table(
         )
         res = await llm.ainvoke(messages)
         prompt_content = res.content.strip()
-        
+
         # Dọn dẹp nếu LLM vô tình bọc trong markdown block
         if prompt_content.startswith("```"):
              lines = prompt_content.splitlines()
@@ -31,12 +32,12 @@ async def _customize_prompt_for_table(
              if lines and lines[-1].startswith("```"):
                   lines = lines[:-1]
              prompt_content = "\n".join(lines).strip()
-             
+
         return prompt_content
 
 async def prompt_customizer_node(state: AgentState) -> dict:
     """Prompt Customizer Node.
-    
+
     Sinh prompt hệ thống chuyên biệt (Specialized System Prompt) cho từng bảng dữ liệu
     dựa trên Hợp đồng ngữ nghĩa (Semantic Contract) đã được xác nhận.
     """

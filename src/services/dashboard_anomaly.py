@@ -6,9 +6,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+
 from sqlalchemy.orm import Session
 
-from src.models.database import DqResultModel, DqRunModel
+from src.models.database import DqResultModel
 from src.services.anomaly_service import detect_anomalies
 
 logger = logging.getLogger(__name__)
@@ -49,26 +50,26 @@ def detect_dashboard_anomalies(
         return []
 
     anomalies: list[DashboardAnomaly] = []
-    
+
     # Map signals with high scores (anomaly decisions) back to DashboardAnomaly
     for sig in result.get("signals", []):
         # Only surface signals that indicate anomalies (score >= 0.70)
         # Or if the family is execution health / business invariant and failed
         if sig.get("score", 0.0) < 0.70:
             continue
-            
+
         rule_id = sig["target_id"]
-        
+
         # We need rule_title, checked_count, and failed_count from DqResultModel
         res_model = db.query(DqResultModel).filter(
             DqResultModel.run_id == run_id,
             DqResultModel.rule_id == rule_id
         ).first()
-        
+
         if not res_model:
             # Skip if the target is table/dataset volume/freshness which doesn't map directly to a rule row
             continue
-            
+
         checked_count = res_model.checked_count
         failed_count = res_model.failed_count
 
@@ -83,15 +84,15 @@ def detect_dashboard_anomalies(
             continue
 
         current_rate = failed_count / checked_count if checked_count > 0 else 0.0
-        
+
         baseline = sig.get("baseline", {})
-        
+
         anomaly_type = "Z_SCORE_SPIKE" if sig["detector_name"] == "ROBUST_MAD_DETECTOR" else "HIGH_VIOLATION_RATE"
         if sig["detector_name"] == "BUSINESS_INVARIANT_DETECTOR":
             anomaly_type = "BUSINESS_RULE_VIOLATION"
-            
+
         detection_mode = "HISTORICAL" if sig["sufficient_history"] else "COLD_START"
-        
+
         # Map back to DashboardAnomaly structure
         anomalies.append(
             DashboardAnomaly(
@@ -108,5 +109,5 @@ def detect_dashboard_anomalies(
                 reason=sig["explanation_code"],
             )
         )
-        
+
     return anomalies

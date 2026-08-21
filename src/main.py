@@ -1,6 +1,5 @@
 
 import os
-
 import sys
 
 # Disable OpenTelemetry instrumentation during unit tests to prevent connection hangs

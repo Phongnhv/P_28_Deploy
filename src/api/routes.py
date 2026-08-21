@@ -653,7 +653,7 @@ def get_semantic_contract(
         raise HTTPException(status_code=404, detail=f"Semantic Contract not generated yet for run {run_id}")
 
     try:
-        with open(semantic_file, "r", encoding="utf-8") as f:
+        with open(semantic_file, encoding="utf-8") as f:
             data = json.load(f)
         return data
     except Exception as e:

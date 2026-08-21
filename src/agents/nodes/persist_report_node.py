@@ -95,16 +95,17 @@ async def persist_report_node(state: AgentState) -> dict:
 
     # 1.1 Also persist to decoupled Graph 2/3 tables (dq_runs and dq_results)
     def _save_decoupled_run():
-        from src.services.rule_store import get_engine
         from sqlalchemy.orm import Session
-        from src.models.database import DqRunModel, DqResultModel
-        
+
+        from src.models.database import DqResultModel, DqRunModel
+        from src.services.rule_store import get_engine
+
         engine = get_engine()
         with Session(engine) as session:
             # Idempotent: delete existing run and results
             session.query(DqResultModel).filter_by(run_id=test_run_id).delete()
             session.query(DqRunModel).filter_by(id=test_run_id).delete()
-            
+
             # Map statuses
             dq_status = "SUCCEEDED" if final_status == "DONE" else "FAILED"
 
@@ -120,11 +121,11 @@ async def persist_report_node(state: AgentState) -> dict:
                 for rule in (state.get("approved_rules") or [])
                 if rule.get("rule_id")
             }
-            
+
             # Count details
             failed_count = sum(1 for r in test_results if _normalize_status(r.get("status")) == "FAIL")
             checked_count = sum(int(r.get("checked_count") or r.get("total_rows") or 0) for r in test_results)
-            
+
             dq_run = DqRunModel(
                 id=test_run_id,
                 job_id=state.get("job_id") or test_run_id,
@@ -149,14 +150,14 @@ async def persist_report_node(state: AgentState) -> dict:
             )
             session.add(dq_run)
             session.flush()
-            
+
             for res in test_results:
                 r_status = _normalize_status(res.get("status"))
 
                 # Extract counts
                 c_count = int(res.get("checked_count") or res.get("total_rows") or 0)
                 f_count = int(res.get("failed_count") or res.get("violation_count") or 0)
-                
+
                 rule_id_value = res.get("rule_id", "")
                 dq_res = DqResultModel(
                     run_id=test_run_id,
@@ -178,7 +179,7 @@ async def persist_report_node(state: AgentState) -> dict:
                     error_message=res.get("error"),
                 )
                 session.add(dq_res)
-                
+
             session.commit()
             logger.info("Đã lưu decoupled run và %d results cho run_id=%s vào dq_runs/dq_results", len(test_results), test_run_id)
 

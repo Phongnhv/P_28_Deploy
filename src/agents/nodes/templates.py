@@ -62,7 +62,7 @@ và Từ điển dữ liệu (Data Dictionary) được cung cấp.
 
 ## Hướng dẫn quan trọng về mặt Ngôn ngữ & Nghiệp vụ (Data Steward-friendly)
 
-1. **`rule_name` (Tên quy tắc)**: 
+1. **`rule_name` (Tên quy tắc)**:
    - Phải viết bằng tiếng Việt tự nhiên, mang tính chất nghiệp vụ thuần túy và dễ hiểu cho Data Steward.
    - **CẤM** sử dụng tên cột kỹ thuật (e.g. `fare_amount`) hay tên kiểu dữ liệu, toán tử logic (e.g. `NOT_NULL`, `RANGE`).
    - *Ví dụ tốt*: `Yêu cầu bắt buộc nhập mã chuyến đi`, `Khống chế cước phí cơ bản tối thiểu`, `Định danh nhà cung cấp hợp lệ`.
@@ -484,7 +484,7 @@ Nhiệm vụ của bạn là phân tích các số liệu thống kê (Profile D
    - `text`: Các cột chuỗi tự do (tên người, mô tả, nội dung đánh giá).
    - `location`: Tọa độ, ID vùng đón/trả, địa chỉ, mã quốc gia.
    - `PII`: Email, số điện thoại, số CCCD/CMND.
-   
+
 2. **business_role (Vai trò nghiệp vụ)**:
    - Đặt tên vai trò nghiệp vụ tương ứng bằng tiếng Anh dạng snake_case (e.g., `primary_key`, `created_at`, `transaction_amount`, `customer_id`, `category_code`).
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
-from typing import Any, Optional
+
 from pydantic import BaseModel, Field
+
 
 class SemanticColumn(BaseModel):
     name: str = Field(..., description="Tên cột vật lý trong database.")
@@ -22,7 +23,7 @@ class SemanticColumn(BaseModel):
         le=1.0,
         description="Độ tin cậy của dự đoán phân tích cột."
     )
-    description: Optional[str] = Field(
+    description: str | None = Field(
         None,
         description="Mô tả nghiệp vụ ngắn gọn bằng tiếng Việt của cột."
     )
@@ -31,7 +32,7 @@ class SemanticRelationship(BaseModel):
     left_column: str = Field(..., description="Cột vế trái.")
     operator: str = Field(..., description="Toán tử so sánh (<=, <, =, >, >=, !=).")
     right_column: str = Field(..., description="Cột vế phải.")
-    description: Optional[str] = Field(None, description="Mô tả mối quan hệ nghiệp vụ bằng tiếng Việt.")
+    description: str | None = Field(None, description="Mô tả mối quan hệ nghiệp vụ bằng tiếng Việt.")
 
 class TableSemanticContract(BaseModel):
     table_name: str = Field(..., description="Tên bảng nghiệp vụ.")

@@ -1,6 +1,7 @@
 import json
 import logging
 from pathlib import Path
+
 from src.agents.state import AgentState
 from src.config import get_settings
 
@@ -8,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 async def hitl_semantic_gate_node(state: AgentState) -> dict:
     """HITL Semantic Gate Node.
-    
+
     Nếu Semantic Contract có status = 'confirmed', cho phép đi tiếp.
     Nếu status = 'draft', lưu contract ra file, cập nhật status job thành 'AWAITING_SEMANTIC_REVIEW' và kết thúc lượt chạy.
     """
@@ -30,7 +31,7 @@ async def hitl_semantic_gate_node(state: AgentState) -> dict:
     # Nếu là draft, lưu lại và tạm dừng graph
     run_id = state.get("rule_run_id", "test_run")
     settings = get_settings()
-    
+
     # 1. Lưu contract ra thư mục output/semantic
     try:
         out_dir = getattr(settings, "output_dir", None)

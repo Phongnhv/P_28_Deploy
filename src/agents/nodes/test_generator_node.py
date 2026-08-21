@@ -20,9 +20,12 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from sqlalchemy import inspect
+from sqlalchemy.orm import Session
 
 from src.agents.state import AgentState
 from src.config import get_settings
+from src.models.database import RulesetVersionModel
 from src.models.rule_schemas import RuleType
 from src.services.dbt_artifact_store import get_dbt_artifact_store, validate_run_id
 from src.services.rule_store import get_approved_rules, get_engine
@@ -258,7 +261,7 @@ def generate_dbt_test_yaml(approved_rules: list[dict]) -> str:
             for rule in rules:
                 r_type = (rule.get("rule_type") or "").upper()
                 params = rule.get("effective_parameters") or rule.get("parameters") or {}
-                
+
                 # Chỉ mapping các rule types được dbt hỗ trợ chính thức
                 if r_type == "NOT_NULL":
                     if "not_null" not in tests_list:
@@ -283,10 +286,10 @@ def generate_dbt_test_yaml(approved_rules: list[dict]) -> str:
                     expr = f"{op} {target_col}"
                     tests_list.append({"dbt_utils.expression_is_true": {"expression": expr}})
                 # Bỏ qua các rule types khác (ví dụ NULL_RATE, REGEX_FORMAT, ROW_COUNT) không được dbt hỗ trợ nguyên bản
-            
+
             if tests_list:
                 columns_list.append({"name": c_name, "tests": tests_list})
-                
+
         if columns_list:
             models_list.append({"name": t_name, "columns": columns_list})
 
@@ -295,9 +298,6 @@ def generate_dbt_test_yaml(approved_rules: list[dict]) -> str:
 
 
 
-from sqlalchemy import inspect
-from sqlalchemy.orm import Session
-from src.models.database import RulesetVersionModel
 
 def validate_ruleset_contract(
     engine,
@@ -306,12 +306,12 @@ def validate_ruleset_contract(
     ruleset_version_id: str | None,
 ) -> tuple[list[dict], str]:
     """Perform Phase 2.2 contract validation and calculate schema signature hash.
-    
+
     Returns:
         (validation_errors, live_schema_hash)
     """
     validation_errors = []
-    
+
     # 1. Reflect database schema for target tables
     try:
         inspector = inspect(engine)
@@ -325,11 +325,11 @@ def validate_ruleset_contract(
         t_name = rule.get("table_name")
         if t_name:
             tables_in_rules.add(t_name)
-            
+
     # Compute live schema signature hash
     schema_parts = []
     table_columns = {}
-    
+
     for t_name in sorted(tables_in_rules):
         if t_name not in db_tables:
             validation_errors.append({
@@ -338,12 +338,12 @@ def validate_ruleset_contract(
                 "message": f"Table '{t_name}' does not exist in the database catalog."
             })
             continue
-            
+
         try:
             cols = inspector.get_columns(t_name)
             col_info = sorted([(c["name"], str(c["type"])) for c in cols], key=lambda x: x[0])
             table_columns[t_name] = {c[0]: c[1] for c in col_info}
-            
+
             # format table signature: table_name(col1:type1,col2:type2,...)
             cols_str = ",".join(f"{name}:{type_str}" for name, type_str in col_info)
             schema_parts.append(f"{t_name}({cols_str})")
@@ -353,10 +353,10 @@ def validate_ruleset_contract(
                 "table_name": t_name,
                 "message": f"Failed to reflect columns for table '{t_name}': {exc}"
             })
-            
+
     live_schema_str = ";".join(schema_parts)
     live_schema_hash = hashlib.md5(live_schema_str.encode("utf-8")).hexdigest() if live_schema_str else ""
-    
+
     # 2. Check schema drift if ruleset_version_id is provided
     if ruleset_version_id:
         try:
@@ -387,11 +387,11 @@ def validate_ruleset_contract(
         rule_id = rule.get("rule_id", "unknown")
         rule_type = rule.get("rule_type", "")
         params = rule.get("effective_parameters") or rule.get("parameters") or {}
-        
+
         if t_name not in table_columns:
             # Table already marked as missing, skip column checks
             continue
-            
+
         # Check column existence (unless cross-field or table-level rule like ROW_COUNT)
         if rule_type != "ROW_COUNT" and col_name:
             if col_name not in table_columns[t_name]:
@@ -402,7 +402,7 @@ def validate_ruleset_contract(
                     "column_name": col_name,
                     "message": f"Column '{col_name}' does not exist in table '{t_name}'."
                 })
-                
+
         # Validate parameters for specific rules
         if rule_type == "RANGE":
             if params.get("min") is None and params.get("max") is None:
@@ -434,7 +434,7 @@ def validate_ruleset_contract(
                     "column_name": target_col,
                     "message": f"Target column '{target_col}' in rule CROSS_FIELD_COMPARISON does not exist in table '{t_name}'."
                 })
-                
+
     return validation_errors, live_schema_hash
 
 

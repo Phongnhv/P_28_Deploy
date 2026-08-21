@@ -1,9 +1,11 @@
 import pytest
-from src.agents.state import AgentState
+
 from src.agents.nodes.dataset_understanding_node import dataset_understanding_node
 from src.agents.nodes.hitl_semantic_gate_node import hitl_semantic_gate_node
 from src.agents.nodes.rule_candidate_builder_node import rule_candidate_builder_node
+from src.agents.state import AgentState
 from src.models.semantic_contract import TableSemanticContract
+
 
 @pytest.mark.asyncio
 async def test_dataset_understanding_node(monkeypatch):

@@ -22,8 +22,9 @@ def test_safe_predicate_passes():
 
 def test_sample_limit_matches_supabase_path():
     """Hai pipeline phải dùng chung một giới hạn số ID vi phạm."""
-    from src.services.supabase_dataset import execute_rule
     import inspect
+
+    from src.services.supabase_dataset import execute_rule
 
     supabase_default = inspect.signature(execute_rule).parameters["failed_id_limit"].default
     assert SAMPLE_FAILURE_LIMIT == supabase_default

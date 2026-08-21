@@ -5,22 +5,18 @@ Used by Graph 3 and Dashboard API.
 from __future__ import annotations
 
 import logging
-import math
 import uuid
-from datetime import datetime, UTC
 from typing import Any
 
-from sqlalchemy import and_, or_
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from src.models.database import (
+    AnomalyFeedbackModel,
+    AnomalyRunModel,
     DqResultModel,
     DqRunModel,
-    AnomalyRunModel,
-    AnomalySignalModel,
-    AnomalyFeedbackModel,
     ProfileModel,
-    ColumnProfileModel,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,7 +54,7 @@ def compute_mad(values: list[float], median: float) -> float:
 
 def calculate_robust_zscore(current: float, history: list[float]) -> tuple[float, float, float]:
     """Calculate robust Z-score using Median and MAD.
-    
+
     Formula: Robust Z = 0.6745 * (current - median) / MAD
     Returns:
         (robust_zscore, median, mad)
@@ -67,7 +63,7 @@ def calculate_robust_zscore(current: float, history: list[float]) -> tuple[float
         return 0.0, current, 0.0
     median = compute_median(history)
     mad = compute_mad(history, median)
-    
+
     if mad == 0.0:
         # MAD = 0 nghĩa là lịch sử hoàn toàn phẳng — rất phổ biến khi mọi đợt chạy đều 0% vi phạm.
         # Trả về hằng số 3.0 cho mọi sai lệch khiến lệch 0.001% và lệch 100% nhận cùng một điểm.
@@ -106,10 +102,10 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
         raise LookupError(f"Execution run {execution_run_id} not found")
 
     current_results = db.query(DqResultModel).filter(DqResultModel.run_id == execution_run_id).all()
-    
+
     # Get excluded execution runs (failed runs + TRUE_ANOMALY feedback)
     excluded_run_ids = get_excluded_execution_run_ids(db)
-    
+
     signals: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
 
@@ -151,7 +147,7 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
         history_rates = history_by_rule.get(rule_id, [])
 
         sufficient_history = len(history_rates) >= 5
-        
+
         # Detector 1 & 2 & 3: Invariant / Cold-start / Robust historical on Rule Level
         score = 0.0
         reliability = 1.0
@@ -159,17 +155,17 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
         baseline_stats = {}
         detector_name = ""
         explanation_code = ""
-        
+
         # Low checked count reduces reliability
         if checked_count < 100:
             reliability = 0.5
-            
+
         if sufficient_history:
             # Warm start: Robust MAD historical
             robust_z, median, mad = calculate_robust_zscore(current_rate, history_rates)
             baseline_stats = {"median": median, "mad": mad, "history_size": len(history_rates)}
             detector_name = "ROBUST_MAD_DETECTOR"
-            
+
             # Translate Z-score to score (0 to 1)
             # z >= 3.0 maps to score >= 0.8
             if current_rate > 0.01:
@@ -181,7 +177,7 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
                     score = max(0.0, robust_z * 0.25)
             else:
                 score = 0.0
-                
+
             if score >= 0.7:
                 explanation_code = f"Tỷ lệ vi phạm hiện tại ({current_rate:.2%}) vượt quá ngưỡng baseline lịch sử (median={median:.2%}, MAD={mad:.2%}) với Robust Z-Score = {robust_z:.2f}."
             else:
@@ -191,7 +187,7 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
             detector_name = "COLD_START_STATIC_DETECTOR"
             baseline_stats = {"static_threshold": 0.05}
             reliability = 0.6 if history_rates else 0.4  # lower reliability for absolute cold start
-            
+
             # Static rule: if failed and rate >= 0.05, it is an anomaly
             if res.status == "FAIL" or res.status == "FAILED":
                 if current_rate >= 0.05:
@@ -203,14 +199,14 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
             else:
                 score = 0.0
                 explanation_code = "Quy tắc kiểm thử ĐẠT."
-                
+
         # Business rule override check
         is_business_rule = res.rule_title.startswith("BUSINESS_") or "invariant" in res.rule_title.lower() or res.rule_id.endswith(".BUSINESS_RULE")
         if is_business_rule and res.status in ("FAIL", "FAILED"):
             score = 1.0
             detector_name = "BUSINESS_INVARIANT_DETECTOR"
             explanation_code = f"Vi phạm nghiêm trọng luật nghiệp vụ (Business Invariant): {res.rule_title}."
-            
+
         signals.append({
             "signal_id": f"sig-{uuid.uuid4().hex[:12]}",
             "family": "BUSINESS_RULE" if is_business_rule else "STATISTICAL",
@@ -247,12 +243,12 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
         )
         hist_rows = [p.row_count for p in hist_profiles]
         sufficient_vol_history = len(hist_rows) >= 5
-        
+
         vol_score = 0.0
         vol_reliability = 1.0
         vol_explanation = ""
         vol_baseline = {}
-        
+
         if sufficient_vol_history:
             vol_z, vol_median, vol_mad = calculate_robust_zscore(float(current_rows), [float(x) for x in hist_rows])
             vol_baseline = {"median": vol_median, "mad": vol_mad, "history_size": len(hist_rows)}
@@ -266,7 +262,7 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
             vol_baseline = {"static_change_threshold": 0.5}
             vol_reliability = 0.5
             vol_explanation = "Không đủ lịch sử để đánh giá đột biến số lượng dòng."
-            
+
         signals.append({
             "signal_id": f"sig-{uuid.uuid4().hex[:12]}",
             "family": "VOLUME",
@@ -319,11 +315,11 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
         "STATISTICAL": 0.6,
         "ML": 0.5,
     }
-    
+
     for sig in signals:
         fam = sig["family"]
         family_scores.setdefault(fam, []).append(sig["score"])
-        
+
     # Represent family: Max score in family
     family_reps: dict[str, float] = {}
     for fam, scs in family_scores.items():
@@ -348,7 +344,7 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
     elif family_reps.get("EXECUTION", 0.0) >= 1.0:
         has_critical_override = True
         override_reason = "Lỗi thực thi kiểm thử hệ thống (Execution Health)."
-        
+
     if has_critical_override:
         final_score = max(family_reps.values())
         decision = "CRITICAL"
@@ -370,7 +366,7 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
         # Reliability sum
         rel_sum = sum(sig["reliability"] for sig in signals)
         avg_reliability = (rel_sum / len(signals)) if signals else 0.0
-        
+
         # Classify decision
         if not signals or (avg_reliability < 0.5 and final_score < 0.5):
             decision = "INSUFFICIENT_HISTORY"
@@ -388,10 +384,10 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
             decision = "NORMAL"
             confidence = 0.90
             severity = "LOW"
-            
+
     # Normalize score
     final_score = round(final_score, 4)
-    
+
     return {
         "decision": decision,
         "score": final_score,

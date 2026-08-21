@@ -1,4 +1,5 @@
 import logging
+
 from src.agents.state import AgentState
 from src.agents.tools.profile_digest import split_digest_by_table
 
@@ -6,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 def rule_candidate_builder_node(state: AgentState) -> dict:
     """Deterministic Rule Candidate Builder.
-    
+
     Sinh các candidates (NOT_NULL, UNIQUE, RANGE, v.v.) dựa trên Semantic Contract đã duyệt và Profile Digest.
     """
     contract = state.get("semantic_contract")
@@ -23,7 +24,7 @@ def rule_candidate_builder_node(state: AgentState) -> dict:
     for table_name, table_contract in tables_contract.items():
         table_digest = per_table_digest.get(table_name, {})
         available_columns = {col.get("name") for col in table_digest.get("columns", []) if col.get("name")}
-        
+
         # 1. NOT_NULL & UNIQUE & RANGE & ACCEPTED_VALUES từ columns contract
         for col_contract in table_contract.get("columns", []):
             col_name = col_contract.get("name")
@@ -35,7 +36,7 @@ def rule_candidate_builder_node(state: AgentState) -> dict:
 
             # Lấy profile info cho cột nếu có
             col_digest = next((c for c in table_digest.get("columns", []) if c.get("name") == col_name), {})
-            signals = set(col_digest.get("signals", []))
+            set(col_digest.get("signals", []))
 
             # --- NOT_NULL ---
             if not nullable_expected or sem_type == "identifier":
@@ -62,7 +63,7 @@ def rule_candidate_builder_node(state: AgentState) -> dict:
                 # Lấy range thực tế từ profile digest
                 val_range = col_digest.get("range") or []
                 quantiles = col_digest.get("quantiles") or col_digest.get("percentiles") or {}
-                
+
                 # Ưu tiên dùng typical range [p5, p95] hoặc [p05, p95]
                 p5 = quantiles.get("p5") or quantiles.get("p05") or (val_range[0] if val_range else None)
                 p95 = quantiles.get("p95") or (val_range[1] if val_range else None)
@@ -72,7 +73,7 @@ def rule_candidate_builder_node(state: AgentState) -> dict:
                     span = p95 - p5
                     suggested_min = p5 - (span * 0.1) if sem_type != "currency" else max(0.0, p5 - (span * 0.1))
                     suggested_max = p95 + (span * 0.1)
-                    
+
                     # Tránh số lẻ thập phân quá nhiều
                     if isinstance(suggested_min, float):
                         suggested_min = round(suggested_min, 2)
@@ -113,7 +114,7 @@ def rule_candidate_builder_node(state: AgentState) -> dict:
                     regex_pattern = "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$"
                 elif "phone" in col_name.lower():
                     regex_pattern = "^\\+?[0-9\\s\\-\\.]{7,15}$"
-                
+
                 candidates.append({
                     "table": table_name,
                     "column": col_name,
@@ -181,13 +182,13 @@ def rule_candidate_builder_node(state: AgentState) -> dict:
 
     # Đính kèm evidence_items (enrich evidence references)
     from src.agents.nodes.rule_proposer_node import _attach_evidence_items
-    
+
     enriched_candidates = []
     for cand in candidates:
         table_name = cand["table"]
         table_digest = per_table_digest.get(table_name, {})
         enriched_cand = cand.copy()
-        
+
         res = _attach_evidence_items([enriched_cand], table_digest)
         if res:
             enriched_candidates.append(res[0])
@@ -195,11 +196,12 @@ def rule_candidate_builder_node(state: AgentState) -> dict:
     logger.info(f"Đã tạo {len(enriched_candidates)} candidates từ Semantic Contract.")
 
     # Xuất trace JSON
+    import json
     from datetime import datetime
     from pathlib import Path
-    import json
+
     from src.config import get_settings
-    
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_id = state.get("rule_run_id") or "test_run"
     try:

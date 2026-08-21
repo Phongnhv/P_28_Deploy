@@ -1,6 +1,5 @@
 import logging
 import os
-
 import sys
 
 # Disable OpenTelemetry instrumentation during unit tests to prevent connection hangs
@@ -37,14 +36,14 @@ def build_proposal_graph() -> StateGraph:
     Luồng: raw_profiler → profiler_digest → dataset_understanding → hitl_semantic_gate → rule_candidate_builder → prompt_customizer → rule_proposer → hitl_gate → END
     Bao gồm chốt chặn duyệt Semantic Contract động và tự động viết lại system prompt theo nghiệp vụ riêng của từng bảng.
     """
-    from src.agents.nodes.hitl_gate_node import hitl_gate_node
-    from src.agents.nodes.profiler_node import profiler_digest_node, raw_profiler_node
-    from src.agents.nodes.rule_proposer_node import rule_proposer_node
-    from src.agents.nodes.dataset_understanding_node import dataset_understanding_node
     from src.agents.nodes.data_dictionary_generator_node import data_dictionary_generator_node
+    from src.agents.nodes.dataset_understanding_node import dataset_understanding_node
+    from src.agents.nodes.hitl_gate_node import hitl_gate_node
     from src.agents.nodes.hitl_semantic_gate_node import hitl_semantic_gate_node
-    from src.agents.nodes.rule_candidate_builder_node import rule_candidate_builder_node
+    from src.agents.nodes.profiler_node import profiler_digest_node, raw_profiler_node
     from src.agents.nodes.prompt_customizer_node import prompt_customizer_node
+    from src.agents.nodes.rule_candidate_builder_node import rule_candidate_builder_node
+    from src.agents.nodes.rule_proposer_node import rule_proposer_node
 
     def _should_continue_proposal(state: AgentState) -> str:
         # Dừng khi có lỗi thật HOẶC khi một gate chủ động tạm dừng chờ người duyệt.
@@ -221,9 +220,9 @@ def build_anomaly_graph() -> StateGraph:
       anomaly_detector ➔ hypothesis_agent ➔ persist_analysis ➔ report_writer ➔ END
     """
     from src.agents.nodes.anomaly_detector_node import anomaly_detector_node
-    from src.agents.nodes.steward_insights_node import steward_insights_node
     from src.agents.nodes.persist_analysis_node import persist_analysis_node
     from src.agents.nodes.report_writer_node import report_writer_node
+    from src.agents.nodes.steward_insights_node import steward_insights_node
     from src.agents.state import AnomalyGraphState
 
     graph = StateGraph(AnomalyGraphState)
@@ -412,9 +411,9 @@ async def run_execution_graph(
 
         print("\n" + "=" * 75 + "\n")
         return {
-            "test_run_id": test_run_id, 
-            "results": results, 
-            "anomalies": anomalies, 
+            "test_run_id": test_run_id,
+            "results": results,
+            "anomalies": anomalies,
             "dq_score": final_state.get("dq_score", 100.0),
             "anomaly_decision": decision_data
         }
@@ -433,7 +432,7 @@ async def run_anomaly_graph(
     """Chạy toàn bộ pipeline Run 3 (Anomaly Analysis & Hypothesis)."""
     import uuid
     anomaly_run_id = f"anom-{uuid.uuid4().hex[:12]}"
-    
+
     anomaly_graph = build_anomaly_graph()
     initial_state = {
         "anomaly_run_id": anomaly_run_id,
@@ -444,10 +443,10 @@ async def run_anomaly_graph(
         # (theo settings.llm_provider) vào metadata để persist_analysis_node lưu chính xác.
         "metadata": {},
     }
-    
-    logger.info("Bắt đầu Run 3 (Anomaly Analysis) | anomaly_run_id=%s | execution_run_id=%s", 
+
+    logger.info("Bắt đầu Run 3 (Anomaly Analysis) | anomaly_run_id=%s | execution_run_id=%s",
                 anomaly_run_id, execution_run_id)
-                
+
     try:
         final_state = await anomaly_graph.ainvoke(initial_state)
         decision_data = final_state.get("anomaly_decision", {})

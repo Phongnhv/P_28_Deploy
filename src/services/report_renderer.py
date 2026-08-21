@@ -15,8 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, UTC
-from pathlib import Path
+from datetime import UTC, datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -52,9 +51,10 @@ def _load_execution_data(execution_run_id: str) -> tuple[dict | None, list[dict]
     Returns (None, []) on any failure to keep report generation resilient.
     """
     try:
-        from src.services.rule_store import get_engine
         from sqlalchemy.orm import Session
-        from src.models.database import DqRunModel, DqResultModel
+
+        from src.models.database import DqResultModel, DqRunModel
+        from src.services.rule_store import get_engine
 
         engine = get_engine()
         with Session(engine) as session:

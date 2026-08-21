@@ -20,7 +20,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -38,7 +38,6 @@ from src.agents.tools.profile_digest import (
 )
 from src.config import get_settings
 from src.models.rule_schemas import (
-    EvidenceSourceType,
     ProposedRule,
     RuleEvidenceSnapshot,
     TableRuleProposal,
@@ -344,9 +343,9 @@ async def _propose_for_table(
                     max_retries + 1,
                     entry_ts.isoformat(),
                 )
-                
+
                 is_taxi = dataset_id.lower().startswith("nyc-yellow") or "taxi" in dataset_id.lower()
-                
+
                 if candidates is not None:
                     coverage_requirements = json.dumps(candidates, ensure_ascii=False)
                 else:

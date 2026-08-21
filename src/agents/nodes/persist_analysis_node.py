@@ -4,18 +4,20 @@ Writes anomaly runs, signals, and hypotheses to the database.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
-import json
-from datetime import datetime, UTC
+from datetime import UTC, datetime
+
 from sqlalchemy.orm import Session
+
 from src.agents.state import AnomalyGraphState
-from src.services.rule_store import get_engine
 from src.models.database import (
+    AnomalyHypothesisModel,
     AnomalyRunModel,
     AnomalySignalModel,
-    AnomalyHypothesisModel,
 )
+from src.services.rule_store import get_engine
 
 logger = logging.getLogger(__name__)
 
@@ -39,13 +41,13 @@ async def persist_analysis_node(state: AnomalyGraphState) -> dict:
     execution_run_id = state.get("execution_run_id") or state.get("anomaly_run_id")
     anomaly_run_id = state.get("anomaly_run_id") or f"anom-{uuid.uuid4().hex[:12]}"
     detector_config_version = state.get("detector_config_version", "anomaly-v1")
-    
+
     decision_data = state.get("anomaly_decision") or {}
     signals = state.get("signal_observations", [])
     hypotheses = state.get("hypotheses", [])
-    
+
     engine = get_engine()
-    
+
     try:
         with Session(engine) as session:
             # Idempotency check: Delete existing anomaly run, signals, and hypotheses for the same execution + config version
@@ -53,13 +55,13 @@ async def persist_analysis_node(state: AnomalyGraphState) -> dict:
                 AnomalyRunModel.execution_run_id == execution_run_id,
                 AnomalyRunModel.detector_config_version == detector_config_version
             ).first()
-            
+
             if existing_run:
                 logger.info("Found existing anomaly run ID %s. Updating fields and deleting old signals/hypotheses for idempotency.", existing_run.id)
                 anomaly_run_id = existing_run.id
                 session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anomaly_run_id).delete()
                 session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == anomaly_run_id).delete()
-                
+
                 # Update existing run
                 existing_run.status = "SUCCEEDED"
                 existing_run.decision = decision_data.get("decision", "NORMAL")
@@ -84,7 +86,7 @@ async def persist_analysis_node(state: AnomalyGraphState) -> dict:
                 )
                 session.add(anomaly_run)
                 session.flush()  # Ensure anomaly_runs row exists before children are added
-            
+
             # Create AnomalySignals
             for sig in signals:
                 sig_record = AnomalySignalModel(
@@ -104,7 +106,7 @@ async def persist_analysis_node(state: AnomalyGraphState) -> dict:
                     evidence_refs=json.dumps(sig.get("evidence_refs", [])),
                 )
                 session.add(sig_record)
-                
+
             # Model thật do steward_insights_node dùng, KHÔNG phải hằng số hardcode.
             # Bản cũ luôn ghi "gemini-3.5-flash" trong khi hệ thống gọi provider cấu hình
             # trong settings (mặc định OpenAI) — toàn bộ cột observability là dữ liệu bịa.
@@ -132,16 +134,16 @@ async def persist_analysis_node(state: AnomalyGraphState) -> dict:
                     fallback_used=state.get("hypothesis_status") == "FALLBACK_USED"
                 )
                 session.add(hyp_record)
-                
+
             session.commit()
             logger.info("Successfully persisted anomaly analysis for run %s. Signals count: %d, Hypotheses count: %d",
                         anomaly_run_id, len(signals), len(hypotheses))
-            
+
             return {
                 "anomaly_run_id": anomaly_run_id,
                 "metadata": {**state.get("metadata", {}), "persisted_anomaly_run_id": anomaly_run_id}
             }
-            
+
     except Exception as exc:
         logger.error("Failed to persist anomaly analysis to database: %s", exc, exc_info=True)
         return {

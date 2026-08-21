@@ -1,13 +1,14 @@
 """Unit tests for the canonical anomaly service (Median/MAD, exclusions, and family aggregations)."""
 
+from datetime import datetime
+
 import pytest
 from sqlalchemy.orm import Session
-from datetime import datetime, UTC
 
-from src.models.database import DqRunModel, DqResultModel, AnomalyFeedbackModel
+from src.models.database import AnomalyFeedbackModel, DqResultModel, DqRunModel
 from src.services.anomaly_service import (
-    compute_median,
     compute_mad,
+    compute_median,
     detect_anomalies,
 )
 
@@ -49,7 +50,7 @@ def test_detect_anomalies_cold_start(test_db):
         # Create a single run
         run = DqRunModel(id="run_1", job_id="job_1", dataset_id="dataset_1", rule_ids="[]", status="SUCCEEDED")
         session.add(run)
-        
+
         # Add a passed result (violation_rate = 0.0) and a failed result (violation_rate = 0.08)
         res_pass = DqResultModel(run_id="run_1", rule_id="rule_pass", rule_title="Pass check", status="PASS", checked_count=100, failed_count=0, failed_row_ids="[]", violation_rate=0.0)
         res_fail = DqResultModel(run_id="run_1", rule_id="rule_fail", rule_title="Fail check", status="FAIL", checked_count=100, failed_count=8, failed_row_ids="[]", violation_rate=0.08)
@@ -58,16 +59,16 @@ def test_detect_anomalies_cold_start(test_db):
 
         # Execute anomaly detection
         result = detect_anomalies(session, "run_1")
-        
+
         # Since rule_fail violation rate (0.08) >= 0.05, it gets score = 0.80 -> decision = ANOMALY
         assert result["decision"] == "ANOMALY"
         assert len(result["signals"]) == 2
-        
+
         # Verify signal details
         sigs = {s["target_id"]: s for s in result["signals"]}
         assert sigs["rule_pass"]["score"] == 0.0
         assert sigs["rule_pass"]["sufficient_history"] is False
-        
+
         assert sigs["rule_fail"]["score"] == 0.80  # Cold start static score = 0.80
         assert sigs["rule_fail"]["sufficient_history"] is False
 
@@ -79,7 +80,7 @@ def test_detect_anomalies_with_exclusions(test_db):
         # Run 1: Failed
         run1 = DqRunModel(id="run_h1", job_id="job_1", dataset_id="dataset_1", rule_ids="[]", status="FAILED", completed_at=datetime.now())
         res1 = DqResultModel(run_id="run_h1", rule_id="rule_x", rule_title="Check X", status="FAIL", checked_count=100, failed_count=2, failed_row_ids="[]", violation_rate=0.02)
-        
+
         # Run 2: Succeeded (but has TRUE_ANOMALY feedback)
         run2 = DqRunModel(id="run_h2", job_id="job_1", dataset_id="dataset_1", rule_ids="[]", status="SUCCEEDED", completed_at=datetime.now())
         res2 = DqResultModel(run_id="run_h2", rule_id="rule_x", rule_title="Check X", status="FAIL", checked_count=100, failed_count=50, failed_row_ids="[]", violation_rate=0.50)
@@ -87,7 +88,7 @@ def test_detect_anomalies_with_exclusions(test_db):
         # To link feedback, we need an anomaly run record for run2
         from src.models.database import AnomalyRunModel
         anom_run2 = AnomalyRunModel(id="anom_h2", execution_run_id="run_h2", decision="ANOMALY", score=0.9, severity="HIGH")
-        
+
         # Run 3, 4, 5, 6, 7: Normal succeeded runs (violation_rate = 0.05, 0.05, 0.06, 0.04, 0.05)
         runs_normal = []
         res_normal = []
@@ -107,7 +108,7 @@ def test_detect_anomalies_with_exclusions(test_db):
         # History should consist of only runs 3, 4, 5, 6, 7 (size = 5)
         # Baselines: [0.05, 0.05, 0.06, 0.05, 0.05] (approx, median = 0.05)
         result = detect_anomalies(session, "run_curr")
-        
+
         assert len(result["signals"]) == 1
         sig = result["signals"][0]
         assert sig["sufficient_history"] is True

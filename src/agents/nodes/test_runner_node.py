@@ -473,14 +473,14 @@ async def test_runner_node(state: AgentState) -> dict:
     for r in all_results:
         status_raw = r.get("status", "PASSED")
         status = "PASS" if status_raw in ("PASSED", "PASS") else "FAIL" if status_raw in ("FAILED", "FAIL") else "ERROR" if status_raw == "ERROR" else "SKIPPED"
-        
+
         checked_count = r.get("total_rows", 0)
         failed_count = r.get("violation_count", 0)
         violation_rate = r.get("violation_rate", 0.0)
-        
+
         dbt_status = "PASS" if dbt_executed and status == "PASS" else "FAIL" if dbt_executed and status == "FAIL" else "NOT_RUN"
         metrics_status = "PASS" if status == "PASS" else "FAIL" if status == "FAIL" else "ERROR"
-        
+
         normalized_results.append({
             "rule_id": r.get("rule_id", ""),
             "rule_version": r.get("rule_version", "rule-v1"),

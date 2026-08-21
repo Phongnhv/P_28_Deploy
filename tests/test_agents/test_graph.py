@@ -8,8 +8,8 @@ from sqlalchemy import create_engine, text
 import src.services.rule_store as rule_store_module
 from src.agents.graph import (
     _should_run_or_fail,
-    build_execution_graph,
     build_anomaly_graph,
+    build_execution_graph,
     build_proposal_graph,
     run_execution_graph,
     run_proposal_graph,
