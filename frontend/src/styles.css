@@ -570,6 +570,17 @@ nav { display: grid; gap: 3px; }
 .workflow-step-copy span, .workflow-step-copy small { color: var(--muted); font-size: .75rem; }
 .workflow-step-copy small { text-transform: uppercase; letter-spacing: .08em; }
 .workflow-step-copy em { color: var(--red); font-size: .75rem; font-style: normal; }
+.workflow-step-choice { border-style: dashed; background: color-mix(in srgb, var(--surface) 88%, var(--accent) 12%); }
+.workflow-step-choice .workflow-step-index { color: var(--accent-deep); background: var(--accent-soft); font-size: 1.05rem; }
+.step-nav-button { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: .48rem .72rem; border: 1px solid var(--border); border-radius: 9px; color: var(--ink-soft); background: var(--surface); font: inherit; font-size: .75rem; font-weight: 750; white-space: nowrap; }
+button.step-nav-button { cursor: pointer; }
+.step-nav-button.backward { color: var(--accent-deep); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); background: var(--accent-soft); }
+.step-nav-button.backward:hover, button.step-nav-button:hover { border-color: var(--accent); background: var(--surface-muted); }
+.step-nav-button.current { color: #fff; border-color: #6da3ff; background: rgb(76 133 231 / 22%); }
+.step-nav-button.locked { opacity: .55; }
+.workflow-entry-steps { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; padding-bottom: 1.05rem; margin-bottom: 1.35rem; border-bottom: 1px solid rgb(174 198 238 / 18%); color: #8ea5ca; font-size: .8rem; }
+.rule-proposer-start .step-nav-button { color: #aebedb; border-color: rgb(174 198 238 / 22%); background: rgb(255 255 255 / 6%); }
+.rule-proposer-start .step-nav-button.current { color: #fff; border-color: #6da3ff; background: rgb(76 133 231 / 22%); }
 .proposal-source { color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
 .dataset-catalog-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; }
 .dataset-catalog-card { display: grid; gap: .9rem; padding: 1.1rem; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
