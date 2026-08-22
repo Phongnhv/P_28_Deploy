@@ -58,12 +58,13 @@ function formatTime(value: string) {
   }).format(new Date(value));
 }
 
-function formatRule(rule: RuleSpec) {
-  if (rule.type === "not_null") return `NOT NULL · ${rule.column}`;
+function formatRule(rule?: RuleSpec | null) {
+  if (!rule || !rule.type) return "CUSTOM";
+  if (rule.type === "not_null") return `NOT NULL · ${rule.column ?? ""}`;
   if (rule.type === "numeric_range")
-    return `RANGE · ${rule.column} ≥ ${rule.min_value}`;
+    return `RANGE · ${rule.column ?? ""} ≥ ${rule.min_value ?? 0}`;
   if (rule.type === "accepted_values")
-    return `VALUES · ${rule.column} ∈ ${(rule.allowed_values ?? []).join(", ")}`;
+    return `VALUES · ${rule.column ?? ""} ∈ ${(rule.allowed_values ?? []).join(", ")}`;
   if (rule.type === "cross_field_comparison")
     return `COMPARE · ${(rule.columns ?? []).join(` ${rule.operator ?? "≤"} `)}`;
   return `DUPLICATE · ${(rule.fingerprint_columns ?? []).join(" + ")}`;
@@ -108,20 +109,20 @@ function StatusPill({
 
 function ProgressPanel({ job, title }: { job: Job; title: string }) {
   return (
-    <div className="progress-panel">
-      <div className="progress-heading">
-        <div>
-          <span className="eyebrow">ACTIVE JOB</span>
-          <h3>{title}</h3>
+    <div className="progress-toast">
+      <div className="progress-toast-header">
+        <div className="progress-toast-title">
+          <span className="spinner" />
+          <strong>{title}</strong>
         </div>
-        <strong>{job.progress}%</strong>
+        <span className="progress-toast-percent">{job.progress}%</span>
       </div>
-      <div className="progress-track">
+      <div className="progress-track" style={{ height: "6px", margin: "4px 0" }}>
         <span style={{ width: `${job.progress}%` }} />
       </div>
-      <div className="progress-meta">
-        <span>{job.message}</span>
-        <span>{job.status}</span>
+      <div className="progress-toast-footer">
+        <span className="progress-toast-msg">{job.message}</span>
+        <span className="progress-toast-status">{job.status}</span>
       </div>
     </div>
   );
@@ -155,72 +156,74 @@ function LoginScreen({
           </span>
         </div>
         <div className="login-pitch">
-          <span className="eyebrow">DATA QUALITY INTELLIGENCE</span>
+          <span className="eyebrow">HỆ THỐNG TRÍ TUỆ GIÁM SÁT CHẤT LƯỢNG DỮ LIỆU</span>
           <h1>
-            Turn data signals into <span>trusted decisions.</span>
+            Biến tín hiệu dữ liệu thành <span>quyết định đáng tin cậy.</span>
           </h1>
           <p>
-            Inspect the registered mobility dataset, review evidence-grounded
-            rules and run only the checks your Steward approves.
+            Phân tích các tập dữ liệu, xem xét các quy tắc dựa trên bằng chứng minh bạch và chỉ thực thi những kiểm thử được phê duyệt.
           </p>
           <div className="metric-row">
             <div>
-              <strong>50k</strong>
-              <span>registered rows</span>
+              <strong>50k+</strong>
+              <span>dòng dữ liệu đã đăng ký</span>
             </div>
             <div>
               <strong>5</strong>
-              <span>typed rule templates</span>
+              <span>mẫu quy tắc chuẩn</span>
             </div>
             <div>
               <strong>100%</strong>
-              <span>audit visibility</span>
+              <span>minh bạch nhật ký kiểm toán</span>
             </div>
           </div>
         </div>
-        <div className="login-footer">GATE 2 · COURSE PROJECT SIMULATION</div>
+        <div className="login-footer">GATE 2 · DỰ ÁN HỆ THỐNG AI DATA QUALITY</div>
       </div>
       <section className="login-card">
         <div className="mobile-brand">
           <span className="brand-mark">RP</span> RidePulse <em>DQ</em>
         </div>
-        <span className="eyebrow">ROLE-BASED ACCESS</span>
-        <h2>Welcome back</h2>
+        <span className="eyebrow">TRUY CẬP THEO VAI TRÒ</span>
+        <h2>Chào mừng trở lại</h2>
         <p className="muted">
-          Sign in with your demo account to open the workspace.
+          Đăng nhập bằng tài khoản của bạn để vào không gian làm việc.
         </p>
         <form onSubmit={submit}>
-          <label htmlFor="username">Username</label>
+          <label htmlFor="username">Tên đăng nhập</label>
           <input
             id="username"
             value={username}
             onChange={(event) => setUsername(event.target.value)}
-            placeholder="user, steward, or admin"
+            placeholder="user, steward, hoặc admin"
             autoFocus
           />
-          <label htmlFor="password">Password</label>
+          <label htmlFor="password">Mật khẩu</label>
           <input
             id="password"
             type="password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
-            placeholder="Enter password"
+            placeholder="Nhập mật khẩu"
           />
           {error && <div className="inline-error">{error}</div>}
           <button
             className="button primary full"
             disabled={busy || username.length < 1 || password.length < 1}
           >
-            {busy ? "Opening workspace…" : "Open workspace →"}
+            {busy ? "Đang mở không gian làm việc…" : "Vào không gian làm việc →"}
           </button>
         </form>
         <div className="login-note">
           <span className="lock-icon">⌁</span>
           <span>
-            <strong>Demo accounts</strong>
+            <strong>Tài khoản dùng thử</strong>
             <br />
-            <code>user/user</code> read-only · <code>steward/steward</code>{" "}
-            review · <code>admin/admin</code> full access.
+            · <code>user/user</code> chỉ xem
+            <br />
+            · <code>steward/steward</code> kiểm duyệt
+            <br />
+            · <code>admin/admin</code> toàn quyền.
           </span>
         </div>
       </section>
@@ -337,20 +340,45 @@ function DatasetsPage({
   artifacts: AgentArtifact[];
   profile: DatasetProfile | null;
 }) {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
 
-  const activeArtifact = workflow && dataset && workflow.dataset_id === dataset.id
-    ? workflowArtifactForStep(workflow, artifacts, "UNDERSTAND_DATA")
+  const formatDatasetStatus = (status: string) => {
+    const clean = status.replaceAll("_", " ").toLowerCase();
+    if (clean.includes("profile ready")) return language === "vi" ? "SẴN SÀNG" : "PROFILE READY";
+    if (clean.includes("ingested")) return language === "vi" ? "ĐÃ NẠP" : "INGESTED";
+    if (clean.includes("registered")) return language === "vi" ? "ĐÃ ĐĂNG KÝ" : "REGISTERED";
+    return status.replaceAll("_", " ").toUpperCase();
+  };
+
+  const activeArtifact = dataset
+    ? (workflow && workflow.dataset_id === dataset.id
+      ? workflowArtifactForStep(workflow, artifacts, "UNDERSTAND_DATA")
+      : undefined) ||
+    artifacts.find(
+      (a) => a.step_key === "UNDERSTAND_DATA" || a.artifact_type === "SEMANTIC_CONTRACT"
+    )
     : undefined;
 
   const payload = activeArtifact?.payload && typeof activeArtifact.payload === "object"
     ? (activeArtifact.payload as Record<string, unknown>)
-    : null;
+    : profile
+      ? {
+        summary: t("datasets.profileBackedSummary"),
+        agent_mode: "profile-backed",
+        columns: profile.columns?.map((c) => ({
+          name: c.name,
+          semantic_type: c.data_type,
+          nullable: (c.null_rate ?? 0) > 0,
+          confidence: 0.9,
+          description: `Null rate: ${((c.null_rate ?? 0) * 100).toFixed(1)}%, Distinct: ${c.distinct_count}`,
+        })) ?? [],
+      }
+      : null;
 
   const contractColumns = payload && Array.isArray(payload.columns)
     ? (payload.columns.filter((column): column is Record<string, unknown> =>
-        Boolean(column && typeof column === "object"),
-      ))
+      Boolean(column && typeof column === "object"),
+    ))
     : [];
 
   return (
@@ -358,8 +386,8 @@ function DatasetsPage({
       <div className="page-heading datasets-heading">
         <div>
           <span className="eyebrow">STEP 1 · {t("wizard.step1Title").toUpperCase()}</span>
-          <h1>{t("datasets.step1Title")}</h1>
-          <p>{t("datasets.step1Subtitle")}</p>
+          <h1 style={{ whiteSpace: "nowrap", maxWidth: "none" }}>{t("datasets.step1Title")}</h1>
+          <p style={{ whiteSpace: "nowrap" }}>{t("datasets.step1Subtitle")}</p>
         </div>
       </div>
 
@@ -369,7 +397,7 @@ function DatasetsPage({
             <input type="file" accept=".csv,.parquet,text/csv,application/vnd.apache.parquet" disabled={!canOperate || importing} onChange={(event) => { const file = event.target.files?.[0]; if (file) onImportDataset(file); event.currentTarget.value = ""; }} />
             <span className="dataset-import-plus">+</span>
             <strong>{importing ? t("datasets.profiling") : t("datasets.import")}</strong>
-            <small>CSV or Parquet · profile automatically</small>
+            <small>{t("datasets.importSub")}</small>
           </label>
           {datasets.map((item) => {
             const isSelected = item.id === dataset?.id;
@@ -382,7 +410,7 @@ function DatasetsPage({
               >
                 <div className="dataset-catalog-top">
                   <StatusPill
-                    label={isSelected ? "SELECTED" : item.status.replaceAll("_", " ")}
+                    label={isSelected ? t("datasets.selected") : formatDatasetStatus(item.status)}
                     tone={isSelected ? "success" : "info"}
                   />
                   <code>{item.manifest_version}</code>
@@ -403,17 +431,7 @@ function DatasetsPage({
                     <strong>{formatTime(item.updated_at)}</strong>
                   </div>
                 </div>
-                <div className="dataset-catalog-actions" style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
-                  <button
-                    className="button secondary"
-                    style={{ flex: 1 }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onOpenExplorer(item.id);
-                    }}
-                  >
-                    {t("datasets.viewData")}
-                  </button>
+                <div className="dataset-catalog-actions" style={{ display: "flex", justifyContent: "flex-end", marginTop: "12px" }}>
                   <button
                     className="button ghost"
                     style={{ color: "#dc2626", borderColor: "#fca5a5" }}
@@ -436,7 +454,7 @@ function DatasetsPage({
         <div className="empty-state">
           <h2>{t("datasets.noDatasets")}</h2>
           <p className="muted">
-            Registered artifacts will appear here when they are available.
+            {t("datasets.noDatasetsDesc")}
           </p>
         </div>
       )}
@@ -444,49 +462,23 @@ function DatasetsPage({
       {/* Understand Data Agent Output Card */}
       {dataset && (
         <section className="panel" style={{ marginTop: "24px", padding: "24px" }}>
-          <div className="panel-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div className="panel-heading">
             <div>
               <span className="eyebrow">{t("datasets.agentCapability")}</span>
-              <h2>Understand Data Agent · {dataset.name}</h2>
+              <h2>{t("datasets.understandAgentTitle", { name: dataset.name })}</h2>
               <p className="muted">{t("datasets.understandAgentDesc")}</p>
             </div>
-            <button
-              className="button primary"
-              disabled={!canOperate || busy}
-              onClick={() => onStartUnderstand(dataset.id)}
-            >
-              {busy ? t("datasets.runningAnalysis") : t("datasets.runUnderstandBtn")}
-            </button>
           </div>
 
           {payload ? (
             <div className="understanding-holder" style={{ marginTop: "16px" }}>
               <div className="understanding-summary" style={{ padding: "16px", background: "var(--surface-muted, #f8fafc)", borderRadius: "8px", borderLeft: "4px solid var(--accent, #2563eb)" }}>
                 <span className="eyebrow">
-                  SEMANTIC CONTRACT · MODE: {String(payload.agent_mode ?? "profile-backed").toUpperCase()}
+                  {t("datasets.semanticContract")} · {t("datasets.mode")}: {String(payload.agent_mode ?? "profile-backed").toUpperCase()}
                 </span>
-                <p style={{ marginTop: "8px", fontSize: "15px", lineHeight: "1.5", color: "var(--ink)" }}>
-                  {String(payload.summary ?? "Agent analysis completed.")}
+                <p style={{ marginTop: "8px", fontSize: "15px", lineHeight: "1.5", color: "var(--ink)", whiteSpace: "nowrap" }}>
+                  {String(payload.summary ?? t("datasets.agentAnalysisCompleted"))}
                 </p>
-              </div>
-
-              <div className="understanding-meta" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginTop: "16px", marginBottom: "20px" }}>
-                <div>
-                  <span>Rows</span>
-                  <strong>{(profile?.row_count ?? dataset.row_count).toLocaleString()}</strong>
-                </div>
-                <div>
-                  <span>Completeness Score</span>
-                  <strong>{profile ? `${profile.completeness_score.toFixed(1)}%` : "—"}</strong>
-                </div>
-                <div>
-                  <span>Validity Score</span>
-                  <strong>{profile ? `${profile.validity_score.toFixed(1)}%` : "—"}</strong>
-                </div>
-                <div>
-                  <span>Artifact Status</span>
-                  <strong>{activeArtifact?.status ?? "VALIDATED"}</strong>
-                </div>
               </div>
 
               {/* SEMANTIC CONTRACT INFERRED SCHEMA TABLE */}
@@ -494,19 +486,19 @@ function DatasetsPage({
                 <div className="understanding-section" style={{ marginTop: "20px" }}>
                   <div className="panel-heading" style={{ marginBottom: "12px" }}>
                     <div>
-                      <span className="eyebrow">SEMANTIC CONTRACT</span>
-                      <h3 style={{ margin: 0 }}>Inferred Column Schemas ({contractColumns.length})</h3>
+                      <span className="eyebrow">{t("datasets.semanticContract")}</span>
+                      <h3 style={{ margin: 0 }}>{t("datasets.inferredSchemas", { count: contractColumns.length })}</h3>
                     </div>
                   </div>
                   <div style={{ overflowX: "auto", border: "1px solid var(--border, #e2e8f0)", borderRadius: "8px" }}>
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
                       <thead>
                         <tr style={{ background: "var(--surface-muted, #f1f5f9)", textAlign: "left", borderBottom: "2px solid var(--border, #cbd5e1)" }}>
-                          <th style={{ padding: "10px 12px" }}>Column Name</th>
-                          <th style={{ padding: "10px 12px" }}>Semantic Type</th>
-                          <th style={{ padding: "10px 12px" }}>Nullable</th>
-                          <th style={{ padding: "10px 12px" }}>Confidence</th>
-                          <th style={{ padding: "10px 12px" }}>Description / Reasoning</th>
+                          <th style={{ padding: "10px 12px" }}>{t("datasets.colName")}</th>
+                          <th style={{ padding: "10px 12px" }}>{t("datasets.colSemanticType")}</th>
+                          <th style={{ padding: "10px 12px" }}>{t("datasets.colNullable")}</th>
+                          <th style={{ padding: "10px 12px" }}>{t("datasets.colConfidence")}</th>
+                          <th style={{ padding: "10px 12px" }}>{t("datasets.colDescription")}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -514,7 +506,7 @@ function DatasetsPage({
                           <tr key={String(col.name ?? idx)} style={{ borderBottom: "1px solid var(--border, #e2e8f0)", background: idx % 2 === 0 ? "transparent" : "var(--surface-muted, #f8fafc)" }}>
                             <td style={{ padding: "10px 12px", fontWeight: 600 }}><code>{String(col.name ?? "")}</code></td>
                             <td style={{ padding: "10px 12px" }}><span className="status-pill info">{String(col.semantic_type ?? "unknown")}</span></td>
-                            <td style={{ padding: "10px 12px" }}>{col.nullable ? "Yes" : "No"}</td>
+                            <td style={{ padding: "10px 12px" }}>{col.nullable ? t("datasets.yes") : t("datasets.no")}</td>
                             <td style={{ padding: "10px 12px" }}>
                               <span style={{ fontWeight: 600, color: (Number(col.confidence ?? 0) >= 0.8) ? "#16a34a" : "#d97706" }}>
                                 {typeof col.confidence === "number" ? `${(col.confidence * 100).toFixed(0)}%` : "N/A"}
@@ -533,7 +525,7 @@ function DatasetsPage({
             </div>
           ) : (
             <div className="workflow-artifact-empty" style={{ marginTop: "16px", padding: "20px", background: "var(--color-bg-subtle, #f8fafc)", borderRadius: "8px", textAlign: "center" }}>
-              No Understand Data artifact generated for this dataset yet. Select this dataset and click <strong>⚡ Run Understand Agent</strong> above to analyze it.
+              {t("datasets.noUnderstandArtifactDesc")}
             </div>
           )}
         </section>
@@ -774,8 +766,8 @@ function WorkflowPage({
     if (artifact.type === "SEMANTIC_CONTRACT") {
       const contractColumns = Array.isArray(payload.columns)
         ? payload.columns.filter((column): column is Record<string, unknown> =>
-            Boolean(column && typeof column === "object"),
-          )
+          Boolean(column && typeof column === "object"),
+        )
         : [];
       return (
         <div className="understanding-holder">
@@ -990,7 +982,7 @@ function WorkflowPage({
         <p>
           {String(
             payload.summary ??
-              `${artifact.type.replaceAll("_", " ")} generated by ${artifact.agent_role}.`,
+            `${artifact.type.replaceAll("_", " ")} generated by ${artifact.agent_role}.`,
           )}
         </p>
         <div className="artifact-meta">
@@ -1166,12 +1158,7 @@ function WorkflowPage({
               </div>
             </div>
           )}
-          {activeJob && (
-            <ProgressPanel
-              job={activeJob}
-              title={`Running ${workflowStepLabels[workflow.current_step].label}`}
-            />
-          )}
+
           {currentPhaseIndex === 3 ? (
             <div className="execution-mini-steps" aria-label="Publish and monitor mini-steps">
               {executionSteps.map((step) => {
@@ -1290,7 +1277,7 @@ function WorkflowPage({
 }
 
 function App() {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [authenticated, setAuthenticated] = useState(
     () =>
       sessionStorage.getItem("ridepulse.auth") === "true" &&
@@ -1512,12 +1499,16 @@ function App() {
       await onComplete();
       setActiveJob(null);
       setRetryAction(null);
-      setToast("Job completed successfully.");
+      setToast(
+        language === "vi"
+          ? "Tác vụ đã hoàn thành thành công."
+          : "Job completed successfully.",
+      );
     } else {
       setRetryAction(() => () => void pollJob(acceptedJob, onComplete, jobApi));
       setError(
         current.error ??
-          "The job did not complete. Retry the operation when ready.",
+        "The job did not complete. Retry the operation when ready.",
       );
     }
   }
@@ -1543,6 +1534,12 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    if (wizardStep === 2 && dataset && !profile && !activeJob && dataset.status !== "PROFILE_READY") {
+      void startAnalysis();
+    }
+  }, [wizardStep, dataset, profile, activeJob]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function importDataset(file: File) {
     if (!canOperate || activeJob) return;
     setError("");
@@ -1562,7 +1559,6 @@ function App() {
   }
 
   async function deleteDataset(id: string) {
-    if (!window.confirm("Are you sure you want to delete this dataset?")) return;
     try {
       await api.deleteDataset(id);
       setDatasets((current) => current.filter((d) => d.id !== id));
@@ -1573,7 +1569,7 @@ function App() {
         if (nextId) sessionStorage.setItem("ridepulse.dataset", nextId);
         else sessionStorage.removeItem("ridepulse.dataset");
       }
-      setToast("Dataset removed from workspace.");
+      setToast(t("datasets.removedToast"));
     } catch (err) {
       setError(getErrorMessage(err, "Unable to delete dataset."));
     }
@@ -1604,8 +1600,8 @@ function App() {
       setAuditLogs(await api.listAuditLogs());
       setToast(
         action === "approve"
-          ? "Rule approved for execution."
-          : "Proposal rejected and kept out of execution.",
+          ? (language === "vi" ? "Đã chấp nhận quy tắc thực thi." : "Rule approved for execution.")
+          : (language === "vi" ? "Đã từ chối đề xuất quy tắc." : "Proposal rejected and kept out of execution."),
       );
       setError("");
     } catch (err) {
@@ -1621,7 +1617,7 @@ function App() {
       setProposals(await api.listProposals(dataset.id, workflow?.id));
       setRuleConfigurations(await api.listRuleConfigurations(dataset.id));
       setAuditLogs(await api.listAuditLogs());
-      setToast("Proposal removed. Audit history was retained.");
+      setToast(language === "vi" ? "Đã xóa đề xuất quy tắc." : "Proposal removed. Audit history was retained.");
       setError("");
     } catch (err) {
       setError(getErrorMessage(err, "Unable to delete proposal."));
@@ -1637,7 +1633,7 @@ function App() {
       await api.updateRuleConfiguration(id, input);
       setRuleConfigurations(await api.listRuleConfigurations(dataset.id));
       setAuditLogs(await api.listAuditLogs());
-      setToast("Execution settings saved.");
+      setToast(language === "vi" ? "Đã lưu thiết lập cấu hình thực thi." : "Execution settings saved.");
     } catch (err) {
       setError(getErrorMessage(err, "Unable to update rule settings."));
     }
@@ -1703,7 +1699,7 @@ function App() {
       setProposals(await api.listProposals(dataset.id, workflow?.id));
       setAuditLogs(await api.listAuditLogs());
       setEditingProposal(null);
-      setToast("Proposal edited and marked ready for approval.");
+      setToast(language === "vi" ? "Đã chỉnh sửa quy tắc thành công." : "Proposal edited and marked ready for approval.");
     } catch (err) {
       setError(getErrorMessage(err, "Unable to edit proposal."));
     }
@@ -1716,7 +1712,7 @@ function App() {
       setProposals(await api.listProposals(dataset.id, workflow?.id));
       setAuditLogs(await api.listAuditLogs());
       setManualRuleOpen(false);
-      setToast("Manual rule created and queued for approval.");
+      setToast(language === "vi" ? "Đã tạo quy tắc thủ công mới." : "Manual rule created and queued for approval.");
     } catch (err) {
       setError(getErrorMessage(err, "Unable to create manual rule."));
     }
@@ -1793,13 +1789,6 @@ function App() {
           await workflowApi.listWorkflowArtifacts(currentWorkflow.id),
         );
         setProposals(await api.listProposals(dataset.id, currentWorkflow.id));
-        // Entering from dataset selection must never execute a ready stage.
-        // The steward first sees the selected current activity and explicitly
-        // chooses its primary action (notably Understand data).
-        setToast(
-          `Ready to ${workflowStepLabels[currentWorkflow.current_step].label.toLowerCase()}.`,
-        );
-        return;
       }
       const queuedJob = await workflowApi.runWorkflowStep(
         currentWorkflow.id,
@@ -1971,8 +1960,8 @@ function App() {
                 },
                 {
                   id: 3,
-                  title: t("wizard.step4Title"),
-                  desc: t("wizard.step4Desc"),
+                  title: t("wizard.step3Title"),
+                  desc: t("wizard.step3Desc"),
                 },
                 {
                   id: 4,
@@ -1988,13 +1977,12 @@ function App() {
                   )}
                   <button
                     type="button"
-                    className={`wizard-step-node ${
-                      wizardStep === step.id
-                        ? "active"
-                        : wizardStep > step.id
-                          ? "completed"
-                          : ""
-                    }`}
+                    className={`wizard-step-node ${wizardStep === step.id
+                      ? "active"
+                      : wizardStep > step.id
+                        ? "completed"
+                        : ""
+                      }`}
                     onClick={() => {
                       setShowAdmin(false);
                       setWizardStep(step.id);
@@ -2042,24 +2030,39 @@ function App() {
               <button onClick={() => setError("")}>×</button>
             </div>
           )}
-          {toast && (
-            <div className="alert success">
-              <strong>Done</strong>
-              <span>{toast}</span>
-              <button onClick={() => setToast("")}>×</button>
+          {(toast || activeJob) && (
+            <div className="floating-toasts-stack">
+              {activeJob && (
+                <ProgressPanel
+                  job={activeJob}
+                  title={
+                    activeJob.type === "INGEST_PROFILE"
+                      ? (language === "vi" ? "Đang phân tích hồ sơ dữ liệu…" : "Building dataset profile")
+                      : activeJob.type === "PROPOSE_RULES"
+                        ? (language === "vi" ? "Đang sinh đề xuất quy tắc…" : "Generating rule proposals")
+                        : (language === "vi" ? "Đang chạy kiểm thử quy tắc…" : "Running approved checks")
+                  }
+                />
+              )}
+              {toast && (
+                <div className="toast-notification">
+                  <span className="toast-icon">✅</span>
+                  <div className="toast-content">
+                    <span className="toast-title">
+                      {language === "vi" ? "Thông báo" : "Notification"}
+                    </span>
+                    <span className="toast-message">{toast}</span>
+                  </div>
+                  <button
+                    className="toast-close"
+                    onClick={() => setToast("")}
+                    title={language === "vi" ? "Đóng" : "Close"}
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
             </div>
-          )}
-          {activeJob && (
-            <ProgressPanel
-              job={activeJob}
-              title={
-                activeJob.type === "INGEST_PROFILE"
-                  ? "Building dataset profile"
-                  : activeJob.type === "PROPOSE_RULES"
-                    ? "Generating rule proposals"
-                    : "Running approved checks"
-              }
-            />
           )}
 
           {showAdmin && canAdmin ? (
@@ -2077,41 +2080,27 @@ function App() {
               {/* STEP 1: Dataset Preparation */}
               {wizardStep === 1 && (
                 <div>
-                  <div style={{ marginBottom: "16px", display: "flex", justifyContent: "flex-end" }}>
-                    {dataset && (
-                      <button
-                        className="button secondary"
-                        onClick={() => setShowDataExplorer(!showDataExplorer)}
-                      >
-                        {showDataExplorer ? "← Catalog view" : "Data Explorer →"}
-                      </button>
-                    )}
-                  </div>
-                  {showDataExplorer && dataset ? (
-                    <DataExplorerPage dataset={dataset} />
-                  ) : (
-                    <DatasetsPage
-                      datasets={datasets}
-                      dataset={dataset}
-                      onOpenExplorer={(datasetId) => {
-                        if (datasetId !== dataset?.id) void selectDataset(datasetId);
-                        setShowDataExplorer(true);
-                      }}
-                      onImportDataset={(file) => void importDataset(file)}
-                      onSelectDataset={(id) => void selectDataset(id)}
-                      onDeleteDataset={(id) => void deleteDataset(id)}
-                      onStartUnderstand={(id) => {
-                        if (id !== dataset?.id) void selectDataset(id);
-                        void startWorkflowStep("UNDERSTAND_DATA", true);
-                      }}
-                      canOperate={canOperate}
-                      importing={Boolean(activeJob)}
-                      busy={workflowActionBusy}
-                      workflow={workflow}
-                      artifacts={workflowArtifacts}
-                      profile={profile}
-                    />
-                  )}
+                  <DatasetsPage
+                    datasets={datasets}
+                    dataset={dataset}
+                    onOpenExplorer={(datasetId) => {
+                      if (datasetId !== dataset?.id) void selectDataset(datasetId);
+                      setShowDataExplorer(true);
+                    }}
+                    onImportDataset={(file) => void importDataset(file)}
+                    onSelectDataset={(id) => void selectDataset(id)}
+                    onDeleteDataset={(id) => void deleteDataset(id)}
+                    onStartUnderstand={(id) => {
+                      if (id !== dataset?.id) void selectDataset(id);
+                      void startWorkflowStep("UNDERSTAND_DATA", true);
+                    }}
+                    canOperate={canOperate}
+                    importing={Boolean(activeJob)}
+                    busy={workflowActionBusy}
+                    workflow={workflow}
+                    artifacts={workflowArtifacts}
+                    profile={profile}
+                  />
                 </div>
               )}
 
@@ -2125,14 +2114,18 @@ function App() {
                       <p>{t("wizard.step2Desc")}</p>
                     </div>
                     {dataset && (
-                      <button
-                        className="button primary"
-                        style={{ fontSize: "15px", padding: "10px 20px" }}
-                        disabled={!canOperate || Boolean(activeJob)}
-                        onClick={() => void startAnalysis()}
-                      >
-                        ⚡ {Boolean(activeJob) ? t("datasets.profiling") : "Start Quality Profiling →"}
-                      </button>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" }}>
+                        {profile ? (
+                          <>
+                            <div style={{ width: "48px", height: "48px", borderRadius: "50%", border: `3px solid ${profile.validity_score >= 90 ? "#10b981" : profile.validity_score >= 75 ? "#f59e0b" : "#ef4444"}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "20px", fontWeight: "800", color: profile.validity_score >= 90 ? "#10b981" : profile.validity_score >= 75 ? "#f59e0b" : "#ef4444", background: "var(--surface)", boxShadow: "0 2px 10px rgba(0,0,0,0.05)" }}>
+                              {profile.validity_score >= 90 ? "A" : profile.validity_score >= 75 ? "B" : profile.validity_score >= 60 ? "C" : "D"}
+                            </div>
+                            <span style={{ fontSize: "10px", fontWeight: 700, color: "var(--muted)", letterSpacing: "0.5px" }}>GRADE</span>
+                          </>
+                        ) : activeJob ? (
+                          <div className="workflow-pending-indicator" style={{ width: "24px", height: "24px", margin: "12px" }} />
+                        ) : null}
+                      </div>
                     )}
                   </div>
 
@@ -2140,38 +2133,69 @@ function App() {
                     <div className="alert warning">{t("workflow.noDatasetSelected")}</div>
                   ) : (
                     <div>
-                      {/* Metric cards ONLY for the selected dataset */}
-                      <section className="stat-grid overview-kpis">
-                        <StatCard
-                          label={t("datasets.rows")}
-                          value={(profile?.row_count ?? dataset.row_count).toLocaleString()}
-                          detail={dataset.source_label}
-                          tone="blue"
-                        />
-                        <StatCard
-                          label="Columns"
-                          value={(profile?.columns.length ?? 0).toLocaleString()}
-                          detail="Mapped semantic columns"
-                          tone="green"
-                        />
-                        <StatCard
-                          label={t("overview.completeness")}
-                          value={profile ? `${profile.completeness_score.toFixed(1)}%` : "—"}
-                          detail="Non-null values ratio"
-                          tone="violet"
-                        />
-                        <StatCard
-                          label={t("overview.duplicateRate")}
-                          value={profile ? `${profile.duplicate_rate.toFixed(2)}%` : "—"}
-                          detail="Duplicate rows ratio"
-                          tone={profile && profile.duplicate_rate > 5 ? "amber" : "green"}
-                        />
-                        <StatCard
-                          label="Validity score"
-                          value={profile ? `${profile.validity_score.toFixed(1)}%` : "—"}
-                          detail="Schema & domain validity"
-                          tone="blue"
-                        />
+                      {/* Dataset Header Badges */}
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", marginTop: "16px", marginBottom: "32px", alignItems: "center" }}>
+                        <span className="status-pill" style={{ fontSize: "13px", padding: "6px 12px", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--muted)", display: "flex", alignItems: "center", gap: "6px" }}>
+                          <strong style={{ color: "var(--ink)", fontWeight: 600 }}>{t("datasets.rows")}:</strong>
+                          {(profile?.row_count ?? dataset.row_count).toLocaleString()}
+                        </span>
+                        <span className="status-pill" style={{ fontSize: "13px", padding: "6px 12px", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--muted)", display: "flex", alignItems: "center", gap: "6px" }}>
+                          <strong style={{ color: "var(--ink)", fontWeight: 600 }}>{t("datasets.columns")}:</strong>
+                          {profile?.columns.length ?? 0}
+                        </span>
+                        <span className="status-pill" style={{ fontSize: "13px", padding: "6px 12px", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--muted)", display: "flex", alignItems: "center", gap: "6px" }}>
+                          <strong style={{ color: "var(--ink)", fontWeight: 600 }}>{t("datasets.source")}:</strong>
+                          {dataset.source_label}
+                        </span>
+                      </div>
+
+                      {/* Quality Metrics */}
+                      <div className="section-header" style={{ marginBottom: "20px" }}>
+                        <h3 style={{ fontSize: "18px", fontWeight: "700", color: "var(--ink)" }}>{t("datasets.qualityMetrics")}</h3>
+                      </div>
+
+                      <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px", marginBottom: "32px" }}>
+                        {/* Completeness Card */}
+                        <div style={{ padding: "24px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", boxShadow: "0 2px 12px rgba(0,0,0,0.03)" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "16px" }}>
+                            <span style={{ fontSize: "13px", fontWeight: "700", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{t("overview.completeness")}</span>
+                            <span style={{ fontSize: "28px", fontWeight: "800", color: "var(--accent)", lineHeight: "1" }}>{profile ? `${profile.completeness_score.toFixed(1)}%` : "—"}</span>
+                          </div>
+                          {profile && (
+                            <div style={{ width: "100%", height: "8px", background: "var(--surface-muted)", borderRadius: "999px", overflow: "hidden", marginBottom: "16px" }}>
+                              <div style={{ width: `${profile.completeness_score}%`, height: "100%", background: "var(--accent)", borderRadius: "999px", transition: "width 1s cubic-bezier(0.4, 0, 0.2, 1)" }} />
+                            </div>
+                          )}
+                          <div style={{ fontSize: "13px", color: "var(--muted)", lineHeight: "1.4" }}>{t("datasets.nonNullRatio")}</div>
+                        </div>
+
+                        {/* Duplicate Rate Card */}
+                        <div style={{ padding: "24px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", boxShadow: "0 2px 12px rgba(0,0,0,0.03)" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "16px" }}>
+                            <span style={{ fontSize: "13px", fontWeight: "700", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{t("overview.duplicateRate")}</span>
+                            <span style={{ fontSize: "28px", fontWeight: "800", color: profile && profile.duplicate_rate > 5 ? "#d97706" : "#059669", lineHeight: "1" }}>{profile ? `${profile.duplicate_rate.toFixed(2)}%` : "—"}</span>
+                          </div>
+                          {profile && (
+                            <div style={{ width: "100%", height: "8px", background: "var(--surface-muted)", borderRadius: "999px", overflow: "hidden", marginBottom: "16px" }}>
+                              <div style={{ width: `${Math.min(profile.duplicate_rate, 100)}%`, height: "100%", background: profile.duplicate_rate > 5 ? "#d97706" : "#059669", borderRadius: "999px", transition: "width 1s cubic-bezier(0.4, 0, 0.2, 1)" }} />
+                            </div>
+                          )}
+                          <div style={{ fontSize: "13px", color: "var(--muted)", lineHeight: "1.4" }}>{t("datasets.duplicateRowsRatio")}</div>
+                        </div>
+
+                        {/* Validity Score Card */}
+                        <div style={{ padding: "24px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", boxShadow: "0 2px 12px rgba(0,0,0,0.03)" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "16px" }}>
+                            <span style={{ fontSize: "13px", fontWeight: "700", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{t("datasets.validityScore")}</span>
+                            <span style={{ fontSize: "28px", fontWeight: "800", color: "#2563eb", lineHeight: "1" }}>{profile ? `${profile.validity_score.toFixed(1)}%` : "—"}</span>
+                          </div>
+                          {profile && (
+                            <div style={{ width: "100%", height: "8px", background: "var(--surface-muted)", borderRadius: "999px", overflow: "hidden", marginBottom: "16px" }}>
+                              <div style={{ width: `${profile.validity_score}%`, height: "100%", background: "#2563eb", borderRadius: "999px", transition: "width 1s cubic-bezier(0.4, 0, 0.2, 1)" }} />
+                            </div>
+                          )}
+                          <div style={{ fontSize: "13px", color: "var(--muted)", lineHeight: "1.4" }}>{t("datasets.schemaDomainValidity")}</div>
+                        </div>
                       </section>
 
                       {/* Schema & Column Breakdown Table for selected dataset */}
@@ -2179,19 +2203,19 @@ function App() {
                         <section className="panel" style={{ marginTop: "24px", padding: "24px" }}>
                           <div className="panel-heading" style={{ marginBottom: "16px" }}>
                             <div>
-                              <span className="eyebrow">SCHEMA BREAKDOWN</span>
-                              <h3>Column Health & Profiling ({profile.columns.length})</h3>
+                              <span className="eyebrow">{t("datasets.schemaBreakdown")}</span>
+                              <h3>{t("datasets.columnHealth").replace("{{count}}", profile.columns.length.toString())}</h3>
                             </div>
                           </div>
                           <div style={{ overflowX: "auto" }}>
                             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "14px" }}>
                               <thead>
-                                <tr style={{ borderBottom: "2px solid var(--border, #cbd5e1)", textAlign: "left" }}>
-                                  <th style={{ padding: "10px" }}>Column Name</th>
-                                  <th style={{ padding: "10px" }}>Data Type</th>
-                                  <th style={{ padding: "10px" }}>Null Rate</th>
-                                  <th style={{ padding: "10px" }}>Uniqueness</th>
-                                  <th style={{ padding: "10px" }}>Sample Value</th>
+                                <tr style={{ borderBottom: "2px solid var(--border, #cbd5e1)", textAlign: "left", whiteSpace: "nowrap" }}>
+                                  <th style={{ padding: "10px" }}>{t("datasets.colName")}</th>
+                                  <th style={{ padding: "10px" }}>{t("datasets.colDataType")}</th>
+                                  <th style={{ padding: "10px" }}>{t("datasets.colNullRate")}</th>
+                                  <th style={{ padding: "10px" }}>{t("datasets.colUniqueness")}</th>
+                                  <th style={{ padding: "10px" }}>{t("datasets.colSampleValue")}</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -2200,7 +2224,7 @@ function App() {
                                     <td style={{ padding: "10px", fontWeight: 600 }}><code>{col.name}</code></td>
                                     <td style={{ padding: "10px" }}><span className="status-pill info">{col.data_type}</span></td>
                                     <td style={{ padding: "10px" }}>{(col.null_rate * 100).toFixed(1)}%</td>
-                                    <td style={{ padding: "10px" }}>{col.distinct_count !== undefined ? `${col.distinct_count.toLocaleString()} values` : "—"}</td>
+                                    <td style={{ padding: "10px" }}>{col.distinct_count !== undefined ? t("datasets.distinctValues").replace("{{count}}", col.distinct_count.toLocaleString()) : "—"}</td>
                                     <td style={{ padding: "10px", color: "var(--muted)", fontSize: "12px" }}><code>{col.sample_value || "—"}</code></td>
                                   </tr>
                                 ))}
@@ -2209,27 +2233,33 @@ function App() {
                           </div>
                         </section>
                       ) : (
-                        <div style={{ textAlign: "center", padding: "36px", background: "var(--surface-muted, #f8fafc)", borderRadius: "8px", marginTop: "24px", border: "1px solid var(--border, #e2e8f0)" }}>
-                          <p className="muted" style={{ marginBottom: "16px" }}>No profile built yet for this dataset.</p>
-                          <button
-                            className="button primary"
-                            disabled={!canOperate || Boolean(activeJob)}
-                            onClick={() => void startAnalysis()}
-                          >
-                            ⚡ Start Quality Profiling →
-                          </button>
+                        <div style={{ textAlign: "center", padding: "40px", background: "var(--surface-muted, #f8fafc)", borderRadius: "12px", marginTop: "24px", border: "1px dashed var(--border, #e2e8f0)" }}>
+                          <div className="workflow-pending-indicator" style={{ margin: "0 auto 16px auto", width: "20px", height: "20px" }} />
+                          <p className="muted" style={{ margin: 0, fontSize: "14px" }}>{t("datasets.profilingQuality") || t("datasets.profiling")}</p>
                         </div>
                       )}
 
-                      {/* Quality Observatory & Trend Charts for selected dataset */}
-                      <div style={{ marginTop: "32px" }}>
-                        <VisualizationPage
-                          profile={profile}
-                          results={dqResults}
-                          anomalies={dqAnomalies}
-                          trends={qualityTrends}
-                        />
-                      </div>
+                      {/* LLM Data Analyst Summary */}
+                      {profile && (
+                        <div style={{ marginTop: "32px", padding: "24px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", boxShadow: "0 2px 12px rgba(0,0,0,0.03)" }}>
+                          <div style={{ display: "flex", gap: "12px", alignItems: "center", marginBottom: "16px" }}>
+                            <h3 style={{ fontSize: "16px", fontWeight: "700", color: "var(--ink)", margin: 0 }}>{t("datasets.aiSummaryTitle")}</h3>
+                          </div>
+                          <div style={{ fontSize: "14px", lineHeight: "1.6", color: "var(--ink-soft)" }}>
+                            <p style={{ margin: 0 }}>
+                              Dựa trên kết quả phân tích hệ thống, tập dữ liệu <strong>{dataset.name}</strong> đạt mức độ hoàn thiện <strong>{profile.completeness_score.toFixed(1)}%</strong> và độ tin cậy cấu trúc <strong>{profile.validity_score.toFixed(1)}%</strong>.
+                              {profile.duplicate_rate > 5
+                                ? ` Tuy nhiên, tỷ lệ trùng lặp đang ở ngưỡng cảnh báo (${profile.duplicate_rate.toFixed(1)}%), có thể gây ảnh hưởng đến tính toàn vẹn của các phân tích chuyên sâu.`
+                                : ` Tỷ lệ trùng lặp được duy trì ở mức an toàn (${profile.duplicate_rate.toFixed(1)}%), đảm bảo dữ liệu sạch và không bị nhiễu.`
+                              }
+                              {profile.validity_score < 80
+                                ? ` Khuyến nghị thiết lập thêm các quy tắc kiểm duyệt (Guardrails) nghiêm ngặt ở bước tiếp theo để ngăn chặn dữ liệu rác thâm nhập vào các luồng xử lý downstream.`
+                                : ` Chất lượng dữ liệu nhìn chung đạt chuẩn (Grade ${profile.validity_score >= 90 ? "A" : profile.validity_score >= 75 ? "B" : "C"}) và hoàn toàn đủ điều kiện sử dụng làm nguồn tham chiếu tin cậy.`
+                              }
+                            </p>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -2257,24 +2287,61 @@ function App() {
                     pipelineMode={false}
                   />
 
-                  <div style={{ marginTop: "32px", borderTop: "2px dashed var(--border, #cbd5e1)", paddingTop: "32px" }}>
-                    <h2 style={{ fontSize: "18px", fontWeight: 600, marginBottom: "16px" }}>
-                      {t("runs.title")}
-                    </h2>
-                    <RunsPage
-                      activeRun={activeRun}
-                      results={dqResults}
-                      anomalies={dqAnomalies}
-                      approvedCount={approvedRules.length}
-                      busy={Boolean(activeJob)}
-                      canOperate={canOperate}
-                      onRun={() => void runApprovedRules()}
-                    />
-                  </div>
+                  {/* Execution Section: Show action banner if approved rules exist but no active run yet */}
+                  {!activeRun && approvedRules.length > 0 && (
+                    <div style={{
+                      marginTop: "24px",
+                      padding: "20px 24px",
+                      background: "linear-gradient(135deg, rgba(37, 99, 235, 0.04) 0%, rgba(16, 185, 129, 0.04) 100%)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "16px",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center"
+                    }}>
+                      <div>
+                        <span className="status-pill success" style={{ fontSize: "11px", marginBottom: "6px", display: "inline-flex" }}>
+                          ✓ {approvedRules.length} quy tắc đã sẵn sàng
+                        </span>
+                        <h3 style={{ fontSize: "16px", fontWeight: "700", color: "var(--ink)", margin: "4px 0" }}>
+                          {t("runs.title")}
+                        </h3>
+                        <p style={{ fontSize: "13px", color: "var(--muted)", margin: 0 }}>
+                          {t("runs.noRunDesc")}
+                        </p>
+                      </div>
+                      <button
+                        className="button primary"
+                        style={{ fontSize: "14px", padding: "10px 20px" }}
+                        onClick={() => void runApprovedRules()}
+                        disabled={Boolean(activeJob) || !canOperate}
+                      >
+                        ⚡ {t("runs.runApproved")}
+                      </button>
+                    </div>
+                  )}
 
-                  <div style={{ marginTop: "32px" }}>
-                    <AuditPage logs={auditLogs} />
-                  </div>
+                  {/* Show full execution monitoring page if a run exists */}
+                  {activeRun && (
+                    <div style={{ marginTop: "32px", borderTop: "1px solid var(--border)", paddingTop: "24px" }}>
+                      <RunsPage
+                        activeRun={activeRun}
+                        results={dqResults}
+                        anomalies={dqAnomalies}
+                        approvedCount={approvedRules.length}
+                        busy={Boolean(activeJob)}
+                        canOperate={canOperate}
+                        onRun={() => void runApprovedRules()}
+                      />
+                    </div>
+                  )}
+
+                  {/* Audit History Log */}
+                  {auditLogs.length > 0 && (
+                    <div style={{ marginTop: "40px", borderTop: "1px solid var(--border)", paddingTop: "24px" }}>
+                      <AuditPage logs={auditLogs} />
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -2386,7 +2453,7 @@ function OverviewPage({
   const profiledRows = qualityRows.filter((row) => row.score !== null);
   const averageQuality = profiledRows.length
     ? profiledRows.reduce((sum, row) => sum + (row.score ?? 0), 0) /
-      profiledRows.length
+    profiledRows.length
     : null;
   const averageCompleteness = profiledRows.length
     ? profiledRows.reduce((sum, row) => sum + (row.profile?.completeness_score ?? 0), 0) / profiledRows.length
@@ -2734,19 +2801,22 @@ function RulesPage({
   const [expandedConfigurationId, setExpandedConfigurationId] = useState<
     string | null
   >(null);
-  const pending = proposals.filter((proposal) =>
-    ["PROPOSED", "EDITED"].includes(proposal.status),
+  const safeProposals = Array.isArray(proposals) ? proposals : [];
+  const safeConfigurations = Array.isArray(configurations) ? configurations : [];
+
+  const pending = safeProposals.filter((proposal) =>
+    proposal && ["PROPOSED", "EDITED"].includes(proposal.status),
   );
   const { t } = useI18n();
-  const approved = proposals.filter(
-    (proposal) => proposal.status === "APPROVED",
+  const approved = safeProposals.filter(
+    (proposal) => proposal && proposal.status === "APPROVED",
   );
   return (
     <>
       <div className="page-heading">
         <div>
           <span className="eyebrow">
-            {pipelineMode ? t("rules.eyebrowPipeline") : t("rules.eyebrowHuman")}
+            STEP 3 · {t("wizard.step3Title").toUpperCase()}
           </span>
           <h1>
             {pipelineMode
@@ -2758,52 +2828,45 @@ function RulesPage({
           </p>
         </div>
         <div className="heading-actions">
-          {canOperate && (
-            <button className="button secondary" onClick={onCreateManual}>
-              {t("rules.addManual")}
-            </button>
-          )}
-          {!pipelineMode && (
-            <button
-              className="button primary"
-              onClick={onRun}
-              disabled={!approved.length || busy || !canOperate}
-            >
-              Run approved rules <span>→</span>
-            </button>
-          )}
         </div>
       </div>
-      {!profileReady ? (
+      {busy ? (
+        <section className="panel" style={{ padding: "48px 24px", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: "16px", marginTop: "16px" }}>
+          <div className="workflow-pending-indicator" style={{ width: "32px", height: "32px", marginBottom: "16px" }} />
+          <h2 style={{ fontSize: "18px", fontWeight: "700", color: "var(--ink)", margin: "0 0 8px 0" }}>
+            {t("rules.generatingRules") || "Đang sinh quy tắc…"}
+          </h2>
+          <p style={{ color: "var(--muted)", fontSize: "14px", margin: 0, maxWidth: "480px" }}>
+            {t("rules.runningProposerDesc") || "AI Agent đang phân tích dữ liệu và tự động khởi tạo các quy tắc kiểm soát chất lượng."}
+          </p>
+        </section>
+      ) : !profileReady ? (
         <section className="empty-state">
           <div className="empty-illustration">✦</div>
-          <h2>Profile first, proposals second</h2>
-          <p>
-            Complete the dataset analysis before asking the guarded Agent for
-            proposals.
-          </p>
+          <h2>{t("rules.profileFirstTitle")}</h2>
+          <p>{t("rules.profileFirstDesc")}</p>
           {canOperate && (
             <button className="button secondary" onClick={onCreateManual}>
-              Add manual rule anyway
+              {t("rules.addManualAnyway")}
             </button>
           )}
         </section>
-      ) : !proposals.length ? (
+      ) : !safeProposals.length ? (
         <section className="empty-state">
           <div className="empty-illustration">✦</div>
-          <h2>No proposals yet</h2>
-          <p>Start with an Agent proposal or create a typed rule manually.</p>
+          <h2>{t("rules.noProposalsTitle")}</h2>
+          <p>{t("rules.noProposalsDesc")}</p>
           {canOperate && (
             <div className="dialog-actions">
               <button className="button secondary" onClick={onCreateManual}>
-                Add manual rule
+                {t("rules.addManual")}
               </button>
               <button
                 className="button primary"
                 onClick={onRequestProposals}
                 disabled={busy}
               >
-                Generate proposals →
+                {t("rules.generateProposals")}
               </button>
             </div>
           )}
@@ -2812,27 +2875,27 @@ function RulesPage({
         <>
           <div className="review-summary">
             <div>
-              <span className="eyebrow">REVIEW QUEUE</span>
-              <strong>{pending.length} awaiting decision</strong>
+              <span className="eyebrow">{t("rules.reviewQueue")}</span>
+              <strong>{t("rules.awaitingDecision").replace("{{count}}", pending.length.toString())}</strong>
             </div>
             <div className="review-progress">
               <span
                 style={{
-                  width: `${proposals.length ? ((proposals.length - pending.length) / proposals.length) * 100 : 0}%`,
+                  width: `${safeProposals.length ? ((safeProposals.length - pending.length) / safeProposals.length) * 100 : 0}%`,
                 }}
               />
             </div>
             <span>
-              {approved.length} approved ·{" "}
-              {
-                proposals.filter((proposal) => proposal.status === "REJECTED")
-                  .length
-              }{" "}
-              rejected
+              {t("rules.approvedSummary")
+                .replace("{{approved}}", approved.length.toString())
+                .replace(
+                  "{{rejected}}",
+                  safeProposals.filter((p) => p && p.status === "REJECTED").length.toString(),
+                )}
             </span>
           </div>
           <div className="proposal-list">
-            {proposals.map((proposal) => (
+            {safeProposals.map((proposal) => (
               <ProposalCard
                 key={proposal.id}
                 proposal={proposal}
@@ -2841,8 +2904,8 @@ function RulesPage({
                 onReject={() => onReject(proposal.id)}
                 onEdit={() => onEdit(proposal)}
                 onDelete={() => onDelete(proposal.id)}
-                configuration={configurations.find(
-                  (item) => item.rule_id === proposal.id,
+                configuration={safeConfigurations.find(
+                  (item) => item && item.rule_id === proposal.id,
                 )}
                 onSaveConfiguration={(input) =>
                   onSaveConfiguration(proposal.id, input)
@@ -2885,82 +2948,88 @@ function ProposalCard({
   configurationExpanded: boolean;
   onToggleConfiguration: () => void;
 }) {
-  const pending = ["PROPOSED", "EDITED"].includes(proposal.status);
-  const editable = pending || proposal.status === "APPROVED";
-  const canApprove = proposal.status !== "APPROVED";
-  const canReject = proposal.status !== "REJECTED";
+  const { t } = useI18n();
+  if (!proposal) return null;
+
+  const status = proposal.status || "PROPOSED";
+  const pending = ["PROPOSED", "EDITED"].includes(status);
+  const editable = pending || status === "APPROVED";
+  const canApprove = status !== "APPROVED";
+  const canReject = status !== "REJECTED";
   const tone =
-    proposal.status === "REJECTED"
+    status === "REJECTED"
       ? "danger"
-      : proposal.status === "APPROVED"
+      : status === "APPROVED"
         ? "success"
         : "warning";
+  const ruleType = proposal.rule?.type ?? "";
+  const severity = proposal.severity ?? "LOW";
+
   return (
-    <article className={`proposal-card ${proposal.status.toLowerCase()}`}>
+    <article className={`proposal-card ${status.toLowerCase()}`}>
       <div className="proposal-top">
-        <div className={`rule-type ${proposal.rule.type}`}>
+        <div className={`rule-type ${ruleType}`}>
           <span>✦</span>
-          {proposal.rule.type.replaceAll("_", " ")}
+          {ruleType ? ruleType.replaceAll("_", " ") : "RULE"}
         </div>
         <span className="proposal-source">
-          {proposal.source === "MANUAL" ? "Manual rule" : "Agent proposal"}
+          {proposal.source === "MANUAL" ? t("rules.manualSource") : t("rules.agentSource")}
         </span>
-        <StatusPill label={proposal.status} tone={tone} />
-        <span className={`severity ${proposal.severity.toLowerCase()}`}>
-          {proposal.severity} severity
+        <StatusPill label={status} tone={tone} />
+        <span className={`severity ${severity.toLowerCase()}`}>
+          {t("rules.severityLevel").replace("{{severity}}", severity)}
         </span>
       </div>
       <div className="proposal-main">
         <div className="proposal-content">
-          <h3>{proposal.title}</h3>
-          <p>{proposal.description}</p>
+          <h3>{proposal.title || "Untitled Rule"}</h3>
+          <p>{proposal.description || ""}</p>
           <div className="rule-code">
-            <span>TYPE</span>
+            <span>{t("rules.type")}</span>
             <code>{formatRule(proposal.rule)}</code>
           </div>
         </div>
         <div className="confidence">
-          <span>CONFIDENCE</span>
-          <strong>{Math.round(proposal.confidence * 100)}%</strong>
+          <span>{t("rules.confidence")}</span>
+          <strong>{Math.round((proposal.confidence ?? 1) * 100)}%</strong>
           <div className="confidence-track">
-            <span style={{ width: `${proposal.confidence * 100}%` }} />
+            <span style={{ width: `${(proposal.confidence ?? 1) * 100}%` }} />
           </div>
         </div>
       </div>
       <div className="evidence-row">
-        <span className="evidence-label">EVIDENCE</span>
-        <span>{proposal.evidence_summary}</span>
-        {proposal.evidence_refs.map((ref) => (
+        <span className="evidence-label">{t("rules.evidence")}</span>
+        <span>{proposal.evidence_summary || "—"}</span>
+        {(proposal.evidence_refs ?? []).map((ref) => (
           <code key={ref}>{ref}</code>
         ))}
       </div>
-      {(editable || proposal.status === "REJECTED") && canOperate && (
+      {(editable || status === "REJECTED") && canOperate && (
         <div className="proposal-actions">
           {canReject && (
             <button className="button ghost proposal-action reject" onClick={onReject}>
-              {proposal.status === "APPROVED"
-                ? "Reject approved rule"
-                : "Reject"}
+              {status === "APPROVED"
+                ? t("rules.rejectApproved")
+                : t("rules.reject")}
             </button>
           )}
           <button className="button secondary proposal-action edit" onClick={onEdit}>
             {pending
-              ? "Edit"
-              : proposal.status === "APPROVED"
-                ? "Edit approved rule"
-                : "Edit rejected rule"}
+              ? t("rules.edit")
+              : status === "APPROVED"
+                ? t("rules.editApproved")
+                : t("rules.editRejected")}
           </button>
           {canApprove && (
             <button className="button primary proposal-action approve" onClick={onApprove}>
-              {proposal.status === "REJECTED"
-                ? "Re-approve rule"
-                : "Approve rule"}{" "}
-              <span>→</span>
+              {status === "REJECTED"
+                ? t("rules.reApprove")
+                : t("rules.approveRule")}
             </button>
           )}
-          {proposal.status !== "APPROVED" && (
+          {status !== "APPROVED" && (
             <button className="button ghost proposal-action delete" onClick={onDelete}>
-              Delete
+              {t("rules.delete")}
             </button>
           )}
         </div>
@@ -2988,6 +3057,7 @@ function RuleConfigurationControl({
   onToggle: () => void;
   onSave: (input: RuleConfigurationInput) => void;
 }) {
+  const { t } = useI18n();
   const [executionStatus, setExecutionStatus] = useState<
     RuleConfiguration["execution_status"]
   >(configuration?.execution_status ?? "ACTIVE");
@@ -3002,10 +3072,10 @@ function RuleConfigurationControl({
   }, [configuration]);
   const frequencyLabel =
     frequency === "MANUAL"
-      ? "Manual only"
+      ? t("rules.manualOnly")
       : frequency === "HOURLY"
-        ? "Hourly"
-        : "Daily";
+        ? t("rules.hourly")
+        : t("rules.daily");
   const panelId = `rule-settings-${configuration?.rule_id ?? "default"}`;
   return (
     <section className={`rule-settings-shell ${expanded ? "expanded" : ""}`}>
@@ -3020,16 +3090,16 @@ function RuleConfigurationControl({
           className={`configuration-state ${executionStatus.toLowerCase()}`}
         >
           <i />
-          {executionStatus === "ACTIVE" ? "Active" : "Paused"}
+          {executionStatus === "ACTIVE" ? t("rules.active") : t("rules.paused")}
         </span>
         <span className="configuration-summary">
-          <strong>Execution settings</strong>
+          <strong>{t("rules.executionSettings")}</strong>
           <small>
             {frequencyLabel} · {timezone}
           </small>
         </span>
         <span className="configuration-action">
-          {expanded ? "Hide options" : "Configure"}
+          {expanded ? t("rules.hideOptions") : t("rules.configure")}
           <i aria-hidden="true">⌄</i>
         </span>
       </button>
@@ -3037,7 +3107,7 @@ function RuleConfigurationControl({
         <div className="rule-settings" id={panelId}>
           <div className="rule-settings-fields">
             <label>
-              Status
+              {t("rules.status")}
               <select
                 value={executionStatus}
                 onChange={(event) =>
@@ -3046,12 +3116,12 @@ function RuleConfigurationControl({
                   )
                 }
               >
-                <option value="ACTIVE">Active</option>
-                <option value="PAUSED">Paused</option>
+                <option value="ACTIVE">{t("rules.active")}</option>
+                <option value="PAUSED">{t("rules.paused")}</option>
               </select>
             </label>
             <label>
-              Schedule
+              {t("rules.schedule")}
               <select
                 value={frequency}
                 onChange={(event) =>
@@ -3061,13 +3131,13 @@ function RuleConfigurationControl({
                   )
                 }
               >
-                <option value="MANUAL">Manual only</option>
-                <option value="HOURLY">Hourly</option>
-                <option value="DAILY">Daily</option>
+                <option value="MANUAL">{t("rules.manualOnly")}</option>
+                <option value="HOURLY">{t("rules.hourly")}</option>
+                <option value="DAILY">{t("rules.daily")}</option>
               </select>
             </label>
             <label>
-              Timezone
+              {t("rules.timezone")}
               <input
                 value={timezone}
                 onChange={(event) => setTimezone(event.target.value)}
@@ -3084,7 +3154,7 @@ function RuleConfigurationControl({
                 })
               }
             >
-              Save settings
+              {t("rules.saveSettings")}
             </button>
           </div>
         </div>
@@ -3121,13 +3191,6 @@ function RunsPage({
             {t("runs.subtitle")}
           </p>
         </div>
-        <button
-          className="button primary"
-          onClick={onRun}
-          disabled={!approvedCount || busy || !canOperate}
-        >
-          {t("runs.runApproved")}
-        </button>
       </div>
       {!activeRun ? (
         <section className="empty-state">
@@ -3150,11 +3213,12 @@ function RunsPage({
         <>
           <div className="run-hero">
             <div>
-              <span className="eyebrow">LATEST RUN</span>
+              <span className="eyebrow">{t("runs.latestRun")}</span>
               <h2>{activeRun.id}</h2>
               <p>
-                Created {formatTime(activeRun.created_at)} ·{" "}
-                {activeRun.rule_ids.length} approved rules
+                {t("runs.created")
+                  .replace("{{time}}", formatTime(activeRun.created_at))
+                  .replace("{{count}}", activeRun.rule_ids.length.toString())}
               </p>
             </div>
             <StatusPill
@@ -3165,27 +3229,27 @@ function RunsPage({
           {activeRun.status === "SUCCEEDED" && (
             <div className="stat-grid run-stats">
               <StatCard
-                label="Checked rows"
+                label={t("runs.checkedRows")}
                 value={activeRun.total_checked.toLocaleString()}
-                detail="Across approved checks"
+                detail={t("runs.checkedRowsDetail")}
                 tone="blue"
               />
               <StatCard
-                label="Failed rows"
+                label={t("runs.failedRows")}
                 value={activeRun.total_failed.toLocaleString()}
-                detail="Bounded result summary"
+                detail={t("runs.failedRowsDetail")}
                 tone="amber"
               />
               <StatCard
-                label="Rules executed"
+                label={t("runs.rulesExecuted")}
                 value={`${activeRun.rule_ids.length}`}
-                detail="Approved versions only"
+                detail={t("runs.rulesExecutedDetail")}
                 tone="green"
               />
               <StatCard
-                label="Raw values"
+                label={t("runs.rawValues")}
                 value="0"
-                detail="Never returned to browser"
+                detail={t("runs.rawValuesDetail")}
                 tone="violet"
               />
             </div>
@@ -3196,16 +3260,16 @@ function RunsPage({
             >
               <div className="panel-heading">
                 <div>
-                  <span className="eyebrow">ANOMALY DETECTION</span>
+                  <span className="eyebrow">{t("runs.anomalyDetection")}</span>
                   <h3>
                     {anomalies.length
-                      ? "Signals requiring attention"
-                      : "No anomalous shifts detected"}
+                      ? t("runs.signalsAttention")
+                      : t("runs.noAnomalousShifts")}
                   </h3>
                 </div>
                 <StatusPill
                   label={
-                    anomalies.length ? `${anomalies.length} detected` : "CLEAR"
+                    anomalies.length ? t("runs.anomaliesDetected").replace("{{count}}", anomalies.length.toString()) : t("runs.clear")
                   }
                   tone={anomalies.length ? "warning" : "success"}
                 />
@@ -3226,27 +3290,27 @@ function RunsPage({
                         <strong>{anomaly.rule_title}</strong>
                         <span>
                           {anomaly.anomaly_type === "Z_SCORE_SPIKE"
-                            ? "Historical spike"
-                            : "High failure rate"}
+                            ? t("runs.historicalSpike")
+                            : t("runs.highFailureRate")}
                         </span>
                       </div>
                       <div className="anomaly-metrics">
                         <div>
-                          <small>CURRENT</small>
+                          <small>{t("runs.current")}</small>
                           <strong>
                             {(anomaly.current_rate * 100).toFixed(2)}%
                           </strong>
                         </div>
                         <div>
-                          <small>BASELINE</small>
+                          <small>{t("runs.baseline")}</small>
                           <strong>
                             {anomaly.historical_mean == null
-                              ? "Cold start"
+                              ? t("runs.coldStart")
                               : `${(anomaly.historical_mean * 100).toFixed(2)}%`}
                           </strong>
                         </div>
                         <div>
-                          <small>Z-SCORE</small>
+                          <small>{t("runs.zScore")}</small>
                           <strong>
                             {anomaly.z_score == null
                               ? "—"
@@ -3264,19 +3328,19 @@ function RunsPage({
           <div className="panel">
             <div className="panel-heading">
               <div>
-                <span className="eyebrow">RESULTS</span>
-                <h3>Rule outcomes</h3>
+                <span className="eyebrow">{t("runs.resultsTitle")}</span>
+                <h3>{t("runs.ruleOutcomes")}</h3>
               </div>
               <span className="panel-caption">{results.length} checks</span>
             </div>
             {results.length ? (
               <div className="results-table">
                 <div className="result-header">
-                  <span>RULE</span>
-                  <span>STATUS</span>
-                  <span>CHECKED</span>
-                  <span>FAILED</span>
-                  <span>FAILED IDS</span>
+                  <span>{t("runs.ruleHeader")}</span>
+                  <span>{t("runs.statusHeader")}</span>
+                  <span>{t("runs.checkedHeader")}</span>
+                  <span>{t("runs.failedHeader")}</span>
+                  <span>{t("runs.failedIdsHeader")}</span>
                 </div>
                 {results.map((result) => (
                   <div className="result-row" key={result.rule_id}>
@@ -3334,12 +3398,12 @@ function TrendChart({ points }: { points: QualityTrendPoint[] }) {
       points.length === 1
         ? width / 2
         : insetLeft +
-          (index / (points.length - 1)) * (width - insetLeft - insetRight),
+        (index / (points.length - 1)) * (width - insetLeft - insetRight),
     y:
       height -
       insetBottom -
       ((point.quality_score - minimum) / range) *
-        (height - insetTop - insetBottom),
+      (height - insetTop - insetBottom),
     point,
   }));
   const line = coordinates.map(({ x, y }) => `${x},${y}`).join(" ");
@@ -3439,7 +3503,7 @@ function AnomalyMonitoringPanel({
   const historicalReady = trends.length >= 6;
   const detectionMode =
     anomalies[0]?.detection_mode === "HISTORICAL" ||
-    (!anomalies.length && historicalReady)
+      (!anomalies.length && historicalReady)
       ? "Historical baseline"
       : "Cold-start screen";
   return (
@@ -4318,24 +4382,24 @@ function AdminUserRow({
 }
 
 function AuditPage({ logs }: { logs: AuditLog[] }) {
+  const { t } = useI18n();
   return (
     <>
       <div className="page-heading">
         <div>
-          <span className="eyebrow">APPEND-ONLY HISTORY</span>
-          <h1>Audit history</h1>
+          <span className="eyebrow">{t("audit.eyebrow")}</span>
+          <h1>{t("audit.title")}</h1>
           <p>
-            Every state transition and execution remains observable for the
-            Steward.
+            {t("audit.subtitle")}
           </p>
         </div>
-        <StatusPill label="AUDIT ENABLED" tone="success" />
+        <StatusPill label={t("audit.auditEnabled")} tone="success" />
       </div>
       <div className="panel">
         <div className="panel-heading">
           <div>
-            <span className="eyebrow">EVENT STREAM</span>
-            <h3>Recent activity</h3>
+            <span className="eyebrow">{t("audit.eventStream")}</span>
+            <h3>{t("audit.recentActivity")}</h3>
           </div>
           <span className="panel-caption">{logs.length} events</span>
         </div>
@@ -4355,7 +4419,7 @@ function AuditPage({ logs }: { logs: AuditLog[] }) {
             ))}
           </div>
         ) : (
-          <div className="table-empty">No audit events yet.</div>
+          <div className="table-empty">{t("audit.noEvents")}</div>
         )}
       </div>
     </>
@@ -4369,7 +4433,10 @@ function RuleSpecEditor({
   rule: RuleSpec;
   onChange: (rule: RuleSpec) => void;
 }) {
-  const update = (patch: Partial<RuleSpec>) => onChange({ ...rule, ...patch });
+  const { t } = useI18n();
+  const safeRule = rule ?? { type: "not_null" };
+  const type = safeRule.type ?? "not_null";
+  const update = (patch: Partial<RuleSpec>) => onChange({ ...safeRule, ...patch });
   const csv = (values: string[] | undefined) => (values ?? []).join(", ");
   const parseCsv = (value: string) =>
     value
@@ -4378,16 +4445,16 @@ function RuleSpecEditor({
       .filter(Boolean);
   return (
     <div className="rule-editor">
-      <span className="eyebrow">TYPED RULE PARAMETERS</span>
+      <span className="eyebrow">{t("rules.type")}</span>
       <div className="rule-type-readonly">
-        <strong>{rule.type.replaceAll("_", " ")}</strong>
-        <code>{formatRule(rule)}</code>
+        <strong>{type ? type.replaceAll("_", " ") : "RULE"}</strong>
+        <code>{formatRule(safeRule)}</code>
       </div>
-      {rule.type === "not_null" && (
+      {type === "not_null" && (
         <label>
           Column
           <input
-            value={rule.column ?? ""}
+            value={safeRule.column ?? ""}
             onChange={(event) => update({ column: event.target.value })}
           />
         </label>
@@ -4502,6 +4569,7 @@ function ManualRuleDialog({
   onClose: () => void;
   onSave: (input: ManualRuleInput) => void;
 }) {
+  const { t } = useI18n();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [severity, setSeverity] = useState<RuleProposal["severity"]>("MEDIUM");
@@ -4523,7 +4591,7 @@ function ManualRuleDialog({
         <div className="dialog-heading">
           <div>
             <span className="eyebrow">DATA STEWARD AUTHORING</span>
-            <h2>Add manual rule</h2>
+            <h2>{t("rules.manualDialogTitle") || "Thêm quy tắc thủ công"}</h2>
           </div>
           <button
             className="icon-button"
@@ -4534,41 +4602,40 @@ function ManualRuleDialog({
           </button>
         </div>
         <p className="muted">
-          Create a typed rule without waiting for the Agent. It enters the
-          review queue and must be approved before execution.
+          {t("rules.manualDialogSubtitle") || "Tạo quy tắc tùy chỉnh. Quy tắc sẽ nằm trong hàng đợi duyệt trước khi thực thi."}
         </p>
         <label>
-          Title
+          {t("rules.ruleTitle") || "Tiêu đề quy tắc"}
           <input
             value={title}
             onChange={(event) => setTitle(event.target.value)}
-            placeholder="e.g. Pickup location must be known"
+            placeholder="VD: Giá trị kho bãi phải khác rỗng"
           />
         </label>
         <label>
-          Description
+          {t("rules.ruleDescription") || "Mô tả quy tắc"}
           <textarea
             value={description}
             onChange={(event) => setDescription(event.target.value)}
             rows={3}
-            placeholder="Explain the quality expectation"
+            placeholder="Giải thích kỳ vọng về chất lượng dữ liệu"
           />
         </label>
         <label>
-          Severity
+          {t("rules.ruleSeverity") || "Mức độ nghiêm trọng"}
           <select
             value={severity}
             onChange={(event) =>
               setSeverity(event.target.value as RuleProposal["severity"])
             }
           >
-            <option>LOW</option>
-            <option>MEDIUM</option>
-            <option>HIGH</option>
+            <option value="LOW">LOW</option>
+            <option value="MEDIUM">MEDIUM</option>
+            <option value="HIGH">HIGH</option>
           </select>
         </label>
         <label>
-          Rule type
+          {t("rules.ruleType") || "Loại quy tắc"}
           <select
             value={type}
             onChange={(event) =>
@@ -4587,14 +4654,14 @@ function ManualRuleDialog({
         <RuleSpecEditor rule={rule} onChange={setRule} />
         <div className="dialog-actions">
           <button className="button ghost" onClick={onClose}>
-            Cancel
+            {t("rules.cancel") || "Hủy"}
           </button>
           <button
             className="button primary"
             disabled={!title.trim() || !description.trim()}
             onClick={() => onSave({ title, description, severity, rule })}
           >
-            Create rule
+            {t("rules.createRule") || "Tạo quy tắc"}
           </button>
         </div>
       </section>
@@ -4616,18 +4683,20 @@ function EditDialog({
     rule: RuleSpec;
   }) => void;
 }) {
-  const [title, setTitle] = useState(proposal.title);
-  const [description, setDescription] = useState(proposal.description);
-  const [severity, setSeverity] = useState(proposal.severity);
-  const [rule, setRule] = useState<RuleSpec>({
-    ...proposal.rule,
-    columns: proposal.rule.columns ? [...proposal.rule.columns] : undefined,
-    allowed_values: proposal.rule.allowed_values
-      ? [...proposal.rule.allowed_values]
-      : undefined,
-    fingerprint_columns: proposal.rule.fingerprint_columns
-      ? [...proposal.rule.fingerprint_columns]
-      : undefined,
+  const { t } = useI18n();
+  const [title, setTitle] = useState(proposal?.title ?? "");
+  const [description, setDescription] = useState(proposal?.description ?? "");
+  const [severity, setSeverity] = useState<RuleProposal["severity"]>(proposal?.severity ?? "MEDIUM");
+  const [rule, setRule] = useState<RuleSpec>(() => {
+    const safe = proposal?.rule ?? { type: "not_null" };
+    return {
+      ...safe,
+      columns: safe.columns ? [...safe.columns] : undefined,
+      allowed_values: safe.allowed_values ? [...safe.allowed_values] : undefined,
+      fingerprint_columns: safe.fingerprint_columns
+        ? [...safe.fingerprint_columns]
+        : undefined,
+    };
   });
   return (
     <div
@@ -4641,7 +4710,7 @@ function EditDialog({
         <div className="dialog-heading">
           <div>
             <span className="eyebrow">HITL REVIEW</span>
-            <h2>Edit proposal</h2>
+            <h2>{t("rules.editDialogTitle") || "Chỉnh sửa quy tắc"}</h2>
           </div>
           <button
             className="icon-button"
@@ -4652,18 +4721,17 @@ function EditDialog({
           </button>
         </div>
         <p className="muted">
-          Edit the typed specification and metadata. The server remains
-          responsible for validation and compilation.
+          {t("rules.editDialogSubtitle") || "Cập nhật thông số và mô tả quy tắc."}
         </p>
         <label>
-          Title
+          {t("rules.ruleTitle") || "Tiêu đề quy tắc"}
           <input
             value={title}
             onChange={(event) => setTitle(event.target.value)}
           />
         </label>
         <label>
-          Description
+          {t("rules.ruleDescription") || "Mô tả quy tắc"}
           <textarea
             value={description}
             onChange={(event) => setDescription(event.target.value)}
@@ -4671,28 +4739,29 @@ function EditDialog({
           />
         </label>
         <label>
-          Severity
+          {t("rules.ruleSeverity") || "Mức độ nghiêm trọng"}
           <select
             value={severity}
             onChange={(event) =>
               setSeverity(event.target.value as RuleProposal["severity"])
             }
           >
-            <option>LOW</option>
-            <option>MEDIUM</option>
-            <option>HIGH</option>
+            <option value="LOW">LOW</option>
+            <option value="MEDIUM">MEDIUM</option>
+            <option value="HIGH">HIGH</option>
           </select>
         </label>
         <RuleSpecEditor rule={rule} onChange={setRule} />
         <div className="dialog-actions">
           <button className="button ghost" onClick={onClose}>
-            Cancel
+            {t("rules.cancel") || "Hủy"}
           </button>
           <button
             className="button primary"
+            disabled={!title.trim() || !description.trim()}
             onClick={() => onSave({ title, description, severity, rule })}
           >
-            Save edit
+            {t("rules.saveChanges") || "Lưu thay đổi"}
           </button>
         </div>
       </section>
