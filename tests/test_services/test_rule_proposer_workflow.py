@@ -24,10 +24,10 @@ from src.services.rule_proposer_workflow import (
     get_or_create_run,
     navigate_forward,
     queue_check_run,
-    run_analysis_report,
-    run_checks_and_prepare_analysis,
     rewind,
+    run_analysis_report,
     run_checks_and_analyze,
+    run_checks_and_prepare_analysis,
 )
 from src.services.rule_store import get_engine
 
