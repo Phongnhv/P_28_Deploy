@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 from typing import Any
 
 from src.config import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
@@ -112,6 +115,31 @@ class DbtArtifactStore:
         if artifact_sha256(content) != ref.sha256:
             raise ValueError("Downloaded dbt artifact checksum does not match its metadata")
         return content
+
+    def upload_dataset_file(
+        self,
+        dataset_id: str,
+        filename: str,
+        content: bytes,
+    ) -> str:
+        object_key = f"datasets/{dataset_id}/{filename}"
+        bucket = self.settings.object_storage_bucket
+        try:
+            try:
+                self.client.head_bucket(Bucket=bucket)
+            except Exception:
+                self.client.create_bucket(Bucket=bucket)
+
+            self.client.put_object(
+                Bucket=bucket,
+                Key=object_key,
+                Body=content,
+                Metadata={"dataset-id": dataset_id, "filename": filename},
+            )
+            logger.info("Successfully uploaded dataset %s to MinIO bucket %s at key %s", dataset_id, bucket, object_key)
+        except Exception as e:
+            logger.warning("Failed to upload dataset %s to MinIO: %s", dataset_id, e)
+        return object_key
 
 
 @lru_cache

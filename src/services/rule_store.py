@@ -26,6 +26,7 @@ from src.models.database import (
     JobModel,
     RuleProposalModel,
     RuleVersionModel,
+    SemanticContractModel,
 )
 from src.models.rule_schemas import RuleStatus
 from src.services.session_service import ensure_default_users
@@ -475,6 +476,15 @@ def _migrate_local_workflow_columns(engine) -> None:
                 "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS dbt_status VARCHAR(32)",
                 "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS metrics_status VARCHAR(32)",
                 "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS error_message TEXT",
+                "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS role VARCHAR(64) DEFAULT 'USER'",
+                "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS csrf_token VARCHAR(256) DEFAULT ''",
+                "ALTER TABLE datasets ADD COLUMN IF NOT EXISTS status VARCHAR(64) DEFAULT 'REGISTERED'",
+                "ALTER TABLE datasets ADD COLUMN IF NOT EXISTS source_label VARCHAR(256) DEFAULT 'unknown'",
+                "ALTER TABLE datasets ADD COLUMN IF NOT EXISTS manifest_version VARCHAR(64) DEFAULT 'v1'",
+                "ALTER TABLE datasets ADD COLUMN IF NOT EXISTS checksum VARCHAR(256) DEFAULT ''",
+                "ALTER TABLE user_accounts ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'ACTIVE'",
+                "ALTER TABLE user_accounts ADD COLUMN IF NOT EXISTS created_by VARCHAR(100)",
+                "ALTER TABLE user_accounts ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP",
             ):
                 connection.exec_driver_sql(statement)
         return
@@ -1228,3 +1238,43 @@ def save_generated_dbt_yaml(
     except Exception as exc:
         logger.warning("save_generated_dbt_yaml failed: %s", exc)
         return False
+
+
+def save_semantic_contract(
+    run_id: str,
+    dataset_id: str,
+    contract: dict,
+    status: str = "DRAFT",
+) -> str:
+    """Save or update a semantic contract in the database."""
+    contract_id = f"sem-{uuid.uuid4().hex[:12]}"
+    try:
+        with Session(get_engine()) as session:
+            existing = (
+                session.query(SemanticContractModel)
+                .filter(SemanticContractModel.run_id == run_id)
+                .first()
+            )
+            if existing:
+                existing.status = status
+                existing.contract_json = json.dumps(contract, ensure_ascii=False)
+                existing.updated_at = utc_now()
+                contract_id = existing.id
+            else:
+                record = SemanticContractModel(
+                    id=contract_id,
+                    dataset_id=dataset_id,
+                    run_id=run_id,
+                    status=status,
+                    contract_json=json.dumps(contract, ensure_ascii=False),
+                    created_at=utc_now(),
+                    updated_at=utc_now(),
+                )
+                session.add(record)
+            session.commit()
+            logger.info("Saved semantic contract %s for run %s into DB", contract_id, run_id)
+        return contract_id
+    except Exception as exc:
+        logger.warning("save_semantic_contract failed: %s", exc)
+        return ""
+

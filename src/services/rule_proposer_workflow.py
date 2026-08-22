@@ -199,7 +199,7 @@ def _agent_semantic_payload(db: Session, dataset_id: str) -> dict[str, Any]:
         "dataset_profile_digest": digest,
         "normalized_data_dictionary": {},
         "metadata": {"domain_hint": "NYC Yellow Taxi trip operations"},
-    }), timeout=35))
+    }), timeout=90))
     if result.get("error") or not result.get("semantic_contract", {}).get("tables"):
         raise WorkflowError(f"Dataset Understanding Agent failed: {result.get('error', 'no semantic contract returned')}")
     contract = next(iter(result["semantic_contract"]["tables"].values()))
@@ -373,7 +373,7 @@ def run_analysis_report(workflow_run_id: str, job_id: str, session_id: str | Non
     try:
         asyncio.run(asyncio.wait_for(
             run_anomaly_graph(execution_run_id=dq_run_id, dataset_id=dataset_id),
-            timeout=45,
+            timeout=90,
         ))
         analysis_error = None
     except Exception as exc:  # the DQ result remains valuable even when analysis fails

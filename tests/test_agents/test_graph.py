@@ -262,12 +262,20 @@ async def test_runners(monkeypatch, tmp_path):
             "progress_state": "PROPOSING_RULES"
         }
 
+    async def mock_data_dict_gen(state):
+        return {
+            "normalized_data_dictionary": {"demo_graph_table": {}},
+            "data_dictionary_source": "inferred"
+        }
+
     async def mock_prompt_customizer(state):
         return {"specialized_system_prompts": {}}
 
     monkeypatch.setattr("src.agents.nodes.rule_proposer_node.rule_proposer_node", mock_rule_proposer)
     monkeypatch.setattr("src.agents.nodes.dataset_understanding_node.dataset_understanding_node", mock_dataset_understanding)
+    monkeypatch.setattr("src.agents.nodes.data_dictionary_generator_node.data_dictionary_generator_node", mock_data_dict_gen)
     monkeypatch.setattr("src.agents.nodes.prompt_customizer_node.prompt_customizer_node", mock_prompt_customizer)
+
 
     # 1. Chạy run_proposal_graph
     prop_res = await run_proposal_graph(
