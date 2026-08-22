@@ -476,6 +476,15 @@ def _migrate_local_workflow_columns(engine) -> None:
                 "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS dbt_status VARCHAR(32)",
                 "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS metrics_status VARCHAR(32)",
                 "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS error_message TEXT",
+                "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS role VARCHAR(64) DEFAULT 'USER'",
+                "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS csrf_token VARCHAR(256) DEFAULT ''",
+                "ALTER TABLE datasets ADD COLUMN IF NOT EXISTS status VARCHAR(64) DEFAULT 'REGISTERED'",
+                "ALTER TABLE datasets ADD COLUMN IF NOT EXISTS source_label VARCHAR(256) DEFAULT 'unknown'",
+                "ALTER TABLE datasets ADD COLUMN IF NOT EXISTS manifest_version VARCHAR(64) DEFAULT 'v1'",
+                "ALTER TABLE datasets ADD COLUMN IF NOT EXISTS checksum VARCHAR(256) DEFAULT ''",
+                "ALTER TABLE user_accounts ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'ACTIVE'",
+                "ALTER TABLE user_accounts ADD COLUMN IF NOT EXISTS created_by VARCHAR(100)",
+                "ALTER TABLE user_accounts ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP",
             ):
                 connection.exec_driver_sql(statement)
         return

@@ -4355,3 +4355,95 @@ button.step-nav-button:disabled {
   border-top: 1px solid var(--border);
 }
 
+/* Step 2 Quality Command Center Enhancements */
+.overview-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.overview-kpis .stat-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  cursor: default;
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.overview-kpis .stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 24px rgb(37 99 235 / 12%);
+  border-top-color: var(--accent);
+}
+
+.overview-grid, .overview-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 20px;
+  margin-bottom: 24px;
+}
+
+.overview-dataset-row {
+  transition: background 0.15s ease, transform 0.15s ease;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr;
+  align-items: center;
+  gap: 12px;
+}
+
+.overview-dataset-row:hover {
+  background: var(--surface-muted);
+  transform: translateX(2px);
+}
+
+.overview-dataset-row.active {
+  background: var(--accent-soft);
+  border-left: 3px solid var(--accent);
+}
+
+.overview-score-track {
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--border);
+  flex: 1;
+}
+
+.overview-score-track > span {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #3b82f6, #1d4ed8);
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.overview-status-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.overview-status-track > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.overview-action-panel {
+  border-radius: var(--radius);
+  transition: all 0.2s ease;
+  padding: 24px;
+}
+
+.overview-action-panel:hover {
+  box-shadow: 0 20px 40px rgb(37 99 235 / 22%);
+}
+
+

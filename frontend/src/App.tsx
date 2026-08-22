@@ -289,16 +289,6 @@ const workflowStepLabels: Record<
 
 const workflowPhases = [
   {
-    label: "Profile data",
-    owner: "System",
-    steps: ["UPLOAD_PROFILE"] as WorkflowStepKey[],
-  },
-  {
-    label: "Understand data",
-    owner: "Agent",
-    steps: ["UNDERSTAND_DATA"] as WorkflowStepKey[],
-  },
-  {
     label: "Propose & review",
     owner: "Agent + steward",
     steps: ["PROPOSE_RULES", "REVIEW_RULES"] as WorkflowStepKey[],
@@ -324,6 +314,7 @@ function DatasetsPage({
   onOpenExplorer,
   onImportDataset,
   onSelectDataset,
+  onDeleteDataset,
   onStartUnderstand,
   canOperate,
   importing,
@@ -337,6 +328,7 @@ function DatasetsPage({
   onOpenExplorer: (datasetId: string) => void;
   onImportDataset: (file: File) => void;
   onSelectDataset: (datasetId: string) => void;
+  onDeleteDataset?: (datasetId: string) => void;
   onStartUnderstand: (datasetId: string) => void;
   canOperate: boolean;
   importing: boolean;
@@ -353,6 +345,12 @@ function DatasetsPage({
     ? (activeArtifact.payload as Record<string, unknown>)
     : null;
 
+  const contractColumns = payload && Array.isArray(payload.columns)
+    ? (payload.columns.filter((column): column is Record<string, unknown> =>
+        Boolean(column && typeof column === "object"),
+      ))
+    : [];
+
   return (
     <div className="datasets-page">
       <div className="page-heading datasets-heading">
@@ -361,10 +359,6 @@ function DatasetsPage({
           <h1>Select Dataset & Understand Data</h1>
           <p>Choose or upload a dataset, then run the AI Agent to perform initial data understanding.</p>
         </div>
-        <label className="button primary dataset-import-button">
-          + Import dataset
-          <input type="file" accept=".csv,.parquet,text/csv,application/vnd.apache.parquet" disabled={!canOperate || importing} onChange={(event) => { const file = event.target.files?.[0]; if (file) onImportDataset(file); event.currentTarget.value = ""; }} />
-        </label>
       </div>
 
       {datasets.length ? (
@@ -407,9 +401,10 @@ function DatasetsPage({
                     <strong>{formatTime(item.updated_at)}</strong>
                   </div>
                 </div>
-                <div className="dataset-catalog-actions">
+                <div className="dataset-catalog-actions" style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
                   <button
                     className="button secondary"
+                    style={{ flex: 1 }}
                     onClick={(e) => {
                       e.stopPropagation();
                       onOpenExplorer(item.id);
@@ -418,14 +413,15 @@ function DatasetsPage({
                     View data →
                   </button>
                   <button
-                    className="button primary"
-                    disabled={!canOperate || busy}
+                    className="button ghost"
+                    style={{ color: "#dc2626", borderColor: "#fca5a5" }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onStartUnderstand(item.id);
+                      onDeleteDataset?.(item.id);
                     }}
+                    title="Delete dataset"
                   >
-                    {busy && isSelected ? "Understanding..." : "🤖 Run Understand"}
+                    🗑️ Delete
                   </button>
                 </div>
               </article>
@@ -461,15 +457,16 @@ function DatasetsPage({
 
           {payload ? (
             <div className="understanding-holder" style={{ marginTop: "16px" }}>
-              <div className="understanding-summary">
+              <div className="understanding-summary" style={{ padding: "16px", background: "var(--surface-muted, #f8fafc)", borderRadius: "8px", borderLeft: "4px solid var(--accent, #2563eb)" }}>
                 <span className="eyebrow">
-                  SEMANTIC CONTRACT · {String(payload.agent_mode ?? "profile-backed")}
+                  SEMANTIC CONTRACT · MODE: {String(payload.agent_mode ?? "profile-backed").toUpperCase()}
                 </span>
-                <p style={{ marginTop: "8px", fontSize: "15px", lineHeight: "1.5" }}>
+                <p style={{ marginTop: "8px", fontSize: "15px", lineHeight: "1.5", color: "var(--ink)" }}>
                   {String(payload.summary ?? "Agent analysis completed.")}
                 </p>
               </div>
-              <div className="understanding-meta" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginTop: "16px" }}>
+
+              <div className="understanding-meta" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginTop: "16px", marginBottom: "20px" }}>
                 <div>
                   <span>Rows</span>
                   <strong>{(profile?.row_count ?? dataset.row_count).toLocaleString()}</strong>
@@ -487,10 +484,52 @@ function DatasetsPage({
                   <strong>{activeArtifact?.status ?? "VALIDATED"}</strong>
                 </div>
               </div>
+
+              {/* SEMANTIC CONTRACT INFERRED SCHEMA TABLE */}
+              {contractColumns.length > 0 && (
+                <div className="understanding-section" style={{ marginTop: "20px" }}>
+                  <div className="panel-heading" style={{ marginBottom: "12px" }}>
+                    <div>
+                      <span className="eyebrow">SEMANTIC CONTRACT</span>
+                      <h3 style={{ margin: 0 }}>Inferred Column Schemas ({contractColumns.length})</h3>
+                    </div>
+                  </div>
+                  <div style={{ overflowX: "auto", border: "1px solid var(--border, #e2e8f0)", borderRadius: "8px" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
+                      <thead>
+                        <tr style={{ background: "var(--surface-muted, #f1f5f9)", textAlign: "left", borderBottom: "2px solid var(--border, #cbd5e1)" }}>
+                          <th style={{ padding: "10px 12px" }}>Column Name</th>
+                          <th style={{ padding: "10px 12px" }}>Semantic Type</th>
+                          <th style={{ padding: "10px 12px" }}>Nullable</th>
+                          <th style={{ padding: "10px 12px" }}>Confidence</th>
+                          <th style={{ padding: "10px 12px" }}>Description / Reasoning</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {contractColumns.map((col, idx) => (
+                          <tr key={String(col.name ?? idx)} style={{ borderBottom: "1px solid var(--border, #e2e8f0)", background: idx % 2 === 0 ? "transparent" : "var(--surface-muted, #f8fafc)" }}>
+                            <td style={{ padding: "10px 12px", fontWeight: 600 }}><code>{String(col.name ?? "")}</code></td>
+                            <td style={{ padding: "10px 12px" }}><span className="status-pill info">{String(col.semantic_type ?? "unknown")}</span></td>
+                            <td style={{ padding: "10px 12px" }}>{col.nullable ? "Yes" : "No"}</td>
+                            <td style={{ padding: "10px 12px" }}>
+                              <span style={{ fontWeight: 600, color: (Number(col.confidence ?? 0) >= 0.8) ? "#16a34a" : "#d97706" }}>
+                                {typeof col.confidence === "number" ? `${(col.confidence * 100).toFixed(0)}%` : "N/A"}
+                              </span>
+                            </td>
+                            <td style={{ padding: "10px 12px", color: "var(--muted)", fontSize: "12px" }}>
+                              {String(col.description ?? col.reasoning ?? col.type ?? "—")}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="workflow-artifact-empty" style={{ marginTop: "16px", padding: "20px", background: "var(--color-bg-subtle, #f8fafc)", borderRadius: "8px", textAlign: "center" }}>
-              No Understand Data artifact generated for this dataset yet. Click <strong>Run Understand Agent</strong> above to analyze this dataset.
+              No Understand Data artifact generated for this dataset yet. Select this dataset and click <strong>⚡ Run Understand Agent</strong> above to analyze it.
             </div>
           )}
         </section>
@@ -978,13 +1017,14 @@ function WorkflowPage({
                 ? "Generate standardization code"
                 : "Run current step";
   const visibleWorkflowSteps = workflow.steps;
-  const currentPhaseIndex = workflowPhaseIndex(workflow.current_step);
+  const currentPhaseIndex = Math.max(0, workflowPhaseIndex(workflow.current_step));
   const phaseStatus = (phaseIndex: number) => {
     if (phaseIndex < currentPhaseIndex) return "COMPLETED";
     if (phaseIndex > currentPhaseIndex) return "LOCKED";
     return currentStep?.status ?? "READY";
   };
-  const executionSteps = workflowPhases[3].steps
+  const publishPhase = workflowPhases.find((p) => p.steps.includes("PUBLISH_RULESET")) ?? workflowPhases[workflowPhases.length - 1];
+  const executionSteps = (publishPhase?.steps ?? [])
     .map((key) => workflow.steps.find((step) => step.key === key))
     .filter((step): step is WorkflowStep => Boolean(step));
   const executionActionLabel = (step: WorkflowStepKey) =>
@@ -1517,6 +1557,19 @@ function App() {
     }
   }
 
+  async function deleteDataset(id: string) {
+    if (!window.confirm("Are you sure you want to delete this dataset?")) return;
+    setDatasets((current) => current.filter((d) => d.id !== id));
+    if (selectedDatasetId === id) {
+      const remaining = datasets.filter((d) => d.id !== id);
+      const nextId = remaining[0]?.id ?? "";
+      setSelectedDatasetId(nextId);
+      if (nextId) sessionStorage.setItem("ridepulse.dataset", nextId);
+      else sessionStorage.removeItem("ridepulse.dataset");
+    }
+    setToast("Dataset removed from workspace.");
+  }
+
   async function requestProposals() {
     if (!dataset) return;
     setError("");
@@ -2042,6 +2095,7 @@ function App() {
                       }}
                       onImportDataset={(file) => void importDataset(file)}
                       onSelectDataset={(id) => void selectDataset(id)}
+                      onDeleteDataset={(id) => void deleteDataset(id)}
                       onStartUnderstand={(id) => {
                         if (id !== dataset?.id) void selectDataset(id);
                         void startWorkflowStep("UNDERSTAND_DATA", true);
@@ -2077,6 +2131,7 @@ function App() {
                       if (v === "datasets") setWizardStep(1);
                       if (v === "rules") setWizardStep(3);
                     }}
+                    onSelectDataset={(id) => void selectDataset(id)}
                   />
                   <div style={{ marginTop: "32px" }}>
                     <VisualizationPage
@@ -2214,6 +2269,7 @@ function OverviewPage({
   onStartAnalysis,
   onRequestProposals,
   onNavigate,
+  onSelectDataset,
 }: {
   dataset?: Dataset;
   datasets: Dataset[];
@@ -2228,6 +2284,7 @@ function OverviewPage({
   onStartAnalysis: () => void;
   onRequestProposals: () => void;
   onNavigate: (view: View) => void;
+  onSelectDataset?: (datasetId: string) => void;
 }) {
   const proposalCount = proposals.filter((proposal) =>
     ["PROPOSED", "EDITED"].includes(proposal.status),
@@ -2369,19 +2426,21 @@ function OverviewPage({
               <span className="eyebrow">CATALOG QUALITY MAP</span>
               <h3>Quality by dataset</h3>
             </div>
-            <span className="panel-caption">{datasets.length} registered</span>
+            <span className="panel-caption">{datasets.length} registered · Click to select</span>
           </div>
           <div className="overview-dataset-list">
             {qualityRows.map((row) => (
               <div
                 className={`overview-dataset-row ${row.dataset.id === dataset.id ? "active" : ""}`}
                 key={row.dataset.id}
+                onClick={() => onSelectDataset?.(row.dataset.id)}
+                style={{ cursor: "pointer" }}
               >
                 <div className="overview-dataset-id">
                   <span className="dataset-mini-icon">⌁</span>
                   <div>
                     <strong>{row.dataset.name}</strong>
-                    <small>
+                    <small style={{ display: "block", color: "var(--muted)", fontSize: "11px" }}>
                       {row.dataset.source_label} ·{" "}
                       {row.dataset.row_count.toLocaleString()} rows
                     </small>
@@ -2401,7 +2460,7 @@ function OverviewPage({
                       <div className="overview-score-track">
                         <span style={{ width: `${row.score}%` }} />
                       </div>
-                      <strong>{row.score.toFixed(1)}%</strong>
+                      <strong style={{ fontSize: "13px", marginLeft: "6px" }}>{row.score.toFixed(1)}%</strong>
                     </>
                   )}
                 </div>
@@ -2580,11 +2639,23 @@ function StatCard({
   detail: string;
   tone: string;
 }) {
+  const toneColor =
+    tone === "green"
+      ? "#10b981"
+      : tone === "blue"
+        ? "#3b82f6"
+        : tone === "amber"
+          ? "#f59e0b"
+          : "#8b5cf6";
+
   return (
-    <div className={`stat-card ${tone}`}>
-      <span className="stat-label">{label}</span>
-      <strong>{value}</strong>
-      <span className="stat-detail">{detail}</span>
+    <div className={`stat-card ${tone}`} style={{ position: "relative", overflow: "hidden" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span className="stat-label" style={{ fontWeight: 600, fontSize: "11px", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</span>
+        <span className="status-dot" style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: toneColor, display: "inline-block" }} />
+      </div>
+      <strong style={{ fontSize: "24px", fontWeight: 700, margin: "8px 0 4px 0", display: "block", color: "var(--ink)", letterSpacing: "-0.02em" }}>{value}</strong>
+      <span className="stat-detail" style={{ fontSize: "12px", color: "var(--muted)" }}>{detail}</span>
     </div>
   );
 }
