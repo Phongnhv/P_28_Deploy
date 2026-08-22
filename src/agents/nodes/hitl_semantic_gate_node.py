@@ -1,6 +1,7 @@
 import json
 import logging
 from pathlib import Path
+
 from src.agents.state import AgentState
 from src.config import get_settings
 
@@ -8,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 async def hitl_semantic_gate_node(state: AgentState) -> dict:
     """HITL Semantic Gate Node.
-    
+
     Nếu Semantic Contract có status = 'confirmed', cho phép đi tiếp.
     Nếu status = 'draft', lưu contract ra file, cập nhật status job thành 'AWAITING_SEMANTIC_REVIEW' và kết thúc lượt chạy.
     """
@@ -30,7 +31,7 @@ async def hitl_semantic_gate_node(state: AgentState) -> dict:
     # Nếu là draft, lưu lại và tạm dừng graph
     run_id = state.get("rule_run_id", "test_run")
     settings = get_settings()
-    
+
     # 1. Lưu contract ra thư mục output/semantic
     try:
         out_dir = getattr(settings, "output_dir", None)
@@ -38,7 +39,7 @@ async def hitl_semantic_gate_node(state: AgentState) -> dict:
         base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
         semantic_dir = Path(base_dir) / "semantic"
         semantic_dir.mkdir(parents=True, exist_ok=True)
-        out_path = semantic_dir / f"semantic_contract_{run_id}.json"
+        out_path = semantic_dir / f"debug_semantic_contract_{run_id}.json"
         out_path.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
         logger.info(f"Đã lưu semantic contract nháp tại {out_path}")
     except Exception as e:
@@ -53,8 +54,9 @@ async def hitl_semantic_gate_node(state: AgentState) -> dict:
     except Exception as e:
         logger.warning(f"Không thể cập nhật trạng thái run: {e}")
 
-    # Set error đặc biệt để conditional edge dẫn tới END
+    # Tạm dừng có chủ đích — KHÔNG phải lỗi. Dùng `pause_reason` để conditional edge dẫn
+    # tới END mà runner vẫn phân biệt được "chờ Steward duyệt" với "chạy thất bại".
     return {
-        "error": "AWAITING_SEMANTIC_REVIEW",
+        "pause_reason": "AWAITING_SEMANTIC_REVIEW",
         "progress_state": "WAITING_FOR_SEMANTIC_REVIEW"
     }

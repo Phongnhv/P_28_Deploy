@@ -7,7 +7,8 @@ from sqlalchemy import create_engine, text
 
 import src.services.rule_store as rule_store_module
 from src.agents.graph import (
-    _should_repair_or_run,
+    _should_run_or_fail,
+    build_anomaly_graph,
     build_execution_graph,
     build_proposal_graph,
     run_execution_graph,
@@ -38,6 +39,7 @@ def setup_test_db(tmp_path, monkeypatch):
     # The graph tests exercise the legacy SQL metrics fallback; dbt CLI integration
     # is covered by the dedicated validation/runner integration tests.
     monkeypatch.setattr("src.agents.nodes.test_runner_node._run_dbt_cli_test", lambda _dbt_dir: False)
+    monkeypatch.setattr("src.agents.nodes.validate_dbt_project_node.run_dbt_parse", lambda _dbt_dir: (True, "mocked output", 0))
     init_db()
 
     with test_engine.connect() as conn:
@@ -66,24 +68,24 @@ def setup_test_db(tmp_path, monkeypatch):
 
 
 def test_build_graphs():
-    """Kiểm tra việc biên dịch cả 2 Graph không phát sinh lỗi."""
+    """Kiểm tra việc biên dịch các Graph không phát sinh lỗi."""
     proposal_graph = build_proposal_graph()
     assert proposal_graph is not None
 
     execution_graph = build_execution_graph()
     assert execution_graph is not None
 
+    anomaly_graph = build_anomaly_graph()
+    assert anomaly_graph is not None
+
 
 def test_conditional_edges_routing():
     """The execution graph routes on dbt artifact validation state."""
-    state_valid = {"dbt_validation_valid": True, "dbt_validation_attempts": 0}
-    assert _should_repair_or_run(state_valid) == "run"
+    state_valid = {"dbt_validation_valid": True}
+    assert _should_run_or_fail(state_valid) == "run"
 
-    state_repair = {"dbt_validation_valid": False, "dbt_validation_attempts": 1}
-    assert _should_repair_or_run(state_repair) == "repair"
-
-    state_max_attempts = {"dbt_validation_valid": False, "dbt_validation_attempts": 3}
-    assert _should_repair_or_run(state_max_attempts) == "fail"
+    state_fail = {"dbt_validation_valid": False}
+    assert _should_run_or_fail(state_fail) == "fail"
 
 
 @pytest.mark.asyncio
@@ -116,7 +118,26 @@ async def test_proposal_graph_execution(monkeypatch, tmp_path):
             "rule_proposal_errors": [],
         }
 
+    async def mock_dataset_understanding(state):
+        return {
+            "semantic_contract": {
+                "dataset_id": state.get("dataset_id"),
+                "tables": {},
+                "status": "confirmed"
+            },
+            "progress_state": "PROPOSING_RULES"
+        }
+
+    async def mock_prompt_customizer(state):
+        return {"specialized_system_prompts": {}}
+
+    async def mock_rule_candidate_builder(state):
+        return {"progress_state": "PROPOSING_RULES"}
+
     monkeypatch.setattr("src.agents.nodes.rule_proposer_node.rule_proposer_node", mock_rule_proposer)
+    monkeypatch.setattr("src.agents.nodes.dataset_understanding_node.dataset_understanding_node", mock_dataset_understanding)
+    monkeypatch.setattr("src.agents.nodes.prompt_customizer_node.prompt_customizer_node", mock_prompt_customizer)
+    monkeypatch.setattr("src.agents.nodes.rule_candidate_builder_node.rule_candidate_builder_node", mock_rule_candidate_builder)
 
     graph = build_proposal_graph()
     initial_state = {
@@ -188,12 +209,12 @@ async def test_execution_graph_execution():
     assert len(test_results) == 2
 
     res_map = {r["rule_id"]: r for r in test_results}
-    # fare NOT_NULL có 1 dòng null trên 4 dòng -> FAILED
-    assert res_map["demo_graph_table.fare.NOT_NULL"]["status"] == "FAILED"
-    assert res_map["demo_graph_table.fare.NOT_NULL"]["violation_count"] == 1
+    # fare NOT_NULL có 1 dòng null trên 4 dòng -> FAIL
+    assert res_map["demo_graph_table.fare.NOT_NULL"]["status"] == "FAIL"
+    assert res_map["demo_graph_table.fare.NOT_NULL"]["failed_count"] == 1
 
-    # ROW_COUNT có 4 dòng >= 2 -> PASSED
-    assert res_map["demo_graph_table._table.ROW_COUNT"]["status"] == "PASSED"
+    # ROW_COUNT có 4 dòng >= 2 -> PASS
+    assert res_map["demo_graph_table._table.ROW_COUNT"]["status"] == "PASS"
 
     # 2. Kiểm tra test_run record trong DB
     db_run = get_test_run(test_run_id)
@@ -265,5 +286,5 @@ async def test_runners(monkeypatch, tmp_path):
     exec_res = await run_execution_graph(dataset_id="demo_graph_table")
     assert exec_res["test_run_id"] is not None
     assert len(exec_res["results"]) == 1
-    assert exec_res["results"][0]["status"] == "PASSED"
+    assert exec_res["results"][0]["status"] == "PASS"
 

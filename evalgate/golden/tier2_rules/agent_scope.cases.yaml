@@ -1,0 +1,68 @@
+# What the agent is allowed to look at, and what it must leave alone.
+#
+# These cases exist because the archived proposals show the agent profiling the
+# application's own bookkeeping tables and proposing data-quality rules about them:
+# 28 rules on `jobs`, 21 on `proposal_runs`, 14 on `proposed_rules`, and one each on
+# `sessions`, `audit_events` and six more. Every one of those is a wasted model call
+# producing a rule nobody will ever act on, and several ended up in the steward's
+# review queue.
+#
+# The root cause is a stale exclusion list: profiler_node.py filters a fixed set of
+# system tables that was written before the anomaly and ruleset tables existed.
+version: "1.0"
+dataset_id: dataset-nyc-yellow-taxi-50k
+description: >-
+  Scope discipline: the agent proposes rules about user data, never about the
+  system's own operational tables.
+
+cases:
+  - id: GC-SCOPE-NO-METADATA-TABLES
+    tier: 2
+    severity: HIGH
+    intent: >-
+      Application bookkeeping tables are not a dataset. Proposing rules about them
+      wastes model budget, pollutes the steward's review queue with meaningless
+      entries, and creates a self-referential loop where the agent audits its own
+      audit log.
+    source: src/agents/nodes/profiler_node.py#system_tables
+    ground_truth_owner: data-engineer
+    assertions:
+      - type: no_rules_on_tables
+        tables:
+          - jobs
+          - sessions
+          - audit_events
+          - datasets
+          - profiles
+          - column_profiles
+          - proposal_runs
+          - proposed_rules
+          - rule_proposals
+          - rule_versions
+          - rule_configurations
+          - dq_runs
+          - dq_results
+          - anomaly_runs
+          - anomaly_signals
+          - anomaly_hypotheses
+          - anomaly_feedback
+          - ruleset_versions
+        note: >-
+          the exclusion list in profiler_node predates the anomaly and ruleset
+          tables, so the newer ones are profiled as if they were user data
+
+  - id: GC-SCOPE-NO-RULES-ON-INTERNAL-COLUMNS
+    tier: 2
+    severity: MEDIUM
+    intent: >-
+      Even on a legitimate table, columns the platform owns are not data-quality
+      subjects. A UNIQUE rule on run_id measures the platform's own id generator.
+    source: evalgate/evidence/gate1/governed_enum_conformance.json
+    ground_truth_owner: data-engineer
+    assertions:
+      - type: rule_not_on_columns
+        rule_type: UNIQUE
+        columns:
+          - run_id
+          - status
+          - dataset_id

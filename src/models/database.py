@@ -173,6 +173,11 @@ class RuleProposalModel(Base):
     business_rationale: Mapped[str] = mapped_column(Text, nullable=False, default="")
     proposal_basis: Mapped[str] = mapped_column(String(32), nullable=False, default="DATA_PROFILE")
     evidence: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    # Hai cột dưới đây được `_migrate_local_proposal_columns` tạo trong bảng vật lý và được
+    # routes.py đọc/ghi (parameter_provenance, assumptions), nhưng trước đây không được khai
+    # báo trong ORM model — mọi truy cập `prop.parameter_provenance` đều ném AttributeError.
+    parameter_provenance: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    assumptions: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     confidence_breakdown: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
@@ -202,9 +207,16 @@ class RuleConfigurationModel(Base):
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Cột NOT NULL nhưng không call site nào truyền giá trị (routes.py:1108, 1178, 1302) và
+    # RuleConfigurationSchema cũng không phơi ra — mọi lần tạo cấu hình đều ném IntegrityError.
+    # Đặt default để insert hợp lệ trên cả schema cũ (đã NOT NULL) lẫn schema mới.
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False, default="unspecified")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=utc_now, onupdate=utc_now
     )
+
+
 
 
 class DqRunModel(Base):
@@ -220,6 +232,15 @@ class DqRunModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime)
 
+    # Graph 2 separation extension columns
+    ruleset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("ruleset_versions.id"), nullable=True)
+    compiler_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    artifact_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    retry_history_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dbt_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    metrics_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
 
 class DqResultModel(Base):
     __tablename__ = "dq_results"
@@ -228,10 +249,17 @@ class DqResultModel(Base):
     run_id: Mapped[str] = mapped_column(String(64), ForeignKey("dq_runs.id"), nullable=False)
     rule_id: Mapped[str] = mapped_column(String(64), nullable=False)
     rule_title: Mapped[str] = mapped_column(String(256), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False)  # PASS, FAIL
+    status: Mapped[str] = mapped_column(String(32), nullable=False)  # PASS, FAIL, ERROR, SKIPPED, RESULT_MISMATCH
     checked_count: Mapped[int] = mapped_column(Integer, nullable=False)
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False)
     failed_row_ids: Mapped[str] = mapped_column(Text, nullable=False)  # JSON list
+
+    # Graph 2 separation extension columns
+    violation_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dbt_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    metrics_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class AuditEventModel(Base):
@@ -244,4 +272,86 @@ class AuditEventModel(Base):
     entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
     entity_id: Mapped[str] = mapped_column(String(256), nullable=False)
     detail_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+
+
+class RulesetVersionModel(Base):
+    __tablename__ = "ruleset_versions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    proposal_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("rule_proposals.id"), nullable=True)
+    semantic_contract_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ruleset_hash: Mapped[str] = mapped_column(String(256), nullable=False)
+    normalized_rules: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+
+
+class AnomalyRunModel(Base):
+    __tablename__ = "anomaly_runs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    execution_run_id: Mapped[str] = mapped_column(String(64), ForeignKey("dq_runs.id"), nullable=False, index=True)
+    detector_config_version: Mapped[str] = mapped_column(String(64), nullable=False, default="anomaly-v1")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
+    decision: Mapped[str] = mapped_column(String(32), nullable=False)  # NORMAL, WATCH, ANOMALY, CRITICAL, INSUFFICIENT_HISTORY
+    score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    severity: Mapped[str] = mapped_column(String(32), nullable=False, default="LOW")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AnomalySignalModel(Base):
+    __tablename__ = "anomaly_signals"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    anomaly_run_id: Mapped[str] = mapped_column(String(64), ForeignKey("anomaly_runs.id"), nullable=False, index=True)
+    family: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)  # DATASET, TABLE, COLUMN, RULE
+    target_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    score: Mapped[float] = mapped_column(Float, nullable=False)
+    reliability: Mapped[float] = mapped_column(Float, nullable=False)
+    observed_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    baseline: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sufficient_history: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    detector_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    detector_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    explanation_code: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_refs: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+
+
+class AnomalyHypothesisModel(Base):
+    __tablename__ = "anomaly_hypotheses"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    anomaly_run_id: Mapped[str] = mapped_column(String(64), ForeignKey("anomaly_runs.id"), nullable=False, index=True)
+    hypothesis_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    supporting_signal_ids: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    contradicting_signal_ids: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    evidence_refs: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    recommended_checks: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    missing_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    limitations: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    fallback_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+
+
+class AnomalyFeedbackModel(Base):
+    __tablename__ = "anomaly_feedback"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    anomaly_run_id: Mapped[str] = mapped_column(String(64), ForeignKey("anomaly_runs.id"), nullable=False, index=True)
+    username: Mapped[str] = mapped_column(String(100), ForeignKey("user_accounts.username"), nullable=False)
+    feedback_label: Mapped[str] = mapped_column(String(64), nullable=False)  # TRUE_ANOMALY, FALSE_POSITIVE, EXPECTED_CHANGE, RULE_MISCONFIGURATION, UNKNOWN
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)

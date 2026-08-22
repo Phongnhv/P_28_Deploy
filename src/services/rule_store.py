@@ -260,7 +260,7 @@ class TestResultModel(Base):
     violation_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     violation_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    sample_failures: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list[dict]
+    sample_failures: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list[str] — chỉ ID dòng vi phạm
     sql_text: Mapped[str] = mapped_column(Text, nullable=False)
     duration_ms: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -873,6 +873,22 @@ def get_approved_rules(run_id: str) -> list[dict]:
 def create_test_run(test_run_id: str, dataset_id: str) -> dict:
     """Tạo bản ghi test run mới với status=QUEUED."""
     with Session(get_engine()) as session:
+        # Check if job exists, if not create dummy job to satisfy foreign key constraint
+        job = session.get(JobModel, test_run_id)
+        if not job:
+            job = JobModel(
+                id=test_run_id,
+                type="RUN_DQ",
+                status="RUNNING",
+                progress=0.0,
+                attempt_count=0,
+                linked_entity=dataset_id,
+                idempotency_key=f"run-dq-job-{test_run_id}",
+                created_at=utc_now(),
+                updated_at=utc_now(),
+            )
+            session.add(job)
+
         run = TestRunModel(
             test_run_id=test_run_id,
             dataset_id=dataset_id,
@@ -922,10 +938,20 @@ def save_test_results(test_run_id: str, results: list[dict]) -> int:
 
         for res in results:
             row_samples = res.get("sample_failures")
+            if row_samples is None:
+                row_samples = res.get("sample_refs")
             if row_samples is not None and not isinstance(row_samples, str):
                 sample_fail_str = json.dumps(row_samples, default=str, ensure_ascii=False)
             else:
                 sample_fail_str = row_samples
+
+            v_count = res.get("violation_count")
+            if v_count is None:
+                v_count = res.get("failed_count", 0)
+
+            t_rows = res.get("total_rows")
+            if t_rows is None:
+                t_rows = res.get("checked_count", 0)
 
             row = TestResultModel(
                 test_run_id=test_run_id,
@@ -934,8 +960,8 @@ def save_test_results(test_run_id: str, results: list[dict]) -> int:
                 column_name=res.get("column"),
                 rule_type=res.get("rule_type", ""),
                 status=res.get("status", "PASSED"),
-                violation_count=res.get("violation_count", 0),
-                total_rows=res.get("total_rows", 0),
+                violation_count=v_count,
+                total_rows=t_rows,
                 violation_rate=res.get("violation_rate", 0.0),
                 sample_failures=sample_fail_str,
                 sql_text=res.get("sql_text", ""),
@@ -1028,7 +1054,7 @@ def publish_approved_rules(run_id: str) -> int:
             clean_params = _extract_clean_parameters(p.rule_type, spec)
             params_str = json.dumps(clean_params, ensure_ascii=False)
 
-            table_name = p.id.split(".")[0] if "." in p.id else "source_rows"
+            table_name = spec.get("table_name") or (p.id.split(".")[0] if "." in p.id else "source_rows")
             column_name = spec.get("column")
             proposed_source = (
                 session.query(ProposedRuleModel)

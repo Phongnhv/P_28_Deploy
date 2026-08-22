@@ -28,6 +28,11 @@ def render_json(
         "gate_scores": outcome.gate_scores,
         "effective_weights": outcome.effective_weights,
         "excluded_gates": outcome.excluded_gates,
+        "measured_weight": outcome.measured_weight,
+        "override_reason": outcome.override_reason,
+        "baseline_run_id": next(
+            (r.baseline_run_id for r in results if r.baseline_run_id), None
+        ),
         "hard_gates": [
             {
                 "id": h.id, "gate": h.gate, "title": h.title, "metric": h.metric,
@@ -59,6 +64,16 @@ def render_markdown(
         f"- **Run:** `{head.run_id if head else '-'}`",
         f"- **Git ref:** `{head.git_ref if head else '-'}`",
         f"- **Timestamp:** {head.timestamp if head else '-'}",
+        f"- **Measured weight:** {outcome.measured_weight * 100:.1f}% of the gate weight was actually measured",
+    ]
+    baseline = next((r.baseline_run_id for r in results if r.baseline_run_id), None)
+    parts.append(f"- **Baseline:** `{baseline or 'none stored yet'}`")
+    if outcome.override_reason:
+        parts += [
+            "",
+            f"> **This verdict is qualified.** {outcome.override_reason}",
+        ]
+    parts += [
         "",
         "## Hard gates",
         "",

@@ -139,6 +139,9 @@ class EvalResult(BaseModel):
     cost: CostRecord = Field(default_factory=CostRecord)
     run_id: str | None = None
     git_ref: str | None = None
+    #: Run this result was compared against. Only set by evaluators that make a
+    #: statement about change over time; a regression claim without it is unfalsifiable.
+    baseline_run_id: str | None = None
     sdih_seed: int | None = None
     timestamp: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

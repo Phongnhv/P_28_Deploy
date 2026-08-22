@@ -52,9 +52,9 @@ weight: 1
 - **Tips:** Template đã có sẵn, cập nhật mỗi ngày
 
 #### 10. Evaluation Evidence
-- **Location:** `/eval/results/report.md`
+- **Location:** `/evalgate/reports/report.md`
 - **Yêu cầu:** Metrics, test results, user feedback
-- **Tips:** Follow template trong `eval/results/report.md`
+- **Tips:** Chạy `python -m evalgate.run --mode ci`; báo cáo sinh tại `evalgate/reports/report.md`
 
 ## Evaluation Criteria (BTC chấm 1-10)
 

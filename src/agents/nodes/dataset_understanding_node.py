@@ -1,12 +1,13 @@
 import asyncio
 import json
 import logging
-from src.agents.state import AgentState
-from src.models.semantic_contract import TableSemanticContract
+
 from src.agents.nodes.templates import dataset_understanding_prompt
+from src.agents.state import AgentState
 from src.agents.tools.profile_digest import split_digest_by_table
-from src.services.llm import get_llm
 from src.config import get_settings
+from src.models.semantic_contract import TableSemanticContract
+from src.services.llm import get_llm
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ async def _understand_table(
 
 async def dataset_understanding_node(state: AgentState) -> dict:
     """Dataset Understanding Agent Node.
-    
+
     Phân tích digest profile của từng bảng trong dataset và suy luận ra Hợp đồng ngữ nghĩa (Semantic Contract).
     """
     digest = state.get("dataset_profile_digest", {})
@@ -93,6 +94,24 @@ async def dataset_understanding_node(state: AgentState) -> dict:
     }
 
     logger.info(f"Hoàn thành dataset_understanding_node cho dataset: {state.get('dataset_id')}")
+
+    # Xuất trace JSON
+    from datetime import datetime
+    from pathlib import Path
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = state.get("rule_run_id") or "test_run"
+    try:
+        out_dir = getattr(settings, "output_dir", None)
+        res_dir = getattr(settings, "results_dir", None)
+        base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+        semantic_dir = Path(base_dir) / "semantic"
+        semantic_dir.mkdir(parents=True, exist_ok=True)
+        dump_file = semantic_dir / f"debug_semantic_understanding_{timestamp}_{run_id}.json"
+        dump_file.write_text(json.dumps(contract_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"Đã xuất trace dataset understanding ra {dump_file}")
+    except Exception as e:
+        logger.warning(f"Không thể ghi file trace dataset understanding: {e}")
+
     return {
         "semantic_contract": contract_payload,
         "progress_state": "WAITING_FOR_SEMANTIC_REVIEW"

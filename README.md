@@ -45,7 +45,7 @@ graph TD
     Worker -- "Access" --> DB
 ```
 
-> 📖 **Gate 2 MVP Documentation:** Xem tài liệu Gate 2 MVP tại [`docs/gate2-mvp`](docs/DATABASE_ARCHITECTURE.md), chi tiết Kiến trúc CSDL PostgreSQL tại [`docs/DATABASE_ARCHITECTURE.md`](docs/DATABASE_ARCHITECTURE.md) và Báo cáo Nghiệm thu 5 kịch bản E1-E5 tại [`eval/results/E1_E5_EVALUATION.md`](eval/results/E1_E5_EVALUATION.md).
+> 📖 **Gate 2 MVP Documentation:** Xem tài liệu Gate 2 MVP tại [`docs/gate2-mvp`](docs/DATABASE_ARCHITECTURE.md), chi tiết Kiến trúc CSDL PostgreSQL tại [`docs/DATABASE_ARCHITECTURE.md`](docs/DATABASE_ARCHITECTURE.md) và Báo cáo Nghiệm thu 5 kịch bản E1-E5 tại [`docs/EVAL_EVIDENCES_E1_E5.md`](docs/EVAL_EVIDENCES_E1_E5.md) (bản thực thi được: [`evalgate/golden/tier2_rules/e1_e5.cases.yaml`](evalgate/golden/tier2_rules/e1_e5.cases.yaml)).
 
 
 

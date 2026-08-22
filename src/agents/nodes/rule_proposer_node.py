@@ -20,7 +20,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -38,7 +38,6 @@ from src.agents.tools.profile_digest import (
 )
 from src.config import get_settings
 from src.models.rule_schemas import (
-    EvidenceSourceType,
     ProposedRule,
     RuleEvidenceSnapshot,
     TableRuleProposal,
@@ -344,9 +343,9 @@ async def _propose_for_table(
                     max_retries + 1,
                     entry_ts.isoformat(),
                 )
-                
+
                 is_taxi = dataset_id.lower().startswith("nyc-yellow") or "taxi" in dataset_id.lower()
-                
+
                 if candidates is not None:
                     coverage_requirements = json.dumps(candidates, ensure_ascii=False)
                 else:
@@ -481,6 +480,30 @@ def _stamp_rule(
         logger.warning("Rule %s không còn evidence hợp lệ sau chuẩn hóa", rule_id)
         return {}
 
+    # parameter_provenance trỏ vào cùng tập evidence với selected_evidence_refs.
+    # Khi ở trên đã chuẩn hóa refs, provenance phải đi theo — nếu không, rule được
+    # lưu với chứng cứ trỏ vào một id không tồn tại và mọi truy vết sau này đều gãy.
+    provenance = [item.model_dump() for item in rule.parameter_provenance]
+    if invalid_refs:
+        for entry in provenance:
+            if entry["source_ref"] in evidence_by_id:
+                continue
+            # Ưu tiên ref cùng loại nguồn để không đổi ý nghĩa của chứng cứ.
+            original_type = str(entry["source_type"])
+            replacement = next(
+                (ref for ref in selected_refs if _evidence_source_type(ref) == original_type),
+                selected_refs[0],
+            )
+            logger.warning(
+                "Rule %s: provenance của tham số %s trỏ vào %s không hợp lệ — chuyển sang %s",
+                rule_id,
+                entry["parameter_name"],
+                entry["source_ref"],
+                replacement,
+            )
+            entry["source_ref"] = replacement
+            entry["source_type"] = _evidence_source_type(replacement)
+
     digest = table_digest or {}
     sample = digest.get("sample") or {}
     dashboard_full_table = bool(digest.get("dashboard_candidate_mode"))
@@ -506,6 +529,8 @@ def _stamp_rule(
         "business_rationale": rule.business_rationale,
         "proposal_basis": rule.proposal_basis.value,
         "selected_evidence_refs": selected_refs,
+        "parameter_provenance": provenance,
+        "assumptions": list(rule.assumptions),
         "confidence": rule.confidence.model_dump(),
         "confidence_score": rule.confidence.overall,
         "evidence": evidence.model_dump(),
@@ -631,29 +656,46 @@ async def rule_proposer_node(state: AgentState) -> dict:
         len(errors),
     )
 
-    if settings.debug_dump_table_digests:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        try:
-            rule_proposer_dir.mkdir(parents=True, exist_ok=True)
-            dump_file = rule_proposer_dir / f"debug_proposed_rules_{timestamp}_{run_id}.json"
-            dump_payload = {
-                "run_id": run_id,
-                "generated_at": datetime.now().isoformat(),
-                "total_rules": len(flat_rules),
-                "total_errors": len(errors),
-                "proposed_rules": flat_rules,
-                "errors": errors,
-            }
-            dump_file.write_text(json.dumps(dump_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            logger.info("Đã xuất trace proposed rules ra %s", dump_file)
-        except Exception as exc:
-            logger.warning("Không thể ghi file trace proposed rules: %s", exc)
+    # Xuất trace JSON proposed rules
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    try:
+        rule_proposer_dir.mkdir(parents=True, exist_ok=True)
+        dump_file = rule_proposer_dir / f"debug_proposed_rules_{timestamp}_{run_id}.json"
+        dump_payload = {
+            "run_id": run_id,
+            "generated_at": datetime.now().isoformat(),
+            "total_rules": len(flat_rules),
+            "total_errors": len(errors),
+            "proposed_rules": flat_rules,
+            "errors": errors,
+        }
+        dump_file.write_text(json.dumps(dump_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("Đã xuất trace proposed rules ra %s", dump_file)
+    except Exception as exc:
+        logger.warning("Không thể ghi file trace proposed rules: %s", exc)
 
-    return {
+    result: dict = {
         "proposed_rules": flat_rules,
         "rule_proposal_errors": errors,
         "rule_run_id": run_id,
     }
+
+    # Thất bại toàn bộ (ví dụ LLM hết quota / mất mạng) trước đây chỉ được ghi vào
+    # `rule_proposal_errors` rồi graph vẫn chạy tiếp và runner báo DONE với 0 rules —
+    # không phân biệt được với trường hợp hợp lệ "dataset sạch, không cần rule nào".
+    if errors and not flat_rules:
+        result["error"] = (
+            f"Rule proposer thất bại trên toàn bộ {len(errors)}/{len(table_names)} bảng: "
+            + "; ".join(f"{e.get('table')}: {e.get('error')}" for e in errors[:3])
+        )
+    elif errors:
+        logger.warning(
+            "rule_proposer_node thành công một phần: %d/%d bảng thất bại",
+            len(errors),
+            len(table_names),
+        )
+
+    return result
 
 # ---------------------------------------------------------------------------
 

@@ -1,9 +1,11 @@
 import pytest
-from src.agents.state import AgentState
+
 from src.agents.nodes.dataset_understanding_node import dataset_understanding_node
 from src.agents.nodes.hitl_semantic_gate_node import hitl_semantic_gate_node
 from src.agents.nodes.rule_candidate_builder_node import rule_candidate_builder_node
+from src.agents.state import AgentState
 from src.models.semantic_contract import TableSemanticContract
+
 
 @pytest.mark.asyncio
 async def test_dataset_understanding_node(monkeypatch):
@@ -84,9 +86,12 @@ async def test_hitl_semantic_gate_node(tmp_path):
         }
     }
 
-    # Trường hợp draft -> Tạm dừng và trả error đặc biệt
+    # Trường hợp draft -> Tạm dừng có chủ đích: báo qua `pause_reason`, KHÔNG phải `error`.
+    # Dùng chung một trường cho "lỗi" và "chờ người duyệt" khiến runner không phân biệt được
+    # hai tình huống và ghi đè trạng thái AWAITING_SEMANTIC_REVIEW thành DONE.
     res_draft = await hitl_semantic_gate_node(state_draft)
-    assert res_draft.get("error") == "AWAITING_SEMANTIC_REVIEW"
+    assert res_draft.get("pause_reason") == "AWAITING_SEMANTIC_REVIEW"
+    assert res_draft.get("error") is None
     assert res_draft.get("progress_state") == "WAITING_FOR_SEMANTIC_REVIEW"
 
     # Trường hợp confirmed -> Cho phép đi tiếp

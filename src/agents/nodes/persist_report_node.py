@@ -19,8 +19,26 @@ from src.services.rule_store import (
     save_test_results,
     update_test_run_status,
 )
+from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
+
+# test_runner_node chuẩn hoá status về PASS/FAIL/ERROR/SKIPPED, nhưng dữ liệu cũ (và các
+# harness chạy tay) vẫn dùng PASSED/FAILED. Đọc thì chấp nhận cả hai, ghi thì chỉ một dạng.
+_PASS_STATUSES = ("PASS", "PASSED")
+_FAIL_STATUSES = ("FAIL", "FAILED")
+
+
+def _normalize_status(raw: str | None) -> str:
+    """Quy mọi biến thể status về đúng một từ vựng: PASS / FAIL / ERROR / SKIPPED."""
+    value = (raw or "PASS").upper()
+    if value in _PASS_STATUSES:
+        return "PASS"
+    if value in _FAIL_STATUSES:
+        return "FAIL"
+    if value == "ERROR":
+        return "ERROR"
+    return "SKIPPED"
 
 
 def _dump_report_file(test_run_id: str, payload: dict, steward_summary: str | None = None) -> tuple[str, str | None]:
@@ -46,7 +64,9 @@ def _dump_report_file(test_run_id: str, payload: dict, steward_summary: str | No
     # Ghi file Markdown tổng kết cho Data Steward
     md_path = None
     if steward_summary:
-        md_file = out_dir / f"steward_report_{timestamp}_{test_run_id}.md"
+        steward_dir = base_dir / "steward_reports"
+        steward_dir.mkdir(parents=True, exist_ok=True)
+        md_file = steward_dir / f"steward_report_{timestamp}_{test_run_id}.md"
         with open(md_file, "w", encoding="utf-8") as f:
             f.write(steward_summary)
         md_path = str(md_file)
@@ -73,6 +93,101 @@ async def persist_report_node(state: AgentState) -> dict:
     err_str = "; ".join(errors) if errors else None
     await asyncio.to_thread(update_test_run_status, test_run_id, final_status, err_str)
 
+    # 1.1 Also persist to decoupled Graph 2/3 tables (dq_runs and dq_results)
+    def _save_decoupled_run():
+        from sqlalchemy.orm import Session
+
+        from src.models.database import DqResultModel, DqRunModel
+        from src.services.rule_store import get_engine
+
+        engine = get_engine()
+        with Session(engine) as session:
+            # Idempotent: delete existing run and results
+            session.query(DqResultModel).filter_by(run_id=test_run_id).delete()
+            session.query(DqRunModel).filter_by(id=test_run_id).delete()
+
+            # Map statuses
+            dq_status = "SUCCEEDED" if final_status == "DONE" else "FAILED"
+
+            # Tiêu đề rule lấy từ luật đã duyệt. Trước đây cắt đuôi rule_id
+            # ("yellow_tripdata.fare_amount.RANGE" -> "RANGE") nên steward_insights_node
+            # gửi cho LLM một tiêu đề vô nghĩa thay vì mô tả nghiệp vụ thật.
+            titles_by_rule_id = {
+                rule.get("rule_id"): (
+                    rule.get("rule_name")
+                    or rule.get("rule_description")
+                    or rule.get("title")
+                )
+                for rule in (state.get("approved_rules") or [])
+                if rule.get("rule_id")
+            }
+
+            # Count details
+            failed_count = sum(1 for r in test_results if _normalize_status(r.get("status")) == "FAIL")
+            checked_count = sum(int(r.get("checked_count") or r.get("total_rows") or 0) for r in test_results)
+
+            dq_run = DqRunModel(
+                id=test_run_id,
+                job_id=state.get("job_id") or test_run_id,
+                dataset_id=state.get("dataset_id") or "unknown",
+                rule_ids=json.dumps([r.get("rule_id") for r in test_results if r.get("rule_id")]),
+                status=dq_status,
+                total_failed=failed_count,
+                total_checked=checked_count,
+                created_at=utc_now(),
+                completed_at=utc_now(),
+                ruleset_version_id=state.get("ruleset_version_id"),
+                compiler_version=state.get("metadata", {}).get("compiler_version"),
+                artifact_hash=state.get("metadata", {}).get("artifact_hash"),
+                retry_history_json=json.dumps(state.get("metadata", {}).get("retry_history", [])),
+                error_message=err_str,
+                dbt_status=(
+                    "SKIPPED"
+                    if state.get("dbt_validation_skipped")
+                    else state.get("metadata", {}).get("dbt_status", "SUCCESS")
+                ),
+                metrics_status=state.get("metadata", {}).get("metrics_status", "SUCCESS"),
+            )
+            session.add(dq_run)
+            session.flush()
+
+            for res in test_results:
+                r_status = _normalize_status(res.get("status"))
+
+                # Extract counts
+                c_count = int(res.get("checked_count") or res.get("total_rows") or 0)
+                f_count = int(res.get("failed_count") or res.get("violation_count") or 0)
+
+                rule_id_value = res.get("rule_id", "")
+                dq_res = DqResultModel(
+                    run_id=test_run_id,
+                    rule_id=rule_id_value,
+                    rule_title=(
+                        titles_by_rule_id.get(rule_id_value)
+                        or res.get("rule_title")
+                        or rule_id_value
+                        or "Rule"
+                    ),
+                    status=r_status,
+                    checked_count=c_count,
+                    failed_count=f_count,
+                    failed_row_ids=json.dumps(res.get("sample_refs") or res.get("sample_failures") or []),
+                    violation_rate=float(res.get("violation_rate") or 0.0),
+                    duration_ms=float(res.get("duration_ms") or 0.0),
+                    dbt_status=res.get("dbt_status") or ("SUCCESS" if r_status == "PASS" else "FAIL"),
+                    metrics_status=res.get("metrics_status") or "SUCCESS",
+                    error_message=res.get("error"),
+                )
+                session.add(dq_res)
+
+            session.commit()
+            logger.info("Đã lưu decoupled run và %d results cho run_id=%s vào dq_runs/dq_results", len(test_results), test_run_id)
+
+    try:
+        await asyncio.to_thread(_save_decoupled_run)
+    except Exception as db_exc:
+        logger.warning("Không thể lưu decoupled run thông tin vào dq_runs/dq_results: %s", db_exc)
+
     # Ghi file report
     report_payload = {
         "test_run_id": test_run_id,
@@ -82,9 +197,9 @@ async def persist_report_node(state: AgentState) -> dict:
         "dq_grade": dq_grade,
         "dq_dimensions": dq_dimensions,
         "total_rules_tested": len(test_results),
-        "passed_count": sum(1 for r in test_results if r.get("status") == "PASSED"),
-        "failed_count": sum(1 for r in test_results if r.get("status") == "FAILED"),
-        "error_count": sum(1 for r in test_results if r.get("status") == "ERROR"),
+        "passed_count": sum(1 for r in test_results if _normalize_status(r.get("status")) == "PASS"),
+        "failed_count": sum(1 for r in test_results if _normalize_status(r.get("status")) == "FAIL"),
+        "error_count": sum(1 for r in test_results if _normalize_status(r.get("status")) == "ERROR"),
         "anomalies": anomalies,
         "remediation_actions": remediation_actions,
         "test_results": test_results,

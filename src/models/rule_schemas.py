@@ -86,6 +86,13 @@ class RuleParameters(BaseModel):
     operator: Literal["<=", "<", ">=", ">", "=", "==", "!=", "<>"] | None = None
 
 
+class ParameterProvenance(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    parameter_name: str = Field(min_length=1)
+    source_type: EvidenceSourceType
+    source_ref: str = Field(min_length=1)
+    derivation_method: str = Field(min_length=1)
 
 
 class RuleConfidence(BaseModel):
@@ -140,6 +147,8 @@ class ProposedRule(BaseModel):
     business_rationale: str = Field(min_length=1)
     proposal_basis: ProposalBasis
     selected_evidence_refs: list[str] = Field(min_length=1)
+    parameter_provenance: list[ParameterProvenance] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
     confidence: RuleConfidence
     severity: Severity
 
@@ -182,11 +191,29 @@ class ProposedRule(BaseModel):
         params = upgraded.get("parameters") or {}
         if isinstance(params, RuleParameters):
             params = params.model_dump(exclude_none=True)
+        elif isinstance(params, dict):
+            pass
+        else:
+            params = {}
         reference = "history:legacy:proposal"
         upgraded.setdefault("rule_name", description)
         upgraded.setdefault("business_rationale", str(upgraded.get("ai_reasoning") or description))
         upgraded.setdefault("proposal_basis", ProposalBasis.HISTORICAL_RULE)
         upgraded.setdefault("selected_evidence_refs", [reference])
+        upgraded.setdefault(
+            "parameter_provenance",
+            [
+                {
+                    "parameter_name": name,
+                    "source_type": EvidenceSourceType.HISTORICAL_RULE,
+                    "source_ref": reference,
+                    "derivation_method": "legacy proposal compatibility",
+                }
+                for name, parameter_value in params.items()
+                if parameter_value is not None
+            ],
+        )
+        upgraded.setdefault("assumptions", ["Upgraded from the legacy proposal schema."])
         upgraded.setdefault(
             "confidence",
             {
@@ -201,52 +228,9 @@ class ProposedRule(BaseModel):
 
     @model_validator(mode="after")
     def _validate_parameters(self) -> ProposedRule:
-        """Guardrail: kiểm tra từng rule_type có đủ tham số bắt buộc không."""
-        import re
-
+        """Guardrail: kiểm tra từng rule_type có đủ tham số bắt buộc không và có parameter provenance không."""
         rt = self.rule_type
         p = self.parameters
-
-        # ---------- Phase 1: Auto-fill missing required parameters from LLM text ----------
-        text_context = f"{self.rule_description} {self.ai_reasoning}"
-
-        if rt == RuleType.ROW_COUNT and p.min_row_count is None:
-            m = re.search(r'\b(\d{4,10})\b', text_context)
-            p.min_row_count = int(m.group(1)) if m else 50000
-
-        elif rt == RuleType.FRESHNESS and p.max_age_hours is None:
-            m = re.search(r'\b(\d+(?:\.\d+)?)\b', text_context)
-            p.max_age_hours = float(m.group(1)) if m else 24.0
-
-        elif rt == RuleType.NULL_RATE and p.max_null_pct is None:
-            m = re.search(r'\b(\d+(?:\.\d+)?)\s*%', text_context)
-            p.max_null_pct = float(m.group(1)) if m else 10.0
-
-        elif rt == RuleType.RANGE and p.min is None and p.max is None:
-            numbers = [float(x) for x in re.findall(r'\b\d+(?:\.\d+)?\b', text_context)]
-            if len(numbers) >= 2:
-                p.min, p.max = numbers[0], numbers[1]
-            elif len(numbers) == 1:
-                p.min = numbers[0]
-            else:
-                p.min = 0.0
-
-        elif rt == RuleType.ACCEPTED_VALUES and not p.accepted_values:
-            matches = re.findall(r"['\"]([a-zA-Z0-9_ \-]+)['\"]", text_context)
-            p.accepted_values = list(dict.fromkeys(matches)) if matches else ["1", "2"]
-
-        elif rt == RuleType.REGEX_FORMAT and not p.regex:
-            p.regex = "^.+$"
-
-        elif rt == RuleType.CROSS_FIELD_COMPARISON:
-            if p.target_column is None:
-                # Try extract column name from description
-                m = re.search(r'\b(tpep_dropoff_datetime|dropoff_at|end_time|end_date)\b', text_context)
-                p.target_column = m.group(1) if m else "tpep_dropoff_datetime"
-            if p.operator is None:
-                p.operator = "<="
-
-        # ---------- Phase 2: Strict structural checks ----------
 
         if len(self.selected_evidence_refs) != len(set(self.selected_evidence_refs)):
             raise ValueError("selected_evidence_refs không được trùng lặp")
@@ -282,6 +266,36 @@ class ProposedRule(BaseModel):
             raise ValueError(
                 "Rule CROSS_FIELD_COMPARISON yêu cầu target_column và operator "
                 f"không được None (column={self.column!r})"
+            )
+
+        # Một tham số chỉ được coi là "đang sử dụng" khi nó thực sự ràng buộc điều gì.
+        # `None` là chưa khai; collection rỗng (`[]`, `{}`, `""`) là có khai nhưng không
+        # ràng buộc gì — cả hai đều không cần chứng cứ đi kèm.
+        #
+        # KHÔNG dùng phép kiểm falsy ở đây: `min=0`, `max_null_pct=0.0` hay
+        # `threshold=False` đều là ràng buộc thật và bắt buộc phải có provenance.
+        active_parameters = {
+            name
+            for name, value in p.model_dump().items()
+            if value is not None
+            and not (isinstance(value, (list, dict, set, tuple, str)) and len(value) == 0)
+        }
+
+        provenance_names = [item.parameter_name for item in self.parameter_provenance]
+        provenance_parameters = set(provenance_names)
+
+        # So sánh hai `set` sẽ nuốt mất entry trùng tên (hai entry "min" gộp thành một),
+        # nên phải bắt trùng lặp trước khi so khớp.
+        if len(provenance_names) != len(provenance_parameters):
+            duplicates = sorted({n for n in provenance_names if provenance_names.count(n) > 1})
+            raise ValueError(
+                "parameter_provenance có entry trùng tên cho cùng một parameter: "
+                + ", ".join(duplicates)
+            )
+
+        if active_parameters != provenance_parameters:
+            raise ValueError(
+                "parameter_provenance phải chứa đúng một entry cho mỗi parameter đang sử dụng"
             )
 
         return self

@@ -35,6 +35,12 @@ class Decision:
     WARNING = "WARNING"
     FAIL = "FAIL"
     RELEASE_BLOCKED = "RELEASE_BLOCKED"
+    #: The run cannot be attributed to a revision. The score is still shown, because
+    #: the developer needs it, but approval is withheld: the number describes a tree
+    #: that no commit corresponds to.
+    EVALGATE_STALE = "EVALGATE_STALE"
+    #: Too little of the system was measured for an aggregate to mean anything.
+    INSUFFICIENT_COVERAGE = "INSUFFICIENT_COVERAGE"
 
 
 EXIT_CODES = {
@@ -42,7 +48,16 @@ EXIT_CODES = {
     Decision.WARNING: 1,
     Decision.FAIL: 2,
     Decision.RELEASE_BLOCKED: 3,
+    Decision.EVALGATE_STALE: 4,
+    Decision.INSUFFICIENT_COVERAGE: 5,
 }
+
+#: Share of the original gate weight that must actually be measured before an
+#: aggregate is published. Re-normalisation is right -- an unmeasured gate must not
+#: score zero -- but it also silently concentrates the whole verdict onto whatever
+#: happens to be left. Below this floor the honest answer is that there is not
+#: enough evidence for a number, not that the number is low.
+MIN_MEASURED_WEIGHT = 0.60
 
 
 def load_policy(name: str) -> dict[str, Any]:
@@ -69,6 +84,12 @@ class AggregateOutcome:
     excluded_gates: dict[str, str] = field(default_factory=dict)
     hard_gates: list[HardGateOutcome] = field(default_factory=list)
     blocking_findings: list[Finding] = field(default_factory=list)
+    #: Share of the original weight that was actually measured, before re-normalisation.
+    measured_weight: float = 0.0
+    #: Set when the runner overrides the decision, e.g. for a stale workspace.
+    override_reason: str | None = None
+    #: Metric names claimed by more than one evaluator. Empty is the healthy state.
+    metric_collisions: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def exit_code(self) -> int:
@@ -124,6 +145,21 @@ def _evaluate_rule(rule: str, value: float) -> bool:
     if not set(expression) <= _ALLOWED_RULE_CHARS:
         raise ValueError(f"Unsafe hard-gate rule: {rule}")
     return bool(eval(expression, {"__builtins__": {}}, {}))  # noqa: S307 - closed DSL
+
+
+def detect_metric_collisions(results: list[EvalResult]) -> dict[str, list[str]]:
+    """Metric names produced by more than one evaluator.
+
+    Hard gates read metrics from a flat namespace, so a duplicate name means the
+    gate silently reads whichever evaluator happened to run last. There are none
+    today; this exists so that the day one is introduced, it is visible in the
+    report instead of quietly changing a release decision.
+    """
+    owners: dict[str, list[str]] = {}
+    for result in results:
+        for key in result.metrics:
+            owners.setdefault(key, []).append(result.evaluator)
+    return {key: names for key, names in owners.items() if len(names) > 1}
 
 
 def evaluate_hard_gates(results: list[EvalResult]) -> list[HardGateOutcome]:
@@ -219,15 +255,19 @@ def aggregate(results: list[EvalResult]) -> AggregateOutcome:
         excluded_reasons.setdefault(gate, EvalStatus.NOT_IMPLEMENTED.value)
 
     effective = re_normalize_weights(weights, excluded)
+    measured_weight = sum(w for g, w in weights.items() if g not in excluded)
     total_score = (
         sum(gate_scores[g] * w for g, w in effective.items()) if effective else None
     )
 
-    # 3. Decision.
+    # 3. Decision. Hard gates come first, then coverage, then the score band: a
+    #    number computed from too little evidence should not be presented at all.
     if any_hard_gate_failed or blocking:
         decision = Decision.RELEASE_BLOCKED
     elif total_score is None:
         decision = Decision.FAIL
+    elif measured_weight < MIN_MEASURED_WEIGHT:
+        decision = Decision.INSUFFICIENT_COVERAGE
     elif total_score >= bands["pass"]:
         decision = Decision.PASS
     elif total_score >= bands["warning"]:
@@ -243,4 +283,6 @@ def aggregate(results: list[EvalResult]) -> AggregateOutcome:
         excluded_gates={g: excluded_reasons.get(g, "unknown") for g in excluded},
         hard_gates=hard_gates,
         blocking_findings=blocking,
+        measured_weight=round(measured_weight, 4),
+        metric_collisions=detect_metric_collisions(results),
     )

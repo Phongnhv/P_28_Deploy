@@ -208,9 +208,10 @@ async def run_propose_rules(job_id: str, dataset_id: str):
     if err:
         if err == "AWAITING_SEMANTIC_REVIEW":
             logger.info("Proposal pipeline paused: AWAITING_SEMANTIC_REVIEW. Exiting worker cleanly.")
-            from src.services.rule_store import get_engine
             from sqlalchemy.orm import Session
+
             from src.models.database import JobModel
+            from src.services.rule_store import get_engine
             with Session(get_engine()) as session:
                 db_job = session.query(JobModel).filter_by(id=job_id).first()
                 if db_job:

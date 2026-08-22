@@ -1,0 +1,60 @@
+# Tier 3 — does the model obey the constraints its own prompt imposes?
+#
+# The system prompt in src/agents/nodes/templates.py gives the model two explicit,
+# checkable orders:
+#
+#   business_rationale  "TUYET DOI CAM su dung ten bien ky thuat"
+#                       (absolutely forbidden to use technical variable names)
+#   ai_reasoning        "BAT BUOC trich dan so lieu thuc te cu the tu profile"
+#                       (must cite concrete real figures from the profile)
+#
+# Both are instruction-following properties, and both can be checked without a model
+# call. That matters: instruction-following measured by another LLM is a judgement
+# that drifts between runs, while "does this string contain fare_amount" does not.
+#
+# Whether the explanation is *good* is a separate question and is deliberately not
+# gated here.
+version: "1.0"
+dataset_id: dataset-nyc-yellow-taxi-50k
+description: >-
+  Prompt-compliance of generated rule text, measured deterministically against
+  archived proposals.
+
+cases:
+  - id: GL-RATIONALE-NO-TECHNICAL-NAMES
+    tier: 3
+    severity: MEDIUM
+    intent: >-
+      The business rationale is written for a Data Steward who does not read the
+      schema. Leaking column identifiers into it defeats the only purpose the field
+      has, and the prompt forbids it in capitals.
+    source: src/agents/nodes/templates.py#_RULE_PROPOSER_SYSTEM
+    ground_truth_owner: data-steward
+    assertions:
+      - type: forbidden_tokens
+        field: business_rationale
+        tokens:
+          - fare_amount
+          - trip_distance
+          - payment_type
+          - tpep_pickup_datetime
+          - tpep_dropoff_datetime
+          - passenger_count
+          - vendor_id
+          - source_row_id
+          - NOT_NULL
+          - ACCEPTED_VALUES
+
+  - id: GL-REASONING-MUST-CITE-FIGURES
+    tier: 3
+    severity: MEDIUM
+    intent: >-
+      A rationale with no number in it cannot have been derived from the profile. The
+      check is weak on purpose -- it proves citation happened, not that the figure is
+      correct -- but a rule whose reasoning contains no figure at all is a rule the
+      steward has no basis to approve.
+    source: src/agents/nodes/templates.py#_RULE_PROPOSER_USER
+    ground_truth_owner: data-steward
+    assertions:
+      - type: must_cite_numbers
+        field: ai_reasoning

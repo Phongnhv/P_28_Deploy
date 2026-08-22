@@ -62,7 +62,7 @@ và Từ điển dữ liệu (Data Dictionary) được cung cấp.
 
 ## Hướng dẫn quan trọng về mặt Ngôn ngữ & Nghiệp vụ (Data Steward-friendly)
 
-1. **`rule_name` (Tên quy tắc)**: 
+1. **`rule_name` (Tên quy tắc)**:
    - Phải viết bằng tiếng Việt tự nhiên, mang tính chất nghiệp vụ thuần túy và dễ hiểu cho Data Steward.
    - **CẤM** sử dụng tên cột kỹ thuật (e.g. `fare_amount`) hay tên kiểu dữ liệu, toán tử logic (e.g. `NOT_NULL`, `RANGE`).
    - *Ví dụ tốt*: `Yêu cầu bắt buộc nhập mã chuyến đi`, `Khống chế cước phí cơ bản tối thiểu`, `Định danh nhà cung cấp hợp lệ`.
@@ -484,7 +484,7 @@ Nhiệm vụ của bạn là phân tích các số liệu thống kê (Profile D
    - `text`: Các cột chuỗi tự do (tên người, mô tả, nội dung đánh giá).
    - `location`: Tọa độ, ID vùng đón/trả, địa chỉ, mã quốc gia.
    - `PII`: Email, số điện thoại, số CCCD/CMND.
-   
+
 2. **business_role (Vai trò nghiệp vụ)**:
    - Đặt tên vai trò nghiệp vụ tương ứng bằng tiếng Anh dạng snake_case (e.g., `primary_key`, `created_at`, `transaction_amount`, `customer_id`, `category_code`).
 
@@ -516,6 +516,53 @@ dataset_understanding_prompt = ChatPromptTemplate.from_messages(
         ("user", _DATASET_UNDERSTANDING_USER),
     ]
 )
+
+
+_DATA_DICTIONARY_GENERATOR_SYSTEM = """Bạn là một Chuyên gia Quản trị Dữ liệu (Data Governance Specialist) và Kỹ sư Metadata nghiệp vụ.
+Nhiệm vụ của bạn là phân tích các số liệu thống kê kỹ thuật (Profile Digest) của bảng `{table_name}` kết hợp với Domain Hint (Gợi ý nghiệp vụ) để tự động xây dựng một Bản Từ điển dữ liệu nghiệp vụ (Data Dictionary) chi tiết, chuẩn hóa và dễ hiểu.
+
+Hãy suy luận các khía cạnh nghiệp vụ sau cho bảng:
+1. **Mô tả bảng (description)**: Tóm tắt rõ ràng vai trò nghiệp vụ chính của bảng `{table_name}` bằng tiếng Việt.
+2. **Mô tả cột (description)**: Viết định nghĩa nghiệp vụ bằng tiếng Việt ngắn gọn, dễ hiểu cho từng cột dựa trên tên cột kỹ thuật, kiểu dữ liệu thực tế và dải giá trị.
+3. **semantic_type (Kiểu dữ liệu ngữ nghĩa)**: Phân loại chính xác kiểu dữ liệu thực tế thành một trong các nhóm:
+   - `identifier`: Khóa chính, mã giao dịch, ID tham chiếu, mã số định danh.
+   - `timestamp`: Các mốc thời gian sự kiện (ngày giờ giao dịch, ngày tạo, ngày cập nhật).
+   - `category`: Cột phân loại, mã trạng thái, hình thức, phương thức giao dịch (enum/danh sách giới hạn).
+   - `currency`: Các cột số tiền, doanh thu, phí, thuế, tiền tip.
+   - `numeric`: Các cột số đo lường (khoảng cách, số lượng, trọng lượng, tọa độ vật lý).
+   - `text`: Các chuỗi văn bản tự do, mô tả, tên, ghi chú.
+   - `PII`: Thông tin định danh cá nhân nhạy cảm (email, số điện thoại, số CCCD, địa chỉ cá nhân).
+   - `unknown`: Nếu không đủ dữ liệu để suy luận.
+4. **business_role**: Vai trò nghiệp vụ tương ứng bằng tiếng Anh snake_case (e.g., primary_key, created_at, customer_id, transaction_amount).
+5. **nullable_expected**: Suy luận xem cột này có bắt buộc phải có giá trị trong nghiệp vụ không (ví dụ: các cột khóa chính, ngày giao dịch hoặc số tiền thường là bắt buộc - nullable_expected=false; các cột ghi chú hoặc tiền tip thường không bắt buộc - nullable_expected=true).
+6. **governance_notes**: Đưa ra các ghi chú hoặc khuyến nghị quản trị dữ liệu quan trọng bằng tiếng Việt (ví dụ: cảnh báo PII nhạy cảm cần ẩn danh, tỷ lệ null cao, hoặc dải giá trị bất thường).
+7. **business_rules**: Liệt kê các ràng buộc hoặc luật nghiệp vụ tự nhiên suy ra từ bảng bằng tiếng Việt (ví dụ: ngày tạo phải trước ngày cập nhật, số tiền giao dịch phải lớn hơn hoặc bằng 0, v.v.).
+
+Lưu ý quan trọng:
+- Mô tả phải viết bằng tiếng Việt thuần túy nghiệp vụ và dễ hiểu cho Data Steward.
+- Tuyệt đối bảo mật: Chỉ dựa trên metadata và thống kê digest, không bịa đặt hoặc suy diễn vượt quá phạm vi dữ liệu quan sát được.
+"""
+
+_DATA_DICTIONARY_GENERATOR_USER = """Dưới đây là thông tin kỹ thuật của bảng `{table_name}`:
+
+## Profile Digest của bảng:
+```json
+{table_digest}
+```
+
+## Domain Hint (Gợi ý nghiệp vụ từ người dùng):
+{domain_hint}
+
+Hãy phân tích và sinh ra cấu trúc InferredDictionaryTable phù hợp nhất cho bảng này.
+"""
+
+data_dictionary_generator_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", _DATA_DICTIONARY_GENERATOR_SYSTEM),
+        ("user", _DATA_DICTIONARY_GENERATOR_USER),
+    ]
+)
+
 
 
 _GENERIC_RULE_PROPOSER_SYSTEM = """Bạn là chuyên gia kiểm định chất lượng dữ liệu (Data Quality Expert). Nhiệm vụ của bạn là đề xuất các quy tắc kiểm thử chất lượng (DQ Rules) cho bảng `{table_name}` dựa trên digest profile thực tế và Hợp đồng ngữ nghĩa (Semantic Contract) đã được Data Steward duyệt.

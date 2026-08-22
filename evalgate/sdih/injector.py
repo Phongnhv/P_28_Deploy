@@ -35,6 +35,18 @@ _INVALID_CATEGORY_TOKEN = "__SDIH_INVALID__"
 _TYPE_VIOLATION_TOKEN = "__SDIH_NOT_A_VALUE__"
 _STALE_YEARS = 10
 
+#: Classes whose label is a claim about a *relationship*, not about one cell.
+#:
+#: "This row is a duplicate" is only true while some other row still holds the same
+#: key; "pickup is after dropoff" is only true while both columns keep the values
+#: that made it true. Disjoint row positions are therefore not enough for these --
+#: another class writing anywhere in the same column can silently falsify the label,
+#: and the resulting ground truth penalises the agent for missing a defect that is
+#: no longer there. Their target columns are claimed exclusively.
+RELATIONAL_DEFECTS: frozenset[DefectClass] = frozenset(
+    {DefectClass.DUPLICATE_ROW, DefectClass.CROSS_FIELD_VIOLATION}
+)
+
 
 @dataclass
 class InjectionPlan:
@@ -46,6 +58,10 @@ class InjectionPlan:
     targets: dict[str, str] = field(default_factory=dict)  # class -> column (or pair)
     not_applicable: list[str] = field(default_factory=list)
     expected_counts: dict[str, int] = field(default_factory=dict)
+    #: Non-fatal notes about the plan, e.g. a column claimed by several cell-local
+    #: classes. Reported rather than silently accepted: a column labelled as
+    #: simultaneously missing, mistyped and outlying is hard for a reviewer to read.
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def is_measurable(self) -> bool:
@@ -72,10 +88,25 @@ def build_plan(
     rng = np.random.default_rng(seed)
 
     plan = InjectionPlan(dataset_id=dataset_id, seed=seed, n_per_class=n_per_class)
-    for defect in ALL_DEFECTS:
+
+    # Relational classes choose first and claim their columns exclusively; a
+    # cell-local class writing into the same column would falsify their labels.
+    ordered = [d for d in ALL_DEFECTS if d in RELATIONAL_DEFECTS] + [
+        d for d in ALL_DEFECTS if d not in RELATIONAL_DEFECTS
+    ]
+    claimed: set[str] = set()
+    used_by: dict[str, list[str]] = {}
+
+    for defect in ordered:
         candidates = applicable_columns(defect, profile)
-        blocked = skip.get(defect.value, set())
-        candidates = [c for c in candidates if c not in blocked]
+        blocked = set(skip.get(defect.value, set()))
+        if defect not in RELATIONAL_DEFECTS:
+            blocked |= claimed
+        candidates = [c for c in candidates if c not in blocked and not (
+            # A cross-field target is a "left|right" pair; reject it if either side
+            # is already claimed.
+            "|" in c and set(c.split("|")) & blocked
+        )]
         if not candidates:
             plan.not_applicable.append(defect.value)
             continue
@@ -84,6 +115,18 @@ def build_plan(
         chosen = candidates[int(rng.integers(0, len(candidates)))]
         plan.targets[defect.value] = chosen
         plan.expected_counts[defect.value] = min(n_per_class, max(0, len(df) // 20))
+
+        parts = chosen.split("|") if "|" in chosen else [chosen]
+        if defect in RELATIONAL_DEFECTS:
+            claimed.update(parts)
+        for part in parts:
+            used_by.setdefault(part, []).append(defect.value)
+
+    for column, classes in sorted(used_by.items()):
+        if len(classes) > 1:
+            plan.warnings.append(
+                f"{column}: targeted by {len(classes)} cell-local classes {sorted(classes)}"
+            )
     return plan
 
 
@@ -245,12 +288,20 @@ def _apply_defect(
 
     if defect is DefectClass.DUPLICATE_ROW:
         # Overwrite the key column so the row becomes a duplicate of another one.
+        #
+        # The donor must not itself be one of the rows being overwritten. If it is,
+        # a later iteration replaces the donor's key and the value copied here no
+        # longer appears anywhere else -- the label then claims a duplicate that
+        # does not exist, and the agent is penalised for not finding it.
         loc = dirty.columns.get_loc(target)
-        donors = rng.permutation(len(dirty))
+        targets = {int(p) for p in positions}
+        donors = [int(d) for d in rng.permutation(len(dirty)) if int(d) not in targets]
+        if not donors:
+            # Every row is a target (only possible on a very small frame); there is
+            # no untouched row to duplicate from, so the class is not applicable.
+            return False
         for index, pos in enumerate(positions):
-            donor = int(donors[index % len(donors)])
-            if donor == pos:
-                continue
+            donor = donors[index % len(donors)]
             dirty.iloc[pos, loc] = dirty.iloc[donor, loc]
             store.add(
                 CellLabel(
