@@ -51,6 +51,28 @@ def test_parameter_provenance_must_cover_all_parameters():
         ProposedRule.model_validate(payload)
 
 
+def test_dashboard_candidate_repairs_only_a_missing_provenance_array():
+    payload = _range_payload()
+    payload["candidate_id"] = "nonnegative:amount"
+    payload["parameter_provenance"] = []
+
+    rule = ProposedRule.model_validate(payload)
+
+    assert rule.parameter_provenance[0].parameter_name == "min"
+    assert rule.parameter_provenance[0].source_ref == "policy.nonnegative_column.amount"
+
+
+def test_dashboard_candidate_repairs_duplicate_or_incomplete_provenance():
+    payload = _range_payload()
+    payload["candidate_id"] = "nonnegative:amount"
+    payload["parameters"]["max"] = 100.0
+    payload["parameter_provenance"].append(dict(payload["parameter_provenance"][0]))
+
+    rule = ProposedRule.model_validate(payload)
+
+    assert [item.parameter_name for item in rule.parameter_provenance] == ["min", "max"]
+
+
 def test_empty_optional_parameters_do_not_require_provenance():
     payload = _range_payload()
     payload["parameters"]["accepted_values"] = []

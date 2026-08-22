@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     mistral_api_key: str | None = os.getenv("MISTRAL_API_KEY")
     google_api_key: str | None = os.getenv("GOOGLE_API_KEY")
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    llm_request_timeout_seconds: int = Field(default=25, ge=5, le=120)
 
     # LLM provider selection
     llm_provider: Literal["openai", "anthropic", "mistral", "google"] = os.getenv("PROVIDER") or "openai"

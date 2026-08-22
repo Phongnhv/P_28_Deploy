@@ -158,6 +158,9 @@ class RuleProposalModel(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    # Proposal batches belong to a concrete steward workflow.  Keeping this nullable
+    # preserves legacy dashboard rows while new workflow rows remain isolated.
+    workflow_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(256), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     severity: Mapped[str] = mapped_column(String(32), nullable=False)  # LOW, MEDIUM, HIGH
@@ -184,6 +187,41 @@ class RuleProposalModel(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=utc_now, onupdate=utc_now
     )
+
+
+class WorkflowRunModel(Base):
+    """Durable state for the four-stage Rule Proposer workflow.
+
+    The UI may navigate backwards without changing this state.  Artifacts are
+    marked stale only when a stage is actually re-run or its review decisions
+    change.
+    """
+
+    __tablename__ = "workflow_runs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    current_step: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    steps_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class WorkflowArtifactModel(Base):
+    __tablename__ = "workflow_artifacts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workflow_run_id: Mapped[str] = mapped_column(String(64), ForeignKey("workflow_runs.id"), nullable=False, index=True)
+    step_key: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    artifact_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="VALIDATED")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    input_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
 
 
 class RuleVersionModel(Base):
@@ -240,6 +278,9 @@ class DqRunModel(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     dbt_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     metrics_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Retain execution evidence when an upstream workflow revision supersedes it.
+    workflow_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workflow_runs.id"), nullable=True, index=True)
+    stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class DqResultModel(Base):
@@ -282,6 +323,9 @@ class RulesetVersionModel(Base):
     dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
     dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     proposal_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("rule_proposals.id"), nullable=True)
+    # New dashboard rulesets are owned by a workflow batch, not one legacy proposal row.
+    workflow_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workflow_runs.id"), nullable=True, index=True)
+    stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     semantic_contract_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ruleset_hash: Mapped[str] = mapped_column(String(256), nullable=False)
     normalized_rules: Mapped[str] = mapped_column(Text, nullable=False)
