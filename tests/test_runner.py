@@ -77,7 +77,9 @@ async def test_dq_run_and_failed_ids_capped_at_20(client):
     assert login_res.status_code == 200
     csrf_token = login_res.json()["csrf_token"]
     # 1. Ingest dataset first to populate source_rows (required to execute queries)
-    ingest_headers = {"X-CSRF-Token": csrf_token, "Idempotency-Key": "dq-run-ingest"}
+    import uuid
+    key_suffix = str(uuid.uuid4())[:8]
+    ingest_headers = {"X-CSRF-Token": csrf_token, "Idempotency-Key": f"dq-run-ingest-{key_suffix}"}
     ingest_res = await client.post("/api/v1/datasets/dataset-nyc-yellow-taxi-50k/ingestions", headers=ingest_headers)
     assert ingest_res.status_code == 202
     run_ingest_profile(ingest_res.json()["job_id"], "dataset-nyc-yellow-taxi-50k")
@@ -108,7 +110,7 @@ async def test_dq_run_and_failed_ids_capped_at_20(client):
         session.commit()
 
     # 3. Trigger DQ Run
-    dq_headers = {"X-CSRF-Token": csrf_token, "Idempotency-Key": "dq-run-trigger"}
+    dq_headers = {"X-CSRF-Token": csrf_token, "Idempotency-Key": f"dq-run-trigger-{key_suffix}"}
     dq_res = await client.post(
         "/api/v1/dq-runs",
         headers=dq_headers,

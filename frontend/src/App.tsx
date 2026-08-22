@@ -2,6 +2,9 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api, isMockMode, workflowApi } from "./api";
 import { ApiError, clearApiSession } from "./api/client";
 import ThemeControl from "./ThemeControl";
+import LanguageToggle from "./LanguageToggle";
+import { useI18n } from "./i18n/context";
+import { Step5Analytics } from "./components/wizard/Step5Analytics";
 import type {
   AuditLog,
   CreateJobResponse,
@@ -133,8 +136,8 @@ function LoginScreen({
   busy: boolean;
   error: string;
 }) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("admin");
   const submit = (event: FormEvent) => {
     event.preventDefault();
     onLogin(username, password);
@@ -320,29 +323,50 @@ function DatasetsPage({
   dataset,
   onOpenExplorer,
   onImportDataset,
+  onSelectDataset,
+  onStartUnderstand,
   canOperate,
   importing,
+  busy,
+  workflow,
+  artifacts,
+  profile,
 }: {
   datasets: Dataset[];
   dataset?: Dataset;
   onOpenExplorer: (datasetId: string) => void;
   onImportDataset: (file: File) => void;
+  onSelectDataset: (datasetId: string) => void;
+  onStartUnderstand: (datasetId: string) => void;
   canOperate: boolean;
   importing: boolean;
+  busy: boolean;
+  workflow: WorkflowRun | null;
+  artifacts: AgentArtifact[];
+  profile: DatasetProfile | null;
 }) {
+  const activeArtifact = workflow && dataset && workflow.dataset_id === dataset.id
+    ? workflowArtifactForStep(workflow, artifacts, "UNDERSTAND_DATA")
+    : undefined;
+
+  const payload = activeArtifact?.payload && typeof activeArtifact.payload === "object"
+    ? (activeArtifact.payload as Record<string, unknown>)
+    : null;
+
   return (
     <div className="datasets-page">
       <div className="page-heading datasets-heading">
         <div>
-          <span className="eyebrow">DATASET CATALOG</span>
-          <h1>Registered datasets</h1>
-          <p>Browse the registered artifacts and open a read-only data view.</p>
+          <span className="eyebrow">STEP 1 · DATASET PREPARATION</span>
+          <h1>Select Dataset & Understand Data</h1>
+          <p>Choose or upload a dataset, then run the AI Agent to perform initial data understanding.</p>
         </div>
         <label className="button primary dataset-import-button">
           + Import dataset
           <input type="file" accept=".csv,.parquet,text/csv,application/vnd.apache.parquet" disabled={!canOperate || importing} onChange={(event) => { const file = event.target.files?.[0]; if (file) onImportDataset(file); event.currentTarget.value = ""; }} />
         </label>
       </div>
+
       {datasets.length ? (
         <div className="dataset-catalog-grid">
           <label className={`dataset-import-card ${importing ? "busy" : ""}`}>
@@ -351,45 +375,62 @@ function DatasetsPage({
             <strong>{importing ? "Profiling dataset…" : "Import a dataset"}</strong>
             <small>CSV or Parquet · profile automatically</small>
           </label>
-          {datasets.map((item) => (
-            <article
-              className={`dataset-catalog-card ${item.id === dataset?.id ? "active" : ""}`}
-              key={item.id}
-            >
-              <div className="dataset-catalog-top">
-                <StatusPill
-                  label={item.status.replaceAll("_", " ")}
-                  tone={item.status === "PROFILE_READY" ? "success" : "info"}
-                />
-                <code>{item.manifest_version}</code>
-              </div>
-              <h2>{item.name}</h2>
-              <p>{item.description}</p>
-              <div className="dataset-catalog-stats">
-                <div>
-                  <span>Rows</span>
-                  <strong>{item.row_count.toLocaleString()}</strong>
+          {datasets.map((item) => {
+            const isSelected = item.id === dataset?.id;
+            return (
+              <article
+                className={`dataset-catalog-card ${isSelected ? "active" : ""}`}
+                key={item.id}
+                onClick={() => onSelectDataset(item.id)}
+                style={{ cursor: "pointer", border: isSelected ? "2px solid var(--color-primary, #2563eb)" : undefined }}
+              >
+                <div className="dataset-catalog-top">
+                  <StatusPill
+                    label={isSelected ? "SELECTED" : item.status.replaceAll("_", " ")}
+                    tone={isSelected ? "success" : "info"}
+                  />
+                  <code>{item.manifest_version}</code>
                 </div>
-                <div>
-                  <span>Source</span>
-                  <strong>{item.source_label}</strong>
+                <h2>{item.name}</h2>
+                <p>{item.description}</p>
+                <div className="dataset-catalog-stats">
+                  <div>
+                    <span>Rows</span>
+                    <strong>{item.row_count.toLocaleString()}</strong>
+                  </div>
+                  <div>
+                    <span>Source</span>
+                    <strong>{item.source_label}</strong>
+                  </div>
+                  <div>
+                    <span>Updated</span>
+                    <strong>{formatTime(item.updated_at)}</strong>
+                  </div>
                 </div>
-                <div>
-                  <span>Updated</span>
-                  <strong>{formatTime(item.updated_at)}</strong>
+                <div className="dataset-catalog-actions">
+                  <button
+                    className="button secondary"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenExplorer(item.id);
+                    }}
+                  >
+                    View data →
+                  </button>
+                  <button
+                    className="button primary"
+                    disabled={!canOperate || busy}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onStartUnderstand(item.id);
+                    }}
+                  >
+                    {busy && isSelected ? "Understanding..." : "🤖 Run Understand"}
+                  </button>
                 </div>
-              </div>
-              <div className="dataset-catalog-actions">
-                <span className="dataset-catalog-hint">Read-only preview</span>
-                <button
-                  className="button primary"
-                  onClick={() => onOpenExplorer(item.id)}
-                >
-                  View data <span aria-hidden="true">→</span>
-                </button>
-              </div>
-            </article>
-          ))}
+              </article>
+            );
+          })}
         </div>
       ) : (
         <div className="empty-state">
@@ -398,6 +439,61 @@ function DatasetsPage({
             Registered artifacts will appear here when they are available.
           </p>
         </div>
+      )}
+
+      {/* Understand Data Agent Output Card */}
+      {dataset && (
+        <section className="panel" style={{ marginTop: "24px", padding: "24px" }}>
+          <div className="panel-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <span className="eyebrow">AGENT CAPABILITY</span>
+              <h2>Understand Data Agent · {dataset.name}</h2>
+              <p className="muted">Infers schema, semantic types, completeness, and validity for down-stream rule generation.</p>
+            </div>
+            <button
+              className="button primary"
+              disabled={!canOperate || busy}
+              onClick={() => onStartUnderstand(dataset.id)}
+            >
+              {busy ? "Running Analysis…" : "⚡ Run Understand Agent"}
+            </button>
+          </div>
+
+          {payload ? (
+            <div className="understanding-holder" style={{ marginTop: "16px" }}>
+              <div className="understanding-summary">
+                <span className="eyebrow">
+                  SEMANTIC CONTRACT · {String(payload.agent_mode ?? "profile-backed")}
+                </span>
+                <p style={{ marginTop: "8px", fontSize: "15px", lineHeight: "1.5" }}>
+                  {String(payload.summary ?? "Agent analysis completed.")}
+                </p>
+              </div>
+              <div className="understanding-meta" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginTop: "16px" }}>
+                <div>
+                  <span>Rows</span>
+                  <strong>{(profile?.row_count ?? dataset.row_count).toLocaleString()}</strong>
+                </div>
+                <div>
+                  <span>Completeness Score</span>
+                  <strong>{profile ? `${profile.completeness_score.toFixed(1)}%` : "—"}</strong>
+                </div>
+                <div>
+                  <span>Validity Score</span>
+                  <strong>{profile ? `${profile.validity_score.toFixed(1)}%` : "—"}</strong>
+                </div>
+                <div>
+                  <span>Artifact Status</span>
+                  <strong>{activeArtifact?.status ?? "VALIDATED"}</strong>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="workflow-artifact-empty" style={{ marginTop: "16px", padding: "20px", background: "var(--color-bg-subtle, #f8fafc)", borderRadius: "8px", textAlign: "center" }}>
+              No Understand Data artifact generated for this dataset yet. Click <strong>Run Understand Agent</strong> above to analyze this dataset.
+            </div>
+          )}
+        </section>
       )}
     </div>
   );
@@ -557,9 +653,7 @@ function WorkflowPage({
                 className="button primary"
                 onClick={() =>
                   onStartStep(
-                    selectedRuleDataset?.status === "PROFILE_READY"
-                      ? "UNDERSTAND_DATA"
-                      : "UPLOAD_PROFILE",
+                    "PROPOSE_RULES",
                     true,
                   )
                 }
@@ -570,12 +664,10 @@ function WorkflowPage({
                   !selectedRuleDataset
                 }
               >
-                Start new run <span aria-hidden="true">→</span>
+                Start Rule Proposer <span aria-hidden="true">→</span>
               </button>
               <small>
-                {selectedRuleDataset?.status === "PROFILE_READY"
-                  ? "A completed profile is available; the new run opens at data understanding."
-                  : "Profile the selected dataset before data understanding."}
+                Rule proposals will be generated based on the dataset profile and semantic contract.
               </small>
               {!canOperate && (
                 <small>Steward access is required to start a workflow.</small>
@@ -1154,6 +1246,7 @@ function WorkflowPage({
 }
 
 function App() {
+  const { t } = useI18n();
   const [authenticated, setAuthenticated] = useState(
     () =>
       sessionStorage.getItem("ridepulse.auth") === "true" &&
@@ -1169,6 +1262,9 @@ function App() {
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState("");
   const [view, setView] = useState<View>("overview");
+  const [wizardStep, setWizardStep] = useState<number>(1);
+  const [showAdmin, setShowAdmin] = useState<boolean>(false);
+  const [showDataExplorer, setShowDataExplorer] = useState<boolean>(false);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(
     () => sessionStorage.getItem("ridepulse.dataset") ?? null,
@@ -1762,140 +1858,105 @@ function App() {
       <LoginScreen onLogin={handleLogin} busy={loginBusy} error={loginError} />
     );
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand-lockup">
-          <span className="brand-mark">RP</span>
-          <span>
-            RidePulse <em>DQ</em>
-          </span>
-        </div>
-        <div className="sidebar-label">WORKSPACE</div>
-        <nav>
-          {(
-            [
-              "overview",
-              "workflow",
-              "datasets",
-              "audit",
-              ...(canAdmin ? ["admin" as View] : []),
-            ] as View[]
-          ).map((item) => (
-            <button
-              key={item}
-              className={`nav-item ${view === item ? "active" : ""}`}
-              onClick={() => setView(item)}
-            >
-              <span className="nav-icon">
-                {item === "overview"
-                  ? "◈"
-                  : item === "workflow"
-                    ? "↯"
-                    : item === "datasets"
-                      ? "▦"
-                      : item === "rules"
-                        ? "✦"
-                        : item === "runs"
-                          ? "↗"
-                          : item === "visualization"
-                            ? "⌁"
-                            : item === "data"
-                              ? "▦"
-                              : item === "admin"
-                                ? "⚙"
-                                : "≡"}
-              </span>
-              {item === "overview"
-                ? "Overview"
-                : item === "workflow"
-                  ? "Rule proposer"
-                  : item === "datasets"
-                    ? "Datasets"
-                    : item === "rules"
-                      ? "Rule proposals"
-                      : item === "runs"
-                        ? "DQ runs"
-                        : item === "visualization"
-                          ? "Visualizations"
-                          : item === "data"
-                            ? "Data explorer"
-                            : item === "admin"
-                              ? "Admin control"
-                              : "Audit history"}
-              {item === "rules" &&
-                proposals.some((proposal) =>
-                  ["PROPOSED", "EDITED"].includes(proposal.status),
-                ) && (
-                  <span className="nav-count">
-                    {
-                      proposals.filter((proposal) =>
-                        ["PROPOSED", "EDITED"].includes(proposal.status),
-                      ).length
-                    }
-                  </span>
-                )}
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="security-card">
-            <span className="shield">✦</span>
-            <div>
-              <strong>Guardrails active</strong>
-              <small>Aggregate evidence only</small>
-            </div>
-          </div>
-          <button
-            className="profile-button"
-            onClick={() => void handleLogout()}
-          >
-            <span className="avatar">
-              {role === "ADMIN" ? "AD" : role === "STEWARD" ? "DS" : "US"}
-            </span>
-            <span>
-              <strong>{username || role}</strong>
-              <small>{role} · Sign out</small>
-            </span>
-            <span className="chevron">↗</span>
-          </button>
-        </div>
-      </aside>
-      <main className="main-content">
+    <div className="app-shell wizard-shell">
+      <main className="main-content full-width">
         <header className="topbar">
-          <div className="breadcrumb">
-            <span>Workspace</span>
-            <span>/</span>
-            <strong>
-              {view === "overview"
-                ? "Overview"
-                : view === "workflow"
-                  ? "Rule proposer"
-                  : view === "datasets"
-                    ? "Datasets"
-                    : view === "rules"
-                      ? "Rule proposals"
-                      : view === "runs"
-                        ? "DQ runs"
-                        : view === "visualization"
-                          ? "Visualizations"
-                          : view === "data"
-                            ? "Data explorer"
-                            : view === "admin"
-                              ? "Admin control"
-                              : "Audit history"}
-            </strong>
+          <div className="brand-lockup">
+            <span className="brand-mark">RP</span>
+            <span>
+              RidePulse <em>DQ</em>
+            </span>
           </div>
           <div className="topbar-actions">
             <span className="role-badge">{role}</span>
-            <button className="icon-button" aria-label="Notifications">
-              ♢
-            </button>
+            <LanguageToggle />
             <ThemeControl />
-            <button className="avatar mini" aria-label="Current user">
-              {role === "ADMIN" ? "AD" : role === "STEWARD" ? "DS" : "US"}
+            {canAdmin && (
+              <button
+                type="button"
+                className={`button secondary ${showAdmin ? "active" : ""}`}
+                onClick={() => setShowAdmin(!showAdmin)}
+              >
+                ⚙ {t("app.adminControl")}
+              </button>
+            )}
+            <button
+              type="button"
+              className="profile-button-mini icon-button"
+              onClick={() => void handleLogout()}
+              title={t("app.signOut")}
+            >
+              <span className="avatar mini">
+                {role === "ADMIN" ? "AD" : role === "STEWARD" ? "DS" : "US"}
+              </span>
             </button>
           </div>
         </header>
+
+        {!showAdmin && (
+          <div className="wizard-header-container">
+            <nav className="wizard-stepper" aria-label="Wizard Steps">
+              {[
+                {
+                  id: 1,
+                  title: t("wizard.step1Title"),
+                  desc: t("wizard.step1Desc"),
+                },
+                {
+                  id: 2,
+                  title: t("wizard.step2Title"),
+                  desc: t("wizard.step2Desc"),
+                },
+                {
+                  id: 3,
+                  title: t("wizard.step3Title"),
+                  desc: t("wizard.step3Desc"),
+                },
+                {
+                  id: 4,
+                  title: t("wizard.step4Title"),
+                  desc: t("wizard.step4Desc"),
+                },
+                {
+                  id: 5,
+                  title: t("wizard.step5Title"),
+                  desc: t("wizard.step5Desc"),
+                },
+              ].map((step, idx) => (
+                <div key={step.id} style={{ display: "contents" }}>
+                  {idx > 0 && (
+                    <div
+                      className={`wizard-connector ${wizardStep >= step.id ? "filled" : ""}`}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    className={`wizard-step-node ${
+                      wizardStep === step.id
+                        ? "active"
+                        : wizardStep > step.id
+                          ? "completed"
+                          : ""
+                    }`}
+                    onClick={() => {
+                      setShowAdmin(false);
+                      setWizardStep(step.id);
+                    }}
+                  >
+                    <div className="wizard-step-badge">
+                      {wizardStep > step.id ? "✓" : step.id}
+                    </div>
+                    <div className="wizard-step-info">
+                      <span className="wizard-step-title">{step.title}</span>
+                      <span className="wizard-step-desc">{step.desc}</span>
+                    </div>
+                  </button>
+                </div>
+              ))}
+            </nav>
+          </div>
+        )}
+
         <div className="page-container">
           {!canOperate && (
             <div className="dev-banner">
@@ -1943,112 +2004,8 @@ function App() {
               }
             />
           )}
-          {view === "overview" && (
-            <OverviewPage
-              dataset={dataset}
-              datasets={datasets}
-              profile={profile}
-              datasetProfiles={datasetProfiles}
-              qualityTrends={qualityTrends}
-              proposals={proposals}
-              approvedRules={approvedRules.length}
-              loading={loading}
-              busy={Boolean(activeJob)}
-              canOperate={canOperate}
-              onStartAnalysis={() => void startAnalysis()}
-              onRequestProposals={() => void requestProposals()}
-              onNavigate={setView}
-            />
-          )}
-          {view === "workflow" && (
-            <WorkflowPage
-              dataset={dataset}
-              profile={profile}
-              datasets={datasets}
-              workflow={workflow}
-              artifacts={workflowArtifacts}
-              proposals={proposals}
-              configurations={ruleConfigurations}
-              activeJob={activeJob}
-              busy={workflowActionBusy}
-              canOperate={canOperate}
-              onStartStep={(step, fresh) => void startWorkflowStep(step, fresh)}
-              onAdvanceStep={() => void navigateForwardWorkflowStep()}
-              onReviewArtifact={(id, input) =>
-                void reviewWorkflowArtifact(id, input)
-              }
-              onLoopDecision={(input) => void decideWorkflowLoop(input)}
-              onApproveRule={(id) => void reviewProposal(id, "approve")}
-              onRejectRule={(id) => void reviewProposal(id, "reject")}
-              onEditRule={setEditingProposal}
-              onDeleteRule={(id) => void deleteProposal(id)}
-              onSaveConfiguration={(id, input) =>
-                void saveRuleConfiguration(id, input)
-              }
-              onCreateManualRule={() => setManualRuleOpen(true)}
-              onRewindStep={(step) => void rewindWorkflowStage(step)}
-              onSelectDataset={(id) => void selectDataset(id)}
-              onUploadPreview={(file) => void importDataset(file)}
-              onBackToDatasetSelection={() => {
-                setWorkflow(null);
-                setView("workflow");
-              }}
-            />
-          )}
-          {view === "datasets" && (
-            <DatasetsPage
-              datasets={datasets}
-              dataset={dataset}
-              onOpenExplorer={(datasetId) => {
-                if (datasetId !== dataset?.id) void selectDataset(datasetId);
-                setView("data");
-              }}
-              onImportDataset={(file) => void importDataset(file)}
-              canOperate={canOperate}
-              importing={Boolean(activeJob)}
-            />
-          )}
-          {view === "rules" && (
-            <RulesPage
-              proposals={proposals}
-              profileReady={Boolean(profile)}
-              busy={Boolean(activeJob)}
-              canOperate={canOperate}
-              onRequestProposals={() => void requestProposals()}
-              onApprove={(id) => void reviewProposal(id, "approve")}
-              onReject={(id) => void reviewProposal(id, "reject")}
-              onEdit={setEditingProposal}
-              configurations={ruleConfigurations}
-              onDelete={(id) => void deleteProposal(id)}
-              onSaveConfiguration={(id, input) =>
-                void saveRuleConfiguration(id, input)
-              }
-              onCreateManual={() => setManualRuleOpen(true)}
-              onRun={() => void runApprovedRules()}
-            />
-          )}
-          {view === "runs" && (
-            <RunsPage
-              activeRun={activeRun}
-              results={dqResults}
-              anomalies={dqAnomalies}
-              approvedCount={approvedRules.length}
-              busy={Boolean(activeJob)}
-              canOperate={canOperate}
-              onRun={() => void runApprovedRules()}
-            />
-          )}
-          {view === "visualization" && (
-            <VisualizationPage
-              profile={profile}
-              results={dqResults}
-              anomalies={dqAnomalies}
-              trends={qualityTrends}
-            />
-          )}
-          {view === "data" && <DataExplorerPage dataset={dataset} />}
-          {view === "audit" && <AuditPage logs={auditLogs} />}
-          {view === "admin" && canAdmin && (
+
+          {showAdmin && canAdmin ? (
             <AdminPage
               users={adminUsers}
               access={datasetAccess}
@@ -2058,6 +2015,171 @@ function App() {
               onGrant={grantAdminAccess}
               onRevoke={revokeAdminAccess}
             />
+          ) : (
+            <>
+              {/* STEP 1: Dataset Preparation */}
+              {wizardStep === 1 && (
+                <div>
+                  <div style={{ marginBottom: "16px", display: "flex", justifyContent: "flex-end" }}>
+                    {dataset && (
+                      <button
+                        className="button secondary"
+                        onClick={() => setShowDataExplorer(!showDataExplorer)}
+                      >
+                        {showDataExplorer ? "← Catalog view" : "Data Explorer →"}
+                      </button>
+                    )}
+                  </div>
+                  {showDataExplorer && dataset ? (
+                    <DataExplorerPage dataset={dataset} />
+                  ) : (
+                    <DatasetsPage
+                      datasets={datasets}
+                      dataset={dataset}
+                      onOpenExplorer={(datasetId) => {
+                        if (datasetId !== dataset?.id) void selectDataset(datasetId);
+                        setShowDataExplorer(true);
+                      }}
+                      onImportDataset={(file) => void importDataset(file)}
+                      onSelectDataset={(id) => void selectDataset(id)}
+                      onStartUnderstand={(id) => {
+                        if (id !== dataset?.id) void selectDataset(id);
+                        void startWorkflowStep("UNDERSTAND_DATA", true);
+                      }}
+                      canOperate={canOperate}
+                      importing={Boolean(activeJob)}
+                      busy={workflowActionBusy}
+                      workflow={workflow}
+                      artifacts={workflowArtifacts}
+                      profile={profile}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* STEP 2: Quality Profiling */}
+              {wizardStep === 2 && (
+                <div>
+                  <OverviewPage
+                    dataset={dataset}
+                    datasets={datasets}
+                    profile={profile}
+                    datasetProfiles={datasetProfiles}
+                    qualityTrends={qualityTrends}
+                    proposals={proposals}
+                    approvedRules={approvedRules.length}
+                    loading={loading}
+                    busy={Boolean(activeJob)}
+                    canOperate={canOperate}
+                    onStartAnalysis={() => void startAnalysis()}
+                    onRequestProposals={() => void requestProposals()}
+                    onNavigate={(v) => {
+                      if (v === "datasets") setWizardStep(1);
+                      if (v === "rules") setWizardStep(3);
+                    }}
+                  />
+                  <div style={{ marginTop: "32px" }}>
+                    <VisualizationPage
+                      profile={profile}
+                      results={dqResults}
+                      anomalies={dqAnomalies}
+                      trends={qualityTrends}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 3: Rule Engineering */}
+              {wizardStep === 3 && (
+                <div>
+                  <WorkflowPage
+                    dataset={dataset}
+                    profile={profile}
+                    datasets={datasets}
+                    workflow={workflow}
+                    artifacts={workflowArtifacts}
+                    proposals={proposals}
+                    configurations={ruleConfigurations}
+                    activeJob={activeJob}
+                    busy={workflowActionBusy}
+                    canOperate={canOperate}
+                    onStartStep={(step, fresh) =>
+                      void startWorkflowStep(step, fresh)
+                    }
+                    onAdvanceStep={() => void navigateForwardWorkflowStep()}
+                    onReviewArtifact={(id, input) =>
+                      void reviewWorkflowArtifact(id, input)
+                    }
+                    onLoopDecision={(input) => void decideWorkflowLoop(input)}
+                    onApproveRule={(id) => void reviewProposal(id, "approve")}
+                    onRejectRule={(id) => void reviewProposal(id, "reject")}
+                    onEditRule={setEditingProposal}
+                    onDeleteRule={(id) => void deleteProposal(id)}
+                    onSaveConfiguration={(id, input) =>
+                      void saveRuleConfiguration(id, input)
+                    }
+                    onCreateManualRule={() => setManualRuleOpen(true)}
+                    onRewindStep={(step) => void rewindWorkflowStage(step)}
+                    onSelectDataset={(id) => void selectDataset(id)}
+                    onUploadPreview={(file) => void importDataset(file)}
+                    onBackToDatasetSelection={() => setWizardStep(1)}
+                  />
+                </div>
+              )}
+
+              {/* STEP 4: Execution & Monitoring */}
+              {wizardStep === 4 && (
+                <div>
+                  <RunsPage
+                    activeRun={activeRun}
+                    results={dqResults}
+                    anomalies={dqAnomalies}
+                    approvedCount={approvedRules.length}
+                    busy={Boolean(activeJob)}
+                    canOperate={canOperate}
+                    onRun={() => void runApprovedRules()}
+                  />
+                  <div style={{ marginTop: "32px" }}>
+                    <AuditPage logs={auditLogs} />
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 5: Analytics Dashboard */}
+              {wizardStep === 5 && (
+                <Step5Analytics
+                  results={dqResults}
+                  anomalies={dqAnomalies}
+                  onBack={() => setWizardStep(4)}
+                  onStartNewRun={() => setWizardStep(1)}
+                />
+              )}
+
+              {/* Wizard Bottom Nav Controls */}
+              <div className="wizard-footer-nav">
+                <button
+                  type="button"
+                  className="button secondary"
+                  disabled={wizardStep === 1}
+                  onClick={() => setWizardStep((prev) => Math.max(1, prev - 1))}
+                >
+                  {t("wizard.back")}
+                </button>
+
+                <span className="muted" style={{ fontWeight: 600 }}>
+                  {t("wizard.stepProgress", { current: wizardStep, total: 5 })}
+                </span>
+
+                <button
+                  type="button"
+                  className="button primary"
+                  disabled={wizardStep === 5 || (!dataset && wizardStep === 1)}
+                  onClick={() => setWizardStep((prev) => Math.min(5, prev + 1))}
+                >
+                  {t("wizard.next")}
+                </button>
+              </div>
+            </>
           )}
         </div>
       </main>

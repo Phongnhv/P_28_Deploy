@@ -29,6 +29,7 @@
 }
 html {
   min-width: 320px;
+  font-size: 14px;
   background: var(--canvas);
   scroll-behavior: smooth;
 }
@@ -36,6 +37,7 @@ body {
   min-width: 320px;
   min-height: 100dvh;
   margin: 0;
+  font-size: 14px;
   background: var(--canvas);
 }
 button,
@@ -652,6 +654,10 @@ nav {
   min-width: 0;
   max-width: 100%;
   margin-left: 232px;
+}
+.wizard-shell .main-content,
+.main-content.full-width {
+  margin-left: 0;
 }
 .topbar {
   position: sticky;
@@ -4211,3 +4217,141 @@ button.step-nav-button:disabled {
     text-align: left;
   }
 }
+
+/* Language Toggle Component */
+.language-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.lang-btn {
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 12px;
+  transition: all 0.15s ease;
+}
+
+.lang-btn.active {
+  color: var(--accent);
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.lang-divider {
+  color: var(--border);
+}
+
+/* Main Wizard Layout */
+.wizard-header-container {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 16px 24px;
+  margin-bottom: 24px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.wizard-stepper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+  gap: 12px;
+}
+
+.wizard-step-node {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: none;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 10px;
+  transition: all 0.2s ease;
+  text-align: left;
+}
+
+.wizard-step-node:hover:not(:disabled) {
+  background: var(--surface-muted);
+}
+
+.wizard-step-badge {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 13px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  border: 2px solid var(--border);
+  transition: all 0.2s ease;
+}
+
+.wizard-step-node.active .wizard-step-badge {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+
+.wizard-step-node.completed .wizard-step-badge {
+  background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.wizard-step-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.wizard-step-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.wizard-step-node.active .wizard-step-title {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.wizard-step-desc {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.wizard-connector {
+  flex: 1;
+  height: 2px;
+  background: var(--border);
+  margin: 0 4px;
+  transition: background 0.2s ease;
+}
+
+.wizard-connector.filled {
+  background: var(--accent);
+}
+
+.wizard-footer-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+

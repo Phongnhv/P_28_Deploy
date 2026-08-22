@@ -4,6 +4,7 @@ import json
 import logging
 import uuid
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from fastapi import (
     APIRouter,
@@ -23,6 +24,10 @@ from sqlalchemy.orm import Session
 
 from src.config import get_settings
 from src.models.database import (
+    AnomalyFeedbackModel,
+    AnomalyHypothesisModel,
+    AnomalyRunModel,
+    AnomalySignalModel,
     AuditEventModel,
     ColumnProfileModel,
     DatasetAccessModel,
@@ -33,12 +38,21 @@ from src.models.database import (
     ProfileModel,
     RuleConfigurationModel,
     RuleProposalModel,
+    RulesetVersionModel,
     RuleVersionModel,
     SessionModel,
     SourceRowModel,
     UserAccountModel,
     WorkflowArtifactModel,
     WorkflowRunModel,
+)
+from src.models.api_schemas import (
+    AnomalyFeedbackRequest,
+    AnomalySignalDTO,
+    CombinedRunStatusResponse,
+    ExecutionRequest,
+    PublishRulesetRequest,
+    PublishRulesetResponse,
 )
 from src.models.schemas import (
     ActiveRuleResponse,
@@ -2397,3 +2411,197 @@ async def get_run_approved_rules(run_id: str) -> ApprovedRulesResponse:
 
     rules = await asyncio.to_thread(get_approved_rules, run_id)
     return ApprovedRulesResponse(run_id=run_id, count=len(rules), rules=[RuleReviewResponse(**r) for r in rules])
+
+
+# ---------------------------------------------------------------------------
+# Specialized API v1 Endpoints (Execution & Anomaly Separation)
+# ---------------------------------------------------------------------------
+
+@dq_router.post(
+    "/rule-runs/{proposal_run_id}/publish",
+    response_model=PublishRulesetResponse,
+)
+async def publish_ruleset_endpoint(
+    proposal_run_id: str,
+    body: PublishRulesetRequest,
+) -> PublishRulesetResponse:
+    """Publishes approved rules into an active immutable RulesetVersion."""
+    from src.services.rule_store import publish_approved_rules
+    ruleset_ver_id = await asyncio.to_thread(
+        publish_approved_rules,
+        proposal_run_id=proposal_run_id,
+        created_by=body.created_by,
+    )
+    if not ruleset_ver_id:
+        raise HTTPException(status_code=400, detail="No approved rules found or failed to publish ruleset.")
+
+    with Session(get_engine()) as session:
+        ruleset = session.query(RulesetVersionModel).filter(RulesetVersionModel.id == ruleset_ver_id).first()
+        rules_list = json.loads(ruleset.normalized_rules) if ruleset else []
+        return PublishRulesetResponse(
+            ruleset_version_id=ruleset_ver_id,
+            ruleset_hash=ruleset.ruleset_hash if ruleset else "",
+            dataset_id=body.dataset_id,
+            status="PUBLISHED",
+            rule_count=len(rules_list),
+        )
+
+
+@dq_router.post(
+    "/execution-runs",
+    response_model=CombinedRunStatusResponse,
+)
+async def trigger_execution_run_endpoint(
+    body: ExecutionRequest,
+) -> CombinedRunStatusResponse:
+    """Triggers Graph 2 (Execution) and Graph 3 (Anomaly) returning combined 3-status payload."""
+    from src.agents.graph import run_execution_graph
+
+    res = await run_execution_graph(
+        dataset_id=body.dataset_id,
+        test_run_id=body.execution_run_id,
+        ruleset_version_id=body.ruleset_version_id,
+        trigger_type=body.trigger_type,
+    )
+
+    return CombinedRunStatusResponse(
+        execution_run_id=body.execution_run_id,
+        dataset_id=body.dataset_id,
+        execution_status=res.get("execution_status", "DONE"),
+        anomaly_status=res.get("anomaly_status", "DONE"),
+        hypothesis_status=res.get("hypothesis_status", "NOT_RUN"),
+        execution_details={"total_rules": len(res.get("results", []))},
+        anomaly_decision=res.get("anomaly_decision", {}).get("decision"),
+        anomaly_score=res.get("anomaly_decision", {}).get("score"),
+    )
+
+
+@dq_router.get(
+    "/execution-runs/{id}/results",
+    response_model=CombinedRunStatusResponse,
+)
+async def get_execution_run_results_endpoint(
+    id: str,
+) -> CombinedRunStatusResponse:
+    """Fetches combined execution status, anomaly status, and hypothesis status."""
+    with Session(get_engine()) as session:
+        dq_run = session.query(DqRunModel).filter(DqRunModel.id == id).first()
+        if not dq_run:
+            raise HTTPException(status_code=404, detail=f"Execution run {id} not found")
+
+        anomaly_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.execution_run_id == id).first()
+        signals = session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anomaly_run.id).all() if anomaly_run else []
+        hypotheses = session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == anomaly_run.id).all() if anomaly_run else []
+
+        return CombinedRunStatusResponse(
+            execution_run_id=id,
+            dataset_id=dq_run.dataset_id,
+            execution_status=dq_run.status,
+            anomaly_status=anomaly_run.status if anomaly_run else "NOT_RUN",
+            hypothesis_status="SUCCEEDED" if hypotheses else ("FALLBACK_USED" if anomaly_run else "NOT_RUN"),
+            execution_details={"total_failed": dq_run.total_failed, "total_checked": dq_run.total_checked},
+            anomaly_decision=anomaly_run.decision if anomaly_run else None,
+            anomaly_score=anomaly_run.score if anomaly_run else None,
+            signals_count=len(signals),
+            hypotheses_count=len(hypotheses),
+        )
+
+
+@dq_router.get(
+    "/anomaly-runs/{id}/signals",
+    response_model=List[AnomalySignalDTO],
+)
+async def get_anomaly_signals_endpoint(
+    id: str,
+) -> List[AnomalySignalDTO]:
+    """Fetches specialized signals for an anomaly run."""
+    with Session(get_engine()) as session:
+        signals = session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == id).all()
+        if not signals:
+            # Also check if id is execution_run_id
+            anom_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.execution_run_id == id).first()
+            if anom_run:
+                signals = session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anom_run.id).all()
+
+        result = []
+        for s in signals:
+            baseline_dict = json.loads(s.baseline) if s.baseline else None
+            refs = json.loads(s.evidence_refs) if s.evidence_refs else []
+            result.append(
+                AnomalySignalDTO(
+                    signal_id=s.id,
+                    family=s.family,
+                    target_type=s.target_type,
+                    target_id=s.target_id,
+                    score=s.score,
+                    reliability=s.reliability,
+                    observed_value=s.observed_value,
+                    baseline=baseline_dict,
+                    explanation_code=s.explanation_code,
+                    evidence_refs=refs,
+                )
+            )
+        return result
+
+
+@dq_router.get(
+    "/anomaly-runs/{id}/hypotheses",
+    response_model=List[Dict[str, Any]],
+)
+async def get_anomaly_hypotheses_endpoint(
+    id: str,
+) -> List[Dict[str, Any]]:
+    """Fetches detailed hypotheses for an anomaly run."""
+    with Session(get_engine()) as session:
+        hyps = session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == id).all()
+        if not hyps:
+            anom_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.execution_run_id == id).first()
+            if anom_run:
+                hyps = session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == anom_run.id).all()
+
+        return [
+            {
+                "id": h.id,
+                "hypothesis_type": h.hypothesis_type,
+                "summary": h.summary,
+                "confidence": h.confidence,
+                "supporting_signal_ids": json.loads(h.supporting_signal_ids) if h.supporting_signal_ids else [],
+                "contradicting_signal_ids": json.loads(h.contradicting_signal_ids) if h.contradicting_signal_ids else [],
+                "evidence_refs": json.loads(h.evidence_refs) if h.evidence_refs else [],
+                "recommended_checks": json.loads(h.recommended_checks) if h.recommended_checks else [],
+                "missing_evidence": h.missing_evidence,
+                "limitations": h.limitations,
+                "fallback_used": h.fallback_used,
+            }
+            for h in hyps
+        ]
+
+
+@dq_router.post(
+    "/anomaly-runs/{id}/feedback",
+)
+async def submit_anomaly_feedback_endpoint(
+    id: str,
+    body: AnomalyFeedbackRequest,
+) -> Dict[str, Any]:
+    """Submits steward feedback for an anomaly run."""
+    with Session(get_engine()) as session:
+        anom_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.id == id).first()
+        if not anom_run:
+            anom_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.execution_run_id == id).first()
+        if not anom_run:
+            raise HTTPException(status_code=404, detail=f"Anomaly run {id} not found")
+
+        feedback_id = f"fb-{uuid.uuid4().hex[:12]}"
+        fb = AnomalyFeedbackModel(
+            id=feedback_id,
+            anomaly_run_id=anom_run.id,
+            username=body.username,
+            feedback_label=body.feedback_label,
+            comment=body.comment,
+            created_at=utc_now(),
+        )
+        session.add(fb)
+        session.commit()
+        return {"status": "SUCCESS", "feedback_id": feedback_id, "anomaly_run_id": anom_run.id}
+

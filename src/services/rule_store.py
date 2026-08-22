@@ -26,6 +26,7 @@ from src.models.database import (
     JobModel,
     RuleProposalModel,
     RuleVersionModel,
+    SemanticContractModel,
 )
 from src.models.rule_schemas import RuleStatus
 from src.services.session_service import ensure_default_users
@@ -1228,3 +1229,43 @@ def save_generated_dbt_yaml(
     except Exception as exc:
         logger.warning("save_generated_dbt_yaml failed: %s", exc)
         return False
+
+
+def save_semantic_contract(
+    run_id: str,
+    dataset_id: str,
+    contract: dict,
+    status: str = "DRAFT",
+) -> str:
+    """Save or update a semantic contract in the database."""
+    contract_id = f"sem-{uuid.uuid4().hex[:12]}"
+    try:
+        with Session(get_engine()) as session:
+            existing = (
+                session.query(SemanticContractModel)
+                .filter(SemanticContractModel.run_id == run_id)
+                .first()
+            )
+            if existing:
+                existing.status = status
+                existing.contract_json = json.dumps(contract, ensure_ascii=False)
+                existing.updated_at = utc_now()
+                contract_id = existing.id
+            else:
+                record = SemanticContractModel(
+                    id=contract_id,
+                    dataset_id=dataset_id,
+                    run_id=run_id,
+                    status=status,
+                    contract_json=json.dumps(contract, ensure_ascii=False),
+                    created_at=utc_now(),
+                    updated_at=utc_now(),
+                )
+                session.add(record)
+            session.commit()
+            logger.info("Saved semantic contract %s for run %s into DB", contract_id, run_id)
+        return contract_id
+    except Exception as exc:
+        logger.warning("save_semantic_contract failed: %s", exc)
+        return ""
+

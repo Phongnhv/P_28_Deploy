@@ -9,8 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "lucide-react": "^1.33.0",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "recharts": "^3.10.1"
   },
   "devDependencies": {
     "@types/react": "latest",

@@ -1,9 +1,40 @@
+import enum
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from src.time_utils import utc_now
+
+
+class TriggerTypeEnum(str, enum.Enum):
+    MANUAL = "MANUAL"
+    PUBLISH_AND_RUN = "PUBLISH_AND_RUN"
+    SCHEDULED = "SCHEDULED"
+
+
+class ExecutionRunStatusEnum(str, enum.Enum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    DONE = "DONE"
+    FAILED = "FAILED"
+    FAILED_TO_START = "FAILED_TO_START"
+
+
+class DqResultStatusEnum(str, enum.Enum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    ERROR = "ERROR"
+    SKIPPED = "SKIPPED"
+    RESULT_MISMATCH = "RESULT_MISMATCH"
+
+
+class AnomalyFeedbackEnum(str, enum.Enum):
+    TRUE_ANOMALY = "TRUE_ANOMALY"
+    FALSE_POSITIVE = "FALSE_POSITIVE"
+    EXPECTED_CHANGE = "EXPECTED_CHANGE"
+    RULE_MISCONFIGURATION = "RULE_MISCONFIGURATION"
+    UNKNOWN = "UNKNOWN"
 
 
 class Base(DeclarativeBase):
@@ -267,11 +298,14 @@ class DqRunModel(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
     total_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_checked: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    trigger_type: Mapped[str] = mapped_column(String(32), nullable=False, default=TriggerTypeEnum.MANUAL.value)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     # Graph 2 separation extension columns
     ruleset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("ruleset_versions.id"), nullable=True)
+    ruleset_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
     compiler_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     artifact_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
     retry_history_json: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -281,6 +315,19 @@ class DqRunModel(Base):
     # Retain execution evidence when an upstream workflow revision supersedes it.
     workflow_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workflow_runs.id"), nullable=True, index=True)
     stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class SemanticContractModel(Base):
+    __tablename__ = "semantic_contracts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="DRAFT")
+    contract_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+
 
 
 class DqResultModel(Base):
