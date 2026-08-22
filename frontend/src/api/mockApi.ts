@@ -572,6 +572,9 @@ export const mockApi: ApiClient = {
     const job = makeJob("INGEST_PROFILE");
     return { dataset: imported, job: { job_id: job.id, status: "PENDING" as const } };
   },
+  async deleteDataset(id: string) {
+    await wait(100);
+  },
   async getWorkflow(id: string) {
     await wait(120);
     const workflow = workflowRuns.find((item) => item.id === id);

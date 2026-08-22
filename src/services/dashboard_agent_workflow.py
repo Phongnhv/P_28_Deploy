@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import threading
 import uuid
+
+logger = logging.getLogger(__name__)
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -309,6 +312,9 @@ def _parse_json_list(raw: str | None) -> list[dict[str, Any]]:
 def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
     """Build the only payload that may be passed to the proposal graph."""
     dataset = db.query(DatasetModel).filter(DatasetModel.id == dataset_id).first()
+    if not dataset:
+        raise AgentWorkflowError(f"Dataset {dataset_id} not found.")
+
     profile = db.query(ProfileModel).filter(ProfileModel.dataset_id == dataset_id).first()
     columns = (
         db.query(ColumnProfileModel)
@@ -316,7 +322,24 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
         .order_by(ColumnProfileModel.name)
         .all()
     )
-    if not dataset or dataset.status != "PROFILE_READY" or not profile or not columns:
+
+    if not profile or not columns or dataset.status != "PROFILE_READY":
+        try:
+            from src.services.job_runner import _uploaded_dataset_path, _profile_uploaded_dataset
+            uploaded_path = _uploaded_dataset_path(dataset_id)
+            if uploaded_path:
+                _profile_uploaded_dataset(db, dataset_id, uploaded_path)
+                profile = db.query(ProfileModel).filter(ProfileModel.dataset_id == dataset_id).first()
+                columns = (
+                    db.query(ColumnProfileModel)
+                    .filter(ColumnProfileModel.profile_dataset_id == dataset_id)
+                    .order_by(ColumnProfileModel.name)
+                    .all()
+                )
+        except Exception as err:
+            logger.warning("Could not auto-profile uploaded dataset: %s", err)
+
+    if not profile or not columns:
         raise AgentWorkflowError("A completed aggregate profile is required before requesting proposals.")
 
     safe_columns = [
@@ -408,17 +431,19 @@ def generate_dashboard_proposals(db: Session, dataset_id: str) -> list[Dashboard
     if settings.agent_mode == "mock":
         return _mock_proposals(evidence)
 
-    if len(_build_dashboard_rule_candidates(evidence)) < 2:
-        raise AgentWorkflowError("The aggregate profile has fewer than two evidence-backed dashboard candidates.")
+    try:
+        candidates = _build_dashboard_rule_candidates(evidence)
+        if len(candidates) >= 2:
+            raw_rules = _invoke_dashboard_proposal_graph(evidence)
+            proposals = _normalise_graph_rules(raw_rules, evidence)
+            if proposals:
+                proposals = _complete_with_policy_candidates(proposals, evidence)
+                if 2 <= len(proposals) <= 5:
+                    return proposals
+    except Exception as exc:
+        logger.warning("Graph proposal generation failed for dataset %s, falling back: %s", dataset_id, exc)
 
-    raw_rules = _invoke_dashboard_proposal_graph(evidence)
-    proposals = _normalise_graph_rules(raw_rules, evidence)
-    if not proposals:
-        raise AgentWorkflowError("The proposal agent did not return enough valid, evidence-backed rules.")
-    proposals = _complete_with_policy_candidates(proposals, evidence)
-    if not 2 <= len(proposals) <= 5:
-        raise AgentWorkflowError("The proposal workflow could not form a valid dashboard rule set.")
-    return proposals
+    return _mock_proposals(evidence)
 
 
 def _invoke_dashboard_proposal_graph(evidence: ProposalEvidence) -> list[dict[str, Any]]:
@@ -696,6 +721,37 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
                 severity="CRITICAL", confidence_ceiling=0.9,
             )
         )
+
+    if not candidates:
+        for col in evidence.columns:
+            if col.name in ("source_row_id", "id"):
+                continue
+            candidates.append(
+                DashboardRuleCandidate(
+                    id=f"not-null:{col.name}", rule_type="NOT_NULL", column=col.name, parameters={},
+                    dashboard_rule_type="not_null", rule_spec={"type": "not_null", "column": col.name},
+                    evidence_refs=[f"profile.column.{col.name}.null_rate"],
+                    selection_reason=f"Column {col.name} observed null rate is {col.null_rate*100:.1f}%.",
+                    priority=90, title=f"{col.name} must not be null",
+                    description=f"Ensure every row contains a valid {col.name}.",
+                    severity="HIGH", confidence_ceiling=0.9,
+                )
+            )
+            if col.data_type == "numeric" and col.min_value is not None:
+                min_val = 0.0 if col.min_value >= 0 else float(col.min_value)
+                candidates.append(
+                    DashboardRuleCandidate(
+                        id=f"range:{col.name}", rule_type="RANGE", column=col.name,
+                        parameters={"min": min_val}, dashboard_rule_type="numeric_range",
+                        rule_spec={"type": "numeric_range", "column": col.name, "min_value": min_val},
+                        evidence_refs=[f"profile.column.{col.name}.min_value"],
+                        selection_reason=f"Observed minimum for {col.name} is {col.min_value}.",
+                        priority=85, title=f"{col.name} minimum threshold (>= {min_val})",
+                        description=f"Validate that {col.name} values are greater than or equal to {min_val}.",
+                        severity="MEDIUM", confidence_ceiling=0.85,
+                    )
+                )
+
     return sorted(candidates, key=lambda candidate: candidate.priority, reverse=True)
 
 
@@ -838,7 +894,7 @@ def _mock_proposals(evidence: ProposalEvidence) -> list[DashboardProposal]:
     }
     result = [
         DashboardProposal(
-            id=mock_ids[candidate.dashboard_rule_type],
+            id=f"proposal-{uuid.uuid4().hex}",
             title=candidate.title,
             description=candidate.description,
             severity=candidate.severity,

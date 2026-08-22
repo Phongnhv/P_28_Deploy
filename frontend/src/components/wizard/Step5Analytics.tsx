@@ -47,15 +47,15 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
   const zScoreCount = anomalies.filter((a) => a.anomaly_type === "Z_SCORE_SPIKE").length;
 
   const pieData = [
-    { name: "High Violation Rate", value: highRateCount || (anomalies.length ? 0 : 1), color: "#dc2626" },
-    { name: "Z-Score Spike", value: zScoreCount || (anomalies.length ? 0 : 2), color: "#eab308" },
+    { name: t("analytics.highViolationRate"), value: highRateCount || (anomalies.length ? 0 : 1), color: "#dc2626" },
+    { name: t("analytics.zScoreSpike"), value: zScoreCount || (anomalies.length ? 0 : 2), color: "#eab308" },
   ];
 
   const trendData = [
-    { run: "Run #1", score: 78 },
-    { run: "Run #2", score: 85 },
-    { run: "Run #3", score: 91 },
-    { run: "Current Run", score: score },
+    { run: t("analytics.run1"), score: 78 },
+    { run: t("analytics.run2"), score: 85 },
+    { run: t("analytics.run3"), score: 91 },
+    { run: t("analytics.currentRun"), score: score },
   ];
 
   return (
@@ -183,17 +183,17 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
         <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "14px" }}>
           <thead>
             <tr style={{ borderBottom: "2px solid #e2e8f0", color: "#475569" }}>
-              <th style={{ padding: "10px" }}>Rule Title</th>
-              <th style={{ padding: "10px" }}>Checked</th>
-              <th style={{ padding: "10px" }}>Failed</th>
-              <th style={{ padding: "10px" }}>Status</th>
+              <th style={{ padding: "10px" }}>{t("analytics.ruleTitle")}</th>
+              <th style={{ padding: "10px" }}>{t("analytics.checked")}</th>
+              <th style={{ padding: "10px" }}>{t("analytics.failed")}</th>
+              <th style={{ padding: "10px" }}>{t("analytics.status")}</th>
             </tr>
           </thead>
           <tbody>
             {results.length === 0 ? (
               <tr>
                 <td colSpan={4} style={{ padding: "16px", textAlign: "center", color: "#94a3b8" }}>
-                  No execution results available.
+                  {t("analytics.noResults")}
                 </td>
               </tr>
             ) : (

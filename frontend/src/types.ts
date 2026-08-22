@@ -346,6 +346,7 @@ export interface ApiClient {
   deleteSession(): Promise<void>;
   listDatasets(): Promise<Dataset[]>;
   importDataset(file: File): Promise<DatasetImportResponse>;
+  deleteDataset(id: string): Promise<void>;
   startIngestion(datasetId: string, idempotencyKey: string): Promise<CreateJobResponse>;
   getJob(jobId: string): Promise<Job>;
   getProfile(datasetId: string): Promise<DatasetProfile | null>;

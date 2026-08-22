@@ -71,6 +71,19 @@ def _uploaded_dataset_path(dataset_id: str) -> Path | None:
 
 def _profile_uploaded_dataset(db: Session, dataset_id: str, path: Path) -> dict:
     """Profile an imported CSV/Parquet without exposing its source rows to agents."""
+    existing_profile = db.query(ProfileModel).filter_by(dataset_id=dataset_id).first()
+    if existing_profile:
+        dataset = db.get(DatasetModel, dataset_id)
+        if dataset and dataset.status != "PROFILE_READY":
+            dataset.status = "PROFILE_READY"
+            db.commit()
+        return {
+            "row_count": existing_profile.row_count,
+            "completeness_score": existing_profile.completeness_score,
+            "validity_score": existing_profile.validity_score,
+            "duplicate_rate": existing_profile.duplicate_rate,
+        }
+
     df = pd.read_parquet(path) if path.suffix.lower() == ".parquet" else pd.read_csv(path)
     if df.empty:
         raise ValueError("The imported dataset has no rows.")
@@ -80,8 +93,9 @@ def _profile_uploaded_dataset(db: Session, dataset_id: str, path: Path) -> dict:
     if any(not column for column in df.columns) or len(set(df.columns)) != len(df.columns):
         raise ValueError("Column names must be non-empty and unique.")
     row_count = int(len(df))
-    db.query(ColumnProfileModel).filter_by(profile_dataset_id=dataset_id).delete()
-    db.query(ProfileModel).filter_by(dataset_id=dataset_id).delete()
+    db.query(ColumnProfileModel).filter_by(profile_dataset_id=dataset_id).delete(synchronize_session=False)
+    db.query(ProfileModel).filter_by(dataset_id=dataset_id).delete(synchronize_session=False)
+    db.commit()
     columns = []
     total_nulls = 0
     for name in df.columns:
@@ -107,14 +121,20 @@ def _profile_uploaded_dataset(db: Session, dataset_id: str, path: Path) -> dict:
     completeness = (1.0 - _rate(total_nulls, row_count * len(df.columns))) * 100.0
     evidence_keys = ["profile.row_count", "profile.completeness_score", "profile.duplicate_rate"]
     evidence_keys.extend(f"profile.column.{column.name}.null_rate" for column in columns)
-    db.add(ProfileModel(dataset_id=dataset_id, row_count=row_count, completeness_score=round(completeness, 2),
-                        validity_score=100.0, duplicate_rate=round(duplicate_rate, 2),
-                        cross_field_metrics_json="[]", evidence_keys=json.dumps(evidence_keys), generated_at=utc_now()))
-    db.add_all(columns)
-    dataset = db.get(DatasetModel, dataset_id)
-    if dataset:
-        dataset.status, dataset.row_count, dataset.updated_at = "PROFILE_READY", row_count, utc_now()
-    db.commit()
+    try:
+        db.add(ProfileModel(dataset_id=dataset_id, row_count=row_count, completeness_score=round(completeness, 2),
+                            validity_score=100.0, duplicate_rate=round(duplicate_rate, 2),
+                            cross_field_metrics_json="[]", evidence_keys=json.dumps(evidence_keys), generated_at=utc_now()))
+        db.add_all(columns)
+        dataset = db.get(DatasetModel, dataset_id)
+        if dataset:
+            dataset.status, dataset.row_count, dataset.updated_at = "PROFILE_READY", row_count, utc_now()
+        db.commit()
+    except Exception:
+        db.rollback()
+        existing = db.query(ProfileModel).filter_by(dataset_id=dataset_id).first()
+        if existing:
+            return {"row_count": existing.row_count, "completeness_score": existing.completeness_score, "validity_score": existing.validity_score, "duplicate_rate": existing.duplicate_rate}
     return {"row_count": row_count, "completeness_score": completeness, "validity_score": 100.0, "duplicate_rate": duplicate_rate}
 
 
@@ -130,9 +150,9 @@ def _profile_supabase_into_dashboard(db: Session, dataset_id: str) -> dict:
     finally:
         source_engine.dispose()
 
-    db.query(ColumnProfileModel).filter(ColumnProfileModel.profile_dataset_id == dataset_id).delete()
-    db.query(ProfileModel).filter(ProfileModel.dataset_id == dataset_id).delete()
-    db.flush()
+    db.query(ColumnProfileModel).filter(ColumnProfileModel.profile_dataset_id == dataset_id).delete(synchronize_session=False)
+    db.query(ProfileModel).filter(ProfileModel.dataset_id == dataset_id).delete(synchronize_session=False)
+    db.commit()
 
     columns = []
     evidence_keys = [

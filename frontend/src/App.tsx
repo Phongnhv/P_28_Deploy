@@ -337,6 +337,8 @@ function DatasetsPage({
   artifacts: AgentArtifact[];
   profile: DatasetProfile | null;
 }) {
+  const { t } = useI18n();
+
   const activeArtifact = workflow && dataset && workflow.dataset_id === dataset.id
     ? workflowArtifactForStep(workflow, artifacts, "UNDERSTAND_DATA")
     : undefined;
@@ -355,9 +357,9 @@ function DatasetsPage({
     <div className="datasets-page">
       <div className="page-heading datasets-heading">
         <div>
-          <span className="eyebrow">STEP 1 · DATASET PREPARATION</span>
-          <h1>Select Dataset & Understand Data</h1>
-          <p>Choose or upload a dataset, then run the AI Agent to perform initial data understanding.</p>
+          <span className="eyebrow">STEP 1 · {t("wizard.step1Title").toUpperCase()}</span>
+          <h1>{t("datasets.step1Title")}</h1>
+          <p>{t("datasets.step1Subtitle")}</p>
         </div>
       </div>
 
@@ -366,7 +368,7 @@ function DatasetsPage({
           <label className={`dataset-import-card ${importing ? "busy" : ""}`}>
             <input type="file" accept=".csv,.parquet,text/csv,application/vnd.apache.parquet" disabled={!canOperate || importing} onChange={(event) => { const file = event.target.files?.[0]; if (file) onImportDataset(file); event.currentTarget.value = ""; }} />
             <span className="dataset-import-plus">+</span>
-            <strong>{importing ? "Profiling dataset…" : "Import a dataset"}</strong>
+            <strong>{importing ? t("datasets.profiling") : t("datasets.import")}</strong>
             <small>CSV or Parquet · profile automatically</small>
           </label>
           {datasets.map((item) => {
@@ -389,15 +391,15 @@ function DatasetsPage({
                 <p>{item.description}</p>
                 <div className="dataset-catalog-stats">
                   <div>
-                    <span>Rows</span>
+                    <span>{t("datasets.rows")}</span>
                     <strong>{item.row_count.toLocaleString()}</strong>
                   </div>
                   <div>
-                    <span>Source</span>
+                    <span>{t("datasets.source")}</span>
                     <strong>{item.source_label}</strong>
                   </div>
                   <div>
-                    <span>Updated</span>
+                    <span>{t("datasets.updated")}</span>
                     <strong>{formatTime(item.updated_at)}</strong>
                   </div>
                 </div>
@@ -410,18 +412,20 @@ function DatasetsPage({
                       onOpenExplorer(item.id);
                     }}
                   >
-                    View data →
+                    {t("datasets.viewData")}
                   </button>
                   <button
                     className="button ghost"
                     style={{ color: "#dc2626", borderColor: "#fca5a5" }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onDeleteDataset?.(item.id);
+                      if (window.confirm(t("datasets.confirmDelete", { name: item.name }))) {
+                        onDeleteDataset?.(item.id);
+                      }
                     }}
-                    title="Delete dataset"
+                    title={t("datasets.delete")}
                   >
-                    🗑️ Delete
+                    🗑️ {t("datasets.delete")}
                   </button>
                 </div>
               </article>
@@ -430,7 +434,7 @@ function DatasetsPage({
         </div>
       ) : (
         <div className="empty-state">
-          <h2>No datasets registered.</h2>
+          <h2>{t("datasets.noDatasets")}</h2>
           <p className="muted">
             Registered artifacts will appear here when they are available.
           </p>
@@ -442,16 +446,16 @@ function DatasetsPage({
         <section className="panel" style={{ marginTop: "24px", padding: "24px" }}>
           <div className="panel-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
-              <span className="eyebrow">AGENT CAPABILITY</span>
+              <span className="eyebrow">{t("datasets.agentCapability")}</span>
               <h2>Understand Data Agent · {dataset.name}</h2>
-              <p className="muted">Infers schema, semantic types, completeness, and validity for down-stream rule generation.</p>
+              <p className="muted">{t("datasets.understandAgentDesc")}</p>
             </div>
             <button
               className="button primary"
               disabled={!canOperate || busy}
               onClick={() => onStartUnderstand(dataset.id)}
             >
-              {busy ? "Running Analysis…" : "⚡ Run Understand Agent"}
+              {busy ? t("datasets.runningAnalysis") : t("datasets.runUnderstandBtn")}
             </button>
           </div>
 
@@ -599,6 +603,7 @@ function WorkflowPage({
   onUploadPreview: (file: File) => void;
   onBackToDatasetSelection: () => void;
 }) {
+  const { t } = useI18n();
   const [ruleDatasetId, setRuleDatasetId] = useState(dataset?.id ?? "");
   useEffect(() => {
     setRuleDatasetId(workflow?.dataset_id ?? dataset?.id ?? "");
@@ -611,15 +616,15 @@ function WorkflowPage({
       <section className="workflow-page">
         <header className="workflow-page-header">
           <div>
-            <span className="eyebrow">RULE PROPOSER WORKFLOW</span>
-            <h1>Dataset to decision</h1>
+            <span className="eyebrow">{t("workflow.eyebrow")}</span>
+            <h1>{t("workflow.title")}</h1>
             <p>
-              {selectedRuleDataset?.name ?? "Choose a registered dataset"} ·
-              each result is preserved as a versioned workflow artifact.
+              {selectedRuleDataset?.name ?? t("workflow.selectDataset")} ·{" "}
+              {t("workflow.subtitle")}
             </p>
           </div>
           <span className="status-pill">
-            {selectedRuleDataset ? "READY" : "SELECT DATASET"}
+            {selectedRuleDataset ? t("workflow.ready") : t("workflow.selectDataset")}
           </span>
         </header>
         <div className="workflow-layout">
@@ -633,8 +638,8 @@ function WorkflowPage({
               >
                 <div className="workflow-step-index">{index + 1}</div>
                 <div>
-                  <strong>{phase.label}</strong>
-                  <span>{phase.owner}</span>
+                  <strong>{index === 0 ? t("workflow.phase1Label") : t("workflow.phase2Label")}</strong>
+                  <span>{index === 0 ? t("workflow.phase1Owner") : t("workflow.phase2Owner")}</span>
                 </div>
               </button>
             ))}
@@ -642,27 +647,27 @@ function WorkflowPage({
           <section className="workflow-detail panel workflow-selection-detail">
             <div className="workflow-detail-heading">
               <div>
-                <span className="eyebrow">STEP 0 · CHOOSE DATASET</span>
-                <h2>Select the dataset for this run</h2>
-                <p>Choose a profiled dataset to start.</p>
+                <span className="eyebrow">{t("workflow.step0Eyebrow")}</span>
+                <h2>{t("workflow.step0Title")}</h2>
+                <p>{t("workflow.step0Subtitle")}</p>
               </div>
               <span className="status-pill">
-                {selectedRuleDataset ? "DATASET SELECTED" : "READY"}
+                {selectedRuleDataset ? t("workflow.datasetSelected") : t("workflow.ready")}
               </span>
             </div>
             <div className="dataset-selection-holder">
               <div className="section-heading">
                 <div>
-                  <span className="eyebrow">REGISTERED DATASETS</span>
-                  <h3>Select an input</h3>
+                  <span className="eyebrow">{t("workflow.registeredInputs")}</span>
+                  <h3>{t("workflow.selectInput")}</h3>
                 </div>
-                <span className="muted">{datasets.length} available</span>
+                <span className="muted">{datasets.length} {t("workflow.available")}</span>
               </div>
               <div className="dataset-choice-list">
                 <label className="dataset-choice dataset-choice-import">
                   <input type="file" accept=".csv,.parquet,text/csv,application/vnd.apache.parquet" disabled={!canOperate || busy} onChange={(event) => { const file = event.target.files?.[0]; if (file) onUploadPreview(file); event.currentTarget.value = ""; }} />
                   <span className="dataset-choice-import-icon">+</span>
-                  <span><strong>Import dataset</strong><small>CSV or Parquet · profile automatically</small></span>
+                  <span><strong>{t("datasets.import")}</strong><small>CSV or Parquet · profile automatically</small></span>
                 </label>
                 {datasets.map((item) => (
                   <button
@@ -703,13 +708,13 @@ function WorkflowPage({
                   !selectedRuleDataset
                 }
               >
-                Start Rule Proposer <span aria-hidden="true">→</span>
+                {t("workflow.startRuleProposer")} <span aria-hidden="true">→</span>
               </button>
               <small>
-                Rule proposals will be generated based on the dataset profile and semantic contract.
+                {t("workflow.proposerNotice")}
               </small>
               {!canOperate && (
-                <small>Steward access is required to start a workflow.</small>
+                <small>{t("workflow.stewardRequired")}</small>
               )}
             </div>
           </section>
@@ -720,11 +725,10 @@ function WorkflowPage({
   if (!dataset) {
     return (
       <div className="empty-state">
-        <span className="eyebrow">WORKFLOW</span>
-        <h2>Select a dataset to begin.</h2>
+        <span className="eyebrow">{t("workflow.eyebrow")}</span>
+        <h2>{t("workflow.noDatasetSelected")}</h2>
         <p className="muted">
-          The workflow will keep every agent artifact scoped to the selected
-          dataset.
+          {t("workflow.noDatasetSelectedDesc")}
         </p>
       </div>
     );
@@ -1559,15 +1563,20 @@ function App() {
 
   async function deleteDataset(id: string) {
     if (!window.confirm("Are you sure you want to delete this dataset?")) return;
-    setDatasets((current) => current.filter((d) => d.id !== id));
-    if (selectedDatasetId === id) {
-      const remaining = datasets.filter((d) => d.id !== id);
-      const nextId = remaining[0]?.id ?? "";
-      setSelectedDatasetId(nextId);
-      if (nextId) sessionStorage.setItem("ridepulse.dataset", nextId);
-      else sessionStorage.removeItem("ridepulse.dataset");
+    try {
+      await api.deleteDataset(id);
+      setDatasets((current) => current.filter((d) => d.id !== id));
+      if (selectedDatasetId === id) {
+        const remaining = datasets.filter((d) => d.id !== id);
+        const nextId = remaining[0]?.id ?? "";
+        setSelectedDatasetId(nextId);
+        if (nextId) sessionStorage.setItem("ridepulse.dataset", nextId);
+        else sessionStorage.removeItem("ridepulse.dataset");
+      }
+      setToast("Dataset removed from workspace.");
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to delete dataset."));
     }
-    setToast("Dataset removed from workspace.");
   }
 
   async function requestProposals() {
@@ -1962,16 +1971,11 @@ function App() {
                 },
                 {
                   id: 3,
-                  title: t("wizard.step3Title"),
-                  desc: t("wizard.step3Desc"),
-                },
-                {
-                  id: 4,
                   title: t("wizard.step4Title"),
                   desc: t("wizard.step4Desc"),
                 },
                 {
-                  id: 5,
+                  id: 4,
                   title: t("wizard.step5Title"),
                   desc: t("wizard.step5Desc"),
                 },
@@ -2111,101 +2115,175 @@ function App() {
                 </div>
               )}
 
-              {/* STEP 2: Quality Profiling */}
+              {/* STEP 2: Quality Profiling (Selected Dataset Only) */}
               {wizardStep === 2 && (
                 <div>
-                  <OverviewPage
-                    dataset={dataset}
-                    datasets={datasets}
-                    profile={profile}
-                    datasetProfiles={datasetProfiles}
-                    qualityTrends={qualityTrends}
-                    proposals={proposals}
-                    approvedRules={approvedRules.length}
-                    loading={loading}
-                    busy={Boolean(activeJob)}
-                    canOperate={canOperate}
-                    onStartAnalysis={() => void startAnalysis()}
-                    onRequestProposals={() => void requestProposals()}
-                    onNavigate={(v) => {
-                      if (v === "datasets") setWizardStep(1);
-                      if (v === "rules") setWizardStep(3);
-                    }}
-                    onSelectDataset={(id) => void selectDataset(id)}
-                  />
-                  <div style={{ marginTop: "32px" }}>
-                    <VisualizationPage
-                      profile={profile}
-                      results={dqResults}
-                      anomalies={dqAnomalies}
-                      trends={qualityTrends}
-                    />
+                  <div className="page-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <span className="eyebrow">STEP 2 · {t("wizard.step2Title").toUpperCase()}</span>
+                      <h1>{dataset ? dataset.name : t("overview.title")}</h1>
+                      <p>{t("wizard.step2Desc")}</p>
+                    </div>
+                    {dataset && (
+                      <button
+                        className="button primary"
+                        style={{ fontSize: "15px", padding: "10px 20px" }}
+                        disabled={!canOperate || Boolean(activeJob)}
+                        onClick={() => void startAnalysis()}
+                      >
+                        ⚡ {Boolean(activeJob) ? t("datasets.profiling") : "Start Quality Profiling →"}
+                      </button>
+                    )}
                   </div>
+
+                  {!dataset ? (
+                    <div className="alert warning">{t("workflow.noDatasetSelected")}</div>
+                  ) : (
+                    <div>
+                      {/* Metric cards ONLY for the selected dataset */}
+                      <section className="stat-grid overview-kpis">
+                        <StatCard
+                          label={t("datasets.rows")}
+                          value={(profile?.row_count ?? dataset.row_count).toLocaleString()}
+                          detail={dataset.source_label}
+                          tone="blue"
+                        />
+                        <StatCard
+                          label="Columns"
+                          value={(profile?.columns.length ?? 0).toLocaleString()}
+                          detail="Mapped semantic columns"
+                          tone="green"
+                        />
+                        <StatCard
+                          label={t("overview.completeness")}
+                          value={profile ? `${profile.completeness_score.toFixed(1)}%` : "—"}
+                          detail="Non-null values ratio"
+                          tone="violet"
+                        />
+                        <StatCard
+                          label={t("overview.duplicateRate")}
+                          value={profile ? `${profile.duplicate_rate.toFixed(2)}%` : "—"}
+                          detail="Duplicate rows ratio"
+                          tone={profile && profile.duplicate_rate > 5 ? "amber" : "green"}
+                        />
+                        <StatCard
+                          label="Validity score"
+                          value={profile ? `${profile.validity_score.toFixed(1)}%` : "—"}
+                          detail="Schema & domain validity"
+                          tone="blue"
+                        />
+                      </section>
+
+                      {/* Schema & Column Breakdown Table for selected dataset */}
+                      {profile?.columns && profile.columns.length > 0 ? (
+                        <section className="panel" style={{ marginTop: "24px", padding: "24px" }}>
+                          <div className="panel-heading" style={{ marginBottom: "16px" }}>
+                            <div>
+                              <span className="eyebrow">SCHEMA BREAKDOWN</span>
+                              <h3>Column Health & Profiling ({profile.columns.length})</h3>
+                            </div>
+                          </div>
+                          <div style={{ overflowX: "auto" }}>
+                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "14px" }}>
+                              <thead>
+                                <tr style={{ borderBottom: "2px solid var(--border, #cbd5e1)", textAlign: "left" }}>
+                                  <th style={{ padding: "10px" }}>Column Name</th>
+                                  <th style={{ padding: "10px" }}>Data Type</th>
+                                  <th style={{ padding: "10px" }}>Null Rate</th>
+                                  <th style={{ padding: "10px" }}>Uniqueness</th>
+                                  <th style={{ padding: "10px" }}>Sample Value</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {profile.columns.map((col, idx) => (
+                                  <tr key={idx} style={{ borderBottom: "1px solid var(--border, #f1f5f9)" }}>
+                                    <td style={{ padding: "10px", fontWeight: 600 }}><code>{col.name}</code></td>
+                                    <td style={{ padding: "10px" }}><span className="status-pill info">{col.data_type}</span></td>
+                                    <td style={{ padding: "10px" }}>{(col.null_rate * 100).toFixed(1)}%</td>
+                                    <td style={{ padding: "10px" }}>{col.distinct_count !== undefined ? `${col.distinct_count.toLocaleString()} values` : "—"}</td>
+                                    <td style={{ padding: "10px", color: "var(--muted)", fontSize: "12px" }}><code>{col.sample_value || "—"}</code></td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </section>
+                      ) : (
+                        <div style={{ textAlign: "center", padding: "36px", background: "var(--surface-muted, #f8fafc)", borderRadius: "8px", marginTop: "24px", border: "1px solid var(--border, #e2e8f0)" }}>
+                          <p className="muted" style={{ marginBottom: "16px" }}>No profile built yet for this dataset.</p>
+                          <button
+                            className="button primary"
+                            disabled={!canOperate || Boolean(activeJob)}
+                            onClick={() => void startAnalysis()}
+                          >
+                            ⚡ Start Quality Profiling →
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Quality Observatory & Trend Charts for selected dataset */}
+                      <div style={{ marginTop: "32px" }}>
+                        <VisualizationPage
+                          profile={profile}
+                          results={dqResults}
+                          anomalies={dqAnomalies}
+                          trends={qualityTrends}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* STEP 3: Rule Engineering */}
+              {/* STEP 3: Execution & Rules Selection & Monitoring */}
               {wizardStep === 3 && (
                 <div>
-                  <WorkflowPage
-                    dataset={dataset}
-                    profile={profile}
-                    datasets={datasets}
-                    workflow={workflow}
-                    artifacts={workflowArtifacts}
+                  <RulesPage
                     proposals={proposals}
                     configurations={ruleConfigurations}
-                    activeJob={activeJob}
-                    busy={workflowActionBusy}
+                    profileReady={Boolean(profile || dataset)}
+                    busy={Boolean(activeJob)}
                     canOperate={canOperate}
-                    onStartStep={(step, fresh) =>
-                      void startWorkflowStep(step, fresh)
-                    }
-                    onAdvanceStep={() => void navigateForwardWorkflowStep()}
-                    onReviewArtifact={(id, input) =>
-                      void reviewWorkflowArtifact(id, input)
-                    }
-                    onLoopDecision={(input) => void decideWorkflowLoop(input)}
-                    onApproveRule={(id) => void reviewProposal(id, "approve")}
-                    onRejectRule={(id) => void reviewProposal(id, "reject")}
-                    onEditRule={setEditingProposal}
-                    onDeleteRule={(id) => void deleteProposal(id)}
+                    onRequestProposals={() => void requestProposals()}
+                    onApprove={(id) => void reviewProposal(id, "approve")}
+                    onReject={(id) => void reviewProposal(id, "reject")}
+                    onEdit={setEditingProposal}
+                    onDelete={(id) => void deleteProposal(id)}
                     onSaveConfiguration={(id, input) =>
                       void saveRuleConfiguration(id, input)
                     }
-                    onCreateManualRule={() => setManualRuleOpen(true)}
-                    onRewindStep={(step) => void rewindWorkflowStage(step)}
-                    onSelectDataset={(id) => void selectDataset(id)}
-                    onUploadPreview={(file) => void importDataset(file)}
-                    onBackToDatasetSelection={() => setWizardStep(1)}
-                  />
-                </div>
-              )}
-
-              {/* STEP 4: Execution & Monitoring */}
-              {wizardStep === 4 && (
-                <div>
-                  <RunsPage
-                    activeRun={activeRun}
-                    results={dqResults}
-                    anomalies={dqAnomalies}
-                    approvedCount={approvedRules.length}
-                    busy={Boolean(activeJob)}
-                    canOperate={canOperate}
+                    onCreateManual={() => setManualRuleOpen(true)}
                     onRun={() => void runApprovedRules()}
+                    pipelineMode={false}
                   />
+
+                  <div style={{ marginTop: "32px", borderTop: "2px dashed var(--border, #cbd5e1)", paddingTop: "32px" }}>
+                    <h2 style={{ fontSize: "18px", fontWeight: 600, marginBottom: "16px" }}>
+                      {t("runs.title")}
+                    </h2>
+                    <RunsPage
+                      activeRun={activeRun}
+                      results={dqResults}
+                      anomalies={dqAnomalies}
+                      approvedCount={approvedRules.length}
+                      busy={Boolean(activeJob)}
+                      canOperate={canOperate}
+                      onRun={() => void runApprovedRules()}
+                    />
+                  </div>
+
                   <div style={{ marginTop: "32px" }}>
                     <AuditPage logs={auditLogs} />
                   </div>
                 </div>
               )}
 
-              {/* STEP 5: Analytics Dashboard */}
-              {wizardStep === 5 && (
+              {/* STEP 4: Analytics Dashboard */}
+              {wizardStep === 4 && (
                 <Step5Analytics
                   results={dqResults}
                   anomalies={dqAnomalies}
-                  onBack={() => setWizardStep(4)}
+                  onBack={() => setWizardStep(3)}
                   onStartNewRun={() => setWizardStep(1)}
                 />
               )}
@@ -2216,20 +2294,28 @@ function App() {
                   type="button"
                   className="button secondary"
                   disabled={wizardStep === 1}
+                  title={wizardStep === 1 ? (t("wizard.firstStepTooltip") || "Đây là bước đầu tiên") : ""}
                   onClick={() => setWizardStep((prev) => Math.max(1, prev - 1))}
                 >
                   {t("wizard.back")}
                 </button>
 
                 <span className="muted" style={{ fontWeight: 600 }}>
-                  {t("wizard.stepProgress", { current: wizardStep, total: 5 })}
+                  {t("wizard.stepProgress", { current: wizardStep, total: 4 })}
                 </span>
 
                 <button
                   type="button"
                   className="button primary"
-                  disabled={wizardStep === 5 || (!dataset && wizardStep === 1)}
-                  onClick={() => setWizardStep((prev) => Math.min(5, prev + 1))}
+                  disabled={wizardStep === 4 || (!dataset && wizardStep === 1)}
+                  title={
+                    !dataset && wizardStep === 1
+                      ? (t("wizard.selectDatasetTooltip") || "Vui lòng chọn hoặc tải lên một bộ dữ liệu ở Bước 1")
+                      : wizardStep === 4
+                        ? (t("wizard.lastStepTooltip") || "Bạn đang ở bước cuối cùng")
+                        : ""
+                  }
+                  onClick={() => setWizardStep((prev) => Math.min(4, prev + 1))}
                 >
                   {t("wizard.next")}
                 </button>
@@ -2313,20 +2399,21 @@ function OverviewPage({
   const profileReadyCount = datasets.filter(
     (item) => item.status === "PROFILE_READY",
   ).length;
+  const { t } = useI18n();
   const statusRows = [
     {
-      label: "Profile ready",
+      label: t("overview.profileReady"),
       count: datasets.filter((item) => item.status === "PROFILE_READY").length,
     },
     {
-      label: "Ingested",
+      label: t("overview.ingested"),
       count: datasets.filter((item) => item.status === "INGESTED").length,
     },
     {
-      label: "Registered",
+      label: t("overview.registered"),
       count: datasets.filter((item) => item.status === "REGISTERED").length,
     },
-    { label: "Needs attention", count: attentionCount },
+    { label: t("overview.needsAttention"), count: attentionCount },
   ];
   const statusMax = Math.max(1, ...statusRows.map((row) => row.count));
   if (!dataset)
@@ -2334,17 +2421,16 @@ function OverviewPage({
       <>
         <div className="page-heading">
           <div>
-            <span className="eyebrow">QUALITY COMMAND CENTER</span>
-            <h1>No registered dataset</h1>
-            <p>The backend has not registered a Gate 2 dataset yet.</p>
+            <span className="eyebrow">{t("overview.eyebrow")}</span>
+            <h1>{t("overview.noDatasetTitle")}</h1>
+            <p>{t("overview.noDatasetDesc")}</p>
           </div>
         </div>
         <section className="empty-state">
           <div className="empty-illustration">▦</div>
-          <h2>Dataset catalog is empty</h2>
+          <h2>{t("overview.catalogEmpty")}</h2>
           <p>
-            Upload or register a dataset to populate the multi-dataset quality
-            dashboard.
+            {t("overview.catalogEmptyDesc")}
           </p>
         </section>
       </>
@@ -2353,11 +2439,10 @@ function OverviewPage({
     <>
       <div className="page-heading overview-heading">
         <div>
-          <span className="eyebrow">QUALITY COMMAND CENTER</span>
-          <h1>Dataset quality overview</h1>
+          <span className="eyebrow">{t("overview.eyebrow")}</span>
+          <h1>{t("overview.title")}</h1>
           <p>
-            Compare quality signals across the catalog before opening an
-            individual pipeline.
+            {t("overview.subtitle")}
           </p>
         </div>
         <div className="heading-actions">
@@ -2365,13 +2450,13 @@ function OverviewPage({
             className="button ghost"
             onClick={() => onNavigate("datasets")}
           >
-            Dataset catalog →
+            {t("overview.datasetCatalog")}
           </button>
           <button
             className="button primary"
             onClick={() => onNavigate("visualization")}
           >
-            Open observatory →
+            {t("overview.openObservatory")}
           </button>
         </div>
       </div>
@@ -2526,51 +2611,6 @@ function OverviewPage({
           <OverviewQualityBars rows={qualityRows} />
         </article>
       </section>
-      <section className="overview-action-panel next-panel">
-        <div>
-          <span className="eyebrow">NEXT ACTION</span>
-          <h3>
-            {profile
-              ? "Continue the active pipeline"
-              : "Build the first profile"}
-          </h3>
-          <p>
-            {profile
-              ? "The active dataset is profiled. Move into Rule proposer to review the next agent step."
-              : "Run ingestion and profiling to make this dataset available for cross-dataset comparison."}
-          </p>
-        </div>
-        <div className="overview-action-buttons">
-          {canOperate &&
-            (!profile ? (
-              <button
-                className="button secondary"
-                onClick={onStartAnalysis}
-                disabled={loading || busy}
-              >
-                Start profiling →
-              </button>
-            ) : proposalCount ? (
-              <button
-                className="button secondary"
-                onClick={() => onNavigate("rules")}
-              >
-                Open review queue →
-              </button>
-            ) : (
-              <button
-                className="button secondary"
-                onClick={onRequestProposals}
-                disabled={busy}
-              >
-                Generate proposals →
-              </button>
-            ))}
-          <button className="button ghost" onClick={() => onNavigate("audit")}>
-            View audit trail
-          </button>
-        </div>
-      </section>
     </>
   );
 }
@@ -2697,6 +2737,7 @@ function RulesPage({
   const pending = proposals.filter((proposal) =>
     ["PROPOSED", "EDITED"].includes(proposal.status),
   );
+  const { t } = useI18n();
   const approved = proposals.filter(
     (proposal) => proposal.status === "APPROVED",
   );
@@ -2705,23 +2746,21 @@ function RulesPage({
       <div className="page-heading">
         <div>
           <span className="eyebrow">
-            {pipelineMode ? "PIPELINE STAGE 4" : "HUMAN-IN-THE-LOOP"}
+            {pipelineMode ? t("rules.eyebrowPipeline") : t("rules.eyebrowHuman")}
           </span>
           <h1>
             {pipelineMode
-              ? "Review rules before code generation"
-              : "Rule proposals"}
+              ? t("rules.titlePipeline")
+              : t("rules.titleHuman")}
           </h1>
           <p>
-            {pipelineMode
-              ? "Accept, edit, reject or add a manual rule. Agent stays locked until this set is approved."
-              : "Review agent suggestions or author a typed rule manually."}
+            {t("rules.subtitle")}
           </p>
         </div>
         <div className="heading-actions">
           {canOperate && (
             <button className="button secondary" onClick={onCreateManual}>
-              + Add manual rule
+              {t("rules.addManual")}
             </button>
           )}
           {!pipelineMode && (
@@ -3071,15 +3110,15 @@ function RunsPage({
   canOperate: boolean;
   onRun: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <>
       <div className="page-heading">
         <div>
-          <span className="eyebrow">READ-ONLY EXECUTION</span>
-          <h1>DQ runs</h1>
+          <span className="eyebrow">{t("runs.eyebrow")}</span>
+          <h1>{t("runs.title")}</h1>
           <p>
-            Persisted checks from approved typed rules. Failed results expose
-            bounded IDs only.
+            {t("runs.subtitle")}
           </p>
         </div>
         <button
@@ -3087,16 +3126,15 @@ function RunsPage({
           onClick={onRun}
           disabled={!approvedCount || busy || !canOperate}
         >
-          Run approved rules <span>→</span>
+          {t("runs.runApproved")}
         </button>
       </div>
       {!activeRun ? (
         <section className="empty-state">
           <div className="empty-illustration">↗</div>
-          <h2>No run yet</h2>
+          <h2>{t("runs.noRunTitle")}</h2>
           <p>
-            Approve at least one proposal, then execute it through the read-only
-            runner.
+            {t("runs.noRunDesc")}
           </p>
           {canOperate && (
             <button
@@ -3104,7 +3142,7 @@ function RunsPage({
               onClick={onRun}
               disabled={!approvedCount || busy}
             >
-              Run approved rules →
+              {t("runs.runApproved")}
             </button>
           )}
         </section>
@@ -3527,42 +3565,44 @@ function VisualizationPage({
   anomalies: DqAnomaly[];
   trends: QualityTrendPoint[];
 }) {
-  const latestScore =
-    trends.at(-1)?.quality_score ?? profile?.validity_score ?? 0;
-  const failedRules = results.filter(
-    (result) => result.status === "FAIL",
-  ).length;
-  const previousScore = trends.at(-2)?.quality_score;
-  const scoreDelta =
-    previousScore === undefined ? null : latestScore - previousScore;
+  const { t } = useI18n();
+
+  // Composite Health Score calculation
+  const completeness = profile?.completeness_score ?? 100;
+  const validity = profile?.validity_score ?? 100;
+  const uniqueness = Math.max(0, 100 - (profile?.duplicate_rate ?? 0));
+  const healthScore = Math.round(completeness * 0.4 + validity * 0.3 + uniqueness * 0.3);
+
+  const healthGrade =
+    healthScore >= 90 ? "A+" : healthScore >= 80 ? "A" : healthScore >= 70 ? "B" : "C";
+  const healthTone =
+    healthScore >= 90 ? "green" : healthScore >= 75 ? "amber" : "warn";
+
   const sortedColumns = [...(profile?.columns ?? [])]
-    .sort((left, right) => right.null_rate - left.null_rate)
-    .slice(0, 8);
-  const maximumViolation = results.reduce((maximum, result) => {
-    const rate = result.checked_count
-      ? result.failed_count / result.checked_count
-      : 0;
-    return Math.max(maximum, rate);
-  }, 0);
+    .sort((a, b) => b.null_rate - a.null_rate);
+
+  const columnsWithNulls = sortedColumns.filter((c) => c.null_rate > 0);
+  const totalColumns = profile?.columns.length ?? 0;
+
   const circumference = 2 * Math.PI * 52;
-  const scoreOffset =
-    circumference * (1 - Math.min(100, Math.max(0, latestScore)) / 100);
-  const latestRunAt = trends.at(-1)?.created_at;
+  const scoreOffset = circumference * (1 - Math.min(100, Math.max(0, healthScore)) / 100);
+
   return (
-    <>
-      <div className="page-heading visualization-heading">
+    <div style={{ marginTop: "16px" }}>
+      <div className="page-heading visualization-heading" style={{ background: "var(--surface-card, #ffffff)", padding: "24px", borderRadius: "12px", border: "1px solid var(--border, #e2e8f0)", marginBottom: "24px" }}>
         <div>
-          <span className="eyebrow">QUALITY CONTROL ROOM</span>
-          <h1>Data quality observatory</h1>
-          <p>
-            Monitor run health, surface rule drift, and focus review on the
-            signals that need attention.
+          <span className="eyebrow" style={{ color: "var(--primary, #2563eb)", fontWeight: 700 }}>
+            {t("overview.eyebrow") || "DATA QUALITY OBSERVATORY"}
+          </span>
+          <h2 style={{ fontSize: "22px", margin: "6px 0" }}>
+            📊 {t("overview.title") || "Báo cáo Tổng quan Sức khỏe Dữ liệu"}
+          </h2>
+          <p className="muted" style={{ fontSize: "14px", maxWidth: "600px" }}>
+            Đánh giá tự động tính đầy đủ, hợp lệ và trùng lặp của tập dữ liệu để phát hiện rủi ro trước khi xây dựng quy tắc.
           </p>
         </div>
-        <div
-          className="quality-dial"
-          aria-label={`Latest quality score ${latestScore.toFixed(1)} percent`}
-        >
+
+        <div className="quality-dial" aria-label={`Quality score ${healthScore}%`}>
           <svg viewBox="0 0 120 120" aria-hidden="true">
             <circle cx="60" cy="60" r="52" className="quality-dial-track" />
             <circle
@@ -3570,183 +3610,126 @@ function VisualizationPage({
               cy="60"
               r="52"
               className="quality-dial-progress"
+              stroke={healthScore >= 90 ? "#10b981" : healthScore >= 75 ? "#f59e0b" : "#ef4444"}
               strokeDasharray={circumference}
               strokeDashoffset={scoreOffset}
             />
           </svg>
           <div>
-            <strong>{latestScore.toFixed(1)}</strong>
-            <span>quality score</span>
+            <strong>{healthScore}%</strong>
+            <span style={{ fontSize: "11px", textTransform: "uppercase" }}>Grade {healthGrade}</span>
           </div>
         </div>
       </div>
-      <section
-        className="visual-kpi-rail"
-        aria-label="Latest quality indicators"
-      >
-        <div>
-          <span>Profiled records</span>
-          <strong>{(profile?.row_count ?? 0).toLocaleString()}</strong>
-          <small>current dataset</small>
+
+      {/* 4 Health KPI Cards */}
+      <section className="visual-kpi-rail" style={{ gridTemplateColumns: "repeat(4, 1fr)", gap: "16px", marginBottom: "24px" }}>
+        <div style={{ padding: "18px", borderRadius: "10px", background: "var(--surface-card, #fff)", border: "1px solid var(--border, #e2e8f0)" }}>
+          <span className="muted" style={{ fontSize: "12px", textTransform: "uppercase" }}>Tổng số dòng dữ liệu</span>
+          <strong style={{ fontSize: "22px", display: "block", margin: "4px 0" }}>{(profile?.row_count ?? 0).toLocaleString()}</strong>
+          <small className="muted">bản ghi đã phân tích</small>
         </div>
-        <div>
-          <span>Latest movement</span>
-          <strong
-            className={
-              scoreDelta !== null && scoreDelta < 0 ? "metric-warn" : ""
-            }
-          >
-            {scoreDelta === null
-              ? "Baseline"
-              : `${scoreDelta >= 0 ? "+" : ""}${scoreDelta.toFixed(2)} pts`}
+        <div style={{ padding: "18px", borderRadius: "10px", background: "var(--surface-card, #fff)", border: "1px solid var(--border, #e2e8f0)" }}>
+          <span className="muted" style={{ fontSize: "12px", textTransform: "uppercase" }}>Chỉ số đầy đủ (Completeness)</span>
+          <strong style={{ fontSize: "22px", display: "block", margin: "4px 0", color: completeness < 95 ? "#f59e0b" : "#10b981" }}>
+            {completeness.toFixed(1)}%
           </strong>
-          <small>
-            {trends.length} completed {trends.length === 1 ? "run" : "runs"}
-          </small>
+          <small className="muted">{columnsWithNulls.length} cột có giá trị thiếu</small>
         </div>
-        <div>
-          <span>Rules requiring review</span>
-          <strong className={failedRules ? "metric-warn" : ""}>
-            {failedRules} / {results.length}
+        <div style={{ padding: "18px", borderRadius: "10px", background: "var(--surface-card, #fff)", border: "1px solid var(--border, #e2e8f0)" }}>
+          <span className="muted" style={{ fontSize: "12px", textTransform: "uppercase" }}>Tỷ lệ không trùng lặp</span>
+          <strong style={{ fontSize: "22px", display: "block", margin: "4px 0", color: profile && profile.duplicate_rate > 0 ? "#f59e0b" : "#10b981" }}>
+            {uniqueness.toFixed(2)}%
           </strong>
-          <small>{(maximumViolation * 100).toFixed(1)}% peak violation</small>
+          <small className="muted">{profile?.duplicate_rate ?? 0}% trùng lặp dòng</small>
         </div>
-        <div>
-          <span>Signal status</span>
-          <strong className={anomalies.length ? "metric-warn" : ""}>
-            {anomalies.length ? "Attention" : "Stable"}
+        <div style={{ padding: "18px", borderRadius: "10px", background: "var(--surface-card, #fff)", border: "1px solid var(--border, #e2e8f0)" }}>
+          <span className="muted" style={{ fontSize: "12px", textTransform: "uppercase" }}>Đánh giá rủi ro (Risk Status)</span>
+          <strong style={{ fontSize: "20px", display: "block", margin: "4px 0", color: healthTone === "green" ? "#10b981" : healthTone === "amber" ? "#d97706" : "#dc2626" }}>
+            {healthScore >= 90 ? "🟢 An toàn (Healthy)" : healthScore >= 75 ? "🟡 Cần lưu ý (Notice)" : "🔴 Rủi ro cao (High Risk)"}
           </strong>
-          <small>
-            {anomalies.length} detected{" "}
-            {anomalies.length === 1 ? "anomaly" : "anomalies"}
-          </small>
+          <small className="muted">Sẵn sàng chuyển sang Step 3</small>
         </div>
       </section>
-      <section className="visual-grid">
-        <article className="panel trend-panel">
-          <div className="panel-heading">
+
+      {/* Main Observatory Grid */}
+      <section className="visual-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px" }}>
+        {/* Panel 1: Column Completeness Health Bars */}
+        <article className="panel completeness-panel" style={{ padding: "20px", background: "#fff", borderRadius: "10px", border: "1px solid var(--border, #e2e8f0)" }}>
+          <div className="panel-heading" style={{ marginBottom: "16px" }}>
             <div>
-              <span className="eyebrow">RUN HISTORY</span>
-              <h3>Quality score trend</h3>
+              <span className="eyebrow" style={{ fontSize: "11px" }}>PROFILE HEALTH</span>
+              <h3 style={{ fontSize: "16px", margin: "2px 0" }}>Phân tích độ đầy đủ theo cột ({totalColumns} cột)</h3>
             </div>
-            <span className="panel-caption">
-              {latestRunAt
-                ? `Updated ${formatTime(latestRunAt)}`
-                : "No completed run"}
-            </span>
+            <span className="panel-caption muted" style={{ fontSize: "12px" }}>Xếp theo tỷ lệ khuyết dữ liệu</span>
           </div>
-          <TrendChart points={trends} />
-          <div className="chart-legend">
-            <span>
-              <i />
-              Quality score
-            </span>
-            <small>Calculated from bounded rule results</small>
-          </div>
-        </article>
-        <article className="panel signal-summary">
-          <div className="signal-heading">
-            <span className="eyebrow">LATEST SIGNALS</span>
-            <span
-              className={`signal-state ${anomalies.length ? "attention" : "stable"}`}
-            >
-              {anomalies.length ? "Review" : "Stable"}
-            </span>
-          </div>
-          <div className="signal-number">
-            <strong>{anomalies.length}</strong>
-            <span>anomalies detected</span>
-          </div>
-          <div className="signal-row">
-            <span>Failed rules</span>
-            <strong>{failedRules}</strong>
-          </div>
-          <div className="signal-row">
-            <span>Checks available</span>
-            <strong>{results.length}</strong>
-          </div>
-          <div className="signal-row">
-            <span>Detection mode</span>
-            <strong>
-              {anomalies[0]?.detection_mode === "HISTORICAL"
-                ? "Historical"
-                : "Cold start"}
-            </strong>
-          </div>
-          <p className="signal-insight">
-            {anomalies[0]?.reason ??
-              "No abnormal violation-rate movement detected in the latest completed run."}
-          </p>
-        </article>
-        <article className="panel completeness-panel">
-          <div className="panel-heading">
-            <div>
-              <span className="eyebrow">PROFILE HEALTH</span>
-              <h3>Column completeness</h3>
-            </div>
-            <span className="panel-caption">lowest coverage first</span>
-          </div>
-          <div className="viz-bars">
-            {sortedColumns.map((column) => {
-              const completeness = Math.max(0, 100 - column.null_rate * 100);
+          <div className="viz-bars" style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+            {sortedColumns.slice(0, 8).map((column) => {
+              const compRate = Math.max(0, 100 - column.null_rate * 100);
+              const barColor = compRate === 100 ? "#10b981" : compRate > 80 ? "#f59e0b" : "#ef4444";
               return (
-                <div className="viz-bar-row" key={column.name}>
-                  <span>{column.name}</span>
-                  <div>
-                    <i style={{ width: `${completeness}%` }} />
+                <div className="viz-bar-row" key={column.name} style={{ display: "grid", gridTemplateColumns: "140px 1fr 60px", alignItems: "center", gap: "12px" }}>
+                  <span style={{ fontWeight: 600, fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{column.name}</span>
+                  <div style={{ background: "#f1f5f9", height: "10px", borderRadius: "5px", overflow: "hidden" }}>
+                    <i style={{ display: "block", height: "100%", width: `${compRate}%`, background: barColor, borderRadius: "5px", transition: "width 0.3s" }} />
                   </div>
-                  <strong>{completeness.toFixed(1)}%</strong>
+                  <strong style={{ fontSize: "12px", textAlign: "right" }}>{compRate.toFixed(1)}%</strong>
                 </div>
               );
             })}
             {!profile && (
-              <div className="chart-empty">
-                Create a dataset profile to visualize completeness.
+              <div className="chart-empty muted" style={{ textAlign: "center", padding: "20px" }}>
+                Chưa có dữ liệu hồ sơ. Bấm "Start Quality Profiling" ở trên để phân tích.
               </div>
             )}
           </div>
         </article>
-        <article className="panel failure-panel">
-          <div className="panel-heading">
-            <div>
-              <span className="eyebrow">RULE EXECUTION</span>
-              <h3>Violation rates</h3>
+
+        {/* Panel 2: Diagnostics & Recommended Actions */}
+        <article className="panel signal-summary" style={{ padding: "20px", background: "#fff", borderRadius: "10px", border: "1px solid var(--border, #e2e8f0)", display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+          <div>
+            <div className="signal-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+              <span className="eyebrow" style={{ fontSize: "11px" }}>DIAGNOSTIC SUMMARY</span>
+              <span className={`status-pill ${healthTone === "green" ? "success" : "warning"}`}>
+                {healthScore >= 80 ? "Sẵn sàng sinh quy tắc" : "Cần kiểm tra lại dữ liệu"}
+              </span>
             </div>
-            <span className="panel-caption">latest completed run</span>
-          </div>
-          <div className="failure-list">
-            {results.map((result) => {
-              const rate = result.checked_count
-                ? result.failed_count / result.checked_count
-                : 0;
-              return (
-                <div className="failure-item" key={result.rule_id}>
-                  <div className="failure-copy">
-                    <strong title={result.rule_title}>
-                      {result.rule_title}
-                    </strong>
-                    <span>
-                      {result.failed_count.toLocaleString()} of{" "}
-                      {result.checked_count.toLocaleString()} rows
-                    </span>
-                  </div>
-                  <strong className={rate ? "metric-warn" : ""}>
-                    {(rate * 100).toFixed(2)}%
-                  </strong>
-                  <div className="failure-track">
-                    <i style={{ width: `${Math.min(100, rate * 100)}%` }} />
-                  </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginBottom: "20px" }}>
+              <div style={{ background: "var(--surface-muted, #f8fafc)", padding: "12px 16px", borderRadius: "8px", borderLeft: "4px solid #2563eb" }}>
+                <strong style={{ fontSize: "13px", display: "block", color: "#1e293b" }}>💡 Ý nghĩa chỉ số Observatory:</strong>
+                <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "#64748b" }}>
+                  Bảng điều khiển này giúp bạn phát hiện các cột trống (nulls), cột bị trùng lặp hoặc vi phạm kiểu dữ liệu ngay khi vừa nạp dữ liệu.
+                </p>
+              </div>
+
+              {columnsWithNulls.length > 0 ? (
+                <div style={{ background: "#fffbeb", padding: "12px 16px", borderRadius: "8px", borderLeft: "4px solid #f59e0b" }}>
+                  <strong style={{ fontSize: "13px", color: "#b45309" }}>⚠️ Phát hiện {columnsWithNulls.length} cột có dữ liệu khuyết:</strong>
+                  <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "#78350f" }}>
+                    Các cột: {columnsWithNulls.map((c) => c.name).join(", ")}. AI Agent ở Step 3 sẽ tự động tạo quy tắc <code>NOT NULL</code> để kiểm soát các cột này.
+                  </p>
                 </div>
-              );
-            })}
-            {!results.length && (
-              <div className="chart-empty">No persisted rule results yet.</div>
-            )}
+              ) : (
+                <div style={{ background: "#f0fdf4", padding: "12px 16px", borderRadius: "8px", borderLeft: "4px solid #10b981" }}>
+                  <strong style={{ fontSize: "13px", color: "#15803d" }}>✓ Tất cả các cột đều hoàn chỉnh 100%:</strong>
+                  <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "#166534" }}>
+                    Không phát hiện ô trống (null values) trong bộ dữ liệu này.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div style={{ background: "#eff6ff", padding: "16px", borderRadius: "8px", border: "1px solid #bfdbfe", marginTop: "auto" }}>
+            <h4 style={{ margin: "0 0 6px 0", fontSize: "14px", color: "#1e40af" }}>🎯 Khuyến nghị thao tác:</h4>
+            <p style={{ margin: "0", fontSize: "13px", color: "#1e3a8a" }}>
+              Hồ sơ dữ liệu đã hợp lệ. Hãy bấm <strong>Tiếp tục (Next) →</strong> ở góc dưới để chuyển sang <strong>Step 3 (Sinh & Duyệt quy tắc)</strong>, nơi AI Agent sẽ tự động chuyển đổi các phát hiện này thành quy tắc kiểm thử có thể thực thi.
+            </p>
           </div>
         </article>
-        <AnomalyMonitoringPanel anomalies={anomalies} trends={trends} />
       </section>
-    </>
+    </div>
   );
 }
 
