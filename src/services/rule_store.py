@@ -297,6 +297,7 @@ def init_db() -> None:
     Base.metadata.create_all(engine)
     _migrate_local_profile_columns(engine)
     _migrate_local_proposal_columns(engine)
+    _migrate_local_workflow_columns(engine)
     logger.info("Database đã được khởi tạo tại: %s", get_settings().database_url)
 
     # Seed default demo dataset if not present
@@ -429,6 +430,7 @@ def _migrate_local_proposal_columns(engine) -> None:
         return
     inspector = inspect(engine)
     additions = {
+        "workflow_run_id": "VARCHAR(64)",
         "rule_name": "VARCHAR(256) NOT NULL DEFAULT 'Rule proposal'",
         "business_rationale": "TEXT NOT NULL DEFAULT ''",
         "proposal_basis": "VARCHAR(32) NOT NULL DEFAULT 'DATA_PROFILE'",
@@ -447,6 +449,67 @@ def _migrate_local_proposal_columns(engine) -> None:
                     connection.exec_driver_sql(
                         f"ALTER TABLE {table_name} ADD COLUMN {name} {sql_type}"
                     )
+
+
+def _migrate_local_workflow_columns(engine) -> None:
+    """Reconcile additive workflow provenance columns on existing databases."""
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as connection:
+            for statement in (
+                "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS workflow_run_id VARCHAR(64)",
+                "ALTER TABLE ruleset_versions ADD COLUMN IF NOT EXISTS workflow_run_id VARCHAR(64)",
+                "ALTER TABLE ruleset_versions ADD COLUMN IF NOT EXISTS stale BOOLEAN NOT NULL DEFAULT FALSE",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS workflow_run_id VARCHAR(64)",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS stale BOOLEAN NOT NULL DEFAULT FALSE",
+                "ALTER TABLE rule_configurations ADD COLUMN IF NOT EXISTS model_name VARCHAR(128) NOT NULL DEFAULT 'unspecified'",
+                "ALTER TABLE rule_configurations ADD COLUMN IF NOT EXISTS created_at TIMESTAMP",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS compiler_version VARCHAR(64)",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS ruleset_version_id VARCHAR(64)",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS artifact_hash VARCHAR(256)",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS retry_history_json TEXT",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS error_message TEXT",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS dbt_status VARCHAR(32)",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS metrics_status VARCHAR(32)",
+                "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS violation_rate DOUBLE PRECISION",
+                "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS duration_ms DOUBLE PRECISION",
+                "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS dbt_status VARCHAR(32)",
+                "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS metrics_status VARCHAR(32)",
+                "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS error_message TEXT",
+            ):
+                connection.exec_driver_sql(statement)
+        return
+    if engine.dialect.name != "sqlite":
+        return
+    inspector = inspect(engine)
+    additions = {
+        "rule_proposals": {"workflow_run_id": "VARCHAR(64)"},
+        "ruleset_versions": {"workflow_run_id": "VARCHAR(64)", "stale": "BOOLEAN NOT NULL DEFAULT 0"},
+        "dq_runs": {
+            "workflow_run_id": "VARCHAR(64)", "stale": "BOOLEAN NOT NULL DEFAULT 0",
+            "ruleset_version_id": "VARCHAR(64)", "compiler_version": "VARCHAR(64)", "artifact_hash": "VARCHAR(256)",
+            "retry_history_json": "TEXT", "error_message": "TEXT",
+            "dbt_status": "VARCHAR(32)", "metrics_status": "VARCHAR(32)",
+        },
+        # Existing local databases predate the provenance field on the ORM
+        # model.  Without this additive migration, approving a proposal fails
+        # when SQLAlchemy selects RuleConfigurationModel.
+        "rule_configurations": {
+            "model_name": "VARCHAR(128) NOT NULL DEFAULT 'unspecified'",
+            "created_at": "DATETIME",
+        },
+        "dq_results": {
+            "violation_rate": "FLOAT", "duration_ms": "FLOAT", "dbt_status": "VARCHAR(32)",
+            "metrics_status": "VARCHAR(32)", "error_message": "TEXT",
+        },
+    }
+    with engine.begin() as connection:
+        for table_name, columns_to_add in additions.items():
+            if table_name not in inspector.get_table_names():
+                continue
+            columns = {column["name"] for column in inspector.get_columns(table_name)}
+            for name, sql_type in columns_to_add.items():
+                if name not in columns:
+                    connection.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {name} {sql_type}")
 
 
 # ---------------------------------------------------------------------------

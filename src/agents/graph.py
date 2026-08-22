@@ -459,30 +459,20 @@ async def run_anomaly_graph(
         )
         llm_used = final_state.get("metadata", {}).get("steward_report_llm_used", False)
 
-        print("\n" + "=" * 75)
-        print(f"🎉 RUN 3 HOÀN THÀNH THÀNH CÔNG (anomaly_run_id: {anomaly_run_id})")
-        print("=" * 75)
-        print(f"• Kết luận bất thường   : {decision_data.get('decision', 'NORMAL')}")
-        print(f"• Điểm số bất thường    : {decision_data.get('score', 0.0)}")
-        print(f"• Độ tự tin             : {decision_data.get('confidence', 0.0)}")
-        print(f"• Số tín hiệu           : {len(signals)}")
-        print(f"• Số giả thuyết AI sinh : {len(hypotheses)}")
-        if steward_report_path:
-            mode = "LLM" if llm_used else "FALLBACK"
-            print(f"• Báo cáo Steward (MD)  : {steward_report_path} [{mode}]")
-
-        if hypotheses:
-            print("\n💡 GIẢ THUYẾT NGUYÊN NHÂN AI ĐỀ XUẤT:")
-            for idx, h in enumerate(hypotheses, 1):
-                print(f"   [{idx}] Loại: {h.get('hypothesis_type')} (Độ tin cậy: {h.get('confidence'):.2f})")
-                print(f"       Tóm tắt: {h.get('summary')}")
-                print(f"       Khuyến nghị: {', '.join(h.get('recommended_checks', []))}")
-
-        print("\n" + "=" * 75 + "\n")
+        logger.info(
+            "Run 3 completed | anomaly_run_id=%s decision=%s score=%s confidence=%s signals=%d hypotheses=%d report=%s mode=%s",
+            anomaly_run_id,
+            decision_data.get("decision", "NORMAL"),
+            decision_data.get("score", 0.0),
+            decision_data.get("confidence", 0.0),
+            len(signals),
+            len(hypotheses),
+            steward_report_path or "not-written",
+            "llm" if llm_used else "fallback",
+        )
         return final_state
     except Exception as exc:
         logger.error("Run 3 thất bại: %s", exc, exc_info=True)
-        print(f"\n❌ RUN 3 THẤT BẠI: {exc}\n")
         raise
 
 
