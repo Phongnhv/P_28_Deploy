@@ -72,8 +72,67 @@ def _load_rule_policy_document() -> RulePolicyDocument:
         raise AgentWorkflowError("The dataset rule policy is missing or invalid.") from exc
 
 
-def get_dataset_rule_policy(dataset_id: str) -> DatasetRulePolicy | None:
-    return _load_rule_policy_document().datasets.get(dataset_id)
+def infer_dataset_rule_policy(columns: list[Any]) -> DatasetRulePolicy:
+    req_ids = []
+    non_negs = []
+    gov_sets: dict[str, list[str]] = {}
+
+    for c in columns:
+        name = c.name if hasattr(c, "name") else c.get("name", "")
+        if name == "source_row_id":
+            continue
+        name_lower = name.lower()
+        if name_lower in ("id", "vendor_id", "trip_id") or name_lower.endswith("_id") or name_lower.endswith(" id"):
+            req_ids.append(name)
+            break
+    if not req_ids:
+        for c in columns:
+            name = c.name if hasattr(c, "name") else c.get("name", "")
+            null_rate = getattr(c, "null_rate", 0)
+            if null_rate == 0 and name != "source_row_id":
+                req_ids.append(name)
+                break
+    if not req_ids and columns:
+        name0 = columns[0].name if hasattr(columns[0], "name") else columns[0].get("name", "")
+        req_ids.append(name0)
+
+    for c in columns:
+        name = c.name if hasattr(c, "name") else c.get("name", "")
+        if name in req_ids:
+            continue
+        dtype = getattr(c, "data_type", "")
+        min_val = getattr(c, "min_value", None)
+        if dtype in ("numeric", "float", "integer", "int", "real", "double") and min_val is not None and min_val >= 0:
+            non_negs.append(name)
+            if len(non_negs) >= 3:
+                break
+    if not non_negs:
+        for c in columns:
+            name = c.name if hasattr(c, "name") else c.get("name", "")
+            dtype = getattr(c, "data_type", "")
+            min_val = getattr(c, "min_value", None)
+            if dtype in ("numeric", "float", "integer", "int", "real", "double") and min_val is not None:
+                non_negs.append(name)
+                break
+
+    return DatasetRulePolicy(
+        required_identifiers=req_ids,
+        nonnegative_columns=non_negs,
+        governed_value_sets=gov_sets,
+        cross_field_rules=[],
+        duplicate_fingerprint_columns=req_ids[:3],
+    )
+
+
+def get_dataset_rule_policy(dataset_id: str, columns: list[Any] | None = None) -> DatasetRulePolicy | None:
+    doc = _load_rule_policy_document()
+    policy = doc.datasets.get(dataset_id)
+    if policy is not None:
+        return policy
+    if columns:
+        return infer_dataset_rule_policy(columns)
+    return doc.datasets.get("dataset-nyc-yellow-taxi-50k")
+
 
 
 @dataclass(frozen=True)
@@ -315,7 +374,7 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
         for metric in cross_field_metrics
     )
 
-    policy = get_dataset_rule_policy(dataset_id)
+    policy = get_dataset_rule_policy(dataset_id, safe_columns)
     if policy:
         evidence_keys.extend(f"policy.required_identifier.{column}" for column in policy.required_identifiers)
         evidence_keys.extend(f"policy.nonnegative_column.{column}" for column in policy.nonnegative_columns)
@@ -501,7 +560,7 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
     a zero null rate alone, and it does not permit the model to invent thresholds.
     """
     columns = {column.name: column for column in evidence.columns}
-    policy = get_dataset_rule_policy(evidence.dataset_id)
+    policy = get_dataset_rule_policy(evidence.dataset_id, evidence.columns)
     if not policy:
         return []
     candidates: list[DashboardRuleCandidate] = []
@@ -794,7 +853,7 @@ def _mock_proposals(evidence: ProposalEvidence) -> list[DashboardProposal]:
         for candidate in _build_dashboard_rule_candidates(evidence)
     ]
 
-    policy = get_dataset_rule_policy(evidence.dataset_id)
+    policy = get_dataset_rule_policy(evidence.dataset_id, evidence.columns)
     fingerprint_columns = policy.duplicate_fingerprint_columns if policy else []
     duplicate_refs = ["profile.duplicate_rate", "policy.duplicate_fingerprint"]
     if fingerprint_columns and set(fingerprint_columns).issubset(available) and set(duplicate_refs).issubset(

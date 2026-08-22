@@ -233,12 +233,19 @@ def test_graph_normalizer_rejects_mismatched_candidate_id():
     assert proposals == []
 
 
-def test_mock_mode_returns_dashboard_supported_proposals():
-    seed_completed_profile()
-    with Session(get_engine()) as session:
-        proposals = generate_dashboard_proposals(session, DATASET_ID)
+def test_mock_mode_returns_dashboard_supported_proposals(monkeypatch):
+    from src.config import get_settings
+    monkeypatch.setenv("AGENT_MODE", "mock")
+    get_settings.cache_clear()
+    try:
+        seed_completed_profile()
+        with Session(get_engine()) as session:
+            proposals = generate_dashboard_proposals(session, DATASET_ID)
 
-    assert len(proposals) == 5
+        assert len(proposals) == 5
+    finally:
+        get_settings.cache_clear()
+
     assert {proposal.rule_type for proposal in proposals} == {
         "not_null",
         "numeric_range",
