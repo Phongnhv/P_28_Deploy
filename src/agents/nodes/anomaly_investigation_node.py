@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import inspect
+from pathlib import Path
 from typing import Any
 
 from src.agents.nodes.templates import (
@@ -14,6 +16,10 @@ from src.agents.tools.anomaly_investigation_tools import ANOMALY_INVESTIGATION_T
 from src.config import get_settings
 from src.models.rule_schemas import AnomalyInvestigationResponse
 from src.services.llm import get_llm
+
+
+def _load_investigation_skill() -> str:
+    return (Path(__file__).parents[1] / "skills" / "SKILLS.md").read_text(encoding="utf-8")
 
 
 def _message_content(result: Any) -> Any:
@@ -37,11 +43,15 @@ async def anomaly_investigation_node(state: AnomalyGraphState) -> dict:
     except ImportError as exc:
         raise RuntimeError("Install deepagents before running anomaly investigation") from exc
 
-    agent = create_deep_agent(
+    skill_text = _load_investigation_skill()
+    agent_kwargs = dict(
         model=structured_model,
         tools=ANOMALY_INVESTIGATION_TOOLS,
-        system_prompt=ANOMALY_INVESTIGATION_SYSTEM_PROMPT,
+        system_prompt=ANOMALY_INVESTIGATION_SYSTEM_PROMPT + "\n\nSKILL:\n" + skill_text,
     )
+    if "skills" in inspect.signature(create_deep_agent).parameters:
+        agent_kwargs["skills"] = [skill_text]
+    agent = create_deep_agent(**agent_kwargs)
     prompt = ANOMALY_INVESTIGATION_USER_PROMPT.format(
         anomaly_run_id=state.get("anomaly_run_id", ""),
         execution_run_id=state.get("execution_run_id", ""),
