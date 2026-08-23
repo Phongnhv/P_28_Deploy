@@ -486,6 +486,7 @@ def _migrate_local_workflow_columns(engine) -> None:
                 "ALTER TABLE user_accounts ADD COLUMN IF NOT EXISTS created_by VARCHAR(100)",
                 "ALTER TABLE user_accounts ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP",
                 "ALTER TABLE dataset_access ADD COLUMN IF NOT EXISTS username VARCHAR(100)",
+                "ALTER TABLE dataset_access ALTER COLUMN user_id DROP NOT NULL",
                 "CREATE INDEX IF NOT EXISTS ix_dataset_access_username ON dataset_access (username)",
             ):
                 connection.exec_driver_sql(statement)
