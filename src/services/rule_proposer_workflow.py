@@ -329,9 +329,14 @@ def run_checks_and_prepare_analysis(workflow_run_id: str, dq_run_id: str, job_id
             db.commit()
             return
         rows = db.query(DqResultModel).filter_by(run_id=dq_run.id).all()
+        total_checked = dq_run.total_checked
+        total_failed = dq_run.total_failed
+        dq_score = round((1.0 - (total_failed / total_checked if total_checked > 0 else 0.0)) * 100, 1)
+        dq_grade = "A" if dq_score >= 90 else ("B" if dq_score >= 80 else ("C" if dq_score >= 70 else "D"))
         _add_artifact(db, run, "RUN_CHECKS", "DQ_RUN", {
             "run_id": dq_run.id, "ruleset_version_id": dq_run.ruleset_version_id, "status": dq_run.status,
-            "total_checked": dq_run.total_checked, "total_failed": dq_run.total_failed,
+            "total_checked": total_checked, "total_failed": total_failed,
+            "dq_score": dq_score, "dq_grade": dq_grade,
             "results": [{"rule_id": row.rule_id, "title": row.rule_title, "status": row.status,
                          "checked_count": row.checked_count, "failed_count": row.failed_count} for row in rows],
         })

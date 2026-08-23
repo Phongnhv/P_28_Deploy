@@ -433,13 +433,12 @@ def generate_dashboard_proposals(db: Session, dataset_id: str) -> list[Dashboard
 
     try:
         candidates = _build_dashboard_rule_candidates(evidence)
-        if len(candidates) >= 2:
+        if len(candidates) >= 1:
             raw_rules = _invoke_dashboard_proposal_graph(evidence)
             proposals = _normalise_graph_rules(raw_rules, evidence)
             if proposals:
                 proposals = _complete_with_policy_candidates(proposals, evidence)
-                if 2 <= len(proposals) <= 5:
-                    return proposals
+                return proposals
     except Exception as exc:
         logger.warning("Graph proposal generation failed for dataset %s, falling back: %s", dataset_id, exc)
 
@@ -508,13 +507,10 @@ def _normalise_graph_rules(raw_rules: list[dict[str, Any]], evidence: ProposalEv
         proposal = _normalise_graph_rule(raw, evidence, matched_candidate)
         if not proposal:
             continue
-        if matched_candidate.id in candidate_ids or proposal.rule_type in rule_types:
+        if matched_candidate.id in candidate_ids:
             continue
         candidate_ids.add(matched_candidate.id)
-        rule_types.add(proposal.rule_type)
         accepted.append((proposal, matched_candidate))
-        if len(accepted) == 5:
-            break
     # The model chooses candidates; server policy owns stable display order.
     accepted.sort(key=lambda item: item[1].priority, reverse=True)
     return [proposal for proposal, _candidate in accepted]
@@ -616,7 +612,6 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
                 severity="HIGH", confidence_ceiling=0.85,
             )
         )
-        break
 
     for column_name in policy.nonnegative_columns:
         column = columns.get(column_name)
@@ -650,7 +645,6 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
                 severity="HIGH", confidence_ceiling=0.9,
             )
         )
-        break
 
     for column, allowed_values in policy.governed_value_sets.items():
         profile = columns.get(column)
@@ -722,10 +716,11 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
             )
         )
 
-    if not candidates:
-        for col in evidence.columns:
-            if col.name in ("source_row_id", "id"):
-                continue
+    existing_column_rules = {candidate.column for candidate in candidates}
+    for col in evidence.columns:
+        if col.name in ("source_row_id", "id"):
+            continue
+        if col.name not in existing_column_rules:
             candidates.append(
                 DashboardRuleCandidate(
                     id=f"not-null:{col.name}", rule_type="NOT_NULL", column=col.name, parameters={},
@@ -737,7 +732,7 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
                     severity="HIGH", confidence_ceiling=0.9,
                 )
             )
-            if col.data_type == "numeric" and col.min_value is not None:
+            if col.data_type in ("numeric", "float", "integer", "real") and col.min_value is not None:
                 min_val = 0.0 if col.min_value >= 0 else float(col.min_value)
                 candidates.append(
                     DashboardRuleCandidate(
@@ -934,7 +929,7 @@ def _mock_proposals(evidence: ProposalEvidence) -> list[DashboardProposal]:
                 confidence_breakdown={"overall": 0.8, "evidence_strength": 0.8, "business_support": 0.8, "sample_representativeness": 1.0, "explanation": "Policy-backed duplicate candidate"},
             )
         )
-    if not 2 <= len(result) <= 5:
+    if not result:
         raise AgentWorkflowError("The completed profile does not contain enough supported fields for mock proposals.")
     return result
 

@@ -355,7 +355,7 @@ function DatasetsPage({
       ? workflowArtifactForStep(workflow, artifacts, "UNDERSTAND_DATA")
       : undefined) ||
     artifacts.find(
-      (a) => a.step_key === "UNDERSTAND_DATA" || a.artifact_type === "SEMANTIC_CONTRACT"
+      (a) => a.type === "SEMANTIC_CONTRACT"
     )
     : undefined;
 
@@ -886,6 +886,18 @@ function WorkflowPage({
           </div>
         </>
       );
+    if (artifact.type === "RULE_SET")
+      return (
+        <div className="publish-result">
+          <div>
+            <span className="eyebrow">GRAPH 1b — AI RULE PROPOSAL</span>
+            <strong>{String(payload.proposal_count ?? 0)} rules proposed</strong>
+          </div>
+          <p className="muted" style={{ marginTop: "8px", fontSize: "13px" }}>
+            Rules are ready for your review. Approve, edit, or reject each rule before publishing.
+          </p>
+        </div>
+      );
     if (artifact.type === "PUBLISHED_RULESET")
       return (
         <div className="publish-result">
@@ -899,7 +911,11 @@ function WorkflowPage({
           </dl>
         </div>
       );
-    if (artifact.type === "DQ_RUN")
+    if (artifact.type === "DQ_RUN") {
+      const dqScore = typeof payload.dq_score === "number" ? (payload.dq_score as number) : null;
+      const dqGrade = payload.dq_grade ? String(payload.dq_grade) : null;
+      const scoreTone: "danger" | "warning" | "success" =
+        dqScore !== null ? (dqScore >= 80 ? "success" : dqScore >= 60 ? "warning" : "danger") : "warning";
       return (
         <>
           <div className="understanding-meta">
@@ -915,6 +931,14 @@ function WorkflowPage({
                 {Number(payload.total_failed ?? 0).toLocaleString()}
               </strong>
             </div>
+            {dqScore !== null && (
+              <div>
+                <span>DQ Score</span>
+                <strong style={{ color: scoreTone === "success" ? "var(--success)" : scoreTone === "danger" ? "var(--danger)" : "var(--warn)" }}>
+                  {dqScore.toFixed(1)}% {dqGrade ? `(${dqGrade})` : ""}
+                </strong>
+              </div>
+            )}
             <div>
               <span>Run</span>
               <strong>{String(payload.run_id ?? "—")}</strong>
@@ -928,35 +952,79 @@ function WorkflowPage({
                   <div className={`check-result-row ${String(row.status).toLowerCase()}`} key={String(row.rule_id)}>
                     <span className="check-result-status">{String(row.status)}</span>
                     <strong>{String(row.title)}</strong>
-                    <span>{String(row.failed_count)} failed</span>
+                    <span>{String(row.failed_count ?? 0)} failed / {String(row.checked_count ?? 0)} checked</span>
                   </div>
                 );
               })}
           </div>
         </>
       );
-    if (artifact.type === "ANOMALY_REPORT")
+    }
+    if (artifact.type === "ANOMALY_REPORT") {
+      const decision = String(payload.decision ?? "UNAVAILABLE");
+      const score = typeof payload.score === "number" ? (payload.score as number) : null;
+      const confidence = typeof payload.confidence === "number"
+        ? Math.round((payload.confidence as number) * 100) : null;
+      const hypotheses = Array.isArray(payload.hypotheses)
+        ? (payload.hypotheses as Record<string, unknown>[]) : [];
+      const severityTone: "danger" | "success" | "warning" =
+        decision === "ANOMALY" || decision === "CRITICAL" ? "danger"
+        : decision === "NORMAL" ? "success" : "warning";
       return (
-        <>
-          <p className="hypothesis">
-            Decision: {payload.decision === "INSUFFICIENT_HISTORY" ? "Not enough history" : String(payload.decision ?? "UNAVAILABLE")} · confidence{" "}
-            {typeof payload.confidence === "number"
-              ? `${Math.round((payload.confidence as number) * 100)}%`
-              : "—"}
-          </p>
-          {Array.isArray(payload.hypotheses) &&
-            (payload.hypotheses as Record<string, unknown>[]).map(
-              (item, index) => (
-                <p key={index}>
-                  {String(item.summary ?? "No hypothesis supplied.")}
-                </p>
-              ),
+        <div className="anomaly-report-artifact">
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px", flexWrap: "wrap" }}>
+            <StatusPill
+              label={decision === "INSUFFICIENT_HISTORY" ? "NOT ENOUGH HISTORY" : decision}
+              tone={severityTone}
+            />
+            {score !== null && (
+              <span style={{ fontSize: "13px", color: "var(--muted)" }}>
+                Score: <strong style={{ color: "var(--ink)" }}>{score.toFixed(1)}</strong>
+              </span>
             )}
-          {payload.error ? (
-            <p className="muted">Analysis note: {String(payload.error)}</p>
-          ) : null}
-        </>
+            {confidence !== null && (
+              <span style={{ fontSize: "13px", color: "var(--muted)" }}>
+                Confidence: <strong style={{ color: "var(--ink)" }}>{confidence}%</strong>
+              </span>
+            )}
+          </div>
+          {hypotheses.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              <span className="eyebrow">AGENT HYPOTHESES</span>
+              {hypotheses.map((item, index) => (
+                <div key={index} style={{
+                  padding: "12px 16px",
+                  background: "var(--surface-muted, #f8fafc)",
+                  borderRadius: "10px",
+                  border: "1px solid var(--border)",
+                }}>
+                  <p style={{ margin: "0 0 6px", fontWeight: 600, fontSize: "14px" }}>
+                    {String(item.summary ?? "No hypothesis supplied.")}
+                  </p>
+                  {typeof item.confidence === "number" && (
+                    <span style={{ fontSize: "12px", color: "var(--muted)" }}>
+                      Confidence: {Math.round((item.confidence as number) * 100)}%
+                    </span>
+                  )}
+                  {Array.isArray(item.recommended_checks) && (item.recommended_checks as string[]).length > 0 && (
+                    <div style={{ marginTop: "8px", display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                      {(item.recommended_checks as string[]).map((check, ci) => (
+                        <span key={ci} className="evidence-chip">{check}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {Boolean(payload.error) && (
+            <p className="muted" style={{ marginTop: "12px", fontSize: "13px" }}>
+              ⚠️ Analysis note: {String(payload.error)}
+            </p>
+          )}
+        </div>
       );
+    }
     if (artifact.type === "LOOP_RECOMMENDATION")
       return (
         <>
@@ -982,7 +1050,7 @@ function WorkflowPage({
         <p>
           {String(
             payload.summary ??
-            `${artifact.type.replaceAll("_", " ")} generated by ${artifact.agent_role}.`,
+            `${String(artifact.type).replaceAll("_", " ")} generated by ${artifact.agent_role}.`,
           )}
         </p>
         <div className="artifact-meta">
@@ -1028,7 +1096,9 @@ function WorkflowPage({
       ? "Publish approved rules"
       : step === "RUN_CHECKS"
         ? "Run Graph 2 checks"
-        : "Run Graph 3 analysis";
+        : step === "ANALYZE_REPORT"
+          ? "Run Graph 3 anomaly analysis"
+          : "Run current step";
   const currentStepIndex = currentStep
     ? visibleWorkflowSteps.findIndex((step) => step.key === currentStep.key)
     : -1;
@@ -1373,31 +1443,22 @@ function App() {
       if (nextDataset)
         sessionStorage.setItem("ridepulse.dataset", nextDataset.id);
       if (nextDataset?.status === "PROFILE_READY") {
-        const [nextProposals, nextConfigurations, latestRun, nextTrends] =
-          await Promise.all([
-            api.listProposals(nextDataset.id),
-            api.listRuleConfigurations(nextDataset.id),
-            api.getLatestDqRun(nextDataset.id),
-            api.getQualityTrends(nextDataset.id),
-          ]);
+        const nextTrends = await api.getQualityTrends(nextDataset.id);
         const nextProfile = nextProfiles[nextDataset.id] ?? null;
         setProfile(nextProfile);
-        setProposals(nextProposals);
-        setRuleConfigurations(nextConfigurations);
         setQualityTrends(nextTrends);
-        setActiveRun(latestRun);
-        if (latestRun?.status === "SUCCEEDED") {
-          const [latestResults, latestAnomalies] = await Promise.all([
-            api.getDqResults(latestRun.id),
-            api.getDqAnomalies(latestRun.id),
-          ]);
-          setDqResults(latestResults);
-          setDqAnomalies(latestAnomalies);
-        }
+        setProposals([]);
+        setRuleConfigurations([]);
+        setActiveRun(null);
+        setDqResults([]);
+        setDqAnomalies([]);
       } else {
         setProfile(null);
         setProposals([]);
         setRuleConfigurations([]);
+        setActiveRun(null);
+        setDqResults([]);
+        setDqAnomalies([]);
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -1486,11 +1547,11 @@ function App() {
     setActiveJob(current);
     for (
       let attempt = 0;
-      attempt < 120 &&
+      attempt < 600 &&
       !["SUCCEEDED", "FAILED", "FAILED_RETRYABLE"].includes(current.status);
       attempt += 1
     ) {
-      await sleep(450);
+      await sleep(1000);
       current = await jobApi.getJob(acceptedJob.job_id);
       setActiveJob(current);
     }
@@ -1579,13 +1640,18 @@ function App() {
     if (!dataset) return;
     setError("");
     setRetryAction(null);
+    setProposals([]);
     try {
-      const job = await api.startRuleProposals(dataset.id, crypto.randomUUID());
-      await pollJob(job, async () => {
-        setProposals(await api.listProposals(dataset.id, workflow?.id));
-        setAuditLogs(await api.listAuditLogs());
-        setView("rules");
-      });
+      if (workflow) {
+        await startWorkflowStep("PROPOSE_RULES", true);
+      } else {
+        const job = await api.startRuleProposals(dataset.id, crypto.randomUUID());
+        await pollJob(job, async () => {
+          setProposals(await api.listProposals(dataset.id));
+          setAuditLogs(await api.listAuditLogs());
+          setView("rules");
+        });
+      }
     } catch (err) {
       setError(getErrorMessage(err, "Unable to request proposals."));
     }
@@ -2333,6 +2399,30 @@ function App() {
                         canOperate={canOperate}
                         onRun={() => void runApprovedRules()}
                       />
+                      {/* Graph 3: ANOMALY_REPORT from workflow artifacts */}
+                      {workflowArtifacts.filter((a) => a.type === "ANOMALY_REPORT").slice(-1).map((anomalyArtifact) => {
+                        const p = anomalyArtifact.payload as Record<string, unknown>;
+                        const dec = String(p.decision ?? "UNAVAILABLE");
+                        const hyps = Array.isArray(p.hypotheses) ? (p.hypotheses as Record<string, unknown>[]) : [];
+                        const tone: "danger" | "success" | "warning" = dec === "ANOMALY" || dec === "CRITICAL" ? "danger" : dec === "NORMAL" ? "success" : "warning";
+                        return (
+                          <div key={anomalyArtifact.id} style={{ marginTop: "24px", padding: "24px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px" }}>
+                            <span className="eyebrow">GRAPH 3 — AI ANOMALY ANALYSIS</span>
+                            <h3 style={{ fontSize: "16px", fontWeight: 700, margin: "8px 0 16px" }}>Steward Insights</h3>
+                            <div style={{ display: "flex", gap: "12px", alignItems: "center", marginBottom: "16px", flexWrap: "wrap" }}>
+                              <StatusPill label={dec === "INSUFFICIENT_HISTORY" ? "NOT ENOUGH HISTORY" : dec} tone={tone} />
+                              {typeof p.score === "number" && <span style={{ fontSize: "13px", color: "var(--muted)" }}>Score: <strong>{(p.score as number).toFixed(1)}</strong></span>}
+                              {typeof p.confidence === "number" && <span style={{ fontSize: "13px", color: "var(--muted)" }}>Confidence: <strong>{Math.round((p.confidence as number) * 100)}%</strong></span>}
+                            </div>
+                            {hyps.map((h, i) => (
+                              <div key={i} style={{ padding: "10px 14px", background: "var(--surface-muted, #f8fafc)", borderRadius: "8px", border: "1px solid var(--border)", marginBottom: "8px" }}>
+                                <p style={{ margin: 0, fontWeight: 600, fontSize: "14px" }}>{String(h.summary ?? "No hypothesis.")}</p>
+                                {typeof h.confidence === "number" && <span style={{ fontSize: "12px", color: "var(--muted)" }}>Confidence: {Math.round((h.confidence as number) * 100)}%</span>}
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
 
@@ -2807,7 +2897,7 @@ function RulesPage({
   const pending = safeProposals.filter((proposal) =>
     proposal && ["PROPOSED", "EDITED"].includes(proposal.status),
   );
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const approved = safeProposals.filter(
     (proposal) => proposal && proposal.status === "APPROVED",
   );
@@ -2828,6 +2918,7 @@ function RulesPage({
           </p>
         </div>
         <div className="heading-actions">
+          {/* Buttons removed from heading as per user request to avoid duplication with empty state */}
         </div>
       </div>
       {busy ? (
@@ -4382,7 +4473,7 @@ function AdminUserRow({
 }
 
 function AuditPage({ logs }: { logs: AuditLog[] }) {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   return (
     <>
       <div className="page-heading">
@@ -4405,18 +4496,78 @@ function AuditPage({ logs }: { logs: AuditLog[] }) {
         </div>
         {logs.length ? (
           <div className="audit-list">
-            {logs.map((log) => (
-              <div className="audit-row" key={log.id}>
-                <div className="audit-icon">✓</div>
-                <div>
-                  <strong>{log.summary}</strong>
-                  <span>
-                    {log.action} · {log.entity_type} · {log.actor}
-                  </span>
+            {logs.map((log) => {
+              let summary = log.summary;
+              let action = log.action;
+              let entity = log.entity_type;
+              
+              if (language === "vi") {
+                const summaryMap: Record<string, string> = {
+                  "Started ingestion job": "Bắt đầu tiến trình nạp dữ liệu",
+                  "Generated dataset profile": "Đã tạo hồ sơ dữ liệu",
+                  "Proposed rules generated": "Đã sinh đề xuất quy tắc",
+                  "Rules generated": "Đã sinh quy tắc",
+                  "Data quality rules executed": "Đã chạy kiểm tra chất lượng dữ liệu",
+                  "Workflow created": "Tạo luồng công việc mới",
+                  "Rule checks started": "Bắt đầu kiểm tra quy tắc",
+                  "Rule checks finished": "Hoàn tất kiểm tra quy tắc",
+                  "Rule checks failed": "Kiểm tra quy tắc thất bại",
+                };
+                
+                // Try exact match or partial match
+                for (const [en, vi] of Object.entries(summaryMap)) {
+                  if (summary.includes(en)) {
+                    summary = summary.replace(en, vi);
+                    break;
+                  }
+                }
+                
+                // Fallbacks for dynamic summaries
+                if (summary.includes("Proposed")) summary = summary.replace("Proposed", "Đề xuất");
+                if (summary.includes("rule")) summary = summary.replace("rule", "quy tắc");
+                if (summary.includes("Rule")) summary = summary.replace("Rule", "Quy tắc");
+                if (summary.includes("accepted")) summary = summary.replace("accepted", "được chấp nhận");
+                if (summary.includes("rejected")) summary = summary.replace("rejected", "bị từ chối");
+                if (summary.includes("created")) summary = summary.replace("created", "được tạo");
+                if (summary.includes("deleted")) summary = summary.replace("deleted", "đã bị xóa");
+                if (summary.includes("updated")) summary = summary.replace("updated", "đã cập nhật");
+                if (summary.includes("Executed")) summary = summary.replace("Executed", "Đã thực thi");
+
+                const actionMap: Record<string, string> = {
+                  "CREATE": "TẠO",
+                  "UPDATE": "CẬP NHẬT",
+                  "DELETE": "XÓA",
+                  "EXECUTE": "THỰC THI",
+                  "APPROVE": "PHÊ DUYỆT",
+                  "REJECT": "TỪ CHỐI"
+                };
+                action = actionMap[action] || action;
+                
+                const entityMap: Record<string, string> = {
+                  "DATASET": "TẬP DỮ LIỆU",
+                  "WORKFLOW_JOB": "TÁC VỤ LUỒNG",
+                  "WORKFLOW_RUN": "LẦN CHẠY LUỒNG",
+                  "PROPOSAL": "ĐỀ XUẤT",
+                  "RULE": "QUY TẮC",
+                  "RUN": "LẦN CHẠY",
+                  "PROFILE": "HỒ SƠ DỮ LIỆU"
+                };
+                entity = entityMap[entity] || entity;
+              }
+
+              return (
+                <div className="audit-row" key={log.id}>
+                  <div className="audit-icon">✓</div>
+                  <div>
+                    <strong>{summary}</strong>
+                    <span>
+                      {action} · {entity} · {log.actor}
+                    </span>
+                  </div>
+                  <time>{formatTime(log.created_at)}</time>
                 </div>
-                <time>{formatTime(log.created_at)}</time>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="table-empty">{t("audit.noEvents")}</div>
