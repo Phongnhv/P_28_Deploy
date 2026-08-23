@@ -442,8 +442,14 @@ async def run_execution_graph(
 async def run_anomaly_graph(
     execution_run_id: str,
     dataset_id: str,
+    stream_id: str | None = None,
 ) -> dict:
-    """Chạy toàn bộ pipeline Run 3 (Anomaly Analysis & Hypothesis)."""
+    """Chạy toàn bộ pipeline Run 3 (Anomaly Analysis & Hypothesis).
+
+    Nếu truyền ``stream_id``, mỗi node sẽ phát event realtime qua NodeEventBroker
+    (SSE endpoint ``GET /workflows/{id}/stream``); nếu không, hành vi giữ nguyên
+    như ``ainvoke`` cũ.
+    """
     import uuid
     anomaly_run_id = f"anom-{uuid.uuid4().hex[:12]}"
 
@@ -458,11 +464,15 @@ async def run_anomaly_graph(
         "metadata": {},
     }
 
-    logger.info("Bắt đầu Run 3 (Anomaly Analysis) | anomaly_run_id=%s | execution_run_id=%s",
-                anomaly_run_id, execution_run_id)
+    logger.info("Bắt đầu Run 3 (Anomaly Analysis) | anomaly_run_id=%s | execution_run_id=%s | stream_id=%s",
+                anomaly_run_id, execution_run_id, stream_id)
 
     try:
-        final_state = await anomaly_graph.ainvoke(initial_state)
+        if stream_id:
+            from src.services.node_event_stream import run_graph_streamed
+            final_state = await run_graph_streamed(anomaly_graph, initial_state, stream_id)
+        else:
+            final_state = await anomaly_graph.ainvoke(initial_state)
         decision_data = final_state.get("anomaly_decision", {})
         signals = final_state.get("signal_observations", [])
         hypotheses = final_state.get("hypotheses", [])

@@ -607,17 +607,18 @@ def run_propose_rules(job_id: str, dataset_id: str, session_id: str | None = Non
             job.message = "Validating and persisting proposals..."
             db.commit()
 
-            # Replace only previous agent drafts. Manual and approved stewardship
-            # decisions remain immutable dashboard records.
-            db.query(RuleProposalModel).filter(
-                RuleProposalModel.dataset_id == dataset_id,
-                or_(
-                    RuleProposalModel.model_name.like("agent-%"),
-                    RuleProposalModel.model_name.like("langgraph-%"),
-                ),
-                RuleProposalModel.status.in_(["PROPOSED", "REJECTED"]),
-            ).delete(synchronize_session=False)
-            db.commit()
+            try:
+                db.query(RuleProposalModel).filter(
+                    RuleProposalModel.dataset_id == dataset_id,
+                    or_(
+                        RuleProposalModel.model_name.like("agent-%"),
+                        RuleProposalModel.model_name.like("langgraph-%"),
+                    ),
+                ).delete(synchronize_session=False)
+                db.commit()
+            except Exception as del_err:
+                logger.warning("Could not delete previous agent proposals: %s", del_err)
+                db.rollback()
 
             for p in proposals:
                 prop = RuleProposalModel(
@@ -660,18 +661,24 @@ def run_propose_rules(job_id: str, dataset_id: str, session_id: str | None = Non
 
         except Exception as e:
             logger.error("Job PROPOSE_RULES failed: %s", str(e), exc_info=True)
-            job.status = "FAILED"
-            job.error = "Proposals generation failed"
-            db.commit()
-            add_audit_event(
-                db,
-                session_id=session_id,
-                actor_role=actor_role,
-                action_code="JOB_FAILED",
-                entity_type="job",
-                entity_id=job_id,
-                detail={"error": "Rule proposals job failed."}
-            )
+            db.rollback()
+            try:
+                failed_job = db.query(JobModel).filter(JobModel.id == job_id).first()
+                if failed_job:
+                    failed_job.status = "FAILED"
+                    failed_job.error = str(e) or "Proposals generation failed"
+                    db.commit()
+                    add_audit_event(
+                        db,
+                        session_id=session_id,
+                        actor_role=actor_role,
+                        action_code="JOB_FAILED",
+                        entity_type="job",
+                        entity_id=job_id,
+                        detail={"error": str(e) or "Rule proposals job failed."}
+                    )
+            except Exception as rollback_err:
+                logger.error("Failed to set job status to FAILED: %s", rollback_err)
 
 def compile_rule_to_sql(rule_type: str, spec: dict, columns_allowlist: set[str]) -> str:
     """

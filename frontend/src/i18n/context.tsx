@@ -11,7 +11,7 @@ interface I18nContextType {
   t: (keyPath: string, params?: Record<string, string | number>) => string;
 }
 
-const translations: Record<Language, Translations> = { en, vi };
+const translations: Record<Language, any> = { en, vi };
 
 const I18nContext = createContext<I18nContextType | undefined>(undefined);
 

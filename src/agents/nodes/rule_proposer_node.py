@@ -392,122 +392,150 @@ async def _propose_for_table(
     dashboard_mode = bool(table_digest.get("dashboard_candidate_mode"))
     historical = [] if dashboard_mode else query_historical_rules(table_name, columns)
 
-    async with semaphore:
-        last_exc: Exception | None = None
-        for attempt in range(max_retries + 1):
-            try:
-                entry_ts = datetime.now()
-                logger.info(
-                    "[%s] Bắt đầu gọi LLM (attempt %d/%d) lúc %s",
-                    table_name,
-                    attempt + 1,
-                    max_retries + 1,
-                    entry_ts.isoformat(),
-                )
+    if candidates is not None:
+        coverage_requirements_list = candidates
+    else:
+        coverage_requirements_list = _build_coverage_requirements(table_digest)
 
-                is_taxi = dataset_id.lower().startswith("nyc-yellow") or "taxi" in dataset_id.lower()
+    chunk_size = 15
+    chunks = [coverage_requirements_list[i:i + chunk_size] for i in range(0, len(coverage_requirements_list), chunk_size)]
+    if not chunks:
+        chunks = [[]]
 
-                if candidates is not None:
-                    coverage_requirements = json.dumps(candidates, ensure_ascii=False)
-                else:
-                    coverage_requirements = json.dumps(
-                        _build_coverage_requirements(table_digest),
-                        ensure_ascii=False,
+    is_taxi = dataset_id.lower().startswith("nyc-yellow") or "taxi" in dataset_id.lower()
+
+    async def _invoke_chunk(chunk_reqs: list, chunk_index: int) -> TableRuleProposal:
+        async with semaphore:
+            last_exc: Exception | None = None
+            for attempt in range(max_retries + 1):
+                try:
+                    entry_ts = datetime.now()
+                    logger.info(
+                        "[%s|Chunk %d/%d] Bắt đầu gọi LLM (attempt %d/%d) lúc %s",
+                        table_name, chunk_index + 1, len(chunks), attempt + 1, max_retries + 1, entry_ts.isoformat()
                     )
+                    coverage_requirements = json.dumps(chunk_reqs, ensure_ascii=False)
 
-                if dashboard_mode:
-                    messages = dashboard_rule_proposer_prompt.format_messages(
-                        table_name=table_name,
-                        table_digest=json.dumps(table_digest, ensure_ascii=False),
-                        coverage_requirements=coverage_requirements,
-                    )
-                elif not is_taxi and semantic_contract:
-                    from src.agents.nodes.templates import generic_rule_proposer_prompt
-                    messages = generic_rule_proposer_prompt.format_messages(
-                        table_name=table_name,
-                        table_digest=json.dumps(table_digest, ensure_ascii=False),
-                        semantic_contract=json.dumps(semantic_contract, ensure_ascii=False),
-                        historical_rules=json.dumps(historical, ensure_ascii=False),
-                        coverage_requirements=coverage_requirements,
-                    )
-                else:
-                    messages = rule_proposer_prompt.format_messages(
-                        table_name=table_name,
-                        table_digest=json.dumps(table_digest, ensure_ascii=False),
-                        domain_context=DOMAIN_CONTEXT,
-                        data_dictionary=_load_data_dictionary(),
-                        historical_rules=json.dumps(historical, ensure_ascii=False),
-                        coverage_requirements=coverage_requirements,
-                        few_shot_examples=_RULE_PROPOSER_FEW_SHOT,
-                    )
-                envelope = await structured_llm.ainvoke(messages)
-                exit_ts = datetime.now()
-
-                # include_raw=True trả về {"raw", "parsed", "parsing_error"} nên payload
-                # vẫn lấy được kể cả khi kiểm định thất bại — đó là điều kiện để cứu
-                # được các rule hợp lệ thay vì mất cả lô.
-                #
-                # Nhưng KHÔNG phải đường gọi nào cũng trả envelope. Test bơm thẳng một
-                # structured_llm giả trả về TableRuleProposal, và một provider không hỗ
-                # trợ include_raw cũng làm vậy. Giả định envelope luôn là dict khiến
-                # `envelope.get` ném AttributeError — tức bản vá cứu-rule tự nó trở
-                # thành lỗi, và lỗi đó nuốt mất nguyên nhân thật của lần chạy.
-                if isinstance(envelope, dict):
-                    parsed = envelope.get("parsed")
-                    parsing_error = envelope.get("parsing_error")
-                    raw_message = envelope.get("raw")
-                else:
-                    parsed, parsing_error, raw_message = envelope, None, None
-
-                if parsed is not None and not parsing_error:
-                    result = parsed
-                    rejected: list[dict] = []
-                else:
-                    payload = _raw_to_dict(raw_message)
-                    if payload is None:
-                        raise parsing_error or ValueError(
-                            "không đọc được payload thô từ LLM"
+                    if dashboard_mode:
+                        messages = dashboard_rule_proposer_prompt.format_messages(
+                            table_name=table_name,
+                            table_digest=json.dumps(table_digest, ensure_ascii=False),
+                            coverage_requirements=coverage_requirements,
                         )
-                    accepted, rejected = _salvage_rules(payload, table_name)
-                    if not accepted:
-                        # Không cứu được rule nào: đây mới thực sự là thất bại đáng thử lại.
-                        raise parsing_error or ValueError("không rule nào qua được kiểm định")
-                    result = TableRuleProposal(
-                        table=payload.get("table") or table_name, rules=accepted
-                    )
+                    elif not is_taxi and semantic_contract:
+                        from src.agents.nodes.templates import generic_rule_proposer_prompt
+                        messages = generic_rule_proposer_prompt.format_messages(
+                            table_name=table_name,
+                            table_digest=json.dumps(table_digest, ensure_ascii=False),
+                            semantic_contract=json.dumps(semantic_contract, ensure_ascii=False),
+                            historical_rules=json.dumps(historical, ensure_ascii=False),
+                            coverage_requirements=coverage_requirements,
+                        )
+                    else:
+                        messages = rule_proposer_prompt.format_messages(
+                            table_name=table_name,
+                            table_digest=json.dumps(table_digest, ensure_ascii=False),
+                            domain_context=DOMAIN_CONTEXT,
+                            data_dictionary=_load_data_dictionary(),
+                            historical_rules=json.dumps(historical, ensure_ascii=False),
+                            coverage_requirements=coverage_requirements,
+                            few_shot_examples=_RULE_PROPOSER_FEW_SHOT,
+                        )
 
-                result.rejected_rules = rejected
-                logger.info(
-                    "[%s] Hoàn thành (attempt %d) sau %.2fs — %d rules, %d bị từ chối",
-                    table_name,
-                    attempt + 1,
-                    (exit_ts - entry_ts).total_seconds(),
-                    len(result.rules),
-                    len(rejected),
-                )
-                return result
+                    # include_raw=True normally returns an envelope. Tests and
+                    # providers without include_raw support may return the parsed
+                    # TableRuleProposal directly, so support both shapes.
+                    envelope = await structured_llm.ainvoke(messages)
+                    exit_ts = datetime.now()
 
-            except (ValidationError, Exception) as exc:
-                last_exc = exc
-                if attempt < max_retries:
-                    wait_seconds = 2 ** attempt  # 1s, 2s, 4s …
-                    logger.warning(
-                        "[%s] Lỗi attempt %d: %s — thử lại sau %ds",
+                    if isinstance(envelope, dict):
+                        parsed = envelope.get("parsed")
+                        parsing_error = envelope.get("parsing_error")
+                        raw_message = envelope.get("raw")
+                    else:
+                        parsed, parsing_error, raw_message = envelope, None, None
+
+                    if parsed is not None and not parsing_error:
+                        result = parsed
+                        rejected: list[dict] = []
+                    else:
+                        payload = _raw_to_dict(raw_message)
+                        if payload is None:
+                            raise parsing_error or ValueError(
+                                "không đọc được payload thô từ LLM"
+                            )
+                        accepted, rejected = _salvage_rules(payload, table_name)
+                        if not accepted:
+                            raise parsing_error or ValueError(
+                                "không rule nào qua được kiểm định"
+                            )
+                        result = TableRuleProposal(
+                            table=payload.get("table") or table_name,
+                            rules=accepted,
+                        )
+
+                    result.rejected_rules = rejected
+                    logger.info(
+                        "[%s|Chunk %d/%d] Hoàn thành (attempt %d) sau %.2fs — "
+                        "%d rules, %d bị từ chối",
                         table_name,
+                        chunk_index + 1,
+                        len(chunks),
                         attempt + 1,
-                        exc,
-                        wait_seconds,
+                        (exit_ts - entry_ts).total_seconds(),
+                        len(result.rules),
+                        len(rejected),
                     )
-                    await asyncio.sleep(wait_seconds)
-                else:
-                    logger.error(
-                        "[%s] Đã thử %d lần, từ bỏ. Lỗi cuối: %s",
-                        table_name,
-                        max_retries + 1,
-                        exc,
-                    )
+                    return result
 
-        raise last_exc  # type: ignore[misc]
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt < max_retries:
+                        wait_seconds = 2 ** attempt
+                        logger.warning(
+                            "[%s|Chunk %d] Lỗi attempt %d: %s — thử lại sau %ds",
+                            table_name,
+                            chunk_index + 1,
+                            attempt + 1,
+                            exc,
+                            wait_seconds,
+                        )
+                        await asyncio.sleep(wait_seconds)
+                    else:
+                        logger.error(
+                            "[%s|Chunk %d] Đã thử %d lần, từ bỏ. Lỗi cuối: %s",
+                            table_name,
+                            chunk_index + 1,
+                            max_retries + 1,
+                            exc,
+                        )
+            raise last_exc  # type: ignore[misc]
+
+    chunk_results = await asyncio.gather(
+        *[_invoke_chunk(chunk, index) for index, chunk in enumerate(chunks)],
+        return_exceptions=True,
+    )
+
+    all_rules: list[ProposedRule] = []
+    all_rejected: list[dict] = []
+    first_exc: Exception | None = None
+    for res in chunk_results:
+        if isinstance(res, Exception):
+            logger.error("[%s] Chunk failed: %s", table_name, res)
+            if first_exc is None:
+                first_exc = res
+        else:
+            all_rules.extend(res.rules)
+            all_rejected.extend(res.rejected_rules)
+
+    if not all_rules and first_exc:
+        raise first_exc
+
+    return TableRuleProposal(
+        table=table_name,
+        rules=all_rules,
+        rejected_rules=all_rejected,
+    )
 
 
 # ---------------------------------------------------------------------------

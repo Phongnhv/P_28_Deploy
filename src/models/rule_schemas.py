@@ -354,7 +354,7 @@ class TableRuleProposal(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    table: str = Field(..., description="Tên bảng trong database.")
+    table: str = Field(default="source_rows", description="Tên bảng trong database.")
     rules: list[ProposedRule] = Field(
         default_factory=list,
         description="Danh sách các rule đề xuất cho bảng này.",
