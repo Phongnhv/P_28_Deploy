@@ -14,6 +14,7 @@ env/
 
 # Environment variables
 .env
+real.env
 .env.local
 .env.production
 
@@ -92,5 +93,6 @@ dbt_project/models/generated_dq_tests.yml
 /PR12_Report.md
 /agent_Workflow.md
 presentation/VIDEO_REHEARSAL.md
+/steward_local.db
 /steward_local.db-wal
 /steward_local.db-shm

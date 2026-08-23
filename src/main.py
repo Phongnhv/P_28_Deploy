@@ -1,26 +1,30 @@
 
 import os
 import sys
+from dotenv import load_dotenv
 
-# Disable OpenTelemetry instrumentation during unit tests to prevent connection hangs
-if "pytest" not in sys.modules and not os.getenv("DISABLE_TRACING"):
+load_dotenv()
+
+# Only enable Phoenix OpenTelemetry tracing when explicitly requested and not in test/disabled mode
+if "pytest" not in sys.modules and not os.getenv("DISABLE_TRACING") and (os.getenv("ENABLE_PHOENIX") == "true" or os.getenv("PHOENIX_COLLECTOR_ENDPOINT")):
     try:
         from openinference.instrumentation.langchain import LangChainInstrumentor
         from opentelemetry import trace
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
         from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
         phoenix_host = "localhost" if os.name == "nt" or not os.path.exists("/.dockerenv") else "host.docker.internal"
         phoenix_endpoint = os.getenv("PHOENIX_COLLECTOR_ENDPOINT") or f"http://{phoenix_host}:6006/v1/traces"
         tracer_provider = TracerProvider()
         tracer_provider.add_span_processor(
-            SimpleSpanProcessor(OTLPSpanExporter(endpoint=phoenix_endpoint))
+            BatchSpanProcessor(OTLPSpanExporter(endpoint=phoenix_endpoint))
         )
         trace.set_tracer_provider(tracer_provider)
         LangChainInstrumentor().instrument()
     except Exception:
         pass
+
 
 
 import logging

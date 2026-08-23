@@ -151,6 +151,9 @@ export const realApiClient: ApiClient = {
     body.append("file", file);
     return request<DatasetImportResponse>("/api/v1/datasets/import", { method: "POST", body });
   },
+  async deleteDataset(id) {
+    await request<void>(`/api/v1/datasets/${id}`, { method: "DELETE" });
+  },
   async startIngestion(datasetId, idempotencyKey) {
     return request<CreateJobResponse>(`/api/v1/datasets/${datasetId}/ingestions`, {
       method: "POST",

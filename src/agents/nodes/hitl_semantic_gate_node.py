@@ -45,14 +45,16 @@ async def hitl_semantic_gate_node(state: AgentState) -> dict:
     except Exception as e:
         logger.warning(f"Không thể ghi file semantic contract: {e}")
 
-    # 2. Cập nhật trạng thái run/job trong DB thành AWAITING_SEMANTIC_REVIEW
+    # 2. Cập nhật trạng thái run/job và lưu semantic contract vào DB
     try:
-        from src.services.rule_store import update_run_status
-        # Sử dụng trạng thái đặc biệt để UI / Worker biết đang chờ Steward duyệt Semantic Contract
+        from src.services.rule_store import save_semantic_contract, update_run_status
+        dataset_id = state.get("dataset_id", "unknown")
+        save_semantic_contract(run_id, dataset_id, contract, status="DRAFT")
         update_run_status(run_id, "AWAITING_SEMANTIC_REVIEW")
-        logger.info(f"Đã cập nhật trạng thái run {run_id} thành AWAITING_SEMANTIC_REVIEW")
+        logger.info(f"Đã lưu semantic contract vào DB và cập nhật trạng thái run {run_id} thành AWAITING_SEMANTIC_REVIEW")
     except Exception as e:
         logger.warning(f"Không thể cập nhật trạng thái run: {e}")
+
 
     # Tạm dừng có chủ đích — KHÔNG phải lỗi. Dùng `pause_reason` để conditional edge dẫn
     # tới END mà runner vẫn phân biệt được "chờ Steward duyệt" với "chạy thất bại".

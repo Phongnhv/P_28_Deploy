@@ -8,7 +8,7 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from src.models.database import (
@@ -82,9 +82,8 @@ def calculate_robust_zscore(current: float, history: list[float]) -> tuple[float
 def get_excluded_execution_run_ids(db: Session) -> set[str]:
     """Get all execution run IDs that are marked as true anomalies by the steward."""
     subquery = (
-        db.query(AnomalyFeedbackModel.anomaly_run_id)
-        .filter(AnomalyFeedbackModel.feedback_label == "TRUE_ANOMALY")
-        .subquery()
+        select(AnomalyFeedbackModel.anomaly_run_id)
+        .where(AnomalyFeedbackModel.feedback_label == "TRUE_ANOMALY")
     )
     runs = (
         db.query(AnomalyRunModel.execution_run_id)
