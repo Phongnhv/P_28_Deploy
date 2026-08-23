@@ -10,8 +10,8 @@ import logging
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic.json_schema import SkipJsonSchema
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 logger = logging.getLogger(__name__)
 

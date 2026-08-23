@@ -446,14 +446,23 @@ async def _propose_for_table(
                 # include_raw=True trả về {"raw", "parsed", "parsing_error"} nên payload
                 # vẫn lấy được kể cả khi kiểm định thất bại — đó là điều kiện để cứu
                 # được các rule hợp lệ thay vì mất cả lô.
-                parsed = envelope.get("parsed")
-                parsing_error = envelope.get("parsing_error")
+                #
+                # Nhưng KHÔNG phải đường gọi nào cũng trả envelope. Test bơm thẳng một
+                # structured_llm giả trả về TableRuleProposal, và một provider không hỗ
+                # trợ include_raw cũng làm vậy. Giả định envelope luôn là dict khiến
+                # `envelope.get` ném AttributeError — tức bản vá cứu-rule tự nó trở
+                # thành lỗi, và lỗi đó nuốt mất nguyên nhân thật của lần chạy.
+                if isinstance(envelope, dict):
+                    parsed = envelope.get("parsed")
+                    parsing_error = envelope.get("parsing_error")
+                    raw_message = envelope.get("raw")
+                else:
+                    parsed, parsing_error, raw_message = envelope, None, None
 
                 if parsed is not None and not parsing_error:
                     result = parsed
                     rejected: list[dict] = []
                 else:
-                    raw_message = envelope.get("raw")
                     payload = _raw_to_dict(raw_message)
                     if payload is None:
                         raise parsing_error or ValueError(
