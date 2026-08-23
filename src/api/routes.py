@@ -470,8 +470,18 @@ def login(request: Request, body: LoginRequest, response: Response, db: Session 
     """
     session = create_user_session(body.username, body.password, db)
 
-    # Set HTTP-only cookie
-    response.set_cookie(key=SESSION_COOKIE_NAME, value=session.id, httponly=True, samesite="lax", path="/")
+    # The Vercel frontend and Cloud Run API are separate sites in production.
+    # Cross-site requests therefore require a Secure SameSite=None session
+    # cookie; local development remains compatible with HTTP and localhost.
+    production = get_settings().app_env == "production"
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=session.id,
+        httponly=True,
+        secure=production,
+        samesite="none" if production else "lax",
+        path="/",
+    )
 
     add_audit_event(
         db,
