@@ -377,7 +377,7 @@ def run_analysis_report(workflow_run_id: str, job_id: str, session_id: str | Non
 
     try:
         asyncio.run(asyncio.wait_for(
-            run_anomaly_graph(execution_run_id=dq_run_id, dataset_id=dataset_id),
+            run_anomaly_graph(execution_run_id=dq_run_id, dataset_id=dataset_id, stream_id=workflow_run_id),
             timeout=90,
         ))
         analysis_error = None

@@ -19,8 +19,9 @@ from fastapi import (
     UploadFile,
 )
 from pydantic import BaseModel
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
+from fastapi.responses import StreamingResponse
 
 from src.config import get_settings
 from src.models.database import (
@@ -947,6 +948,56 @@ def run_workflow_step(
         db.commit()
         raise
     return CreateJobResponse(job_id=job.id, status="PENDING")
+
+
+@router.get("/workflows/{workflow_run_id}/stream")
+async def stream_workflow_nodes(
+    workflow_run_id: str,
+    request: Request,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """SSE: phát output của TỪNG node trong graph theo thời gian thực.
+
+    Client mở EventSource tới endpoint này *đồng thời* với khi trigger một step
+    (vd. POST /workflows/{id}/steps/ANALYZE_REPORT). Graph chạy nền publish event
+    theo ``workflow_run_id`` và được fan-out ở đây. GET nên CSRF được bỏ qua;
+    xác thực bằng session cookie như mọi GET khác.
+    """
+    from src.services.node_event_stream import broker
+
+    run = db.get(WorkflowRunModel, workflow_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+    require_dataset_access(db, session, run.dataset_id)
+
+    async def event_gen():
+        sub, queue, backlog = broker.subscribe(workflow_run_id)
+        try:
+            yield ": connected\n\n"  # SSE comment to open the stream promptly
+            for event in backlog:
+                yield f"event: {event.get('type', 'node')}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if event.get("type") == "done":
+                    return
+            while True:
+                if await request.is_disconnected():
+                    return
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"  # heartbeat to defeat idle proxies
+                    continue
+                yield f"event: {event.get('type', 'node')}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if event.get("type") == "done":
+                    return
+        finally:
+            broker.unsubscribe(workflow_run_id, sub)
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
 
 
 @router.post("/workflows/{workflow_run_id}/rewind")
