@@ -355,7 +355,7 @@ function DatasetsPage({
       ? workflowArtifactForStep(workflow, artifacts, "UNDERSTAND_DATA")
       : undefined) ||
     artifacts.find(
-      (a) => a.step_key === "UNDERSTAND_DATA" || a.artifact_type === "SEMANTIC_CONTRACT"
+      (a) => a.type === "SEMANTIC_CONTRACT"
     )
     : undefined;
 
