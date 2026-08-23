@@ -5,6 +5,7 @@ import ThemeControl from "./ThemeControl";
 import LanguageToggle from "./LanguageToggle";
 import { useI18n } from "./i18n/context";
 import { Step5Analytics } from "./components/wizard/Step5Analytics";
+import { Graph1Studio } from "./features/graph1/Graph1Studio";
 import type {
   AuditLog,
   CreateJobResponse,
@@ -1278,14 +1279,21 @@ function WorkflowPage({
 
 function App() {
   const { t, language } = useI18n();
+  const isGraph1Preview =
+    ["127.0.0.1", "localhost"].includes(window.location.hostname) &&
+    new URLSearchParams(window.location.search).get("preview") === "graph1";
   const [authenticated, setAuthenticated] = useState(
     () =>
-      sessionStorage.getItem("ridepulse.auth") === "true" &&
-      Boolean(sessionStorage.getItem("ridepulse.role")),
+      isGraph1Preview ||
+      (sessionStorage.getItem("ridepulse.auth") === "true" &&
+        Boolean(sessionStorage.getItem("ridepulse.role"))),
   );
   const [role, setRole] = useState<UserRole>(
     () =>
-      (sessionStorage.getItem("ridepulse.role") as UserRole | null) ?? "USER",
+      isGraph1Preview
+        ? "STEWARD"
+        : (sessionStorage.getItem("ridepulse.role") as UserRole | null) ??
+          "USER",
   );
   const [username, setUsername] = useState(
     () => sessionStorage.getItem("ridepulse.username") ?? "",
@@ -1295,6 +1303,8 @@ function App() {
   const [view, setView] = useState<View>("overview");
   const [wizardStep, setWizardStep] = useState<number>(1);
   const [showAdmin, setShowAdmin] = useState<boolean>(false);
+  const [showGraph1Studio, setShowGraph1Studio] =
+    useState<boolean>(isGraph1Preview);
   const [showDataExplorer, setShowDataExplorer] = useState<boolean>(false);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(
@@ -1400,7 +1410,7 @@ function App() {
         setRuleConfigurations([]);
       }
     } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
+      if (err instanceof ApiError && err.status === 401 && !isGraph1Preview) {
         clearApiSession();
         sessionStorage.removeItem("ridepulse.auth");
         sessionStorage.removeItem("ridepulse.role");
@@ -1922,11 +1932,24 @@ function App() {
             <span className="role-badge">{role}</span>
             <LanguageToggle />
             <ThemeControl />
+            <button
+              type="button"
+              className={`button secondary ${showGraph1Studio ? "active" : ""}`}
+              onClick={() => {
+                setShowGraph1Studio((current) => !current);
+                setShowAdmin(false);
+              }}
+            >
+              Graph 1 Studio
+            </button>
             {canAdmin && (
               <button
                 type="button"
                 className={`button secondary ${showAdmin ? "active" : ""}`}
-                onClick={() => setShowAdmin(!showAdmin)}
+                onClick={() => {
+                  setShowAdmin(!showAdmin);
+                  setShowGraph1Studio(false);
+                }}
               >
                 ⚙ {t("app.adminControl")}
               </button>
@@ -1944,7 +1967,7 @@ function App() {
           </div>
         </header>
 
-        {!showAdmin && (
+        {!showAdmin && !showGraph1Studio && (
           <div className="wizard-header-container">
             <nav className="wizard-stepper" aria-label="Wizard Steps">
               {[
@@ -1985,6 +2008,7 @@ function App() {
                       }`}
                     onClick={() => {
                       setShowAdmin(false);
+                      setShowGraph1Studio(false);
                       setWizardStep(step.id);
                     }}
                   >
@@ -2003,7 +2027,7 @@ function App() {
         )}
 
         <div className="page-container">
-          {!canOperate && (
+          {!showGraph1Studio && !canOperate && (
             <div className="dev-banner">
               <span>Read-only access</span>
               <span>
@@ -2013,7 +2037,7 @@ function App() {
               <code>{role}</code>
             </div>
           )}
-          {isMockMode && (
+          {!showGraph1Studio && isMockMode && (
             <div className="dev-banner">
               <span>Local development adapter</span>
               <span>
@@ -2023,7 +2047,7 @@ function App() {
               <code>VITE_USE_MOCK_API=false</code>
             </div>
           )}
-          {error && (
+          {!showGraph1Studio && error && (
             <div className="alert error">
               <strong>Action failed</strong>
               <span>{error}</span>
@@ -2065,7 +2089,12 @@ function App() {
             </div>
           )}
 
-          {showAdmin && canAdmin ? (
+          {showGraph1Studio ? (
+            <Graph1Studio
+              datasetName={dataset?.name}
+              onExit={() => setShowGraph1Studio(false)}
+            />
+          ) : showAdmin && canAdmin ? (
             <AdminPage
               users={adminUsers}
               access={datasetAccess}
