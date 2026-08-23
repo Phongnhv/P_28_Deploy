@@ -66,6 +66,20 @@ _ARTEFACT = re.compile(r"_(\d{8})_(\d{6})_([0-9a-f]{32})\.json$")
 #: Pydantic's own preamble, e.g. "15 validation errors for TableRuleProposal".
 _VALIDATION_ERRORS = re.compile(r"(\d+)\s+validation errors?\s+for\s+(\w+)")
 
+#: Why a run produced nothing. "It produced nothing" is the symptom; these are the
+#: causes, and they belong to different owners. A model that answers with the wrong
+#: shape is a prompt-versus-schema problem; a model that never answers inside the
+#: client timeout is a configuration problem. Reporting both as "structured output
+#: was rejected" sends the wrong team looking -- which is exactly what happened when
+#: a 25s client timeout was introduced and every proposal call began timing out.
+FAILURE_KINDS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("TIMEOUT", re.compile(r"timed out|timeout|ReadTimeout|deadline exceeded", re.I)),
+    ("SCHEMA_REJECTED", _VALIDATION_ERRORS),
+    ("RATE_LIMITED", re.compile(r"rate.?limit|429", re.I)),
+    ("AUTH", re.compile(r"401|403|invalid.{0,10}api.?key|unauthor", re.I)),
+    ("NO_CANDIDATES", re.compile(r"no candidate|0 candidates|rỗng", re.I)),
+)
+
 #: How many recent runs the trend metrics look at. Small on purpose: a long window
 #: lets a wall of healthy history from last month hide a system that is broken today.
 RECENT_RUN_WINDOW = 5
@@ -112,6 +126,24 @@ class RunOutcome:
     #: Structured-output items the product's validators accepted.
     schema_accepted: int = 0
     errors: list[str] = field(default_factory=list)
+
+    @property
+    def failure_kind(self) -> str | None:
+        """Why this run produced nothing, or None when it produced something.
+
+        First match wins, and TIMEOUT is checked first on purpose: a run that timed
+        out may still carry stale validation text from an earlier attempt, and the
+        timeout is the cause that actually stopped it.
+        """
+        if self.produced_output:
+            return None
+        blob = " ".join(self.errors)
+        if not blob:
+            return "NO_ERROR_RECORDED"
+        for name, pattern in FAILURE_KINDS:
+            if pattern.search(blob):
+                return name
+        return "OTHER"
 
     @property
     def produced_output(self) -> bool:
@@ -250,7 +282,10 @@ def evaluate(*, write_evidence: bool = True, output_dir: Path | None = None) -> 
             Finding(
                 id="HG-A7",
                 severity=Severity.CRITICAL,
-                title="The most recent " + str(latest.workflow) + " run produced no output",
+                title=(
+                    "The most recent " + str(latest.workflow) + " run produced no output"
+                    + ("" if latest.failure_kind is None else " (" + latest.failure_kind + ")")
+                ),
                 detail=(
                     "run " + latest.run_id[:12] + " (" + latest.started_at + ") ended as "
                     + latest.verdict + "; stages reached: " + str(sorted(latest.stages))
@@ -273,11 +308,14 @@ def evaluate(*, write_evidence: bool = True, output_dir: Path | None = None) -> 
                 title=(
                     f"{violation_rate:.1%}"
                     + " of structured output was rejected by the product's validators"
+                    + " across the last " + str(len(recent)) + " runs"
                 ),
                 detail=(
                     str(sum(r.schema_rejections for r in recent)) + " rejected against "
                     + str(sum(r.schema_accepted for r in recent)) + " accepted across the last "
-                    + str(len(recent)) + " runs"
+                    + str(len(recent)) + " runs. Runs rejected by a validator: "
+                    + (", ".join(r.run_id[:12] for r in recent if r.schema_rejections) or "none")
+                    + ". The most recent run failed with: " + str(latest.failure_kind)
                 ),
                 root_cause_hint=(
                     "the model is emitting shapes the product's own Pydantic models "
@@ -297,6 +335,7 @@ def evaluate(*, write_evidence: bool = True, output_dir: Path | None = None) -> 
                 run.verdict + "; "
                 + (str(run.output_count) if run.output_count is not None else "no")
                 + " items produced"
+                + ("" if run.failure_kind is None else " (" + run.failure_kind + ")")
             ),
             metrics={
                 "output_count": float(run.output_count) if run.output_count is not None else None,
@@ -319,6 +358,21 @@ def evaluate(*, write_evidence: bool = True, output_dir: Path | None = None) -> 
             unit="ratio",
             normalized=norm.inverse_ratio(empty_rate),
             note=str(len(empty)) + " of the last " + str(len(recent)) + " runs produced nothing",
+        ),
+        "latest_run_failure_kind": MetricValue(
+            raw=None,
+            unit="count",
+            normalized=None,
+            status=None if latest.failure_kind is None else EvalStatus.NOT_APPLICABLE,
+            note=(
+                "latest run succeeded"
+                if latest.failure_kind is None
+                else "latest run failed with " + latest.failure_kind
+                + "; window breakdown: "
+                + ", ".join(
+                    sorted({str(r.failure_kind) for r in recent if r.failure_kind})
+                )
+            ),
         ),
         "schema_violation_rate": MetricValue(
             raw=round(violation_rate, 6) if violation_rate is not None else None,
@@ -356,6 +410,7 @@ def evaluate(*, write_evidence: bool = True, output_dir: Path | None = None) -> 
                             "workflow": r.workflow,
                             "started_at": r.started_at,
                             "verdict": r.verdict,
+                            "failure_kind": r.failure_kind,
                             "stages": sorted(r.stages),
                             "output_count": r.output_count,
                             "schema_rejections": r.schema_rejections,
@@ -390,5 +445,6 @@ def evaluate(*, write_evidence: bool = True, output_dir: Path | None = None) -> 
             "window": RECENT_RUN_WINDOW,
             "latest_run_id": latest.run_id,
             "latest_verdict": latest.verdict,
+            "latest_failure_kind": latest.failure_kind,
         },
     )

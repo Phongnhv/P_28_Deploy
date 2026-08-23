@@ -132,6 +132,9 @@ def _registry(baseline_ref: str = "HEAD") -> dict[str, callable]:
         "default_credential_probe_v1": make(
             "evalgate.gates.gate2_security.default_credential_probe"
         ),
+        "asgi_behaviour_probe_v1": make(
+            "evalgate.gates.gate2_security.asgi_behaviour_probe"
+        ),
         "policy_resolution_v1": make("evalgate.gates.gate6_governance.policy_resolution"),
         "config_static_check_v1": make(
             "evalgate.gates.gate5_reliability.config_static_check"
@@ -167,8 +170,6 @@ def _declared_but_not_run(selected: list[str]) -> list[EvalResult]:
          "requires the evidently package"),
         ("ai_security", "upload_probe_v1", EvalStatus.BLOCKED_BY_SYSTEM_CAPABILITY,
          "no upload endpoint exists, so malicious files cannot be submitted"),
-        ("ai_security", "tenant_isolation_probe_v1", EvalStatus.NOT_IMPLEMENTED,
-         "planned for phase C; BOLA/BFLA is not yet exercised against the ASGI app"),
         ("ai_quality", "generalization_evaluator_v1", EvalStatus.BLOCKED_BY_SYSTEM_CAPABILITY,
          "six of seven corpus datasets cannot be ingested; variance is undefined"),
         ("ai_quality", "live_sdih_detection_v1", EvalStatus.BLOCKED_BY_SYSTEM_CAPABILITY,
@@ -313,7 +314,12 @@ def main(argv: list[str] | None = None) -> int:
             if saved:
                 print(f"history -> {saved.relative_to(PROJECT_ROOT)}")
 
-    print(f"\ndecision: {outcome.decision}   score: {outcome.score}")
+    if outcome.score is None and outcome.score_withheld_reason:
+        print(f"\ndecision: {outcome.decision}   score: WITHHELD")
+        print(f"  {outcome.score_withheld_reason}")
+        print(f"  the number it would have shown is {outcome.provisional_score}")
+    else:
+        print(f"\ndecision: {outcome.decision}   score: {outcome.score}")
     print(
         f"baseline: {baseline_run_id or 'none stored'}  "
         f"(capabilities compared against {baseline_ref})"

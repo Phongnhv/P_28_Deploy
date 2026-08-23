@@ -414,7 +414,17 @@ async def run_execution_graph(
             "test_run_id": test_run_id,
             "results": results,
             "anomalies": anomalies,
-            "dq_score": final_state.get("dq_score", 100.0),
+            # No default. Nothing in the graph currently assigns dq_score, so a
+            # default of 100.0 reported flawless quality on a dataset that had just
+            # failed 8 of 31 rules with 7,672 rows missing passenger_count -- while
+            # persist_report_node wrote None and the Steward report said the data had
+            # serious problems. Three contradictory answers from one run.
+            #
+            # None is the honest answer for a computation that no longer happens: a
+            # caller can see the score is absent, but cannot see that 100.0 was
+            # invented. Restoring the computation is the real fix; until then the
+            # absence must be visible.
+            "dq_score": final_state.get("dq_score"),
             "anomaly_decision": decision_data
         }
 

@@ -26,6 +26,9 @@ from evalgate.schemas.eval_result import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ROUTES = PROJECT_ROOT / "src" / "api" / "routes.py"
+#: Where routers are mounted. A dependency attached at mount time protects every
+#: endpoint on that router, and reading only the route signatures misses it entirely.
+APP_MODULE = PROJECT_ROOT / "src" / "main.py"
 EVIDENCE_DIR = PROJECT_ROOT / "evalgate" / "evidence" / "gate2"
 
 GATE = "ai_security"
@@ -76,8 +79,52 @@ def _decorator_info(node: ast.AST) -> tuple[str, str, str] | None:
     return router, method, path
 
 
-def collect_endpoints(source_path: Path = ROUTES) -> list[Endpoint]:
+def routers_guarded_at_mount(app_path: Path = APP_MODULE) -> set[str]:
+    """Routers whose ``include_router`` call carries an auth dependency.
+
+    FastAPI lets a dependency be attached to the whole router at mount time:
+
+        app.include_router(dq_router, dependencies=[Depends(require_role([...]))])
+
+    Every endpoint on that router then requires a session, even though none of their
+    own signatures mention it. Reading only ``routes.py`` reports all of them as
+    unauthenticated -- a false positive that would block a release for a control that
+    is present and working. Verified against the running service: those endpoints
+    return 401 while this probe still called them violations.
+    """
+    if not app_path.exists():
+        return set()
+    try:
+        tree = ast.parse(app_path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return set()
+
+    guarded: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+        if name != "include_router" or not node.args:
+            continue
+        router_arg = node.args[0]
+        router_name = getattr(router_arg, "id", None)
+        if not router_name:
+            continue
+        for keyword in node.keywords:
+            if keyword.arg != "dependencies":
+                continue
+            rendered = ast.dump(keyword.value)
+            if any(marker in rendered for marker in AUTH_MARKERS):
+                guarded.add(router_name)
+    return guarded
+
+
+def collect_endpoints(
+    source_path: Path = ROUTES, app_path: Path = APP_MODULE
+) -> list[Endpoint]:
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    guarded_routers = routers_guarded_at_mount(app_path)
     endpoints: list[Endpoint] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -89,6 +136,9 @@ def collect_endpoints(source_path: Path = ROUTES) -> list[Endpoint]:
             router, method, path = info
             signature = ast.dump(node.args)
             has_auth = any(marker in signature for marker in AUTH_MARKERS)
+            # A router guarded at mount time protects every endpoint it carries.
+            if not has_auth and router in guarded_routers:
+                has_auth = True
             endpoints.append(
                 Endpoint(
                     router=router,

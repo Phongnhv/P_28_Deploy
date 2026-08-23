@@ -29,6 +29,9 @@ def render_json(
         "effective_weights": outcome.effective_weights,
         "excluded_gates": outcome.excluded_gates,
         "measured_weight": outcome.measured_weight,
+        "coverage_detail": {g: list(v) for g, v in outcome.coverage_detail.items()},
+        "provisional_score": outcome.provisional_score,
+        "score_withheld_reason": outcome.score_withheld_reason,
         "override_reason": outcome.override_reason,
         "baseline_run_id": next(
             (r.baseline_run_id for r in results if r.baseline_run_id), None
@@ -59,12 +62,23 @@ def render_markdown(
         "# EvalGate Report",
         "",
         f"- **Decision:** `{outcome.decision}` (exit code {outcome.exit_code})",
-        f"- **Score:** {outcome.score if outcome.score is not None else 'n/a'}",
+        (
+            f"- **Score:** {outcome.score}"
+            if outcome.score is not None
+            else f"- **Score:** WITHHELD — {outcome.score_withheld_reason}"
+            if outcome.score_withheld_reason
+            else "- **Score:** n/a"
+        ),
         f"- **Mode:** `{mode}`",
         f"- **Run:** `{head.run_id if head else '-'}`",
         f"- **Git ref:** `{head.git_ref if head else '-'}`",
         f"- **Timestamp:** {head.timestamp if head else '-'}",
-        f"- **Measured weight:** {outcome.measured_weight * 100:.1f}% of the gate weight was actually measured",
+        f"- **Measured coverage:** {outcome.measured_weight * 100:.1f}% "
+        f"(counted per evaluator, not per gate)",
+        "- **Coverage by gate:** "
+        + " · ".join(
+            f"{g} {ran}/{dec}" for g, (ran, dec) in sorted(outcome.coverage_detail.items())
+        ),
     ]
     baseline = next((r.baseline_run_id for r in results if r.baseline_run_id), None)
     parts.append(f"- **Baseline:** `{baseline or 'none stored yet'}`")

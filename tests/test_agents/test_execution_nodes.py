@@ -340,6 +340,14 @@ async def test_api_execute_tests_endpoint():
 
     client = TestClient(app)
 
+    # dq_router yeu cau session (mount voi require_role trong src/main.py) va
+    # get_session kiem CSRF tren moi request da xac thuc.
+    _login = client.post(
+        "/api/v1/session", json={"username": "steward", "password": "steward"}
+    )
+    assert _login.status_code == 200, f"khong dang nhap duoc: {_login.text}"
+    client.headers["X-CSRF-Token"] = _login.json()["csrf_token"]
+
     # 1. Trigger Run 2
     res = client.post(f"/api/v1/dq/runs/{proposal_run_id}/execute-tests")
     assert res.status_code == 200

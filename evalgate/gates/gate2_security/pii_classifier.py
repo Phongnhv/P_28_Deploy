@@ -12,9 +12,10 @@ This is an engineering control, not a legal guarantee.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Iterable
+from typing import Any
 
 import pandas as pd
 

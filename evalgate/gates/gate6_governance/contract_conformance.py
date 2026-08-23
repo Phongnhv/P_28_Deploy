@@ -386,6 +386,66 @@ def check_single_run_state_owner() -> tuple[Check, list[str]]:
 
 # ---------------------------------------------------------------------------
 
+
+# ---------------------------------------------------------------------------
+# Scope: what the spec says the product must NOT contain
+# ---------------------------------------------------------------------------
+
+#: docs/PRODUCT_SPEC.md#explicitly-outside-gate-2 lists capabilities the product is
+#: not supposed to have. Each entry: (id, statement, regex, files to search).
+#:
+#: These are checked because a spec that only says what to build is half a contract.
+#: Nothing else in EvalGate reads the "Explicitly outside" section, so scope creep
+#: was invisible -- and worse, `multi_dataset_readiness` gives `upload_surface_exists`
+#: its single largest weight (0.25), meaning EvalGate was *rewarding* the one item on
+#: that list the product actually implemented.
+OUT_OF_SCOPE: tuple[tuple[str, str, str], ...] = (
+    ("SCOPE-UPLOAD", "Arbitrary upload input", r"UploadFile|File\(\.\.\.\)"),
+    ("SCOPE-SQL", "Arbitrary SQL from the client",
+     r"text\(\s*(?:request|body|payload)\.|exec_driver_sql\(\s*(?:request|body|payload)"),
+    ("SCOPE-STREAM", "Streaming responses", r"StreamingResponse|WebSocket|EventSourceResponse"),
+    ("SCOPE-SCHEDULER", "A scheduler", r"APScheduler|celery\.schedules|schedule\.every"),
+    ("SCOPE-ML", "An ML anomaly model",
+     r"IsolationForest|sklearn\.|RandomForest|DBSCAN|LocalOutlierFactor"),
+    ("SCOPE-RAG", "Retrieval-augmented generation",
+     r"chromadb|pinecone|FAISS|as_retriever|VectorStore"),
+)
+
+
+def check_scope_boundaries() -> list[Check]:
+    """One check per capability the spec places outside Gate 2.
+
+    A capability found here is reported as **contract drift**, not as a defect. The
+    code may be right and the spec stale -- the team may have decided to support
+    arbitrary uploads after the spec was written. What is never acceptable is the
+    two disagreeing silently, because then neither can be trusted as the source of
+    truth for what the product is.
+
+    So the finding names both sides and asks for a decision, rather than assuming
+    the spec wins.
+    """
+    files = _py_files()
+    checks: list[Check] = []
+    for check_id, statement, pattern in OUT_OF_SCOPE:
+        hits = _grep(pattern, files)
+        checks.append(
+            Check(
+                id=check_id,
+                source="docs/PRODUCT_SPEC.md#explicitly-outside-gate-2",
+                statement=f"{statement} is outside Gate 2 scope",
+                passed=not hits,
+                detail=(
+                    "absent, as the spec requires" if not hits
+                    else f"CONTRACT DRIFT: the spec excludes this, the code implements it "
+                         f"at {len(hits)} site(s). Update whichever is stale -- the spec "
+                         f"if the capability was adopted deliberately, the code if not."
+                ),
+                evidence=hits[:5],
+            )
+        )
+    return checks
+
+
 def collect_checks() -> tuple[list[Check], dict[str, object]]:
     exposed_check, exposed = check_no_internal_fields_public()
     actor_check, forgeable = check_actor_not_client_supplied()
@@ -401,13 +461,15 @@ def collect_checks() -> tuple[list[Check], dict[str, object]]:
         exposed_check,
     ]
     structural = [actor_check, job_check, run_check]
+    scope = check_scope_boundaries()
     extras = {
         "internal_fields_exposed": exposed,
         "forgeable_actor_fields": forgeable,
         "job_state": job_detail,
         "run_state_tables": run_tables,
+        "contract_drift": [c.id for c in scope if not c.passed],
     }
-    return safety + structural, extras
+    return safety + structural + scope, extras
 
 
 def evaluate(*, write_evidence: bool = True) -> EvalResult:
@@ -415,7 +477,13 @@ def evaluate(*, write_evidence: bool = True) -> EvalResult:
     safety_checks = [c for c in checks if c.id.startswith("SAFETY-")]
     safety_passed = sum(1 for c in safety_checks if c.passed)
     safety_ratio = safety_passed / len(safety_checks)
-    overall = sum(1 for c in checks if c.passed) / len(checks)
+    # Scope checks are deliberately excluded from the score. A capability the spec
+    # excludes is a question about which document is stale, not a defect in the
+    # product -- and five absent capabilities passing would inflate the quality score
+    # without anything having improved. Drift is reported on its own axis below.
+    scored = [c for c in checks if not c.id.startswith("SCOPE-")]
+    overall = sum(1 for c in scored if c.passed) / len(scored)
+    drift = [c for c in checks if c.id.startswith("SCOPE-") and not c.passed]
 
     evidence: list[Evidence] = []
     if write_evidence:
@@ -468,6 +536,27 @@ def evaluate(*, write_evidence: bool = True) -> EvalResult:
             )
         )
 
+    if drift:
+        findings.append(
+            Finding(
+                id="DRIFT-SCOPE",
+                severity=Severity.MEDIUM,
+                title=f"{len(drift)} capability the spec excludes is implemented",
+                detail="; ".join(f"{c.id}: {c.detail}" for c in drift),
+                root_cause_hint=(
+                    "PRODUCT_SPEC.md lists these under 'Explicitly outside Gate 2'. "
+                    "Either the spec predates a deliberate decision and should be "
+                    "updated, or the capability was added without one. Deciding which "
+                    "is the point of this finding"
+                ),
+                evidence_ref="evalgate/evidence/gate6/contract_conformance.json",
+                # Never blocks. EvalGate cannot know which document is authoritative,
+                # and blocking a release over a stale sentence in a spec would teach
+                # the team to stop reading the gate.
+                blocks_release=False,
+            )
+        )
+
     failed_safety = [c for c in safety_checks if not c.passed]
     if failed_safety:
         status = EvalStatus.FAIL
@@ -492,6 +581,14 @@ def evaluate(*, write_evidence: bool = True) -> EvalResult:
             "forgeable_actor_fields": MetricValue(
                 raw=len(extras["forgeable_actor_fields"]), unit="count",
                 normalized=norm.zero_tolerance(len(extras["forgeable_actor_fields"])),
+            ),
+            "contract_drift_count": MetricValue(
+                raw=len(drift), unit="count", normalized=None,
+                status=None,
+                note=(
+                    "spec and code disagree on: " + ", ".join(c.id for c in drift)
+                    if drift else "spec and code agree on every excluded capability"
+                ),
             ),
             "job_state_vocabulary_violations": MetricValue(
                 raw=len(extras["job_state"]["out_of_vocabulary"]), unit="count",

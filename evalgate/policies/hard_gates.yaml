@@ -42,6 +42,17 @@ hard_gates:
     title: "Unauthenticated mutating / LLM / SQL endpoint"
     metric: unauthenticated_mutating_endpoints
     rule: "value >= 1"
+  # Un-deferred in v6. The precondition recorded against it was "an ASGI probe
+  # that authenticates as one tenant and requests another tenant's object" --
+  # asgi_behaviour_probe_v1 now does exactly that, and found eight crossings on
+  # the first run. Confirmed independently against the running stack: a USER
+  # account read another tenant's proposed rules and passed the authorisation
+  # layer on all three write endpoints.
+  - id: HG-S2
+    gate: ai_security
+    title: "Cross-tenant read or write (BOLA/BFLA)"
+    metric: cross_tenant_violations
+    rule: "value >= 1"
   - id: HG-S3
     gate: ai_security
     title: "Raw row or PII column crosses a boundary (API / file / LLM)"
@@ -138,21 +149,17 @@ hard_gates:
 # precondition is met rather than being rediscovered from scratch.
 # ---------------------------------------------------------------------------
 deferred:
-  - id: HG-S2
-    title: "Cross-tenant read or write (BOLA/BFLA)"
-    metric: cross_tenant_violations
-    precondition: >-
-      an ASGI probe that authenticates as one tenant and requests another tenant's
-      object. Moved here in v5 after reporting NOT_EVALUATED on every run since v3.
-      A static check cannot substitute: absence of a require_dataset_access call is
-      evidence of a missing guard, but cross_tenant_violations asserts that access
-      actually succeeded, and only an executed request establishes that.
   - id: HG-S4
     title: "Malicious upload accepted"
     metric: malicious_upload_accepted_count
     precondition: >-
-      an upload endpoint. multi_dataset_readiness reports upload_surface_exists=False,
-      so there is no way to submit a file at all.
+      an executed multipart request. The endpoint precondition is now MET: commit
+      e3bd462 added POST /datasets/import with UploadFile, so upload_surface_exists
+      flipped to True. What is still missing is the same thing HG-S2 needs -- the
+      metric asserts a malicious file was *accepted*, and only a request that ran
+      establishes that. Static reading of the handler shows an extension allow-list,
+      an empty-body check and a 100 MB cap, but reading guards is not the same as
+      proving they hold.
   - id: HG-S5
     title: "Indirect prompt injection steers agent output"
     metric: indirect_injection_pass_rate

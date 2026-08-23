@@ -1,139 +1,274 @@
 {
   "runs": [
     {
-      "run_id": "evalgate-20260822T092614Z-3f696e",
-      "git_ref": "chien@31e065a",
-      "timestamp": "2026-08-22T09:26:14.145288+00:00",
+      "run_id": "evalgate-20260823T032413Z-58041b",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-23T03:24:13.668471+00:00",
       "decision": "RELEASE_BLOCKED",
-      "score": 23.88,
+      "score": 43.41,
       "usable_as_baseline": true,
-      "path": "evalgate/runs/evalgate-20260822T092614Z-3f696e/result.json"
+      "path": "evalgate/runs/evalgate-20260823T032413Z-58041b/result.json"
     },
     {
-      "run_id": "evalgate-20260822T080903Z-b48cd9",
-      "git_ref": "chien@31e065a",
-      "timestamp": "2026-08-22T08:09:03.201004+00:00",
+      "run_id": "evalgate-20260822T195321Z-c3b771",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T19:53:21.630353+00:00",
       "decision": "RELEASE_BLOCKED",
-      "score": 23.88,
+      "score": 43.41,
       "usable_as_baseline": true,
-      "path": "evalgate/runs/evalgate-20260822T080903Z-b48cd9/result.json"
+      "path": "evalgate/runs/evalgate-20260822T195321Z-c3b771/result.json"
     },
     {
-      "run_id": "evalgate-20260822T075326Z-78abd4",
-      "git_ref": "chien@31e065a",
-      "timestamp": "2026-08-22T07:53:26.733572+00:00",
+      "run_id": "evalgate-20260822T194919Z-d3dbcb",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T19:49:19.420225+00:00",
       "decision": "RELEASE_BLOCKED",
-      "score": 23.88,
+      "score": 42.35,
       "usable_as_baseline": true,
-      "path": "evalgate/runs/evalgate-20260822T075326Z-78abd4/result.json"
+      "path": "evalgate/runs/evalgate-20260822T194919Z-d3dbcb/result.json"
     },
     {
-      "run_id": "evalgate-20260822T074934Z-f9ba44",
-      "git_ref": "chien@31e065a",
-      "timestamp": "2026-08-22T07:49:34.044151+00:00",
+      "run_id": "evalgate-20260822T192215Z-17c699",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T19:22:15.062413+00:00",
       "decision": "RELEASE_BLOCKED",
-      "score": 23.88,
+      "score": null,
       "usable_as_baseline": true,
-      "path": "evalgate/runs/evalgate-20260822T074934Z-f9ba44/result.json"
+      "path": "evalgate/runs/evalgate-20260822T192215Z-17c699/result.json"
     },
     {
-      "run_id": "evalgate-20260822T074616Z-9dfdd2",
-      "git_ref": "chien@31e065a",
-      "timestamp": "2026-08-22T07:46:16.332955+00:00",
+      "run_id": "evalgate-20260822T175143Z-dc4377",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T17:51:43.828355+00:00",
       "decision": "RELEASE_BLOCKED",
-      "score": 23.88,
+      "score": null,
       "usable_as_baseline": true,
-      "path": "evalgate/runs/evalgate-20260822T074616Z-9dfdd2/result.json"
+      "path": "evalgate/runs/evalgate-20260822T175143Z-dc4377/result.json"
     },
     {
-      "run_id": "evalgate-20260822T074012Z-f86c3c",
-      "git_ref": "chien@31e065a",
-      "timestamp": "2026-08-22T07:40:12.383470+00:00",
+      "run_id": "evalgate-20260822T173841Z-5c2504",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T17:38:41.858632+00:00",
       "decision": "RELEASE_BLOCKED",
-      "score": 26.04,
+      "score": null,
       "usable_as_baseline": true,
-      "path": "evalgate/runs/evalgate-20260822T074012Z-f86c3c/result.json"
+      "path": "evalgate/runs/evalgate-20260822T173841Z-5c2504/result.json"
     },
     {
-      "run_id": "evalgate-20260822T073949Z-2ab91f",
-      "git_ref": "chien@31e065a",
-      "timestamp": "2026-08-22T07:39:49.041364+00:00",
+      "run_id": "evalgate-20260822T173527Z-ff2b1d",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T17:35:27.439295+00:00",
       "decision": "RELEASE_BLOCKED",
-      "score": 26.04,
+      "score": null,
       "usable_as_baseline": true,
-      "path": "evalgate/runs/evalgate-20260822T073949Z-2ab91f/result.json"
+      "path": "evalgate/runs/evalgate-20260822T173527Z-ff2b1d/result.json"
     },
     {
-      "run_id": "evalgate-20260822T073849Z-a0034f",
-      "git_ref": "chien@31e065a",
-      "timestamp": "2026-08-22T07:38:49.517224+00:00",
+      "run_id": "evalgate-20260822T172425Z-c016b5",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T17:24:25.502690+00:00",
       "decision": "RELEASE_BLOCKED",
-      "score": 25.16,
+      "score": null,
       "usable_as_baseline": true,
-      "path": "evalgate/runs/evalgate-20260822T073849Z-a0034f/result.json"
+      "path": "evalgate/runs/evalgate-20260822T172425Z-c016b5/result.json"
     },
     {
-      "run_id": "evalgate-20260822T072454Z-954f36",
-      "git_ref": "chien@31e065a",
-      "timestamp": "2026-08-22T07:24:54.717854+00:00",
+      "run_id": "evalgate-20260822T170527Z-b4e17e",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T17:05:27.593501+00:00",
       "decision": "RELEASE_BLOCKED",
-      "score": 28.03,
+      "score": null,
       "usable_as_baseline": true,
-      "path": "evalgate/runs/evalgate-20260822T072454Z-954f36/result.json"
+      "path": "evalgate/runs/evalgate-20260822T170527Z-b4e17e/result.json"
     },
     {
-      "run_id": "evalgate-20260822T064219Z-3734d1",
-      "git_ref": "chien@31e065a",
-      "timestamp": "2026-08-22T06:42:19.628830+00:00",
+      "run_id": "evalgate-20260822T163030Z-62543a",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T16:30:30.546364+00:00",
       "decision": "RELEASE_BLOCKED",
-      "score": 28.03,
+      "score": null,
       "usable_as_baseline": true,
-      "path": "evalgate/runs/evalgate-20260822T064219Z-3734d1/result.json"
+      "path": "evalgate/runs/evalgate-20260822T163030Z-62543a/result.json"
     },
     {
-      "run_id": "evalgate-20260822T054115Z-5e8465",
-      "git_ref": "chien@31e065a",
-      "timestamp": "2026-08-22T05:41:15.358785+00:00",
+      "run_id": "evalgate-20260822T161707Z-7997a8",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T16:17:07.584995+00:00",
       "decision": "RELEASE_BLOCKED",
-      "score": 28.03,
+      "score": null,
       "usable_as_baseline": true,
-      "path": "evalgate/runs/evalgate-20260822T054115Z-5e8465/result.json"
+      "path": "evalgate/runs/evalgate-20260822T161707Z-7997a8/result.json"
     },
     {
-      "run_id": "evalgate-20260822T032722Z-2f58a3",
-      "git_ref": "chien@31e065a",
-      "timestamp": "2026-08-22T03:27:22.804464+00:00",
+      "run_id": "evalgate-20260822T161602Z-afa4d5",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T16:16:02.593494+00:00",
       "decision": "RELEASE_BLOCKED",
-      "score": 28.05,
+      "score": null,
       "usable_as_baseline": true,
-      "path": "evalgate/runs/evalgate-20260822T032722Z-2f58a3/result.json"
+      "path": "evalgate/runs/evalgate-20260822T161602Z-afa4d5/result.json"
     },
     {
-      "run_id": "evalgate-20260822T014955Z-59610a",
-      "git_ref": "chien@31e065a",
-      "timestamp": "2026-08-22T01:49:55.083863+00:00",
+      "run_id": "evalgate-20260822T160635Z-05c16a",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T16:06:35.949762+00:00",
       "decision": "RELEASE_BLOCKED",
-      "score": 25.91,
+      "score": null,
       "usable_as_baseline": true,
-      "path": "evalgate/runs/evalgate-20260822T014955Z-59610a/result.json"
+      "path": "evalgate/runs/evalgate-20260822T160635Z-05c16a/result.json"
     },
     {
-      "run_id": "evalgate-20260822T014210Z-3c593b",
-      "git_ref": "chien@31e065a",
-      "timestamp": "2026-08-22T01:42:10.648597+00:00",
+      "run_id": "evalgate-20260822T160422Z-5d2e9d",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T16:04:22.784470+00:00",
       "decision": "RELEASE_BLOCKED",
-      "score": 29.53,
+      "score": null,
       "usable_as_baseline": true,
-      "path": "evalgate/runs/evalgate-20260822T014210Z-3c593b/result.json"
+      "path": "evalgate/runs/evalgate-20260822T160422Z-5d2e9d/result.json"
     },
     {
-      "run_id": "evalgate-20260822T014204Z-ba864f",
-      "git_ref": "chien@31e065a",
-      "timestamp": "2026-08-22T01:42:04.497794+00:00",
+      "run_id": "evalgate-20260822T155832Z-6cac51",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T15:58:32.831418+00:00",
       "decision": "RELEASE_BLOCKED",
-      "score": 27.1,
+      "score": null,
       "usable_as_baseline": true,
-      "path": "evalgate/runs/evalgate-20260822T014204Z-ba864f/result.json"
+      "path": "evalgate/runs/evalgate-20260822T155832Z-6cac51/result.json"
+    },
+    {
+      "run_id": "evalgate-20260822T135717Z-dfa0d9",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T13:57:17.161070+00:00",
+      "decision": "RELEASE_BLOCKED",
+      "score": null,
+      "usable_as_baseline": true,
+      "path": "evalgate/runs/evalgate-20260822T135717Z-dfa0d9/result.json"
+    },
+    {
+      "run_id": "evalgate-20260822T135108Z-fe3228",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T13:51:08.771760+00:00",
+      "decision": "RELEASE_BLOCKED",
+      "score": null,
+      "usable_as_baseline": true,
+      "path": "evalgate/runs/evalgate-20260822T135108Z-fe3228/result.json"
+    },
+    {
+      "run_id": "evalgate-20260822T114517Z-2c71a2",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T11:45:17.341413+00:00",
+      "decision": "RELEASE_BLOCKED",
+      "score": null,
+      "usable_as_baseline": true,
+      "path": "evalgate/runs/evalgate-20260822T114517Z-2c71a2/result.json"
+    },
+    {
+      "run_id": "evalgate-20260822T113740Z-3fb18b",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T11:37:40.445577+00:00",
+      "decision": "RELEASE_BLOCKED",
+      "score": null,
+      "usable_as_baseline": true,
+      "path": "evalgate/runs/evalgate-20260822T113740Z-3fb18b/result.json"
+    },
+    {
+      "run_id": "evalgate-20260822T112402Z-3f1ab8",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T11:24:02.637807+00:00",
+      "decision": "RELEASE_BLOCKED",
+      "score": null,
+      "usable_as_baseline": true,
+      "path": "evalgate/runs/evalgate-20260822T112402Z-3f1ab8/result.json"
+    },
+    {
+      "run_id": "evalgate-20260822T112027Z-447f76",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T11:20:27.681760+00:00",
+      "decision": "RELEASE_BLOCKED",
+      "score": null,
+      "usable_as_baseline": true,
+      "path": "evalgate/runs/evalgate-20260822T112027Z-447f76/result.json"
+    },
+    {
+      "run_id": "evalgate-20260822T104430Z-e9bfc2",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T10:44:30.496222+00:00",
+      "decision": "RELEASE_BLOCKED",
+      "score": null,
+      "usable_as_baseline": true,
+      "path": "evalgate/runs/evalgate-20260822T104430Z-e9bfc2/result.json"
+    },
+    {
+      "run_id": "evalgate-20260822T104402Z-6c5063",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T10:44:02.546243+00:00",
+      "decision": "RELEASE_BLOCKED",
+      "score": null,
+      "usable_as_baseline": true,
+      "path": "evalgate/runs/evalgate-20260822T104402Z-6c5063/result.json"
+    },
+    {
+      "run_id": "evalgate-20260822T104314Z-22ce86",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T10:43:14.169315+00:00",
+      "decision": "RELEASE_BLOCKED",
+      "score": null,
+      "usable_as_baseline": true,
+      "path": "evalgate/runs/evalgate-20260822T104314Z-22ce86/result.json"
+    },
+    {
+      "run_id": "evalgate-20260822T103808Z-f21369",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T10:38:08.090169+00:00",
+      "decision": "RELEASE_BLOCKED",
+      "score": 30.35,
+      "usable_as_baseline": true,
+      "path": "evalgate/runs/evalgate-20260822T103808Z-f21369/result.json"
+    },
+    {
+      "run_id": "evalgate-20260822T103703Z-52e612",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T10:37:03.930569+00:00",
+      "decision": "RELEASE_BLOCKED",
+      "score": 21.52,
+      "usable_as_baseline": true,
+      "path": "evalgate/runs/evalgate-20260822T103703Z-52e612/result.json"
+    },
+    {
+      "run_id": "evalgate-20260822T100314Z-0d61c8",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T10:03:14.190497+00:00",
+      "decision": "RELEASE_BLOCKED",
+      "score": 30.35,
+      "usable_as_baseline": true,
+      "path": "evalgate/runs/evalgate-20260822T100314Z-0d61c8/result.json"
+    },
+    {
+      "run_id": "evalgate-20260822T095654Z-1b243e",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T09:56:54.401628+00:00",
+      "decision": "RELEASE_BLOCKED",
+      "score": 30.35,
+      "usable_as_baseline": true,
+      "path": "evalgate/runs/evalgate-20260822T095654Z-1b243e/result.json"
+    },
+    {
+      "run_id": "evalgate-20260822T095433Z-66d86d",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T09:54:33.671257+00:00",
+      "decision": "RELEASE_BLOCKED",
+      "score": 29.0,
+      "usable_as_baseline": true,
+      "path": "evalgate/runs/evalgate-20260822T095433Z-66d86d/result.json"
+    },
+    {
+      "run_id": "evalgate-20260822T095225Z-c6f2c3",
+      "git_ref": "chien@e3bd462",
+      "timestamp": "2026-08-22T09:52:25.386856+00:00",
+      "decision": "RELEASE_BLOCKED",
+      "score": 18.61,
+      "usable_as_baseline": true,
+      "path": "evalgate/runs/evalgate-20260822T095225Z-c6f2c3/result.json"
     }
   ]
 }

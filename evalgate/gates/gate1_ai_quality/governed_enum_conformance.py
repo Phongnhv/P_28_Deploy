@@ -116,10 +116,44 @@ def load_governed_domains() -> list[GovernedDomain]:
                 for column, values in (dataset.get("governed_value_sets") or {}).items()
             ]
             if domains:
-                return domains
+                # The policy file is authoritative for `allowed`, but it carries no
+                # notion of a value left out on purpose. `excluded` and the planted
+                # defect count live only in the contract prose, and dropping them
+                # silently disables planted_defect_recall -- which is exactly what
+                # happened the moment the policy file was restored on 2026-08-22.
+                # Merge rather than choose: each source supplies what only it knows.
+                from_contract = {d.column: d for d in _domains_from_contract()}
+                merged: list[GovernedDomain] = []
+                for domain in domains:
+                    prose = from_contract.get(domain.column)
+                    merged.append(
+                        GovernedDomain(
+                            column=domain.column,
+                            allowed=domain.allowed,
+                            excluded=list(prose.excluded) if prose else [],
+                            expected_defects=prose.expected_defects if prose else 0,
+                            source=(
+                                "src/resources/rule_policies.json + "
+                                + CONTRACT_DOC.name
+                                if prose
+                                else "src/resources/rule_policies.json"
+                            ),
+                        )
+                    )
+                return merged
         except (OSError, ValueError, AttributeError):
             pass
 
+    return _domains_from_contract()
+
+
+def _domains_from_contract() -> list[GovernedDomain]:
+    """Governed columns as documented in the contract prose.
+
+    The contract is the only place that records which values are *deliberately*
+    excluded, and how many planted defects that implies. The policy JSON lists what
+    is allowed but says nothing about what was left out on purpose.
+    """
     if not CONTRACT_DOC.exists():
         return []
     text = CONTRACT_DOC.read_text(encoding="utf-8")

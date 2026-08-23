@@ -10,6 +10,7 @@ import logging
 from enum import StrEnum
 from typing import Any, Literal
 
+from pydantic.json_schema import SkipJsonSchema
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger(__name__)
@@ -358,3 +359,10 @@ class TableRuleProposal(BaseModel):
         default_factory=list,
         description="Danh sách các rule đề xuất cho bảng này.",
     )
+    #: Rule bị validator từ chối, giữ lại để báo cáo chứ không đưa vào ruleset.
+    #:
+    #: SkipJsonSchema là bắt buộc, không phải trang trí: ``with_structured_output``
+    #: sinh prompt từ JSON schema của model này, nên một trường thừa sẽ bảo LLM tự
+    #: điền "rejected_rules" — vừa vô nghĩa vừa làm nhiễu hướng dẫn. exclude=True
+    #: chỉ tác động lúc serialize, không loại nó khỏi schema.
+    rejected_rules: SkipJsonSchema[list[dict]] = Field(default_factory=list, exclude=True)

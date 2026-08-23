@@ -316,6 +316,67 @@ def _load_data_dictionary() -> str:
     return "None"
 
 
+def _raw_to_dict(raw_message) -> dict | None:
+    """Lấy payload JSON từ phản hồi thô của LLM.
+
+    Structured output của OpenAI trả kết quả qua tool call, nhưng một số đường đi
+    trả thẳng JSON trong nội dung tin nhắn. Thử cả hai, trả None nếu không đọc được
+    — người gọi coi đó là thất bại đáng thử lại, chứ không phải "không có rule nào".
+    """
+    if raw_message is None:
+        return None
+    tool_calls = getattr(raw_message, "tool_calls", None) or []
+    for call in tool_calls:
+        args = call.get("args") if isinstance(call, dict) else getattr(call, "args", None)
+        if isinstance(args, dict):
+            return args
+    content = getattr(raw_message, "content", None)
+    if isinstance(content, str) and content.strip().startswith("{"):
+        try:
+            return json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            return None
+    return None
+
+
+def _salvage_rules(raw_payload: dict, table_name: str) -> tuple[list[ProposedRule], list[dict]]:
+    """Kiểm định TỪNG rule, giữ cái hợp lệ, ghi nhận cái bị từ chối.
+
+    ``with_structured_output`` kiểm định cả ``TableRuleProposal`` một lần, nên một
+    rule sai làm hỏng toàn bộ lô. Đo ngày 23/08: LLM sinh 34 rule, 14 trượt, và
+    **20 rule hợp lệ bị vứt sạch** — ba lần thử liên tiếp đều đúng 14 lỗi, tức đây
+    là hành vi hệ thống chứ không phải trục trặc ngẫu nhiên. Thử lại chỉ tốn thêm
+    thời gian và tiền API.
+
+    Kể cả một prompt hoàn hảo cũng không đảm bảo 34/34 rule đúng mọi lần. Với kiểm
+    định theo lô thì **một rule sai luôn bằng không output**, và đó là điều kiện
+    không thể đạt được một cách đáng tin.
+
+    Rule bị từ chối vẫn được trả về để gọi lên trên ghi lại: tỷ lệ từ chối là một
+    phép đo chất lượng model, không phải thứ nên nuốt im lặng.
+    """
+    accepted: list[ProposedRule] = []
+    rejected: list[dict] = []
+    for index, item in enumerate(raw_payload.get("rules") or []):
+        try:
+            accepted.append(ProposedRule.model_validate(item))
+        except ValidationError as exc:
+            rejected.append(
+                {
+                    "index": index,
+                    "column": (item or {}).get("column"),
+                    "rule_type": (item or {}).get("rule_type"),
+                    "error": str(exc)[:400],
+                }
+            )
+    if rejected:
+        logger.warning(
+            "[%s] %d/%d rule bị từ chối bởi validator, giữ lại %d rule hợp lệ",
+            table_name, len(rejected), len(accepted) + len(rejected), len(accepted),
+        )
+    return accepted, rejected
+
+
 async def _propose_for_table(
     table_name: str,
     table_digest: dict,
@@ -379,14 +440,41 @@ async def _propose_for_table(
                         coverage_requirements=coverage_requirements,
                         few_shot_examples=_RULE_PROPOSER_FEW_SHOT,
                     )
-                result: TableRuleProposal = await structured_llm.ainvoke(messages)
+                envelope = await structured_llm.ainvoke(messages)
                 exit_ts = datetime.now()
+
+                # include_raw=True trả về {"raw", "parsed", "parsing_error"} nên payload
+                # vẫn lấy được kể cả khi kiểm định thất bại — đó là điều kiện để cứu
+                # được các rule hợp lệ thay vì mất cả lô.
+                parsed = envelope.get("parsed")
+                parsing_error = envelope.get("parsing_error")
+
+                if parsed is not None and not parsing_error:
+                    result = parsed
+                    rejected: list[dict] = []
+                else:
+                    raw_message = envelope.get("raw")
+                    payload = _raw_to_dict(raw_message)
+                    if payload is None:
+                        raise parsing_error or ValueError(
+                            "không đọc được payload thô từ LLM"
+                        )
+                    accepted, rejected = _salvage_rules(payload, table_name)
+                    if not accepted:
+                        # Không cứu được rule nào: đây mới thực sự là thất bại đáng thử lại.
+                        raise parsing_error or ValueError("không rule nào qua được kiểm định")
+                    result = TableRuleProposal(
+                        table=payload.get("table") or table_name, rules=accepted
+                    )
+
+                result.rejected_rules = rejected
                 logger.info(
-                    "[%s] Hoàn thành (attempt %d) sau %.2fs — %d rules",
+                    "[%s] Hoàn thành (attempt %d) sau %.2fs — %d rules, %d bị từ chối",
                     table_name,
                     attempt + 1,
                     (exit_ts - entry_ts).total_seconds(),
                     len(result.rules),
+                    len(rejected),
                 )
                 return result
 
@@ -586,7 +674,10 @@ async def rule_proposer_node(state: AgentState) -> dict:
 
     # 3. Chuẩn bị LLM với structured output
     llm = get_llm(settings.llm_provider, temperature=0.1)
-    structured_llm = llm.with_structured_output(TableRuleProposal)
+    # include_raw giữ lại phản hồi gốc để _salvage_rules cứu được rule hợp lệ khi
+    # một phần lô trượt kiểm định. Schema vẫn được đưa cho model như cũ, nên chất
+    # lượng hướng dẫn không đổi.
+    structured_llm = llm.with_structured_output(TableRuleProposal, include_raw=True)
 
     # 4. Fan-out
     semaphore = asyncio.Semaphore(settings.rule_proposer_concurrency)
@@ -624,6 +715,7 @@ async def rule_proposer_node(state: AgentState) -> dict:
     run_id = state.get("rule_run_id") or uuid.uuid4().hex
     flat_rules: list[dict] = []
     errors: list[dict] = []
+    rejected_rules: list[dict] = []
     used_ids: set[str] = set()
 
     for table_name, result in zip(table_names, results):
@@ -633,6 +725,8 @@ async def rule_proposer_node(state: AgentState) -> dict:
             continue
 
         proposal: TableRuleProposal = result
+        for item in getattr(proposal, "rejected_rules", None) or []:
+            rejected_rules.append({"table": table_name, **item})
         requirements = candidates_by_table.get(table_name)
         if requirements is None:
             requirements = _build_coverage_requirements(per_table[table_name])
@@ -664,9 +758,15 @@ async def rule_proposer_node(state: AgentState) -> dict:
         dump_payload = {
             "run_id": run_id,
             "generated_at": datetime.now().isoformat(),
+            "dataset_id": dataset_id,
             "total_rules": len(flat_rules),
             "total_errors": len(errors),
+            # Rule model đề xuất nhưng validator từ chối. Ghi lại vì tỷ lệ từ chối
+            # là một phép đo chất lượng model — nuốt im lặng thì không ai biết
+            # model đang sinh ra bao nhiêu thứ không dùng được.
+            "total_rejected": len(rejected_rules),
             "proposed_rules": flat_rules,
+            "rejected_rules": rejected_rules,
             "errors": errors,
         }
         dump_file.write_text(json.dumps(dump_payload, ensure_ascii=False, indent=2), encoding="utf-8")

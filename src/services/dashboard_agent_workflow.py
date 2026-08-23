@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import threading
 import uuid
@@ -33,6 +34,9 @@ SUPPORTED_RULE_TYPES = {
     "duplicate_fingerprint",
 }
 SAFE_OPERATORS = {"<", "<=", ">", ">=", "==", "!="}
+
+logger = logging.getLogger(__name__)
+
 RULE_POLICY_PATH = Path(__file__).resolve().parents[1] / "resources" / "rule_policies.json"
 
 
@@ -66,6 +70,30 @@ class RulePolicyDocument(BaseModel):
 
 @lru_cache(maxsize=1)
 def _load_rule_policy_document() -> RulePolicyDocument:
+    """Đọc policy tuỳ chọn theo dataset. Thiếu file KHÔNG phải lỗi.
+
+    Mọi nơi gọi ``get_dataset_rule_policy`` đều đã xử lý ``None``
+    (``routes.py:1000``, ``:319``, ``:505``, ``:798``, ``job_runner.py:124``), tức
+    thiết kế ban đầu coi policy là **phần ghi đè tuỳ chọn cho từng dataset**: dataset
+    nào không có policy thì bỏ qua kiểm tra governed value, chứ không phải dừng lại.
+
+    Chỉ hàm này phá vỡ hợp đồng đó. Khi ``ac4b663`` xoá mất file, một tệp cấu hình
+    vắng mặt đã làm chết 7 điểm gọi — trong đó có Data explorer — dù mọi caller đều
+    sẵn sàng chạy tiếp mà không cần policy.
+
+    Điều này còn chặn chính mục tiêu sản phẩm: người dùng upload dataset bất kỳ sẽ
+    không bao giờ có entry viết tay trong ``rule_policies.json``. Nếu thiếu file là
+    lỗi chí mạng thì **không dataset mới nào chạy được**.
+
+    File hỏng thì vẫn báo lỗi: đó là cấu hình sai, khác với cấu hình không có.
+    """
+    if not RULE_POLICY_PATH.exists():
+        logger.info(
+            "Không có %s — chạy không kèm policy theo dataset. "
+            "Kiểm tra governed value sẽ được bỏ qua.",
+            RULE_POLICY_PATH.name,
+        )
+        return RulePolicyDocument(datasets={})
     try:
         return RulePolicyDocument.model_validate_json(RULE_POLICY_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:

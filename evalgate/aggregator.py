@@ -85,7 +85,15 @@ class AggregateOutcome:
     hard_gates: list[HardGateOutcome] = field(default_factory=list)
     blocking_findings: list[Finding] = field(default_factory=list)
     #: Share of the original weight that was actually measured, before re-normalisation.
+    #: Counted at *evaluator* level: see ``evaluator_coverage``.
     measured_weight: float = 0.0
+    #: Per-gate ``(ran, declared)`` so a reader can see where the holes are.
+    coverage_detail: dict[str, tuple[int, int]] = field(default_factory=dict)
+    #: The aggregate that *would* have been published had coverage been sufficient.
+    #: Kept for transparency; ``score`` is None whenever this is set.
+    provisional_score: float | None = None
+    #: Why ``score`` carries no number.
+    score_withheld_reason: str | None = None
     #: Set when the runner overrides the decision, e.g. for a stale workspace.
     override_reason: str | None = None
     #: Metric names claimed by more than one evaluator. Empty is the healthy state.
@@ -209,6 +217,43 @@ def evaluate_hard_gates(results: list[EvalResult]) -> list[HardGateOutcome]:
 # Weights
 # ---------------------------------------------------------------------------
 
+def evaluator_coverage(
+    results: list[EvalResult], weights: dict[str, float]
+) -> tuple[float, dict[str, tuple[int, int]]]:
+    """How much of the declared risk surface was actually measured.
+
+    Counted per *evaluator*, not per gate. The earlier version summed the weight of
+    gates that were not entirely excluded, which treats a gate as fully measured the
+    moment one of its evaluators runs. On 2026-08-22 that reported 0.85 while only
+    0.54 of the surface had been measured -- ai_security was credited its full 0.22
+    with 4 of 7 evaluators running, and the two that did not run were the BOLA probe
+    and the malicious-upload probe.
+
+    Returns the weighted coverage and, per gate, ``(ran, declared)`` so the report can
+    show a reader exactly where the holes are rather than a single opaque fraction.
+    """
+    ran: dict[str, int] = {}
+    declared: dict[str, int] = {}
+    for result in results:
+        if result.gate not in weights:
+            continue  # preflight and anything outside the weighted set
+        declared[result.gate] = declared.get(result.gate, 0) + 1
+        if result.counts_toward_aggregate():
+            ran[result.gate] = ran.get(result.gate, 0) + 1
+
+    detail = {
+        gate: (ran.get(gate, 0), declared.get(gate, 0))
+        for gate in weights
+        if declared.get(gate)
+    }
+    covered = sum(
+        weight * (ran.get(gate, 0) / declared[gate])
+        for gate, weight in weights.items()
+        if declared.get(gate)
+    )
+    return covered, detail
+
+
 def re_normalize_weights(
     weights: dict[str, float], excluded: set[str]
 ) -> dict[str, float]:
@@ -255,7 +300,7 @@ def aggregate(results: list[EvalResult]) -> AggregateOutcome:
         excluded_reasons.setdefault(gate, EvalStatus.NOT_IMPLEMENTED.value)
 
     effective = re_normalize_weights(weights, excluded)
-    measured_weight = sum(w for g, w in weights.items() if g not in excluded)
+    measured_weight, coverage_detail = evaluator_coverage(results, weights)
     total_score = (
         sum(gate_scores[g] * w for g, w in effective.items()) if effective else None
     )
@@ -275,14 +320,38 @@ def aggregate(results: list[EvalResult]) -> AggregateOutcome:
     else:
         decision = Decision.FAIL
 
+    # Withholding the number is separate from the decision, and has to be, because a
+    # failing hard gate preempts the INSUFFICIENT_COVERAGE branch above. Without this,
+    # an under-measured run still published a score whenever anything was blocking --
+    # which is every run that matters. The rule the comment above states is only
+    # actually enforced here.
+    provisional_score: float | None = None
+    score_withheld_reason: str | None = None
+    published_score = total_score
+    if total_score is not None and measured_weight < MIN_MEASURED_WEIGHT:
+        provisional_score = round(total_score, 2)
+        published_score = None
+        thin = ", ".join(
+            f"{gate} {ran}/{dec}"
+            for gate, (ran, dec) in sorted(coverage_detail.items())
+            if dec and ran < dec
+        )
+        score_withheld_reason = (
+            f"measured coverage {measured_weight:.2f} is below the "
+            f"{MIN_MEASURED_WEIGHT:.2f} floor; partially measured gates: {thin}"
+        )
+
     return AggregateOutcome(
         decision=decision,
-        score=round(total_score, 2) if total_score is not None else None,
+        score=round(published_score, 2) if published_score is not None else None,
         gate_scores=gate_scores,
         effective_weights={g: round(w, 4) for g, w in effective.items()},
         excluded_gates={g: excluded_reasons.get(g, "unknown") for g in excluded},
         hard_gates=hard_gates,
         blocking_findings=blocking,
         measured_weight=round(measured_weight, 4),
+        coverage_detail=coverage_detail,
+        provisional_score=provisional_score,
+        score_withheld_reason=score_withheld_reason,
         metric_collisions=detect_metric_collisions(results),
     )

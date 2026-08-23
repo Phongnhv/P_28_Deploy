@@ -12,6 +12,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from evalgate.core import scope
 from evalgate.normalizers import normalizers as norm
 from evalgate.schemas.eval_result import (
     EvalResult,
@@ -62,7 +63,11 @@ def tracked_files() -> list[Path]:
         ).stdout
     except (subprocess.CalledProcessError, FileNotFoundError):
         return []
-    return [PROJECT_ROOT / line for line in output.splitlines() if line.strip()]
+    paths = [PROJECT_ROOT / line for line in output.splitlines() if line.strip()]
+    # EvalGate's own fixtures and documentation are not product secrets. See
+    # evalgate/core/scope.py for why this exclusion is absolute rather than a
+    # suppression with a TTL.
+    return scope.product_only(paths)
 
 
 def evaluate(*, write_evidence: bool = True) -> EvalResult:

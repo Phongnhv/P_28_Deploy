@@ -44,6 +44,7 @@ profiles:
       - egress_probe_v1
       - secret_scan_v1
       - default_credential_probe_v1
+      - asgi_behaviour_probe_v1
       - policy_resolution_v1
       - config_static_check_v1
       - multi_dataset_readiness_v1

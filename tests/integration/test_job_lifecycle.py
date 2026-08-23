@@ -14,6 +14,12 @@ async def test_job_dispatch_and_idempotency():
         login_res = await client.post("/api/v1/session", json={"username": "steward", "password": "steward"})
         assert login_res.status_code == 200
 
+        # POST /api/v1/jobs now requires a steward session, and get_session verifies
+        # CSRF on every authenticated request. Without the token the dispatch comes
+        # back 422 instead of 202. Before the dependency was added this endpoint
+        # accepted anonymous requests entirely.
+        client.headers["X-CSRF-Token"] = login_res.json()["csrf_token"]
+
         ikey = "test-idem-key-12345"
 
         # 1. Test successful dispatch (202 Accepted)

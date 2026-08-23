@@ -1,8 +1,19 @@
 """Gate 5A: reliability controls that can be checked without generating load.
 
-Every item here is a yes/no fact about the configuration, readable today.  It is
+Most items here are a yes/no fact about the configuration, readable today.  It is
 the half of reliability that does not need k6, a running cluster, or approval to
 put load on anything.
+
+**A control is not credited for existing.**  On 2026-08-22 commit e3bd462 added a
+25-second LLM timeout; this evaluator flipped ``llm_timeout_configured`` to True and
+handed the gate 14 points, while every proposal call began timing out and the
+product's core AI feature stopped working entirely.  The check had asked *"is a
+timeout configured?"* and never *"is this timeout right for the call it guards?"*.
+
+A wrongly-valued control is worse than no control: it looks like protection, scores
+like protection, and causes the failure.  So where evidence exists that a control is
+misbehaving, the control does not count.  Where no evidence exists either way, the
+honest report is that adequacy is unverified -- not that the control is fine.
 """
 
 from __future__ import annotations
@@ -47,19 +58,77 @@ def _grep(pattern: str, *paths: Path) -> list[str]:
     return hits
 
 
+def observed_timeout_failures() -> tuple[int, int]:
+    """(runs that failed on a timeout, runs observed at all).
+
+    A configured timeout that demonstrably caused a failure is not a control -- it is
+    the cause. Reading the run history is the only way to tell the two apart, because
+    the value alone says nothing: 25 seconds is generous for one call and fatal for
+    another, and only the workload knows which.
+
+    Returns (0, 0) when nothing has been observed, which the caller must report as
+    NOT_MEASURED rather than as a healthy control.
+    """
+    try:
+        from evalgate.gates.gate1_ai_quality.run_outcome_integrity import collect_runs
+    except ImportError:  # pragma: no cover
+        return 0, 0
+    runs = [r for r in collect_runs() if r.workflow]
+    if not runs:
+        return 0, 0
+    recent = runs[:5]
+    return sum(1 for r in recent if r.failure_kind == "TIMEOUT"), len(recent)
+
+
 def collect_controls() -> dict[str, dict[str, object]]:
-    """Each control: whether it is configured, and where the evidence is."""
+    """Each control: whether it is configured, and where the evidence is.
+
+    A control counts only when it is both **present** and **not demonstrably
+    wrong**. The distinction was learned the hard way: commit e3bd462 added a 25s
+    LLM timeout, this evaluator flipped `llm_timeout_configured` to True and awarded
+    the gate 14 points, and every proposal call began timing out. Presence was
+    rewarded; correctness was never asked about.
+    """
     llm_timeout = _grep(r"\btimeout\s*=", SRC / "services" / "llm.py")
     db_timeout = _grep(r"statement_timeout", SRC)
-    upload_limit = _grep(r"max_upload|MAX_CONTENT_LENGTH|upload_size", SRC)
+    # A size cap is rarely a named setting. The product enforces one inline as
+    # `if len(payload) > 100 * 1024 * 1024: raise HTTPException(413, ...)`, which the
+    # earlier name-only pattern missed entirely -- reporting a control as absent while
+    # it was being enforced two lines from an upload handler. HTTP 413 is the
+    # unambiguous signal, so it is matched alongside the conventional setting names.
+    upload_limit = _grep(
+        r"max_upload|MAX_CONTENT_LENGTH|upload_size|max_file_size"
+        r"|status_code\s*=\s*413|HTTP_413",
+        SRC,
+    )
     tenant_quota = _grep(r"quota|rate_limit|per_tenant", SRC)
     out_of_process_queue = _grep(r"celery|rq\.Queue|dramatiq", SRC)
     background_tasks = _grep(r"BackgroundTasks", SRC)
     retry_policy = _grep(r"tenacity|@retry|max_retries", SRC)
     circuit_breaker = _grep(r"circuit_breaker|CircuitBreaker", SRC)
 
+    timed_out, observed = observed_timeout_failures()
+    # Present but proven harmful counts as not configured: the score must not reward
+    # a control that is currently breaking the workload it guards.
+    timeout_ok = bool(llm_timeout) and timed_out == 0
+    if not llm_timeout:
+        timeout_note = "no timeout configured"
+    elif observed == 0:
+        timeout_note = "configured, but no run observed yet -- adequacy unverified"
+    elif timed_out:
+        timeout_note = (
+            f"configured, but {timed_out} of the last {observed} runs failed ON this "
+            f"timeout. A control that causes the failure is not a control"
+        )
+    else:
+        timeout_note = f"configured and {observed} observed run(s) completed within it"
+
     return {
-        "llm_timeout_configured": {"value": bool(llm_timeout), "evidence": llm_timeout[:5]},
+        "llm_timeout_configured": {
+            "value": timeout_ok,
+            "evidence": llm_timeout[:5],
+            "note": timeout_note,
+        },
         "db_statement_timeout_configured": {"value": bool(db_timeout), "evidence": db_timeout[:5]},
         "upload_size_limit_configured": {"value": bool(upload_limit), "evidence": upload_limit[:5]},
         "per_tenant_quota_configured": {"value": bool(tenant_quota), "evidence": tenant_quota[:5]},

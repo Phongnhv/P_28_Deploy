@@ -136,13 +136,43 @@ def test_blocking_finding_alone_blocks_release():
 
 
 def test_unmeasured_gate_is_excluded_not_scored_zero():
+    """A weighted gate that measured nothing drops out; it is not scored zero.
+
+    The example used to be ``business``. That gate was declared out of scope in
+    weights v3, so it is no longer weighted at all and cannot demonstrate the
+    exclusion path -- an unweighted gate never enters the aggregate in the first
+    place, which is a different mechanism. ``governance`` is used instead because
+    it is still weighted, which is what this test is actually about.
+    """
     results = [
         _result("ai_quality", 90.0),
-        EvalResult(gate="business", evaluator="b", status=EvalStatus.NOT_MEASURED),
+        EvalResult(gate="governance", evaluator="g", status=EvalStatus.NOT_MEASURED),
     ]
     outcome = aggregate(results)
-    assert "business" in outcome.excluded_gates
-    assert "business" not in outcome.effective_weights
+    assert "governance" in outcome.excluded_gates
+    assert "governance" not in outcome.effective_weights
+    assert outcome.gate_scores["ai_quality"] == 90.0
+
+
+def test_a_gate_outside_the_declared_scope_never_enters_the_aggregate():
+    """Out-of-scope gates are absent from the verdict, not excluded from it.
+
+    weights v3 drops observability, reliability and business because
+    PRODUCT_SPEC.md puts HA/SLA and post-course operations outside Gate 2. Their
+    evaluators still run and still report, so a reader can see what they say --
+    but they carry no weight, cannot block a release, and must not appear as
+    coverage holes either, because they are not holes: nobody promised to measure
+    them.
+    """
+    results = [
+        _result("ai_quality", 90.0),
+        _result("reliability", 10.0),
+    ]
+    outcome = aggregate(results)
+    assert "reliability" not in outcome.gate_scores
+    assert "reliability" not in outcome.effective_weights
+    assert "reliability" not in outcome.coverage_detail
+    # A low score on an out-of-scope gate must not pull the published number down.
     assert outcome.gate_scores["ai_quality"] == 90.0
 
 
@@ -259,8 +289,8 @@ def test_bool_column_does_not_break_profiling():
 
 
 def test_preexisting_labels_are_kept_and_marked():
-    from evalgate.sdih.label_store import CellLabel
     from evalgate.sdih.defect_taxonomy import DefectClass
+    from evalgate.sdih.label_store import CellLabel
 
     frame = generate("corpus-synth-retail", rows=SMALL)
     seeded = [

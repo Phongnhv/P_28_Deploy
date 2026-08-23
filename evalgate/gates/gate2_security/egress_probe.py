@@ -49,16 +49,35 @@ EGRESS_SINKS = {
 }
 
 
-def _static_signals() -> dict[str, Any]:
+def _display_path(path: Path) -> str:
+    """Repo-relative when possible, absolute otherwise.
+
+    ``relative_to`` raises for anything outside the project root, which took the
+    whole evaluator down the first time it was pointed at a temp directory. A probe
+    must never crash on an unexpected path -- it should report what it can.
+    """
+    try:
+        return str(path.relative_to(PROJECT_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _static_signals(src_root: Path | None = None) -> dict[str, Any]:
+    """Signals read from product source.
+
+    ``src_root`` exists so the probe can be pointed at a fixture tree. Defaults to
+    the real ``src/`` so production behaviour is unchanged.
+    """
+    root = src_root if src_root is not None else PROJECT_ROOT / "src"
     signals: dict[str, Any] = {}
-    runner = PROJECT_ROOT / "src" / "agents" / "nodes" / "test_runner_node.py"
+    runner = root / "agents" / "nodes" / "test_runner_node.py"
     if runner.exists():
         text = runner.read_text(encoding="utf-8")
         matches = _SELECT_STAR.findall(text)
         signals["select_star_in_test_runner"] = len(matches)
         signals["sample_failures_populated"] = text.count('"sample_failures": samples')
 
-    insights = PROJECT_ROOT / "src" / "agents" / "nodes" / "steward_insights_node.py"
+    insights = root / "agents" / "nodes" / "steward_insights_node.py"
     if insights.exists():
         text = insights.read_text(encoding="utf-8")
         # The LLM payload serialises whole result dicts, each of which carries
@@ -69,11 +88,19 @@ def _static_signals() -> dict[str, Any]:
     return signals
 
 
-def _empirical_rows() -> dict[str, Any]:
-    """Look for whole rows actually sitting in the archived traces."""
+def _empirical_rows(traces_dir: Path | None = None) -> dict[str, Any]:
+    """Look for whole rows actually sitting in the archived traces.
+
+    ``traces_dir`` is a seam for tests; it defaults to the real trace directory.
+    A missing directory yields zero files scanned, which the caller must treat as
+    "nothing was looked at" rather than "nothing was found".
+    """
+    base = traces_dir if traces_dir is not None else TEST_RUNNER_TRACES
     findings: list[dict[str, Any]] = []
     files_scanned = 0
-    for path in sorted(TEST_RUNNER_TRACES.glob("debug_test_results_*.json")):
+    if not base.exists():
+        return {"files_scanned": 0, "raw_row_artifacts": []}
+    for path in sorted(base.glob("debug_test_results_*.json")):
         files_scanned += 1
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -102,7 +129,7 @@ def _empirical_rows() -> dict[str, Any]:
                     )
             findings.append(
                 {
-                    "file": str(path.relative_to(PROJECT_ROOT)),
+                    "file": _display_path(path),
                     "rule_id": entry.get("rule_id"),
                     "row_count": len(samples),
                     "columns": columns,
@@ -112,9 +139,14 @@ def _empirical_rows() -> dict[str, Any]:
     return {"files_scanned": files_scanned, "raw_row_artifacts": findings}
 
 
-def evaluate(*, write_evidence: bool = True) -> EvalResult:
-    static = _static_signals()
-    empirical = _empirical_rows()
+def evaluate(
+    *,
+    write_evidence: bool = True,
+    src_root: Path | None = None,
+    traces_dir: Path | None = None,
+) -> EvalResult:
+    static = _static_signals(src_root)
+    empirical = _empirical_rows(traces_dir)
     artifacts = empirical["raw_row_artifacts"]
 
     raw_row_violations = len(artifacts)

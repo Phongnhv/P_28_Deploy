@@ -58,6 +58,19 @@ def _parse_rule_id(rule_id: str) -> tuple[str | None, str]:
     return None, rule_id
 
 
+def _display_path(path: Path) -> str:
+    """Repo-relative when possible, absolute otherwise.
+
+    ``relative_to`` raises for anything outside the project root, which took the
+    whole evaluator down the first time it was pointed at a temp directory. A probe
+    must never crash on an unexpected path -- it should report what it can.
+    """
+    try:
+        return str(path.relative_to(PROJECT_ROOT))
+    except ValueError:
+        return str(path)
+
+
 def load_archived_runs(reports_dir: Path = REPORTS_DIR) -> list[dict[str, Any]]:
     runs: list[dict[str, Any]] = []
     for path in sorted(reports_dir.glob("test_run_*.json")):
@@ -68,7 +81,7 @@ def load_archived_runs(reports_dir: Path = REPORTS_DIR) -> list[dict[str, Any]]:
         results = payload.get("test_results") or payload.get("results") or []
         if not results:
             continue
-        payload["__path__"] = str(path.relative_to(PROJECT_ROOT))
+        payload["__path__"] = _display_path(path)
         runs.append(payload)
     return runs
 

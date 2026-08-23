@@ -370,3 +370,109 @@ def test_the_gate_detects_the_regression_it_was_built_for():
             capability_regression.KNOWN_GAP,
             capability_regression.IMPROVEMENT,
         }
+
+
+# ---------------------------------------------------------------------------
+# Coverage is counted per evaluator, and an under-measured run publishes no number
+# ---------------------------------------------------------------------------
+
+def _ev(gate: str, name: str, status: EvalStatus, score: float | None = None) -> EvalResult:
+    return EvalResult(gate=gate, evaluator=name, status=status, score=score)
+
+
+def test_coverage_counts_evaluators_not_gates():
+    """A gate is not fully measured just because one of its evaluators ran.
+
+    The earlier version summed the weight of every gate that was not entirely
+    excluded. On 2026-08-22 that reported 0.85 while 0.54 of the surface had been
+    measured -- ai_security was credited its full weight with 4 of 7 evaluators
+    running, and the two missing ones were the BOLA and malicious-upload probes.
+    """
+    from evalgate.aggregator import evaluator_coverage
+
+    weights = {"ai_security": 1.0}
+    results = [
+        _ev("ai_security", "ran_a", EvalStatus.PASS, 100.0),
+        _ev("ai_security", "ran_b", EvalStatus.FAIL, 0.0),
+        _ev("ai_security", "missing_a", EvalStatus.NOT_IMPLEMENTED),
+        _ev("ai_security", "missing_b", EvalStatus.BLOCKED_BY_SYSTEM_CAPABILITY),
+    ]
+    covered, detail = evaluator_coverage(results, weights)
+    assert covered == pytest.approx(0.5)
+    assert detail["ai_security"] == (2, 4)
+
+
+def test_a_gate_outside_the_weighted_set_does_not_dilute_coverage():
+    """preflight has no weight, so it must not appear in the denominator."""
+    from evalgate.aggregator import evaluator_coverage
+
+    weights = {"governance": 1.0}
+    results = [
+        _ev("governance", "ran", EvalStatus.PASS, 100.0),
+        _ev("preflight", "workspace", EvalStatus.FAIL),
+    ]
+    covered, detail = evaluator_coverage(results, weights)
+    assert covered == pytest.approx(1.0)
+    assert "preflight" not in detail
+
+
+def test_an_under_measured_run_publishes_no_score(monkeypatch):
+    """The rule the aggregator already stated in a comment, now enforced.
+
+    A failing hard gate preempts the INSUFFICIENT_COVERAGE branch, so before this
+    the number was still published on every run that actually mattered.
+    """
+    results = [
+        _ev("ai_quality", "ran", EvalStatus.PASS, 90.0),
+        _ev("ai_quality", "missing_a", EvalStatus.NOT_IMPLEMENTED),
+        _ev("ai_quality", "missing_b", EvalStatus.NOT_IMPLEMENTED),
+        _ev("ai_quality", "missing_c", EvalStatus.NOT_IMPLEMENTED),
+    ]
+    outcome = aggregate(results)
+    assert outcome.score is None
+    assert outcome.provisional_score is not None
+    assert "below the" in outcome.score_withheld_reason
+    # The evidence for the hole is in the report, not just the verdict.
+    assert outcome.coverage_detail["ai_quality"] == (1, 4)
+
+
+def test_a_well_measured_run_still_publishes_its_score():
+    """The guard must not swallow every number -- only the ones built on too little."""
+    gates = ["ai_quality", "ai_security", "input_data", "governance",
+             "observability", "reliability", "business"]
+    results = [_ev(g, f"{g}_probe", EvalStatus.PASS, 90.0) for g in gates]
+    outcome = aggregate(results)
+    assert outcome.measured_weight == pytest.approx(1.0)
+    assert outcome.score == pytest.approx(90.0)
+    assert outcome.score_withheld_reason is None
+
+
+# ---------------------------------------------------------------------------
+# EvalGate never measures itself
+# ---------------------------------------------------------------------------
+
+def test_evalgate_paths_are_recognised_as_the_instrument():
+    from evalgate.core import scope
+
+    assert scope.is_instrument("evalgate/tests/test_blind_spots.py")
+    assert scope.is_instrument(scope.PROJECT_ROOT / "evalgate" / "run.py")
+    assert not scope.is_instrument("src/api/routes.py")
+    assert not scope.is_instrument("scripts/import_csv.py")
+    # A product path that merely starts with the same letters is not the instrument.
+    assert not scope.is_instrument("evalgate_notes/readme.md")
+
+
+def test_the_secret_scanner_never_reports_its_own_repository():
+    """Twice in one afternoon this raised a blocking CRITICAL about a test fixture.
+
+    Both findings were true about the repository and useless about the product, and
+    the second moved the score further than any real defect that day.
+    """
+    from evalgate.gates.gate2_security import secret_scan
+
+    for path in secret_scan.tracked_files():
+        assert "evalgate" not in str(path).replace("\\", "/").split("P-028/")[-1].split("/")[0:1], path
+
+    result = secret_scan.evaluate(write_evidence=False)
+    for finding in result.critical_findings:
+        assert "evalgate" not in finding.detail.replace("\\", "/"), finding.detail

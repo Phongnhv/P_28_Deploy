@@ -41,3 +41,76 @@ jobs:
           # credential and prevents an unrelated optional dbt test from
           # depending on runner-local secrets.
           DBT_PASSWORD: ci-placeholder-not-a-secret
+
+  evalgate:
+    # The quality gate is deliberately a separate job. It grades the product; a
+    # failure here means "this revision should not ship", not "the build broke",
+    # and mixing the two makes both harder to read.
+    runs-on: self-hosted
+    needs: lint-and-test
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Remove residual workspace files
+        run: git clean -ffdx
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint EvalGate
+        run: ruff check evalgate/
+
+      - name: EvalGate self-tests
+        # The gate blocks releases, so its own tests run before its verdict is
+        # believed. A broken evaluator that reports zero violations is worse than
+        # no evaluator at all.
+        run: pytest evalgate/tests/ -q
+        env:
+          APP_ENV: test
+          OPENAI_API_KEY: test-key
+
+      - name: Verify golden labels have not drifted
+        run: python -m evalgate.golden.freeze --verify
+
+      # Optional: a prior workflow may publish the product's run artefacts so the
+      # ai_quality gate has something to grade. Without them that gate reports
+      # NOT_MEASURED and coverage falls to roughly 0.36 -- below EvalGate's own
+      # 0.60 floor, so no score is published. That is the honest outcome, not a
+      # failure: `output/` is git-ignored, so a clean checkout genuinely has
+      # nothing to measure.
+      - name: Fetch product run artefacts (optional)
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: product-run-output
+          path: output
+
+      - name: Run EvalGate
+        # continue-on-error while the backlog is worked down. Today the gate exits 3
+        # (RELEASE_BLOCKED) on 13 findings, so making it required immediately would
+        # block every merge. Remove this line once the blocking findings are closed
+        # -- keeping it forever turns the gate into decoration.
+        continue-on-error: true
+        run: python -m evalgate.run --mode ci --out evalgate/reports
+        env:
+          APP_ENV: test
+          OPENAI_API_KEY: test-key
+
+      - name: Publish EvalGate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evalgate-report
+          path: |
+            evalgate/reports/report.md
+            evalgate/reports/result.json
+            evalgate/evidence/

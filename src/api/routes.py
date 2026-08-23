@@ -2040,10 +2040,15 @@ def compatibility_trigger_job(
     request: SmokeCreateJobRequest,
     background_tasks: BackgroundTasks,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
     """
     POST /api/v1/jobs - Smoke test compatibility job dispatcher.
+
+    Requires a steward session. Being a smoke-test convenience does not make it
+    harmless: it dispatches the same INGEST_PROFILE work as the audited endpoint,
+    and without a session it accepted anonymous requests with 202 on a public URL.
     """
     collision_job_id = verify_idempotency(db, idempotency_key)
     if collision_job_id:

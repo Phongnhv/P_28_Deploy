@@ -35,6 +35,17 @@ def _patch_engine(tmp_path):
     # Set _engine trực tiếp — thread pool workers cũng thấy engine đúng
     original = rs._engine
     rs._engine = test_engine
+
+    # create_all() dựng bảng nhưng không seed tài khoản. Trước đây không sao vì
+    # dq_router không yêu cầu đăng nhập; giờ nó có, nên fixture client cần một
+    # tài khoản thật để đăng nhập.
+    from sqlalchemy.orm import Session as _Session
+
+    from src.services.session_service import ensure_default_users
+
+    with _Session(test_engine) as _seed_session:
+        ensure_default_users(_seed_session)
+
     yield
     rs._engine = original
     test_engine.dispose()
@@ -42,8 +53,30 @@ def _patch_engine(tmp_path):
 
 @pytest_asyncio.fixture
 async def client():
+    """Authenticated client.
+
+    Every ``dq_router`` endpoint now requires a session: the router is mounted with
+    a role dependency in ``src/main.py``. Before that, publish, review and
+    bulk-review were reachable with no credentials at all, which made the
+    human-in-the-loop control unenforceable on a public deployment.
+
+    These tests exercise the endpoints' behaviour, not their authentication, so the
+    fixture signs in once. Authentication itself is covered in ``test_session.py``,
+    which deliberately keeps an anonymous client.
+    """
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.post(
+            "/api/v1/session",
+            json={"username": "steward", "password": "steward"},
+        )
+        assert response.status_code == 200, (
+            f"fixture could not sign in: {response.status_code} {response.text}"
+        )
+        # get_session verifies CSRF on every authenticated request, so the token has
+        # to ride along or every mutating call comes back 422 instead of its real
+        # status. Setting it on the client applies it to all subsequent requests.
+        ac.headers["X-CSRF-Token"] = response.json()["csrf_token"]
         yield ac
 
 

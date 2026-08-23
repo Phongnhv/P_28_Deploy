@@ -166,7 +166,7 @@ def test_a_deployment_config_selecting_the_live_mode_clears_the_finding(fake_rep
     _workflow_py(fake_repo)
     (fake_repo / "docker-compose.yml").write_text(
         "services:\n  api:\n    environment:\n"
-        "      - AGENT_MODE=graph\n      - OPENAI_API_KEY=sk-not-a-real-key\n",
+        "      - AGENT_MODE=graph\n      - OPENAI_API_KEY=NOT-A-REAL-KEY\n",
         encoding="utf-8",
     )
     result = spf.evaluate(write_evidence=False)
@@ -203,10 +203,18 @@ def test_a_missing_credential_is_reported_but_never_blocks(fake_repo: Path):
 
 
 def test_no_credential_value_is_ever_written_into_the_facts(fake_repo: Path):
-    """The evidence file lands in the repository, so values must not reach it."""
+    """The evidence file lands in the repository, so values must not reach it.
+
+    The sentinel is deliberately *not* credential-shaped. This file is tracked, and
+    ``secret_scan`` reads tracked files -- an earlier version used a realistic
+    ``sk-`` literal here, which matched the openai_key pattern and raised a CRITICAL
+    release-blocking finding against the test fixture itself. Test data must never
+    manufacture a finding; what this test asserts is that the *value* does not leak,
+    and any unique string establishes that.
+    """
     _config_py(fake_repo, "mock")
     _workflow_py(fake_repo)
-    secret = "sk-live-must-never-appear-in-evidence"
+    secret = "CREDENTIAL-VALUE-SENTINEL-MUST-NOT-LEAK"
     (fake_repo / "docker-compose.yml").write_text(
         "services:\n  api:\n    environment:\n      - OPENAI_API_KEY=" + secret + "\n",
         encoding="utf-8",
@@ -340,3 +348,45 @@ def test_the_real_repository_still_reports_its_three_seeded_accounts():
         pytest.skip("the product now guards its seeding call; the gate is satisfied")
     assert result.metadata["credentials_found"] >= 3
     assert result.metadata["unguarded_call_sites"] >= 1
+
+
+def test_a_timeout_is_not_reported_as_a_validator_rejection(output: Path):
+    """Two different bugs with two different owners.
+
+    A model that answers with the wrong shape is a prompt-versus-schema problem.
+    A model that never answers inside the client timeout is a configuration problem.
+    Collapsing both into "structured output was rejected" sends the wrong team
+    looking -- which is what happened when a 25s client timeout was introduced and
+    every proposal call began timing out.
+    """
+    _artefact(output, "rule_proposer", RUN_A, "100000",
+              {"run_id": RUN_A, "total_rules": 0, "total_errors": 1,
+               "errors": [{"table": "t", "error": "Request timed out."}]})
+    result = roi.evaluate(write_evidence=False, output_dir=output)
+    assert result.metadata["latest_failure_kind"] == "TIMEOUT"
+    # No validator was ever reached, so there is no denominator and no rate.
+    assert result.metrics["schema_violation_rate"].raw is None
+
+
+def test_a_validator_rejection_is_named_as_one(output: Path):
+    _artefact(output, "rule_proposer", RUN_A, "100000",
+              {"run_id": RUN_A, "total_rules": 0, "total_errors": 1,
+               "errors": [{"error": "6 validation errors for TableRuleProposal"}]})
+    result = roi.evaluate(write_evidence=False, output_dir=output)
+    assert result.metadata["latest_failure_kind"] == "SCHEMA_REJECTED"
+
+
+def test_timeout_wins_over_stale_validation_text(output: Path):
+    """A retried call can carry both; the timeout is what actually stopped it."""
+    _artefact(output, "rule_proposer", RUN_A, "100000",
+              {"run_id": RUN_A, "total_rules": 0, "total_errors": 1,
+               "errors": [{"error": "2 validation errors for X ... then Request timed out."}]})
+    result = roi.evaluate(write_evidence=False, output_dir=output)
+    assert result.metadata["latest_failure_kind"] == "TIMEOUT"
+
+
+def test_a_successful_run_has_no_failure_kind(output: Path):
+    _artefact(output, "rule_proposer", RUN_A, "100000",
+              {"run_id": RUN_A, "total_rules": 12, "total_errors": 0, "errors": []})
+    result = roi.evaluate(write_evidence=False, output_dir=output)
+    assert result.metadata["latest_failure_kind"] is None
