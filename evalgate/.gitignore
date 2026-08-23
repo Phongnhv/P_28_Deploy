@@ -4,3 +4,4 @@ evidence/**
 reports/*.json
 reports/*.md
 __pycache__/
+runs/**
