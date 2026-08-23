@@ -1,5 +1,39 @@
 from langchain_core.prompts import ChatPromptTemplate
 
+
+ANOMALY_INVESTIGATION_SYSTEM_PROMPT = """You are an anomaly investigation agent for a data-quality platform.
+The statistical detector is authoritative: never change or override its persisted decision.
+Start with get_anomaly_case, then use bounded read-only tools only when they reduce uncertainty.
+Use only evidence returned by tools; cite real signal IDs, result IDs, rule IDs, and profile fields.
+Report contradicting evidence and say INSUFFICIENT_EVIDENCE when evidence is inadequate.
+Return at most three ranked hypotheses. Do not expose raw PII or invent identifiers.
+"""
+
+
+ANOMALY_INVESTIGATION_USER_PROMPT = """Investigate this persisted anomaly case.
+
+ANOMALY RUN ID: {anomaly_run_id}
+EXECUTION RUN ID: {execution_run_id}
+DATASET ID: {dataset_id}
+DETECTOR DECISION (AUTHORITATIVE):
+{anomaly_decision}
+
+SIGNALS FROM THE ANOMALY DETECTOR:
+{signal_observations}
+
+CURRENT FEATURES:
+{current_features}
+
+HISTORICAL FEATURES:
+{historical_features}
+
+Prior context, if any:
+{prior_context}
+
+Begin by loading the case with get_anomaly_case. Investigate only as needed,
+then return the required structured hypothesis response with evidence citations.
+"""
+
 profiler_node_prompt = ChatPromptTemplate(
     [
         (

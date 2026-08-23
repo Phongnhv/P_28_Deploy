@@ -67,6 +67,39 @@ class RuleStatus(StrEnum):
 
 
 # ---------------------------------------------------------------------------
+# Anomaly investigation structured output
+# ---------------------------------------------------------------------------
+
+class InvestigationHypothesis(BaseModel):
+    """Evidence-backed root-cause hypothesis returned by the investigator."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    hypothesis_type: Literal[
+        "SYSTEM_BUG", "SCHEMA_CHANGE", "UPSTREAM_DATA_DRIFT", "ML_MODEL_DRIFT",
+        "OUTLIER", "DATA_QUALITY_VIOLATION", "UNKNOWN"
+    ] = "UNKNOWN"
+    summary: str = Field(min_length=1)
+    confidence: float = Field(ge=0.0, le=1.0)
+    supporting_signal_ids: list[str] = Field(default_factory=list)
+    contradicting_signal_ids: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    recommended_checks: list[str] = Field(default_factory=list)
+    missing_evidence: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class AnomalyInvestigationResponse(BaseModel):
+    """Structured response contract for the Deep Agent investigation node."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    overall_assessment: str = Field(min_length=1)
+    investigation_summary: str = Field(min_length=1)
+    hypotheses: list[InvestigationHypothesis] = Field(default_factory=list, max_length=3)
+
+
+# ---------------------------------------------------------------------------
 # Parameter bag (closed — tất cả field optional)
 # ---------------------------------------------------------------------------
 
