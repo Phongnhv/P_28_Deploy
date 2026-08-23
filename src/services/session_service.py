@@ -48,7 +48,9 @@ def ensure_default_users(db: Session) -> None:
     """Seed demo accounts from secrets, never from production source defaults."""
     production = os.getenv("APP_ENV") == "production"
     for username, display_name, role, password_env in DEFAULT_USERS:
-        password = os.getenv(password_env)
+        # Secret Manager values supplied through stdin commonly retain a final
+        # newline; it is not part of the intended password.
+        password = (os.getenv(password_env) or "").strip()
         if production and not password:
             raise RuntimeError(f"{password_env} must be configured in production")
         password = password or username
