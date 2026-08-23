@@ -678,4 +678,9 @@ export const mockApi: ApiClient = {
     addAudit("WORKFLOW_REWOUND", "workflow", id, `Returned to ${targetStep}; downstream sessions were kept temporarily.`);
     return structuredClone(workflow);
   },
+  async createGraph1Run() { throw new Error("Graph 1 requires the real backend. Set VITE_USE_MOCK_API=false."); },
+  async getGraph1Run() { throw new Error("Graph 1 requires the real backend."); },
+  async listGraph1Nodes() { throw new Error("Graph 1 requires the real backend."); },
+  async confirmGraph1Semantic() { throw new Error("Graph 1 requires the real backend."); },
+  async reviewGraph1Rules() { throw new Error("Graph 1 requires the real backend."); },
 };

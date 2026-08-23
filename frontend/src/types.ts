@@ -331,6 +331,37 @@ export interface WorkflowRun {
   steps: WorkflowStep[];
 }
 
+export type Graph1RunStatus = "PENDING" | "RUNNING" | "AWAITING_SEMANTIC_REVIEW" | "AWAITING_RULE_REVIEW" | "COMPLETED" | "FAILED";
+export type Graph1NodeStatus = "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED" | "WAITING_REVIEW" | "SKIPPED";
+
+export interface Graph1Run {
+  id: string;
+  dataset_id: string;
+  status: Graph1RunStatus;
+  current_node?: string | null;
+  error?: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Graph1NodeExecution {
+  node_key: string;
+  position: number;
+  status: Graph1NodeStatus;
+  output: Record<string, unknown>;
+  error?: string | null;
+  sequence: number;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface Graph1RuleDecision {
+  rule_id: string;
+  action: "approve" | "reject" | "edit";
+  rule?: Record<string, unknown>;
+}
+
 export interface ArtifactReviewInput {
   action: "approve" | "request_revision" | "reject";
   comment?: string;
@@ -379,4 +410,9 @@ export interface ApiClient {
   reviewArtifact(artifactId: string, input: ArtifactReviewInput): Promise<AgentArtifact>;
   continueLoop(workflowRunId: string, input: LoopDecisionInput): Promise<WorkflowRun>;
   rewindWorkflow(workflowRunId: string, targetStep: WorkflowStepKey): Promise<WorkflowRun>;
+  createGraph1Run(datasetId: string): Promise<Graph1Run>;
+  getGraph1Run(runId: string): Promise<Graph1Run>;
+  listGraph1Nodes(runId: string): Promise<Graph1NodeExecution[]>;
+  confirmGraph1Semantic(runId: string, contract: Record<string, unknown>): Promise<Graph1Run>;
+  reviewGraph1Rules(runId: string, decisions: Graph1RuleDecision[]): Promise<Graph1Run>;
 }

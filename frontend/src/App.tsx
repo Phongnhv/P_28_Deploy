@@ -355,9 +355,7 @@ function DatasetsPage({
     ? (workflow && workflow.dataset_id === dataset.id
       ? workflowArtifactForStep(workflow, artifacts, "UNDERSTAND_DATA")
       : undefined) ||
-    artifacts.find(
-      (a) => a.step_key === "UNDERSTAND_DATA" || a.artifact_type === "SEMANTIC_CONTRACT"
-    )
+    artifacts.find((a) => a.type === "SEMANTIC_CONTRACT")
     : undefined;
 
   const payload = activeArtifact?.payload && typeof activeArtifact.payload === "object"
@@ -469,6 +467,14 @@ function DatasetsPage({
               <h2>{t("datasets.understandAgentTitle", { name: dataset.name })}</h2>
               <p className="muted">{t("datasets.understandAgentDesc")}</p>
             </div>
+            <button
+              type="button"
+              className="button primary"
+              disabled={!canOperate || importing || busy || dataset.status !== "PROFILE_READY"}
+              onClick={() => onStartUnderstand(dataset.id)}
+            >
+              {busy ? "Starting Agent…" : "Run Agent Workflow →"}
+            </button>
           </div>
 
           {payload ? (
@@ -1279,21 +1285,14 @@ function WorkflowPage({
 
 function App() {
   const { t, language } = useI18n();
-  const isGraph1Preview =
-    ["127.0.0.1", "localhost"].includes(window.location.hostname) &&
-    new URLSearchParams(window.location.search).get("preview") === "graph1";
   const [authenticated, setAuthenticated] = useState(
     () =>
-      isGraph1Preview ||
-      (sessionStorage.getItem("ridepulse.auth") === "true" &&
-        Boolean(sessionStorage.getItem("ridepulse.role"))),
+      sessionStorage.getItem("ridepulse.auth") === "true" &&
+      Boolean(sessionStorage.getItem("ridepulse.role")),
   );
   const [role, setRole] = useState<UserRole>(
     () =>
-      isGraph1Preview
-        ? "STEWARD"
-        : (sessionStorage.getItem("ridepulse.role") as UserRole | null) ??
-          "USER",
+      (sessionStorage.getItem("ridepulse.role") as UserRole | null) ?? "USER",
   );
   const [username, setUsername] = useState(
     () => sessionStorage.getItem("ridepulse.username") ?? "",
@@ -1303,8 +1302,7 @@ function App() {
   const [view, setView] = useState<View>("overview");
   const [wizardStep, setWizardStep] = useState<number>(1);
   const [showAdmin, setShowAdmin] = useState<boolean>(false);
-  const [showGraph1Studio, setShowGraph1Studio] =
-    useState<boolean>(isGraph1Preview);
+  const [showGraph1Studio, setShowGraph1Studio] = useState<boolean>(false);
   const [showDataExplorer, setShowDataExplorer] = useState<boolean>(false);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(
@@ -1410,7 +1408,7 @@ function App() {
         setRuleConfigurations([]);
       }
     } catch (err) {
-      if (err instanceof ApiError && err.status === 401 && !isGraph1Preview) {
+      if (err instanceof ApiError && err.status === 401) {
         clearApiSession();
         sessionStorage.removeItem("ridepulse.auth");
         sessionStorage.removeItem("ridepulse.role");
@@ -1446,6 +1444,13 @@ function App() {
     setWorkflow(null);
     setWorkflowArtifacts([]);
     await refreshWorkspace();
+  }
+
+  async function openGraph1ForDataset(datasetId: string) {
+    if (datasetId !== selectedDatasetId) await selectDataset(datasetId);
+    setWizardStep(2);
+    setShowAdmin(false);
+    setShowGraph1Studio(true);
   }
 
   useEffect(() => {
@@ -1562,6 +1567,8 @@ function App() {
       setView("datasets");
       await pollJob(imported.job, async () => {
         await refreshWorkspace();
+        setWizardStep(2);
+        setShowGraph1Studio(true);
       });
     } catch (err) {
       setError(getErrorMessage(err, "Unable to import dataset."));
@@ -1932,16 +1939,6 @@ function App() {
             <span className="role-badge">{role}</span>
             <LanguageToggle />
             <ThemeControl />
-            <button
-              type="button"
-              className={`button secondary ${showGraph1Studio ? "active" : ""}`}
-              onClick={() => {
-                setShowGraph1Studio((current) => !current);
-                setShowAdmin(false);
-              }}
-            >
-              Graph 1 Studio
-            </button>
             {canAdmin && (
               <button
                 type="button"
@@ -2091,8 +2088,9 @@ function App() {
 
           {showGraph1Studio ? (
             <Graph1Studio
-              datasetName={dataset?.name}
               onExit={() => setShowGraph1Studio(false)}
+              onDatasetImported={() => void refreshWorkspace()}
+              initialDataset={dataset}
             />
           ) : showAdmin && canAdmin ? (
             <AdminPage
@@ -2120,8 +2118,7 @@ function App() {
                     onSelectDataset={(id) => void selectDataset(id)}
                     onDeleteDataset={(id) => void deleteDataset(id)}
                     onStartUnderstand={(id) => {
-                      if (id !== dataset?.id) void selectDataset(id);
-                      void startWorkflowStep("UNDERSTAND_DATA", true);
+                      void openGraph1ForDataset(id);
                     }}
                     canOperate={canOperate}
                     importing={Boolean(activeJob)}
