@@ -2035,23 +2035,334 @@ chạy đúng, không phải bản sửa sản phẩm.
 
 ---
 
+## 17. TRẠNG THÁI EVALGATE — 23/08/2026
+
+Lần chạy `evalgate-20260823T033620Z-a25941`, chế độ `ci`, không tốn một đồng LLM nào.
+
+### 17.1 Phán quyết
+
+```text
+decision : EVALGATE_STALE   (exit 4)
+score    : 43.41
+coverage : 68.2%  (ngưỡng sàn 60%)
+baseline : evalgate-20260823T032413Z-58041b
+```
+
+**`EVALGATE_STALE` là trạng thái mới, và nó xuất hiện đúng lúc.** Cổng phát hiện cây làm
+việc đã trôi khỏi revision mà nó vừa chấm:
+
+```text
+7 file sản phẩm bị sửa trong working tree; 3 file chưa theo dõi dưới đường dẫn sản phẩm
+```
+
+Bảy file đó là các bản sửa auth và salvage rule của §15 cùng đợt hôm nay. Điểm 43.41
+**vẫn được công bố** nhưng kèm cảnh báo — vì nó chấm `e3bd462`, không chấm thứ đang nằm
+trên đĩa. Một cổng công bố điểm cho code không phải code sẽ được ship là cổng nói dối;
+đây là cách nó từ chối làm thế mà không im lặng.
+
+### 17.2 Điểm theo gate
+
+| Gate | Điểm | Trọng số | Độ phủ evaluator |
+|---|---:|---:|---:|
+| `ai_quality` | **20.19** | 36% | 5/8 |
+| `ai_security` | 78.64 | 29% | 5/7 |
+| `input_data` | 37.50 | 20% | 2/4 |
+| `governance` | 38.89 | 15% | 6/6 |
+
+Gate nặng nhất chấm thấp nhất. Đó không phải trục trặc — `ai_quality` đo đúng thứ sản
+phẩm đang hỏng: `run_outcome_integrity_v1` = **0.00**, vì lần chạy agent gần nhất sinh
+ra **0 rule**.
+
+### 17.3 Hard gate: 13 trượt / 20 được đánh giá
+
+| Nhóm | ID | Ai phải sửa |
+|---|---|---|
+| Agent không ra được output | `HG-A7` `HG-A2` `HG-A1` | sản phẩm |
+| Rule sai ngữ nghĩa | `HG-A3` `HG-A5` `HG-A6` | sản phẩm |
+| Uỷ quyền | `HG-S2` (8 vi phạm) `HG-S8` | sản phẩm |
+| Rò dữ liệu thô / PII | `HG-S3` (27) | sản phẩm |
+| Nhật ký & HITL | `HG-G2` `HG-G4` | sản phẩm |
+| Đường phục vụ giả lập | `HG-G5` | sản phẩm |
+| Ingest nuốt lỗi thành null | `HG-D2` (8) | sản phẩm |
+
+**Không finding nào trong số này thuộc về EvalGate.** Toàn bộ 13 cái là khuyết tật sản
+phẩm mà cổng phát hiện được.
+
+### 17.4 Một bất đồng giữa hai probe — và bên đúng là bên chạy thật
+
+Đáng chú ý nhất trong lần chạy này:
+
+```text
+authz_probe_v1          PASS   100.00      (tĩnh, đọc src/main.py)
+asgi_behaviour_probe_v1 FAIL    93.22      HG-S2: cross_tenant_violations = 8
+```
+
+Probe tĩnh thấy `dq_router` đã được gắn `dependencies=[Depends(require_role(...))]` ở
+chỗ mount nên kết luận **đạt**. Probe hành vi thực sự gửi request bằng phiên của
+`user` và **đọc được dữ liệu của tenant khác**.
+
+Cả hai đều đúng với thứ chúng nhìn. Sự khác biệt là *xác thực có* ≠ *phân quyền theo
+đối tượng*. Đây là lập luận mạnh nhất cho kế hoạch chấm-theo-run: **kiểm tra tĩnh không
+thay được việc chạy thật.**
+
+### 17.5 So với §16
+
+| | §16 (23/08 sáng) | Nay |
+|---|---:|---:|
+| Self-test EvalGate | 162 pass, 1 skip | **189 pass, 1 skip** |
+| Evaluator | 19 | **30** |
+| Metric | 77 | **84** |
+| Critical finding | — | **22** (15 chặn release) |
+| Điểm | 42.21 | 43.41 |
+| Hard gate FAIL | 13 | 13 |
+| `ruff check evalgate/` | sạch | **sạch** |
+
+### 17.6 EvalGate đã đạt MVP chưa?
+
+**Tầng ra quyết định: rồi.** Bốn thứ một cổng chất lượng bắt buộc phải có, đều có và
+đều có test khoá lại:
+
+| | Bằng chứng |
+|---|---|
+| Chạy đầu-cuối, ra phán quyết máy đọc được | `exit 4`, `result.json` 84 metric |
+| Hard gate chặn bất kể điểm | `test_hard_gate_failure_blocks_release_despite_a_perfect_score` |
+| Không đo thì không bịa | 10/30 evaluator ở `NOT_*` / `BLOCKED_*`, tái chuẩn hoá trọng số |
+| Sàn độ phủ | dưới 0.60 ⇒ **giữ lại điểm**, không công bố |
+| Ở trong CI | job `evalgate`, self-test chạy **trước** khi tin verdict |
+| Tìm ra lỗi thật | 8 lỗ cross-tenant, đã xác minh độc lập bằng `curl` |
+
+**Tầng đo lường: chưa.** Ba hạn chế, xếp theo mức nghiêm trọng:
+
+**1 — 86% vẫn là kiểm tra tĩnh.** Chỉ 3/21 evaluator đang hoạt động thực sự chạy hệ
+thống. §17.4 cho thấy chính xác cái giá của điều đó: probe tĩnh báo `PASS 100` cho một
+router có 8 lỗ hổng thật.
+
+**2 — Gate nặng nhất chưa từng xem agent chạy.** `ai_quality` giữ 36% trọng số nhưng
+chấm các artefact JSON trong `output/` — thư mục **bị gitignore**. Trên một bản
+checkout sạch, gate này báo `NOT_MEASURED`, độ phủ rơi xuống 0.36 và **không điểm nào
+được công bố**. Đã mô phỏng thật ở §16.4. Ba evaluator của nó đang
+`BLOCKED_BY_SYSTEM_CAPABILITY` vì không gọi được agent.
+
+**3 — `R-11` còn mở.** Commit một regression vẫn rửa được nó thành `KNOWN_GAP`, vì
+baseline bám theo lần chạy gần nhất chứ chưa ghim vào một revision đã biết là tốt.
+
+### 17.7 Kết luận
+
+> EvalGate **dùng được** để chặn release hôm nay, và nó đang chặn đúng.
+>
+> Nhưng nó chấm **dấu vết** của hệ thống, chưa chấm **hệ thống**. Chừng nào chưa làm
+> xong kế hoạch chấm-theo-run, mọi phán quyết của nó đều mang giả định rằng các artefact
+> trong `output/` còn phản ánh code hiện tại — và `EVALGATE_STALE` hôm nay là bằng chứng
+> giả định đó vừa sai.
+
+### 17.8 Việc còn lại
+
+| | Việc | Ghi chú |
+|---|---|---|
+| 1 | Chấm theo run (`run_ledger`, `EvalScope`, `--run-id`, watcher) | ~4 ngày; đóng hạn chế 1 và 2 |
+| 2 | `R-11` ghim baseline vào revision đã biết tốt | nhỏ |
+| 3 | Test cho `multi_dataset_readiness_v1`, `workspace_integrity_v1` | 2/19 còn lại |
+| 4 | Gỡ `continue-on-error` trong CI | khi các finding chặn được đóng |
+| 5 | Xây `trace_coverage` cho `observability` | **xây, không xoá** — xem §16.0 |
+
+---
+
+## 18. HƯỚNG PHÁT TRIỂN — EVIDENCE LÀM NGUỒN SỰ THẬT
+
+Mục này là **thiết kế đề xuất**, chưa thực hiện. Nó không sửa một hard gate nào ở §17.3
+— đây là đầu tư kiến trúc, không phải bản vá sản phẩm.
+
+### 18.1 Luồng mục tiêu
+
+```text
+   Evaluator                 DeepEval · Langfuse · Data Quality · probe nội bộ
+       ↓  chỉ số liệu thô
+   evidence/                 nguồn sự thật, sống lâu hơn lần chạy
+       ↓
+   schemas/                  hợp đồng đóng, sai hình dạng là fail to
+       ↓
+   normalizers/              mọi thang đo về 0–100 tại MỘT chỗ
+       ↓
+   aggregator.py             P25, loại NOT_*, tái chuẩn hoá trọng số
+       ↓
+   policies/                 ngưỡng, trọng số, hard gate
+       ↓
+   gates/                    PASS · WARN · FAIL · BLOCK
+       ↓
+   reports/
+```
+
+Nguyên tắc: **đo và chấm là hai việc khác nhau, không được nằm chung một hàm.**
+
+### 18.2 Đối chiếu với hiện tại
+
+Phần lớn luồng này **đã có**. Ba mắt xích là lối tắt:
+
+| Mắt xích | Hiện tại | |
+|---|---|---|
+| `schemas/` | `EvalResult`, `extra="forbid"` | ✅ đúng thiết kế |
+| `aggregator.py` | P25, loại `NOT_*`, tái chuẩn hoá | ✅ |
+| `policies/` | 3 file YAML, có version | ✅ |
+| `reports/` | `report.md` + `result.json` | ✅ |
+| **`evidence/`** | **ghi một chiều** | ❌ **không dòng code nào đọc lại** |
+| **`normalizers/`** | **20/20 evaluator tự gọi, tự đặt `score=`** | ❌ chuẩn hoá nằm trong evaluator |
+| **Adapter ngoài** | **không có** | ❌ DeepEval · Langfuse · GX · Evidently đều là stub |
+
+Kiểm chứng bằng chính mã nguồn:
+
+```text
+grep "evidence"    → chỉ có mkdir / write / evidence_ref.  Không có read.
+grep "normalizers" → 20 evaluator import, mỗi cái tự tính score của mình.
+grep adapter ngoài → 0 file.  geval_domain_v1, promptfoo_injection_v1 = NOT_EXECUTED.
+```
+
+### 18.3 Vì sao ba mắt xích đó quan trọng
+
+**Evidence ghi-một-chiều nghĩa là không tái chấm được.** Muốn đổi một ngưỡng trong
+`thresholds.yaml` thì phải **đo lại toàn bộ** — chạy lại 20 probe, dựng lại ASGI app,
+đọc lại `output/`. Trong khi số liệu thô đã nằm sẵn trên đĩa. Đo lại để trả lời một câu
+hỏi về chính sách là lãng phí, và với evaluator có tính phí thì nó còn tốn tiền thật.
+
+**Chuẩn hoá trong evaluator nghĩa là mỗi evaluator tự chấm mình.** Hôm nay
+`egress_probe` vừa quyết định *"27 vi phạm"* vừa quyết định *"27 vi phạm = 0 điểm"*.
+Hai quyết định đó thuộc hai loại thẩm quyền khác nhau: cái đầu là **quan sát**, cái sau
+là **chính sách**. Trộn lại thì muốn đổi chính sách phải sửa code probe — và không ai
+review được bảng ánh xạ, vì nó nằm rải ở 20 file.
+
+**Không có hợp đồng adapter nghĩa là công cụ ngoài không vào được.** Ba ví dụ nêu ra
+đúng là loại số liệu EvalGate cần, và không cái nào đang vào được:
+
+```text
+DeepEval    → correctness 0.91 · faithfulness 0.95 · hallucination 0.04
+Langfuse    → latency 2.1s · cost $0.035 · error_rate 0.007
+Data Quality→ completeness 0.98 · drift 0.21 · schema_violations 3
+```
+
+### 18.4 Bản ghi evidence đề xuất
+
+```json
+{
+  "evaluator": "deepeval_geval_v1",
+  "gate": "ai_quality",
+  "run_id": "a8b1ca3b2b324878bdd01287ade86f79",
+  "produced_at": "2026-08-23T03:36:20Z",
+  "source": { "tool": "deepeval", "version": "1.4.2", "cost_usd": 0.035 },
+  "status": "PASS",
+  "measurements": [
+    { "metric": "correctness",        "raw": 0.91, "unit": "ratio" },
+    { "metric": "faithfulness",       "raw": 0.95, "unit": "ratio" },
+    { "metric": "hallucination_rate", "raw": 0.04, "unit": "ratio" }
+  ]
+}
+```
+
+**Chi tiết quan trọng nhất: không có trường `score`, không có `normalized`.** Evidence
+chỉ mang thứ đã *quan sát được*. Việc `0.04` đáng bao nhiêu điểm là chính sách, và chính
+sách nằm ở `policies/`, không nằm ở đây.
+
+Bảng ánh xạ chuyển thành dữ liệu, review được trong một lần đọc:
+
+```yaml
+# policies/normalizer_map.yaml
+correctness:        ratio            # 0..1 → 0..100
+faithfulness:       ratio
+hallucination_rate: inverse_ratio    # thấp là tốt
+latency_p95_ms:     latency_band
+cost_per_run_usd:   cost_band
+drift_psi:          psi_band
+schema_violations:  zero_tolerance   # khác 0 là 0 điểm, không nội suy
+```
+
+`EvalStatus` giữ nguyên. Kỷ luật `NOT_*` là thứ đắt giá nhất EvalGate đang có, không
+được đánh mất trong lúc tái cấu trúc.
+
+### 18.5 Adapter cho công cụ ngoài
+
+Một adapter chỉ có đúng một việc: gọi công cụ, ghi một file evidence. Nó **không** biết
+trọng số, **không** biết hard gate, **không** biết điểm.
+
+| Adapter | Nguồn | Gate | Trạng thái |
+|---|---|---|---|
+| `deepeval_geval_v1` | DeepEval | `ai_quality` | stub `NOT_EXECUTED` |
+| `langfuse_trace_v1` | Langfuse | `observability` | chưa có — **sẽ mở khoá gate đang 0 độ phủ** |
+| `gx_corpus_v1` | Great Expectations | `input_data` | stub `NOT_IMPLEMENTED` |
+| `evidently_drift_v1` | Evidently | `input_data` | stub `NOT_IMPLEMENTED` |
+
+`langfuse_trace_v1` đáng chú ý riêng. `observability` bị tuyên ngoài phạm vi ở
+`weights.yaml` v3 **vì chưa từng đo được gì** — và §16.0 đã từ chối xoá nó để làm đẹp
+điểm, nói rõ cách đúng là *xây*. Một adapter Langfuse chính là cái "xây" đó: gate quay
+lại với trọng số thật, không phải bằng cách hạ ngưỡng.
+
+### 18.6 Điều này mở khoá cái gì
+
+| | |
+|---|---|
+| **Tái chấm không cần đo lại** | Đổi ngưỡng → chạy lại từ `evidence/` trong vài giây, $0. Trả lời được *"siết `drift` xuống 0.15 thì bao nhiêu revision trượt?"* |
+| **Công cụ ngoài cắm vào không đụng `aggregator`** | Thêm evaluator = thêm một file evidence, không sửa lõi |
+| **Chấm theo run** (§17.8 mục 1) | Lần chạy thật ghi evidence → EvalGate chấm chính lần chạy đó, không chấm artefact cũ. **Cùng một hạ tầng** |
+| **`R-11`** | Baseline ghim vào một *tập evidence* thay vì lần chạy gần nhất, nên commit một regression không rửa được nó |
+| **Xu hướng theo thời gian** | Evidence sống lâu hơn lần chạy ⇒ vẽ được đồ thị; hôm nay chỉ có ảnh chụp |
+| **Kiểm toán** | Người review đọc được số liệu thô, không phải tin rằng evaluator đã chấm đúng |
+
+### 18.7 Lộ trình
+
+| | Bước | Rủi ro |
+|---|---|---|
+| 1 | Chốt `EvidenceRecord` trong `schemas/`, `extra="forbid"` | thấp |
+| 2 | `policies/normalizer_map.yaml` — bảng ánh xạ dạng dữ liệu | thấp |
+| 3 | Tầng đọc: `evidence/` → `EvalResult`, thay vì evaluator tự dựng | trung bình |
+| 4 | Chuyển 20 evaluator sang chỉ-ghi-evidence | **cao — xem 18.8** |
+| 5 | `--from-evidence` để tái chấm không đo lại | thấp |
+| 6 | `langfuse_trace_v1` — adapter thật đầu tiên | trung bình |
+
+### 18.8 Điều kiện bắt buộc trước bước 4
+
+Chuyển chuẩn hoá ra khỏi 20 evaluator **có thể làm điểm đổi mà không ai nhận ra**. Một
+refactor làm điểm nhích 43.41 → 47 sẽ trông như tiến bộ, trong khi thật ra là lỗi.
+
+Vì vậy: **đóng băng bộ số hiện tại làm golden trước khi bắt đầu.**
+
+```text
+ai_quality 20.19 · ai_security 78.64 · input_data 37.50 · governance 38.89
+tổng 43.41 · độ phủ 0.682 · 13 hard gate FAIL
+```
+
+Sau mỗi bước, bộ số này phải **giống hệt**. Lệch một con số mà không giải thích được thì
+dừng. Refactor đúng là refactor **không đổi hành vi** — nếu nó đổi điểm, nó không phải
+refactor.
+
+### 18.9 Nói thẳng về thứ tự ưu tiên
+
+Kiến trúc này **không sửa** cái nào trong 13 hard gate đang chặn release. 8 lỗ
+cross-tenant vẫn nguyên. Agent vẫn sinh 0 rule.
+
+Nếu phải chọn: **vá sản phẩm trước, tái cấu trúc EvalGate sau.** Một cái cổng đo đẹp hơn
+không làm hệ thống an toàn hơn.
+
+Giá trị thật của mục 18 nằm ở chỗ nó **dùng chung hạ tầng với việc chấm-theo-run** ở
+§17.8 — thứ đã được xác định là hạn chế nghiêm trọng nhất của EvalGate. Làm mục 18 tức
+là làm luôn §17.8 mục 1, không phải gánh thêm một việc nữa.
+---
+
 ## PHỤ LỤC — TRẠNG THÁI
 
 ```text
-Ngày:                          2026-08-22
-Nhánh:                         chien @ e3bd462 (đã pull main)
-Self-test EvalGate:            162 pass, 1 skip
-Test sản phẩm:                 209 pass, 2 skip (trước: 27 fail)
-Golden tier 1:                 7/7 archetype, 5.764 nhan, KIEM CHUNG NGU NGHIA dat
-File sản phẩm (src/) bị sửa:   CÓ — 4 file, đợt trước deploy, xem §15
-File bị xoá:                   eval/results/report.md, eval/results/E1_E5_EVALUATION.md,
-                               thư mục eval/   (đã được người dùng phê duyệt)
-File docs bị sửa:              README.md (link), docs/guide/deliverables/checklist.md (link)
-File docs được thêm:           docs/EVAL_EVIDENCES_E1_E5.md (chuyển từ eval/)
+Ngày:                          2026-08-23
+Nhánh:                         chien @ e3bd462
+Lần chạy EvalGate:             evalgate-20260823T033620Z-a25941
+Phán quyết:                    EVALGATE_STALE (exit 4), điểm 43.41, độ phủ 68.2%
+Self-test EvalGate:            189 pass, 1 skip
+Evaluator / metric:            30 / 84
+Critical finding:              22 (15 chặn release)
+Hard gate:                     13 FAIL / 20 được đánh giá — TẤT CẢ thuộc sản phẩm
+Golden tier 1:                 7/7 archetype, 5.764 nhãn, kiểm chứng ngữ nghĩa đạt
+ruff check evalgate/:          SẠCH
+File sản phẩm (src/) bị sửa:   CÓ — 7 file (§15 + đợt salvage rule hôm nay)
+                               → đây là lý do phán quyết bị đánh dấu STALE
+Chi phí LLM của EvalGate:      $0.00 (geval_domain_v1, promptfoo_injection_v1 = NOT_EXECUTED)
 Dependency cài thêm:           KHÔNG
-Chi phí LLM:                   $0.00
 git add / commit / push:       KHÔNG THỰC HIỆN
 steward_local.db:              checksum không đổi (đã kiểm trước/sau)
-ruff evalgate/:                SẠCH (5 lỗi có sẵn đã dọn ở §16.4)
-Mục 10 (PLAN):                 PROPOSED — chưa thực hiện
+Mục 17.8 (việc còn lại):       PROPOSED — chưa thực hiện
+Mục 18 (hướng phát triển):     PROPOSED — thiết kế, chưa viết một dòng code nào
 ```
