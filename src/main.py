@@ -55,14 +55,17 @@ async def lifespan(app: FastAPI):
     yield
     print("Shutting down...")
 
+settings = get_settings()
+
 app = FastAPI(
     title="AI20K Agent",
     description="RidePulse DQ Localhost MVP",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url=None if settings.app_env == "production" else "/docs",
+    redoc_url=None if settings.app_env == "production" else "/redoc",
+    openapi_url=None if settings.app_env == "production" else "/openapi.json",
 )
-
-settings = get_settings()
 
 # CORS Configuration
 frontend_origin_env = os.getenv("FRONTEND_ORIGIN")

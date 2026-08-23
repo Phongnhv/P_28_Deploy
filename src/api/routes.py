@@ -468,7 +468,7 @@ def login(request: Request, body: LoginRequest, response: Response, db: Session 
     """
     POST /api/v1/session - Authenticates user and sets session cookie + CSRF token.
     """
-    session = create_user_session(body.username, body.password, db)
+    session = create_user_session(request, body.username, body.password, db)
 
     # The Vercel frontend and Cloud Run API are separate sites in production.
     # Cross-site requests therefore require a Secure SameSite=None session

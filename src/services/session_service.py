@@ -1,8 +1,11 @@
 import logging
+import os
 import secrets
 import uuid
+from collections import defaultdict, deque
 from datetime import timedelta
 from hashlib import pbkdf2_hmac
+from time import monotonic
 
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
@@ -15,10 +18,13 @@ logger = logging.getLogger(__name__)
 SESSION_COOKIE_NAME = "session_id"
 SESSION_DURATION_HOURS = 8
 DEFAULT_USERS = (
-    ("user", "User", "user", "USER"),
-    ("steward", "Steward", "steward", "STEWARD"),
-    ("admin", "Admin", "admin", "ADMIN"),
+    ("user", "User", "USER", "DEMO_USER_PASSWORD"),
+    ("steward", "Steward", "STEWARD", "DEMO_STEWARD_PASSWORD"),
+    ("admin", "Admin", "ADMIN", "DEMO_ADMIN_PASSWORD"),
 )
+LOGIN_WINDOW_SECONDS = 15 * 60
+MAX_LOGIN_ATTEMPTS = 5
+_login_attempts: dict[str, deque[float]] = defaultdict(deque)
 
 
 def hash_password(password: str, salt: bytes | None = None) -> str:
@@ -39,9 +45,15 @@ def verify_password(password: str, encoded: str) -> bool:
 
 
 def ensure_default_users(db: Session) -> None:
-    """Seed only the three documented local accounts when the database is empty."""
-    for username, display_name, password, role in DEFAULT_USERS:
-        if not db.query(UserAccountModel).filter(UserAccountModel.username == username).first():
+    """Seed demo accounts from secrets, never from production source defaults."""
+    production = os.getenv("APP_ENV") == "production"
+    for username, display_name, role, password_env in DEFAULT_USERS:
+        password = os.getenv(password_env)
+        if production and not password:
+            raise RuntimeError(f"{password_env} must be configured in production")
+        password = password or username
+        account = db.query(UserAccountModel).filter(UserAccountModel.username == username).first()
+        if not account:
             db.add(
                 UserAccountModel(
                     id=f"user-{username}",
@@ -53,15 +65,41 @@ def ensure_default_users(db: Session) -> None:
                     created_by="system-seed",
                 )
             )
+        elif account.created_by == "system-seed":
+            account.password_hash = hash_password(password)
     db.commit()
 
 
-def create_user_session(username: str, password: str, db: Session) -> SessionModel:
+def _login_attempt_key(request: Request, username: str) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+    client_host = forwarded_for or (request.client.host if request.client else "unknown")
+    return f"{client_host}:{username}"
+
+
+def _enforce_login_rate_limit(key: str) -> None:
+    now = monotonic()
+    attempts = _login_attempts[key]
+    while attempts and now - attempts[0] >= LOGIN_WINDOW_SECONDS:
+        attempts.popleft()
+    if len(attempts) >= MAX_LOGIN_ATTEMPTS:
+        raise HTTPException(status_code=429, detail={"code": "LOGIN_RATE_LIMITED", "message": "Too many sign-in attempts. Try again later."})
+
+
+def _record_failed_login(key: str) -> None:
+    _login_attempts[key].append(monotonic())
+
+
+def create_user_session(request: Request, username: str, password: str, db: Session) -> SessionModel:
     """Authenticate an active persisted account and create its cookie session."""
     normalized_username = username.strip().lower()
+    attempt_key = _login_attempt_key(request, normalized_username)
+    _enforce_login_rate_limit(attempt_key)
     account = db.query(UserAccountModel).filter(UserAccountModel.username == normalized_username).first()
     if not account or account.status != "ACTIVE" or not verify_password(password, account.password_hash):
+        _record_failed_login(attempt_key)
         raise HTTPException(status_code=401, detail={"code": "UNAUTHORIZED", "message": "Invalid username or password"})
+
+    _login_attempts.pop(attempt_key, None)
 
     db.query(SessionModel).filter(SessionModel.username == normalized_username).delete()
     session = SessionModel(
