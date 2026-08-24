@@ -219,11 +219,8 @@ function LoginScreen({
           <span>
             <strong>Tài khoản dùng thử</strong>
             <br />
-            · <code>user/user</code> chỉ xem
-            <br />
-            · <code>steward/steward</code> kiểm duyệt
-            <br />
-            · <code>admin/admin</code> toàn quyền.
+            Thông tin đăng nhập được cấp riêng cho người trình diễn. Không có
+            mật khẩu mặc định trên giao diện.
           </span>
         </div>
       </section>
@@ -361,19 +358,7 @@ function DatasetsPage({
 
   const payload = activeArtifact?.payload && typeof activeArtifact.payload === "object"
     ? (activeArtifact.payload as Record<string, unknown>)
-    : profile
-      ? {
-        summary: t("datasets.profileBackedSummary"),
-        agent_mode: "profile-backed",
-        columns: profile.columns?.map((c) => ({
-          name: c.name,
-          semantic_type: c.data_type,
-          nullable: (c.null_rate ?? 0) > 0,
-          confidence: 0.9,
-          description: `Null rate: ${((c.null_rate ?? 0) * 100).toFixed(1)}%, Distinct: ${c.distinct_count}`,
-        })) ?? [],
-      }
-      : null;
+    : null;
 
   const contractColumns = payload && Array.isArray(payload.columns)
     ? (payload.columns.filter((column): column is Record<string, unknown> =>
@@ -468,6 +453,22 @@ function DatasetsPage({
               <h2>{t("datasets.understandAgentTitle", { name: dataset.name })}</h2>
               <p className="muted">{t("datasets.understandAgentDesc")}</p>
             </div>
+            {canOperate && (
+              <button
+                type="button"
+                className="button primary"
+                disabled={busy || importing}
+                onClick={() => onStartUnderstand(dataset.id)}
+              >
+                {busy || importing
+                  ? (language === "vi" ? "Đang xử lý…" : "Working…")
+                  : activeArtifact
+                    ? (language === "vi" ? "⚡ Chạy lại Understand Agent" : "⚡ Re-run Understand Agent")
+                    : profile
+                      ? (language === "vi" ? "⚡ Chạy Understand Agent" : "⚡ Run Understand Agent")
+                      : (language === "vi" ? "⚡ Tạo profile và phân tích" : "⚡ Profile & understand")}
+              </button>
+            )}
           </div>
 
           {payload ? (
@@ -525,7 +526,11 @@ function DatasetsPage({
             </div>
           ) : (
             <div className="workflow-artifact-empty" style={{ marginTop: "16px", padding: "20px", background: "var(--color-bg-subtle, #f8fafc)", borderRadius: "8px", textAlign: "center" }}>
-              {t("datasets.noUnderstandArtifactDesc")}
+              {profile
+                ? t("datasets.noUnderstandArtifactDesc")
+                : (language === "vi"
+                  ? "Tập dữ liệu chưa có profile hoàn chỉnh. Nút phía trên sẽ tạo profile trước, sau đó chạy Understand Agent."
+                  : "This dataset does not have a complete profile. The action above will profile it before running the Understand Agent.")}
             </div>
           )}
         </section>
@@ -1339,8 +1344,24 @@ function App() {
     () => proposals.filter((proposal) => proposal.status === "APPROVED"),
     [proposals],
   );
+  const understandArtifact = useMemo(
+    () =>
+      workflow && workflow.dataset_id === dataset?.id
+        ? workflowArtifactForStep(
+          workflow,
+          workflowArtifacts,
+          "UNDERSTAND_DATA",
+        )
+        : undefined,
+    [dataset?.id, workflow, workflowArtifacts],
+  );
   const canOperate = role === "STEWARD" || role === "ADMIN";
   const canAdmin = role === "ADMIN";
+  const wizardNextDisabled =
+    wizardStep === 4 ||
+    (wizardStep === 1 &&
+      (!dataset || !profile || (canOperate && !understandArtifact))) ||
+    (wizardStep === 2 && !profile);
 
   const refreshWorkspace = useCallback(async () => {
     setLoading(true);
@@ -1535,7 +1556,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (wizardStep === 2 && dataset && !profile && !activeJob && dataset.status !== "PROFILE_READY") {
+    if (wizardStep === 2 && dataset && !profile && !activeJob) {
       void startAnalysis();
     }
   }, [wizardStep, dataset, profile, activeJob]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1755,24 +1776,30 @@ function App() {
     setWorkflowArtifacts(nextArtifacts);
   }
 
-  async function startWorkflowStep(step: WorkflowStepKey, fresh = false) {
-    if (!dataset || !canOperate || workflowActionBusy || activeJob) return;
+  async function startWorkflowStep(
+    step: WorkflowStepKey,
+    fresh = false,
+    requestedDatasetId?: string,
+  ) {
+    const targetDatasetId = requestedDatasetId ?? dataset?.id;
+    if (!targetDatasetId || !canOperate || workflowActionBusy || activeJob)
+      return;
     setError("");
     setRetryAction(null);
     setWorkflowActionBusy(true);
     try {
       if (!workflow && step === "UPLOAD_PROFILE") {
         const ingestion = await api.startIngestion(
-          dataset.id,
+          targetDatasetId,
           crypto.randomUUID(),
         );
         await pollJob(ingestion, async () => {
           const [nextDatasets, currentWorkflow] = await Promise.all([
             api.listDatasets(),
-            workflowApi.createWorkflow(dataset.id, true),
+            workflowApi.createWorkflow(targetDatasetId, true),
           ]);
           setDatasets(nextDatasets);
-          setProfile(await api.getProfile(dataset.id));
+          setProfile(await api.getProfile(targetDatasetId));
           setWorkflow(currentWorkflow);
           setWorkflowArtifacts(
             await workflowApi.listWorkflowArtifacts(currentWorkflow.id),
@@ -1781,14 +1808,20 @@ function App() {
         });
         return;
       }
-      let currentWorkflow = workflow;
-      if (!currentWorkflow) {
-        currentWorkflow = await workflowApi.createWorkflow(dataset.id, fresh);
+      let currentWorkflow =
+        workflow?.dataset_id === targetDatasetId ? workflow : null;
+      if (!currentWorkflow || fresh) {
+        currentWorkflow = await workflowApi.createWorkflow(
+          targetDatasetId,
+          fresh,
+        );
         setWorkflow(currentWorkflow);
         setWorkflowArtifacts(
           await workflowApi.listWorkflowArtifacts(currentWorkflow.id),
         );
-        setProposals(await api.listProposals(dataset.id, currentWorkflow.id));
+        setProposals(
+          await api.listProposals(targetDatasetId, currentWorkflow.id),
+        );
       }
       const queuedJob = await workflowApi.runWorkflowStep(
         currentWorkflow.id,
@@ -1798,9 +1831,9 @@ function App() {
         queuedJob,
         async () => {
           await refreshWorkflow(currentWorkflow!.id);
-          setProfile(await api.getProfile(dataset.id));
+          setProfile(await api.getProfile(targetDatasetId));
           setProposals(
-            await api.listProposals(dataset.id, currentWorkflow!.id),
+            await api.listProposals(targetDatasetId, currentWorkflow!.id),
           );
           setAuditLogs(await api.listAuditLogs());
         },
@@ -1810,6 +1843,50 @@ function App() {
       setError(getErrorMessage(err, "Unable to run workflow step."));
     } finally {
       setWorkflowActionBusy(false);
+    }
+  }
+
+  async function startDatasetUnderstanding(datasetId: string) {
+    if (!canOperate || workflowActionBusy || activeJob) return;
+    sessionStorage.setItem("ridepulse.dataset", datasetId);
+    setSelectedDatasetId(datasetId);
+    setError("");
+    setRetryAction(null);
+
+    try {
+      let nextProfile: DatasetProfile | null = null;
+      try {
+        nextProfile = await api.getProfile(datasetId);
+      } catch (err) {
+        if (!(err instanceof ApiError) || err.status !== 404) throw err;
+      }
+
+      if (!nextProfile) {
+        const ingestion = await api.startIngestion(
+          datasetId,
+          crypto.randomUUID(),
+        );
+        await pollJob(ingestion, async () => {
+          nextProfile = await api.getProfile(datasetId);
+          setDatasets(await api.listDatasets());
+        });
+      }
+
+      if (nextProfile) {
+        setProfile(nextProfile);
+        setDatasetProfiles((current) => ({
+          ...current,
+          [datasetId]: nextProfile!,
+        }));
+      }
+      await startWorkflowStep("UNDERSTAND_DATA", true, datasetId);
+    } catch (err) {
+      setError(
+        getErrorMessage(
+          err,
+          "Unable to prepare the profile and run the Understand Data Agent.",
+        ),
+      );
     }
   }
 
@@ -2090,10 +2167,9 @@ function App() {
                     onImportDataset={(file) => void importDataset(file)}
                     onSelectDataset={(id) => void selectDataset(id)}
                     onDeleteDataset={(id) => void deleteDataset(id)}
-                    onStartUnderstand={(id) => {
-                      if (id !== dataset?.id) void selectDataset(id);
-                      void startWorkflowStep("UNDERSTAND_DATA", true);
-                    }}
+                    onStartUnderstand={(id) =>
+                      void startDatasetUnderstanding(id)
+                    }
                     canOperate={canOperate}
                     importing={Boolean(activeJob)}
                     busy={workflowActionBusy}
@@ -2234,8 +2310,16 @@ function App() {
                         </section>
                       ) : (
                         <div style={{ textAlign: "center", padding: "40px", background: "var(--surface-muted, #f8fafc)", borderRadius: "12px", marginTop: "24px", border: "1px dashed var(--border, #e2e8f0)" }}>
-                          <div className="workflow-pending-indicator" style={{ margin: "0 auto 16px auto", width: "20px", height: "20px" }} />
-                          <p className="muted" style={{ margin: 0, fontSize: "14px" }}>{t("datasets.profilingQuality") || t("datasets.profiling")}</p>
+                          {activeJob && (
+                            <div className="workflow-pending-indicator" style={{ margin: "0 auto 16px auto", width: "20px", height: "20px" }} />
+                          )}
+                          <p className="muted" style={{ margin: 0, fontSize: "14px" }}>
+                            {activeJob
+                              ? t("datasets.profiling")
+                              : language === "vi"
+                                ? "Chưa có profile hoàn chỉnh. Hệ thống sẽ tạo profile trước khi mở bước tiếp theo."
+                                : "No complete profile is available. Build the profile before continuing."}
+                          </p>
                         </div>
                       )}
 
@@ -2374,10 +2458,14 @@ function App() {
                 <button
                   type="button"
                   className="button primary"
-                  disabled={wizardStep === 4 || (!dataset && wizardStep === 1)}
+                  disabled={wizardNextDisabled}
                   title={
                     !dataset && wizardStep === 1
                       ? (t("wizard.selectDatasetTooltip") || "Vui lòng chọn hoặc tải lên một bộ dữ liệu ở Bước 1")
+                      : wizardStep === 1 && !profile
+                        ? (language === "vi" ? "Hãy tạo profile cho tập dữ liệu trước" : "Build the dataset profile first")
+                        : wizardStep === 1 && canOperate && !understandArtifact
+                          ? (language === "vi" ? "Hãy chạy Understand Agent trước khi tiếp tục" : "Run the Understand Agent before continuing")
                       : wizardStep === 4
                         ? (t("wizard.lastStepTooltip") || "Bạn đang ở bước cuối cùng")
                         : ""

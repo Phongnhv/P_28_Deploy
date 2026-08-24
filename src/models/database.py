@@ -270,7 +270,11 @@ class RuleVersionModel(Base):
 class RuleConfigurationModel(Base):
     __tablename__ = "rule_configurations"
 
-    rule_proposal_id: Mapped[str] = mapped_column(String(64), ForeignKey("rule_proposals.id"), primary_key=True)
+    # Keep the public/domain attribute while mapping to the legacy physical
+    # primary-key name used by the original Supabase schema.
+    rule_proposal_id: Mapped[str] = mapped_column(
+        "rule_id", String(64), ForeignKey("rule_proposals.id"), primary_key=True
+    )
     execution_status: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE")
     schedule_frequency: Mapped[str] = mapped_column(String(16), nullable=False, default="MANUAL")
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")

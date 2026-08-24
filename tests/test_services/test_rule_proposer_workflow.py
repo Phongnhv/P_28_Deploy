@@ -93,6 +93,31 @@ def test_understanding_requires_explicit_continue_before_rule_generation():
         assert run.current_step == "PROPOSE_RULES"
 
 
+def test_understanding_falls_back_when_agent_provider_is_unavailable(monkeypatch):
+    _seed_profile()
+    from src.config import get_settings
+
+    async def unavailable_dictionary(_state):
+        return {"error": "provider unavailable"}
+
+    monkeypatch.setattr(get_settings(), "agent_mode", "graph")
+    monkeypatch.setattr(
+        "src.agents.nodes.data_dictionary_generator_node.data_dictionary_generator_node",
+        unavailable_dictionary,
+    )
+    with Session(get_engine()) as db:
+        dataset = db.get(DatasetModel, DATASET_ID)
+        run = get_or_create_run(db, dataset)
+        execute_step(db, run, "UNDERSTAND_DATA")
+        artifact = db.query(WorkflowArtifactModel).filter_by(
+            workflow_run_id=run.id,
+            artifact_type="SEMANTIC_CONTRACT",
+        ).one()
+        payload = json.loads(artifact.payload_json)
+        assert payload["agent_mode"] == "deterministic-fallback"
+        assert payload["fallback_reason"] == "agent_provider_unavailable"
+
+
 def test_deleted_pending_rule_is_retained_as_stale_and_does_not_block_review(monkeypatch):
     _seed_profile()
     monkeypatch.setattr("src.services.rule_proposer_workflow.generate_dashboard_proposals", lambda *_: [_proposal()])

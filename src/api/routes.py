@@ -2237,11 +2237,19 @@ def compatibility_trigger_job(
     request: SmokeCreateJobRequest,
     background_tasks: BackgroundTasks,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
     """
     POST /api/v1/jobs - Smoke test compatibility job dispatcher.
     """
+    if request.type not in {"INGEST_PROFILE", "PROPOSE_RULES"}:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "VALIDATION_ERROR", "message": "Unsupported compatibility job type."},
+        )
+    target_dataset_id = request.linked_entity or "dataset-nyc-yellow-taxi-50k"
+    require_dataset_access(db, session, target_dataset_id, manage=True)
     collision_job_id = verify_idempotency(db, idempotency_key)
     if collision_job_id:
         raise HTTPException(
@@ -2266,9 +2274,21 @@ def compatibility_trigger_job(
     db.commit()
 
     if request.type == "INGEST_PROFILE":
-        background_tasks.add_task(run_ingest_profile, job_id, "dataset-nyc-yellow-taxi-50k", None, "SYSTEM")
+        background_tasks.add_task(
+            run_ingest_profile,
+            job_id,
+            target_dataset_id,
+            session.id,
+            session.role,
+        )
     elif request.type == "PROPOSE_RULES":
-        background_tasks.add_task(run_propose_rules, job_id, "dataset-nyc-yellow-taxi-50k", None, "SYSTEM")
+        background_tasks.add_task(
+            run_propose_rules,
+            job_id,
+            target_dataset_id,
+            session.id,
+            session.role,
+        )
 
     return {"job_id": job_id, "status": "PENDING"}
 

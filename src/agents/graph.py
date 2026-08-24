@@ -138,16 +138,23 @@ def build_proposal_graph() -> StateGraph:
 def build_dashboard_proposal_graph() -> StateGraph:
     """Build the product-facing proposal graph.
 
-    The dashboard already persists an aggregate profile.  This entrypoint deliberately
-    starts at the structured proposer rather than running the legacy database-wide
-    profiler or the legacy HITL persistence node.  The caller validates and persists
-    the resulting typed proposals in the dashboard workflow models.
+    The dashboard already persists an aggregate profile and owns its HITL
+    checkpoints.  This subgraph therefore resumes Graph 1 after semantic review:
+    deterministic candidate construction -> prompt customization -> structured
+    proposal.  The caller validates and persists the typed proposals before the
+    steward review gate.
     """
+    from src.agents.nodes.prompt_customizer_node import prompt_customizer_node
+    from src.agents.nodes.rule_candidate_builder_node import rule_candidate_builder_node
     from src.agents.nodes.rule_proposer_node import rule_proposer_node
 
     graph = StateGraph(AgentState)
+    graph.add_node("rule_candidate_builder", rule_candidate_builder_node)
+    graph.add_node("prompt_customizer", prompt_customizer_node)
     graph.add_node("rule_proposer", rule_proposer_node)
-    graph.set_entry_point("rule_proposer")
+    graph.set_entry_point("rule_candidate_builder")
+    graph.add_edge("rule_candidate_builder", "prompt_customizer")
+    graph.add_edge("prompt_customizer", "rule_proposer")
     graph.add_edge("rule_proposer", END)
     return graph.compile()
 

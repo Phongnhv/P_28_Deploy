@@ -457,6 +457,31 @@ def _migrate_local_workflow_columns(engine) -> None:
     if engine.dialect.name == "postgresql":
         with engine.begin() as connection:
             for statement in (
+                # The first Supabase schema used different physical names from
+                # the dashboard ORM.  ``create_all`` never reconciles existing
+                # tables, so every select attempted to read columns that were
+                # not present and surfaced as a generic HTTP 500.
+                "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS linked_entity VARCHAR(256)",
+                "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS correlation_id VARCHAR(64)",
+                "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ",
+                "UPDATE jobs SET linked_entity = dataset_id WHERE linked_entity IS NULL AND dataset_id IS NOT NULL",
+                "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS rule_spec TEXT",
+                "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS rule_type VARCHAR(64)",
+                "UPDATE rule_proposals SET rule_spec = rule::text WHERE rule_spec IS NULL AND rule IS NOT NULL",
+                "UPDATE rule_proposals SET rule_type = rule->>'type' WHERE rule_type IS NULL AND rule IS NOT NULL",
+                "ALTER TABLE rule_proposals ALTER COLUMN rule DROP NOT NULL",
+                "ALTER TABLE rule_proposals ALTER COLUMN rule SET DEFAULT '{}'::json",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS trigger_type VARCHAR(32) NOT NULL DEFAULT 'MANUAL'",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS started_at TIMESTAMP",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS ruleset_hash VARCHAR(256)",
+                # psycopg returns native list/dict values for legacy JSON
+                # columns, while this ORM intentionally stores serialized JSON
+                # text.  Convert once so all old and new records have the same
+                # runtime type and json.loads remains deterministic.
+                "ALTER TABLE rule_proposals ALTER COLUMN evidence_refs TYPE TEXT USING evidence_refs::text",
+                "ALTER TABLE dq_runs ALTER COLUMN rule_ids TYPE TEXT USING rule_ids::text",
+                "ALTER TABLE dq_results ALTER COLUMN failed_row_ids TYPE TEXT USING failed_row_ids::text",
                 "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS workflow_run_id VARCHAR(64)",
                 "ALTER TABLE ruleset_versions ADD COLUMN IF NOT EXISTS workflow_run_id VARCHAR(64)",
                 "ALTER TABLE ruleset_versions ADD COLUMN IF NOT EXISTS stale BOOLEAN NOT NULL DEFAULT FALSE",
@@ -488,6 +513,13 @@ def _migrate_local_workflow_columns(engine) -> None:
                 "ALTER TABLE dataset_access ADD COLUMN IF NOT EXISTS username VARCHAR(100)",
                 "ALTER TABLE dataset_access ALTER COLUMN user_id DROP NOT NULL",
                 "CREATE INDEX IF NOT EXISTS ix_dataset_access_username ON dataset_access (username)",
+                "UPDATE rule_proposals SET rule_name = 'Rule proposal' WHERE rule_name IS NULL",
+                "UPDATE rule_proposals SET business_rationale = '' WHERE business_rationale IS NULL",
+                "UPDATE rule_proposals SET proposal_basis = 'DATA_PROFILE' WHERE proposal_basis IS NULL",
+                "UPDATE rule_proposals SET evidence = '{}' WHERE evidence IS NULL",
+                "UPDATE rule_proposals SET parameter_provenance = '[]' WHERE parameter_provenance IS NULL",
+                "UPDATE rule_proposals SET assumptions = '[]' WHERE assumptions IS NULL",
+                "UPDATE rule_proposals SET confidence_breakdown = '{}' WHERE confidence_breakdown IS NULL",
             ):
                 connection.exec_driver_sql(statement)
         return
