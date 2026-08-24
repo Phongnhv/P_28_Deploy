@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Demo Day — RidePulse DQ</title>
+
+<!-- Be Vietnam Pro: font sans-serif hỗ trợ đầy đủ dấu tiếng Việt -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+
+<style>
+/* ===========================================
+   BIẾN THEME — đổi ở đây để đổi toàn bộ slide
+   =========================================== */
+:root{
+  /* Màu nền / chữ */
+  --stage-bg:#07080C;          /* nền ngoài khung (letterbox) */
+  --slide-bg:#0F1117;          /* nền slide */
+  --surface:#171A23;           /* nền thẻ/card */
+  --text:#F2F3F7;              /* chữ chính */
+  --text-muted:#9AA0AE;        /* chữ phụ */
+  --border:#282C38;            /* viền nhạt */
+
+  /* Màu nhấn (accent) xuyên suốt */
+  --accent:#818CF8;            /* indigo sáng trên nền tối */
+  --accent-2:#A78BFA;          /* violet */
+  --accent-soft:rgba(129,140,248,.14);
+  --accent-line:rgba(129,140,248,.30);
+  --ghost:rgba(129,140,248,.07); /* số slide mờ */
+
+  /* Typography — thiết kế ở kích thước stage 1920×1080 */
+  --font:'Be Vietnam Pro',system-ui,sans-serif;
+  --h1:104px; --title:52px; --lead:36px; --body:32px; --small:28px;
+
+  /* Nhịp spacing */
+  --pad:96px; --gap:32px; --radius:20px;
+
+  /* Chuyển động */
+  --ease:cubic-bezier(.16,1,.3,1);
+}
+</style>
+</head>
+<body>
+<style>
+/* ===========================================
+   RESET
+   =========================================== */
+*{margin:0;padding:0;box-sizing:border-box}
+
+/* ===========================================
+   FIXED 16:9 STAGE (bắt buộc) — slide 1920×1080
+   scale nguyên khối vừa khung trình duyệt
+   =========================================== */
+html,body{width:100%;height:100%;margin:0;overflow:hidden;background:var(--stage-bg)}
+.deck-viewport{position:fixed;inset:0;overflow:hidden;background:var(--stage-bg)}
+.deck-stage{position:absolute;left:0;top:0;width:1920px;height:1080px;overflow:hidden;
+  transform-origin:0 0;background:var(--slide-bg)}
+.slide{position:absolute;inset:0;width:1920px;height:1080px;overflow:hidden;display:block;
+  visibility:hidden;opacity:0;pointer-events:none;background:var(--slide-bg);
+  transition:opacity .5s var(--ease),visibility .5s var(--ease)}
+.slide.active,.slide.visible{visibility:visible;opacity:1;pointer-events:auto;z-index:1}
+img,video,canvas,svg{max-width:100%;max-height:100%}
+
+/* In ấn: 1 slide / trang */
+@media print{
+  html,body{width:1920px;height:auto;overflow:visible;background:#fff}
+  .deck-viewport{position:static;overflow:visible;background:#fff}
+  .deck-stage{position:static;width:auto;height:auto;transform:none!important;background:none}
+  .slide{position:relative;display:block!important;visibility:visible!important;opacity:1!important;
+    pointer-events:auto!important;width:1920px;height:1080px;break-after:page;page-break-after:always}
+  .slide:last-child{break-after:auto;page-break-after:auto}
+  .deck-controls{display:none!important}
+}
+/* Giảm chuyển động */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.2s!important}
+}
+</style>
+<style>
+/* ===========================================
+   TYPOGRAPHY & CHROME CHUNG CHO MỌI SLIDE
+   =========================================== */
+.slide{font-family:var(--font);color:var(--text);padding:var(--pad) 120px}
+.slide-inner{position:relative;z-index:2;height:100%;display:flex;flex-direction:column}
+
+/* Nhãn nhỏ trên tiêu đề */
+.eyebrow{display:inline-flex;align-items:center;gap:12px;font-size:var(--small);font-weight:700;
+  letter-spacing:.18em;text-transform:uppercase;color:var(--accent)}
+.eyebrow::before{content:"";width:34px;height:3px;border-radius:2px;background:var(--accent)}
+
+/* Tiêu đề slide (đồng nhất) */
+.slide-title{font-size:var(--title);font-weight:800;line-height:1.1;letter-spacing:-.02em;margin-top:14px}
+.slide-title .hl{color:var(--accent)}
+.slide-head{margin-bottom:52px}
+
+.lead{font-size:var(--lead);color:var(--text-muted);line-height:1.5;font-weight:400}
+.body{font-size:var(--body);color:var(--text);line-height:1.6}
+code{font-family:ui-monospace,'Cascadia Code',Menlo,Consolas,monospace;font-size:.9em;
+  background:var(--accent-soft);color:var(--accent);padding:1px 7px;border-radius:6px}
+
+/* Số thứ tự lớn, mờ — chi tiết thiết kế ở góc slide */
+.ghost-num{position:absolute;top:40px;right:80px;font-size:340px;font-weight:900;line-height:1;
+  color:var(--ghost);z-index:0;letter-spacing:-.04em;user-select:none;pointer-events:none}
+
+/* ===========================================
+   HIỆU ỨNG XUẤT HIỆN (stagger khi slide .visible)
+   =========================================== */
+.reveal{opacity:0;transform:translateY(28px);
+  transition:opacity .6s var(--ease),transform .6s var(--ease)}
+.slide.visible .reveal{opacity:1;transform:translateY(0)}
+.slide.visible .reveal:nth-child(1){transition-delay:.08s}
+.slide.visible .reveal:nth-child(2){transition-delay:.16s}
+.slide.visible .reveal:nth-child(3){transition-delay:.24s}
+.slide.visible .reveal:nth-child(4){transition-delay:.32s}
+.slide.visible .reveal:nth-child(5){transition-delay:.40s}
+.slide.visible .reveal:nth-child(6){transition-delay:.48s}
+.d1{transition-delay:.1s!important}.d2{transition-delay:.2s!important}
+.d3{transition-delay:.3s!important}.d4{transition-delay:.4s!important}
+.d5{transition-delay:.5s!important}.d6{transition-delay:.6s!important}
+</style>
+<style>
+/* ===========================================
+   LƯỚI & THẺ DÙNG CHUNG
+   =========================================== */
+.grow{flex:1;min-height:0}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:64px;align-items:center;flex:1;min-height:0}
+.bullets{list-style:none;display:flex;flex-direction:column;gap:26px}
+.bullets li{display:flex;gap:20px;align-items:flex-start;font-size:var(--body);line-height:1.5}
+.bullets li .dot{flex:none;width:14px;height:14px;margin-top:9px;border-radius:50%;
+  background:var(--accent);box-shadow:0 0 0 6px var(--accent-soft)}
+.bullets li b{font-weight:700}
+.muted{color:var(--text-muted)}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:38px;box-shadow:0 12px 40px rgba(0,0,0,.35)}
+.card .ico{width:56px;height:56px;border-radius:14px;background:var(--accent-soft);
+  display:flex;align-items:center;justify-content:center;color:var(--accent);margin-bottom:22px}
+.card h3{font-size:32px;font-weight:700;margin-bottom:10px}
+.card p{font-size:32px;color:var(--text-muted);line-height:1.5}
+
+/* Con số lớn (big number) */
+.bignum{font-size:200px;font-weight:900;line-height:.9;letter-spacing:-.04em;
+  background:linear-gradient(135deg,var(--accent),var(--accent-2));
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.bignum-cap{font-size:32px;color:var(--text-muted);margin-top:18px;max-width:480px;line-height:1.45}
+
+/* Bảng so sánh nhanh */
+.cmp{width:100%;border-collapse:separate;border-spacing:0;font-size:var(--small)}
+.cmp th,.cmp td{text-align:left;padding:18px 22px;border-bottom:1px solid var(--border)}
+.cmp thead th{font-size:24px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);font-weight:700}
+.cmp .us{color:var(--accent);font-weight:700}
+.cmp tr td:first-child{font-weight:600}
+</style>
+<style>
+/* ===========================================
+   KHUNG MOCKUP / SCREENSHOT (browser frame)
+   =========================================== */
+.mockup{background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden;
+  box-shadow:0 24px 60px rgba(0,0,0,.5);width:100%}
+.mockup .bar{height:44px;background:#1E222D;display:flex;align-items:center;gap:9px;padding:0 18px;border-bottom:1px solid var(--border)}
+.mockup .bar i{width:13px;height:13px;border-radius:50%;background:#D5D8E0;display:block}
+.mockup .bar i:nth-child(1){background:#FF6058}.mockup .bar i:nth-child(2){background:#FFBD2E}.mockup .bar i:nth-child(3){background:#28C840}
+.mockup .ph{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+  color:var(--text-muted);background:
+    repeating-linear-gradient(45deg,transparent,transparent 18px,rgba(79,70,229,.03) 18px,rgba(79,70,229,.03) 36px);}
+.ph-label{font-size:30px;font-weight:600}
+
+/* Hàng highlight tính năng (icon + tên) */
+.feat-row{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+.feat{display:flex;align-items:center;gap:16px;background:var(--surface);border:1px solid var(--border);
+  border-radius:14px;padding:22px 24px}
+.feat .ico{flex:none;width:48px;height:48px;border-radius:12px;background:var(--accent-soft);
+  display:flex;align-items:center;justify-content:center;color:var(--accent)}
+.feat b{font-size:30px;font-weight:700}
+.feat span{display:block;font-size:26px;color:var(--text-muted);margin-top:2px}
+
+/* Sơ đồ luồng các bước: Bước 1 → 2 → 3 */
+.flow{display:flex;align-items:stretch;gap:0;width:100%}
+.flow .step{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px 26px;position:relative}
+.flow .step .n{font-size:22px;font-weight:800;color:var(--accent);letter-spacing:.1em}
+.flow .step b{display:block;font-size:30px;font-weight:700;margin-top:6px}
+.flow .step p{font-size:26px;color:var(--text-muted);margin-top:4px;line-height:1.4}
+.flow .arrow{flex:none;width:56px;display:flex;align-items:center;justify-content:center;color:var(--accent)}
+</style>
+<style>
+/* ===========================================
+   SƠ ĐỒ KIẾN TRÚC (các box nối bằng mũi tên)
+   =========================================== */
+.arch{display:flex;align-items:center;width:100%}
+.arch .box{flex:1;text-align:center;background:var(--surface);border:1px solid var(--border);
+  border-radius:16px;padding:26px 14px}
+.arch .box.key{border-color:var(--accent);background:var(--accent-soft);box-shadow:0 0 0 4px var(--accent-soft)}
+.arch .box .ico{width:52px;height:52px;margin:0 auto 14px;border-radius:13px;background:var(--accent-soft);
+  color:var(--accent);display:flex;align-items:center;justify-content:center}
+.arch .box b{display:block;font-size:30px;font-weight:700}
+.arch .box span{display:block;font-size:24px;color:var(--text-muted);margin-top:4px}
+.arch .conn{flex:none;width:46px;display:flex;align-items:center;justify-content:center;color:var(--accent)}
+.note-box{margin-top:auto;display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.note-box .card p{font-size:32px}
+
+/* Pipeline dạng pill (RAG / prompt flow) */
+.pipe{display:flex;align-items:center;flex-wrap:wrap;gap:14px}
+.pipe .pill{background:var(--surface);border:1px solid var(--border);border-radius:999px;
+  padding:16px 26px;font-size:30px;font-weight:600}
+.pipe .pill.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.pipe .sep{color:var(--accent);font-size:24px}
+
+/* Sơ đồ graph LangGraph (SVG node-edge) */
+.graph-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px}
+.g-node{fill:#1E2230;stroke:var(--accent);stroke-width:2.5}
+.g-node.start{fill:var(--accent)}
+.g-label{font:600 24px var(--font);fill:var(--text);text-anchor:middle}
+.g-label.on{fill:#fff}
+.g-edge{stroke:#4A4F63;stroke-width:2.5;fill:none;marker-end:url(#arrow)}
+
+/* Bảng/box evaluation metrics */
+.metrics{display:flex;flex-direction:column;gap:18px}
+.metric{display:grid;grid-template-columns:250px 1fr 90px;align-items:center;gap:18px}
+.metric .m-name{font-size:32px;font-weight:600}
+.metric .m-track{height:14px;border-radius:8px;background:var(--accent-soft);overflow:hidden}
+.metric .m-fill{height:100%;border-radius:8px;background:linear-gradient(90deg,var(--accent),var(--accent-2))}
+.metric .m-val{font-size:32px;font-weight:800;color:var(--accent);text-align:right}
+</style>
+<style>
+/* ===========================================
+   THẺ KỸ THUẬT (4 ô), VIDEO + QR, 3 CỘT, TIMELINE
+   =========================================== */
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:26px;flex:1;align-content:center}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:34px;
+  display:flex;flex-direction:column;gap:14px}
+.stat .ico{width:56px;height:56px;border-radius:14px;background:var(--accent-soft);color:var(--accent);
+  display:flex;align-items:center;justify-content:center}
+.stat .big{font-size:52px;font-weight:900;letter-spacing:-.02em;color:var(--text)}
+.stat .lbl{font-size:32px;font-weight:700}
+.stat .sub{font-size:26px;color:var(--text-muted);line-height:1.4}
+
+/* Video 16:9 + QR */
+.video-stage{flex:1;display:flex;align-items:center;justify-content:center;gap:52px}
+.videobox{width:1080px;height:608px;border-radius:18px;overflow:hidden;background:var(--surface);
+  border:1px solid var(--border);box-shadow:0 24px 60px rgba(0,0,0,.5);position:relative;
+  display:flex;align-items:center;justify-content:center;flex-direction:column;gap:18px;color:var(--text-muted)}
+.play{width:96px;height:96px;border-radius:50%;background:var(--accent);color:#fff;
+  display:flex;align-items:center;justify-content:center;box-shadow:0 10px 30px var(--accent-line)}
+.qr{width:200px;height:200px;border:3px dashed var(--accent-line);border-radius:16px;background:var(--surface);
+  display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--accent);font-size:26px}
+.side-note{margin-top:22px;font-size:30px;color:var(--text-muted);text-align:center}
+
+/* 3 cột (Challenges & Learnings) */
+.cols3{display:grid;grid-template-columns:repeat(3,1fr);gap:34px;flex:1;align-content:center}
+.col{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:38px;
+  display:flex;flex-direction:column;gap:16px}
+.col .ico{width:60px;height:60px;border-radius:15px;background:var(--accent-soft);color:var(--accent);
+  display:flex;align-items:center;justify-content:center}
+.col h3{font-size:32px;font-weight:700}
+.col p{font-size:32px;color:var(--text-muted);line-height:1.55}
+
+/* Timeline ngang (roadmap) */
+.timeline{display:flex;align-items:flex-start;position:relative;margin-top:8px}
+.timeline::before{content:"";position:absolute;top:11px;left:5%;right:5%;height:3px;background:var(--accent-line)}
+.tl{flex:1;text-align:center;position:relative;padding:0 12px}
+.tl .mk{width:24px;height:24px;border-radius:50%;background:var(--accent);margin:0 auto 18px;
+  box-shadow:0 0 0 7px var(--accent-soft);position:relative;z-index:1}
+.tl b{display:block;font-size:30px;font-weight:700}
+.tl span{font-size:26px;color:var(--text-muted)}
+</style>
+<style>
+/* ===========================================
+   TEAM, TITLE SLIDE, CLOSING, TRANG TRÍ
+   =========================================== */
+.team{display:grid;grid-template-columns:repeat(4,1fr);gap:30px}
+.member{text-align:center;display:flex;flex-direction:column;align-items:center;gap:12px}
+.avatar{width:120px;height:120px;border-radius:50%;background:linear-gradient(135deg,var(--accent-soft),var(--surface));
+  border:2px solid var(--accent-line);display:flex;align-items:center;justify-content:center;
+  font-size:38px;font-weight:800;color:var(--accent)}
+.member b{font-size:30px;font-weight:700}
+.member span{font-size:26px;color:var(--text-muted)}
+
+/* Slide tiêu đề */
+.title-slide{align-items:center;justify-content:center;text-align:center}
+.title-slide .slide-inner{align-items:center;justify-content:center;text-align:center}
+.logo-box{width:120px;height:120px;border-radius:26px;border:2px dashed var(--accent-line);
+  background:var(--accent-soft);display:flex;align-items:center;justify-content:center;
+  color:var(--accent);font-weight:700;font-size:18px;margin-bottom:40px}
+.hero-title{font-size:var(--h1);font-weight:900;letter-spacing:-.03em;line-height:1.02;
+  background:linear-gradient(135deg,#FFFFFF 30%,var(--accent) 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.hero-tag{font-size:34px;color:var(--text-muted);margin-top:26px;max-width:1100px;line-height:1.4}
+.hero-meta{display:flex;gap:40px;align-items:center;margin-top:56px;font-size:32px;color:var(--text-muted)}
+.hero-meta .chip{padding:12px 26px;border:1px solid var(--border);border-radius:999px;background:var(--surface);font-weight:600;color:var(--text)}
+
+/* Slide kết */
+.closing{align-items:center;justify-content:center;text-align:center}
+.thanks{font-size:150px;font-weight:900;letter-spacing:-.03em;
+  background:linear-gradient(135deg,var(--accent),var(--accent-2));
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.contact{margin-top:34px;display:flex;gap:24px;font-size:32px;color:var(--text-muted)}
+.contact .chip{padding:12px 26px;border:1px solid var(--border);border-radius:999px;background:var(--surface);color:var(--text);font-weight:600}
+
+/* Trang trí nền (khối gradient mờ) */
+.decor{position:absolute;border-radius:50%;filter:blur(70px);opacity:.5;z-index:0;pointer-events:none}
+.decor.a{width:520px;height:520px;top:-160px;right:-120px;
+  background:radial-gradient(circle,rgba(124,58,237,.20),transparent 70%)}
+.decor.b{width:420px;height:420px;bottom:-160px;left:-120px;
+  background:radial-gradient(circle,rgba(79,70,229,.18),transparent 70%)}
+</style>
+<style>
+/* ===========================================
+   CHROME ĐIỀU HƯỚNG (ngoài stage 1920×1080)
+   =========================================== */
+.progress{position:fixed;top:0;left:0;height:4px;background:var(--accent);z-index:1000;
+  transition:width .4s var(--ease);box-shadow:0 0 12px var(--accent-line)}
+.deck-controls{position:fixed;right:34px;bottom:26px;display:flex;align-items:center;gap:14px;z-index:1000;
+  background:rgba(23,26,35,.82);backdrop-filter:blur(8px);border:1px solid var(--border);
+  border-radius:999px;padding:8px 12px;box-shadow:0 8px 26px rgba(0,0,0,.45)}
+.nav-btn{width:44px;height:44px;border:none;border-radius:50%;background:var(--accent-soft);color:var(--accent);
+  cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.2s}
+.nav-btn:hover{background:var(--accent);color:#fff}
+.nav-btn:disabled{opacity:.35;cursor:default}
+.counter{font:700 20px var(--font);color:var(--text);min-width:74px;text-align:center;letter-spacing:.02em}
+.counter .cur{color:var(--accent)}
+.hint{position:fixed;left:28px;bottom:28px;z-index:1000;font:500 15px var(--font);color:var(--text-muted);
+  background:rgba(23,26,35,.7);border:1px solid var(--border);border-radius:10px;padding:8px 14px;
+  opacity:.9;transition:opacity .4s}
+.hint kbd{font-family:var(--font);background:var(--surface);border:1px solid var(--border);
+  border-radius:6px;padding:1px 8px;font-size:13px;font-weight:700;color:var(--text)}
+</style>
+<!-- ============================================================
+     DECK — mỗi <section class="slide"> là 1 slide 1920×1080
+     ============================================================ -->
+<div class="deck-viewport">
+<main class="deck-stage" id="deckStage">
+
+  <!-- ============ SLIDE 1 — TITLE ============ -->
+  <section class="slide title-slide active">
+    <div class="decor a"></div><div class="decor b"></div>
+    <div class="slide-inner">
+      <div class="logo-box reveal">RP</div>
+      <h1 class="hero-title reveal">RidePulse DQ</h1>
+      <p class="hero-tag reveal">AI Agent tự động kiểm soát chất lượng dữ liệu &amp; phát hiện bất thường — biến tín hiệu dữ liệu thành quyết định đáng tin.</p>
+      <div class="hero-meta reveal">
+        <span class="chip">Team P-028 · AI20K Cohort 3</span>
+        <span>Demo Day · 24/08/2026</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SLIDE 2 — PROBLEM ============ -->
+  <section class="slide">
+    <span class="ghost-num">02</span>
+    <div class="slide-inner">
+      <div class="slide-head reveal">
+        <span class="eyebrow">Vấn đề</span>
+        <h2 class="slide-title">Nỗi đau của <span class="hl">đội dữ liệu</span></h2>
+      </div>
+      <div class="two-col">
+        <ul class="bullets">
+          <li class="reveal"><span class="dot"></span><div><b>Pain point:</b> Kỹ sư phải viết &amp; bảo trì tay hàng trăm test dbt/SQL để canh chất lượng dữ liệu.</div></li>
+          <li class="reveal"><span class="dot"></span><div><b>Đối tượng:</b> Data Steward / Lead Data Engineer chịu trách nhiệm chất lượng dữ liệu.</div></li>
+          <li class="reveal"><span class="dot"></span><div><b>Mức độ:</b> Phát hiện sự cố chậm → báo cáo sai; truy vấn dữ liệu thô còn tạo rủi ro lộ PII/GDPR.</div></li>
+        </ul>
+        <div class="reveal" style="text-align:center">
+          <div class="bignum">100+</div>
+          <p class="bignum-cap">giờ kỹ sư bỏ ra viết &amp; bảo trì test DQ thủ công cho mỗi dataset — công việc lặp lại, dễ sót lỗi.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+  <!-- ============ SLIDE 3 — SOLUTION ============ -->
+  <section class="slide">
+    <span class="ghost-num">03</span>
+    <div class="slide-inner">
+      <div class="slide-head reveal">
+        <span class="eyebrow">Giải pháp</span>
+        <h2 class="slide-title">Cách chúng tôi <span class="hl">giải quyết</span></h2>
+      </div>
+      <div class="two-col">
+        <div>
+          <ul class="bullets" style="margin-bottom:38px">
+            <li class="reveal"><span class="dot"></span><div>LLM đọc <b>metadata tổng hợp</b> rồi tự đề xuất 5 loại rule: Not-Null, Uniqueness, Range, Accepted-Values, Cross-field.</div></li>
+            <li class="reveal"><span class="dot"></span><div><b>Human-in-the-Loop:</b> Steward duyệt/sửa/từ chối — chỉ rule đã duyệt mới được chạy.</div></li>
+            <li class="reveal"><span class="dot"></span><div>Tự sinh &amp; chạy test, phát hiện anomaly, <b>ghi audit</b> mọi thao tác.</div></li>
+          </ul>
+          <table class="cmp reveal">
+            <thead><tr><th>Tiêu chí</th><th>Cách cũ</th><th>RidePulse DQ</th></tr></thead>
+            <tbody>
+              <tr><td>Viết test</td><td class="muted">Viết tay hàng trăm test dbt</td><td class="us">LLM đề xuất, steward duyệt</td></tr>
+              <tr><td>Bảo mật</td><td class="muted">Truy vấn dữ liệu thô (rủi ro PII)</td><td class="us">Chỉ gửi metadata tổng hợp</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="reveal">
+          <div class="mockup">
+            <div class="bar"><i></i><i></i><i></i></div>
+            <div class="ph" style="height:440px">
+              <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 9h18M8 21h8"/></svg>
+              <span class="ph-label">Workspace của Data Steward — [chèn ảnh màn hình]</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <!-- ============ SLIDE 4 — PRODUCT DEMO ============ -->
+  <section class="slide">
+    <span class="ghost-num">04</span>
+    <div class="slide-inner" style="gap:30px">
+      <div class="slide-head reveal" style="margin-bottom:0">
+        <span class="eyebrow">Sản phẩm</span>
+        <h2 class="slide-title">Sản phẩm <span class="hl">hoạt động thế nào</span></h2>
+      </div>
+      <div class="mockup reveal">
+        <div class="bar"><i></i><i></i><i></i></div>
+        <img src="graph1-ui-preview.png" alt="Giao diện RidePulse DQ" style="display:block;width:100%;height:320px;object-fit:cover;object-position:top">
+      </div>
+      <div class="feat-row reveal">
+        <div class="feat"><span class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l3-3 3 3 4-5"/></svg></span><div><b>Profiler + Proposer</b><span>LLM đề xuất rule</span></div></div>
+        <div class="feat"><span class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></span><div><b>HITL Approval</b><span>Steward duyệt rule</span></div></div>
+        <div class="feat"><span class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></svg></span><div><b>Auto Test + Anomaly</b><span>Chạy &amp; dò bất thường</span></div></div>
+      </div>
+      <div class="flow reveal">
+        <div class="step"><span class="n">BƯỚC 1</span><b>Chọn dataset</b><p>Xem profile &amp; DQ Health Score</p></div>
+        <div class="arrow"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+        <div class="step"><span class="n">BƯỚC 2</span><b>Đề xuất &amp; duyệt</b><p>LLM đề xuất rule → steward duyệt</p></div>
+        <div class="arrow"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+        <div class="step"><span class="n">BƯỚC 3</span><b>Chạy DQ check</b><p>Kết quả pass/fail + anomaly + audit</p></div>
+      </div>
+    </div>
+  </section>
+  <!-- ============ SLIDE 5 — ARCHITECTURE ============ -->
+  <section class="slide">
+    <span class="ghost-num">05</span>
+    <div class="slide-inner">
+      <div class="slide-head reveal">
+        <span class="eyebrow">Kiến trúc</span>
+        <h2 class="slide-title">Kiến trúc <span class="hl">hệ thống</span></h2>
+      </div>
+      <div class="arch reveal">
+        <div class="box"><span class="ico"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8"/></svg></span><b>Frontend</b><span>React + Vite · Vercel</span></div>
+        <div class="conn"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+        <div class="box"><span class="ico"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg></span><b>Backend / API</b><span>FastAPI · Cloud Run</span></div>
+        <div class="conn"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+        <div class="box key"><span class="ico"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg></span><b>LLM / Agent</b><span>LangGraph · OpenAI</span></div>
+        <div class="conn"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+        <div class="box"><span class="ico"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l9 5-9 5-9-5 9-5zM3 12l9 5 9-5M3 17l9 5 9-5"/></svg></span><b>DQ Runner</b><span>dbt Core · chỉ đọc</span></div>
+        <div class="conn"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+        <div class="box"><span class="ico"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></span><b>Database</b><span>Supabase Postgres</span></div>
+      </div>
+      <div class="note-box">
+        <div class="card reveal"><h3>Tech stack</h3><p>React + Vite · FastAPI · LangGraph + OpenAI gpt-4o-mini · dbt Core · Supabase PostgreSQL (SQLite khi dev) · Docker.</p></div>
+        <div class="card reveal"><h3>Vì sao chọn?</h3><p>LangGraph điều phối pipeline profiler → proposer → test → anomaly. Ranh giới bảo mật: LLM chỉ nhận metadata tổng hợp, runner dùng role chỉ đọc, DB không mở ra ngoài.</p></div>
+      </div>
+    </div>
+  </section>
+  <!-- ============ SLIDE 6 — AI / LLM APPROACH ============ -->
+  <section class="slide">
+    <span class="ghost-num">06</span>
+    <div class="slide-inner" style="gap:30px">
+      <div class="slide-head reveal" style="margin-bottom:0">
+        <span class="eyebrow">AI / LLM</span>
+        <h2 class="slide-title">Agent LangGraph &amp; <span class="hl">đánh giá thực tế</span></h2>
+      </div>
+      <div class="pipe reveal">
+        <span class="pill">Profiler</span><span class="sep">→</span>
+        <span class="pill">Digest</span><span class="sep">→</span>
+        <span class="pill">Rule Candidates</span><span class="sep">→</span>
+        <span class="pill on">Rule Proposer · LLM</span><span class="sep">→</span>
+        <span class="pill">HITL Gate</span>
+      </div>
+      <div class="two-col" style="gap:44px">
+        <div class="graph-wrap reveal">
+          <svg viewBox="0 0 820 300" width="100%">
+            <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0l7 3-7 3z" fill="#4A4F63"/></marker></defs>
+            <path class="g-edge" d="M104 170H150"/><path class="g-edge" d="M300 170H352"/>
+            <path class="g-edge" d="M492 170H542"/><path class="g-edge" d="M692 170H716"/>
+            <path class="g-edge" d="M422 138C422 62 225 62 225 138"/>
+            <circle class="g-node start" cx="62" cy="170" r="42"/><text class="g-label on" x="62" y="176">START</text>
+            <rect class="g-node" x="150" y="138" width="150" height="64" rx="14"/><text class="g-label" x="225" y="176">Test Gen</text>
+            <rect class="g-node" x="352" y="138" width="140" height="64" rx="14"/><text class="g-label" x="422" y="176">Validate</text>
+            <rect class="g-node" x="542" y="138" width="150" height="64" rx="14"/><text class="g-label" x="617" y="176">Run</text>
+            <circle class="g-node" cx="758" cy="170" r="42"/><text class="g-label" x="758" y="176">END</text>
+            <text class="g-label" x="323" y="48" style="font-size:22px;fill:#8A90A0">LLM sửa SQL nếu lỗi</text>
+          </svg>
+        </div>
+        <div class="metrics reveal">
+          <div class="metric"><span class="m-name">DQ Health Score</span><div class="m-track"><div class="m-fill" style="width:92%"></div></div><span class="m-val">92.3</span></div>
+          <div class="metric"><span class="m-name">Validity</span><div class="m-track"><div class="m-fill" style="width:87.5%"></div></div><span class="m-val">87.5%</span></div>
+          <div class="metric"><span class="m-name">Completeness</span><div class="m-track"><div class="m-fill" style="width:100%"></div></div><span class="m-val">100%</span></div>
+          <div class="metric"><span class="m-name">Uniqueness</span><div class="m-track"><div class="m-fill" style="width:100%"></div></div><span class="m-val">100%</span></div>
+          <p class="muted" style="font-size:26px;margin-top:2px">Grade B · trên NYC Yellow Taxi 50k · gpt-4o-mini · trace LangSmith · bộ E1–E5</p>
+        </div>
+      </div>
+    </div>
+  </section>
+  <!-- ============ SLIDE 7 — TECHNICAL HIGHLIGHTS ============ -->
+  <section class="slide">
+    <span class="ghost-num">07</span>
+    <div class="slide-inner">
+      <div class="slide-head reveal">
+        <span class="eyebrow">Kỹ thuật</span>
+        <h2 class="slide-title">Điểm nhấn <span class="hl">kỹ thuật</span></h2>
+      </div>
+      <div class="stat-grid">
+        <div class="stat reveal">
+          <span class="ico"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12a8 8 0 018-8 8 8 0 017 4M20 12a8 8 0 01-8 8 8 8 0 01-7-4"/><path d="M16 8h4V4M8 16H4v4"/></svg></span>
+          <div class="big">CI/CD</div><div class="lbl">Tự động hoá</div>
+          <div class="sub">GitHub Actions · ruff + pytest · Python 3.11</div>
+        </div>
+        <div class="stat reveal">
+          <span class="ico"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>
+          <div class="big">221</div><div class="lbl">Bài kiểm thử</div>
+          <div class="sub">Trên 43 file: agents, API, integration, unit</div>
+        </div>
+        <div class="stat reveal">
+          <span class="ico"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></svg></span>
+          <div class="big">~3.2s</div><div class="lbl">LLM đề xuất rule</div>
+          <div class="sub">1.847 tokens · chạy DQ trên 50.000 dòng</div>
+        </div>
+        <div class="stat reveal">
+          <span class="ico"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg></span>
+          <div class="big">Docker</div><div class="lbl">5 service compose</div>
+          <div class="sub">Deploy: Vercel + Cloud Run + Supabase</div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <!-- ============ SLIDE 8 — DEMO VIDEO ============ -->
+  <section class="slide">
+    <span class="ghost-num">08</span>
+    <div class="slide-inner">
+      <div class="slide-head reveal">
+        <span class="eyebrow">Demo</span>
+        <h2 class="slide-title">Xem sản phẩm <span class="hl">chạy thật</span></h2>
+      </div>
+      <div class="video-stage">
+        <div class="reveal">
+          <!-- Thay bằng <video src> hoặc <iframe> YouTube khi có link -->
+          <div class="videobox">
+            <div class="play"><svg width="40" height="40" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></div>
+            <span class="ph-label">Video demo 16:9 — [nhúng &lt;video&gt; hoặc iframe YouTube]</span>
+          </div>
+          <p class="side-note">Demo 2–3 phút: RidePulse DQ chạy end-to-end trên NYC Yellow Taxi 50k</p>
+        </div>
+        <div class="reveal" style="text-align:center">
+          <div class="qr">QR</div>
+          <p class="side-note" style="margin-top:16px;max-width:200px">Quét để mở<br>ridepulse-dq.vercel.app</p>
+        </div>
+      </div>
+    </div>
+  </section>
+  <!-- ============ SLIDE 9 — CHALLENGES & LEARNINGS ============ -->
+  <section class="slide">
+    <span class="ghost-num">09</span>
+    <div class="slide-inner">
+      <div class="slide-head reveal">
+        <span class="eyebrow">Nhìn lại</span>
+        <h2 class="slide-title">Khó khăn &amp; <span class="hl">bài học</span></h2>
+      </div>
+      <div class="cols3">
+        <div class="col reveal">
+          <span class="ico"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg></span>
+          <h3>Khó khăn lớn nhất</h3>
+          <p>Giữ ranh giới bảo mật PII: chỉ gửi metadata tổng hợp cho LLM, runner dùng role chỉ đọc và giới hạn ≤20 ID lỗi trả về.</p>
+        </div>
+        <div class="col reveal">
+          <span class="ico"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6M10 22h4M12 2a7 7 0 00-4 12.7c.6.5 1 1.3 1 2.1V17h6v-.2c0-.8.4-1.6 1-2.1A7 7 0 0012 2z"/></svg></span>
+          <h3>Bài học kỹ thuật</h3>
+          <p>LangGraph <code>ainvoke</code> không báo lỗi khi node trả về error → phải kiểm tra tường minh <code>pause_reason</code> / <code>error</code> để tránh "thành công giả".</p>
+        </div>
+        <div class="col reveal">
+          <span class="ico"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 109-9 9 9 0 00-9 9z"/><path d="M3 3v5h5M12 7v5l3 3"/></svg></span>
+          <h3>Nếu làm lại</h3>
+          <p>Cắt phạm vi sớm hơn: tạm gác RAG/vector store, ML anomaly, Dagster — ưu tiên LLM thật + dbt + HITL + deploy công khai.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+  <!-- ============ SLIDE 10 — TEAM & NEXT STEPS ============ -->
+  <section class="slide">
+    <div class="decor a"></div>
+    <span class="ghost-num">10</span>
+    <div class="slide-inner" style="gap:30px">
+      <div class="slide-head reveal" style="margin-bottom:0">
+        <span class="eyebrow">Đội ngũ &amp; Tương lai</span>
+        <h2 class="slide-title">Cùng nhau <span class="hl">đi tiếp</span></h2>
+      </div>
+      <div class="team reveal">
+        <div class="member"><div class="avatar">Đ</div><b>Vũ Nguyễn Quốc Đạt</b><span>Product Lead / Architect</span></div>
+        <div class="member"><div class="avatar">C</div><b>Lương Trung Chiến</b><span>Product Owner / BA</span></div>
+        <div class="member"><div class="avatar">P</div><b>Nguyễn Hoàng Vĩnh Phong</b><span>UI/UX Lead · Frontend</span></div>
+        <div class="member"><div class="avatar">K</div><b>Nguyễn Hữu Kiên</b><span>Technical Lead · Backend</span></div>
+      </div>
+      <div class="reveal">
+        <span class="eyebrow" style="margin-bottom:18px">Roadmap</span>
+        <div class="timeline">
+          <div class="tl"><div class="mk"></div><b>Sắp tới</b><span>Deploy Vercel + Cloud Run, dataset Supabase thật</span></div>
+          <div class="tl"><div class="mk"></div><b>6 tháng</b><span>ML anomaly + smart thresholding + phân tích xu hướng</span></div>
+          <div class="tl"><div class="mk"></div><b>Tương lai</b><span>RAG lịch sử rule (ChromaDB), RBAC, cảnh báo đa kênh</span></div>
+        </div>
+      </div>
+      <div class="reveal" style="text-align:center;margin-top:auto">
+        <div class="thanks" style="font-size:80px">Cảm ơn! · Q&amp;A</div>
+        <div class="contact" style="justify-content:center">
+          <span class="chip">🔗 github.com/AI20K-Build-Phase-Cohort-3/P-028</span>
+          <span class="chip">🌐 ridepulse-dq.vercel.app</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+</div>
+
+<!-- Chrome điều hướng (nằm ngoài stage) -->
+<div class="progress" id="progress" style="width:10%"></div>
+<div class="hint" id="hint">Dùng <kbd>←</kbd> <kbd>→</kbd> để chuyển slide · <kbd>F</kbd> toàn màn hình</div>
+<div class="deck-controls">
+  <button class="nav-btn" id="prevBtn" aria-label="Slide trước"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18l-6-6 6-6"/></svg></button>
+  <span class="counter"><span class="cur" id="cur">01</span> / <span id="total">10</span></span>
+  <button class="nav-btn" id="nextBtn" aria-label="Slide sau"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 18l6-6-6-6"/></svg></button>
+</div>
+<script>
+/* ===========================================
+   BỘ ĐIỀU KHIỂN TRÌNH CHIẾU
+   =========================================== */
+class Deck{
+  constructor(){
+    this.slides=[...document.querySelectorAll('.slide')];
+    this.i=0;
+    this.stage=document.getElementById('deckStage');
+    this.cur=document.getElementById('cur');
+    this.bar=document.getElementById('progress');
+    this.prevBtn=document.getElementById('prevBtn');
+    this.nextBtn=document.getElementById('nextBtn');
+    document.getElementById('total').textContent=String(this.slides.length).padStart(2,'0');
+    this.scale();window.addEventListener('resize',()=>this.scale());
+    this.bindKeys();this.bindButtons();this.bindTouch();this.bindWheel();
+    this.go(0);this.autoHideHint();
+  }
+  /* Scale nguyên khối stage 1920×1080 vừa khung, letterbox/pillarbox */
+  scale(){
+    const f=Math.min(innerWidth/1920,innerHeight/1080);
+    const x=(innerWidth-1920*f)/2, y=(innerHeight-1080*f)/2;
+    this.stage.style.transform=`translate(${x}px,${y}px) scale(${f})`;
+  }
+  go(n){
+    this.i=Math.max(0,Math.min(n,this.slides.length-1));
+    this.slides.forEach((s,k)=>{s.classList.toggle('active',k===this.i);s.classList.toggle('visible',k===this.i);});
+    this.cur.textContent=String(this.i+1).padStart(2,'0');
+    this.bar.style.width=((this.i+1)/this.slides.length*100)+'%';
+    this.prevBtn.disabled=this.i===0;
+    this.nextBtn.disabled=this.i===this.slides.length-1;
+  }
+  next(){this.go(this.i+1)} prev(){this.go(this.i-1)}
+  toggleFS(){document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen().catch(()=>{});}
+  bindButtons(){this.prevBtn.onclick=()=>this.prev();this.nextBtn.onclick=()=>this.next();}
+  bindKeys(){
+    addEventListener('keydown',e=>{
+      if(['ArrowRight','ArrowDown',' ','PageDown'].includes(e.key)){e.preventDefault();this.next();}
+      else if(['ArrowLeft','ArrowUp','PageUp'].includes(e.key)){e.preventDefault();this.prev();}
+      else if(e.key==='Home'){this.go(0);} else if(e.key==='End'){this.go(this.slides.length-1);}
+      else if(e.key==='f'||e.key==='F'){this.toggleFS();}
+    });
+  }
+  bindTouch(){
+    let x0=null;
+    addEventListener('touchstart',e=>x0=e.touches[0].clientX,{passive:true});
+    addEventListener('touchend',e=>{if(x0===null)return;const dx=e.changedTouches[0].clientX-x0;
+      if(Math.abs(dx)>50){dx<0?this.next():this.prev();}x0=null;});
+  }
+  bindWheel(){
+    let lock=false;
+    addEventListener('wheel',e=>{if(lock)return;if(Math.abs(e.deltaY)<24)return;
+      lock=true;e.deltaY>0?this.next():this.prev();setTimeout(()=>lock=false,650);},{passive:true});
+  }
+  autoHideHint(){const h=document.getElementById('hint');setTimeout(()=>h.style.opacity='0',5000);}
+}
+new Deck();
+</script>
+</body>
+</html>

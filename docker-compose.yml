@@ -63,7 +63,7 @@ services:
     environment:
       - APP_ENV=local
       - DATABASE_URL=postgresql+psycopg2://postgres:localpassword@db:5432/ridepulse
-      - FRONTEND_ORIGIN=http://localhost:3000
+      - FRONTEND_ORIGIN=http://localhost:3000,http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174
       - LOCAL_WORKER_URL=http://worker:8001/run
       - OBJECT_STORAGE_BUCKET=ridepulse-dbt-artifacts
       - OBJECT_STORAGE_ENDPOINT_URL=http://minio:9000
@@ -85,6 +85,8 @@ services:
       dockerfile: Dockerfile
     container_name: ridepulse-worker
     command: uvicorn src.local_worker_api:app --host 0.0.0.0 --port 8001 --reload
+    healthcheck:
+      disable: true
     volumes:
       - .:/app
     environment:
