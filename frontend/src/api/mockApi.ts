@@ -683,4 +683,8 @@ export const mockApi: ApiClient = {
   async listGraph1Nodes() { throw new Error("Graph 1 requires the real backend."); },
   async confirmGraph1Semantic() { throw new Error("Graph 1 requires the real backend."); },
   async reviewGraph1Rules() { throw new Error("Graph 1 requires the real backend."); },
+  async createAnalysisRun() { throw new Error("Graph 2 and Graph 3 analysis requires the real backend."); },
+  async getAnalysisRun() { throw new Error("Analysis requires the real backend."); },
+  async listAnalysisNodes() { throw new Error("Analysis requires the real backend."); },
+  async getAnalysisResult() { throw new Error("Analysis requires the real backend."); },
 };

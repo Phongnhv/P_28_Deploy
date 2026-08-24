@@ -13,7 +13,7 @@ const human = (value: string) => value.replaceAll("_", " ");
 
 const asRecord = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 
-export function Graph1Studio({ onExit, onDatasetImported, initialDataset }: { onExit: () => void; onDatasetImported?: () => void; initialDataset?: Dataset | null }) {
+export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, initialDataset }: { onExit: () => void; onDatasetImported?: () => void; onAnalyze: (graph1RunId: string) => Promise<void>; initialDataset?: Dataset | null }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [dataset, setDataset] = useState<Dataset | null>(initialDataset ?? null);
   const [run, setRun] = useState<Graph1Run | null>(null);
@@ -27,6 +27,7 @@ export function Graph1Studio({ onExit, onDatasetImported, initialDataset }: { on
   const [decisions, setDecisions] = useState<Record<string, RuleDecisionState>>({});
   const [ruleEdits, setRuleEdits] = useState<Record<string, Record<string, string>>>({});
   const [reviewValidation, setReviewValidation] = useState("");
+  const [analysisBusy, setAnalysisBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<"output" | "evidence" | "activity">("output");
   const autoStartRef = useRef(false);
   const reviewRunRef = useRef("");
@@ -149,6 +150,13 @@ export function Graph1Studio({ onExit, onDatasetImported, initialDataset }: { on
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Không thể lưu quyết định rule."); } finally { setBusy(false); }
   };
   const reset = () => { if (run) { sessionStorage.removeItem(`ridepulse.graph1.review.${run.id}`); sessionStorage.removeItem(`ridepulse.graph1.stage.${run.id}`); sessionStorage.removeItem(`ridepulse.graph1.semantic.${run.id}`); } sessionStorage.removeItem("ridepulse.graph1.run"); sessionStorage.removeItem("ridepulse.graph1.dataset"); setRun(null); setNodes([]); setDataset(null); setError(""); setSemanticText(""); setDecisions({}); setRuleEdits({}); setReviewValidation(""); reviewRunRef.current = ""; onExit(); };
+  const analyze = async () => {
+    if (!run || isMockMode) return;
+    setAnalysisBusy(true); setError("");
+    try { await onAnalyze(run.id); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Không thể khởi tạo Graph 2 và Graph 3."); }
+    finally { setAnalysisBusy(false); }
+  };
   const stages = useMemo(() => buildDisplayStages(nodes), [nodes]);
   const selected = stages.find((stage) => stage.key === selectedKey) ?? stages[0];
   useEffect(() => setActiveTab("output"), [selectedKey]);
@@ -171,6 +179,8 @@ export function Graph1Studio({ onExit, onDatasetImported, initialDataset }: { on
   const rejectedCount = Object.values(decisions).filter((value) => value === "reject").length;
   const pendingCount = rules.filter((rule, index) => { const value = decisions[String(rule.rule_id ?? `rule-${index}`)]; return !value || value === "undecided"; }).length;
   const decidedCount = Math.max(0, rules.length - pendingCount);
+  const gateOutput = asRecord(nodes.find((node) => node.node_key === "hitl_gate")?.output);
+  const finalApprovedCount = Number(gateOutput.approved_count ?? gateOutput.approved ?? approvedCount + editedCount);
   const onFile = (event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (file) void upload(file); };
   const onDrop = (event: DragEvent<HTMLDivElement>) => { event.preventDefault(); setDragging(false); const file = event.dataTransfer.files[0]; if (file) void upload(file); };
 
@@ -210,7 +220,7 @@ export function Graph1Studio({ onExit, onDatasetImported, initialDataset }: { on
         })}</div>
         <div className="g1-review-actions"><div><strong>{pendingCount ? `${pendingCount} rule đang chờ quyết định` : "Tất cả rule đã có quyết định"}</strong><span>Cần ít nhất một rule Approve hoặc Edit & approve.</span></div><button type="button" className="button primary" disabled={busy || !rules.length} onClick={() => void confirmRules()}>{busy ? "Đang lưu…" : "Lưu quyết định và hoàn tất"}</button></div>
       </section>}
-      {run.status === "FAILED" && <div className="g1-terminal failed"><strong>Graph 1 failed</strong><p>{run.error}</p><button type="button" className="button secondary" onClick={reset}>Upload dataset khác</button></div>}{run.status === "COMPLETED" && <div className="g1-terminal completed"><strong>Graph 1 đã hoàn thành</strong><p>Rules đã được lưu thật vào backend.</p><button type="button" className="button secondary" onClick={reset}>Chạy dataset khác</button></div>}
+      {run.status === "FAILED" && <div className="g1-terminal failed"><strong>Graph 1 failed</strong><p>{run.error}</p><button type="button" className="button secondary" onClick={reset}>Upload dataset khác</button></div>}{run.status === "COMPLETED" && <div className="g1-terminal completed"><div><strong>Graph 1 đã hoàn thành</strong><p>{finalApprovedCount} rule đã được duyệt và sẵn sàng cho Graph 2.</p></div><div className="g1-terminal-actions"><button type="button" className="button primary" disabled={analysisBusy || isMockMode || finalApprovedCount < 1} onClick={() => void analyze()}>{analysisBusy ? "Đang khởi tạo phân tích…" : "Analyze Graph 2 & 3"}</button><button type="button" className="button secondary" disabled={analysisBusy} onClick={reset}>Chạy dataset khác</button></div>{isMockMode && <small>Analysis Studio yêu cầu real backend.</small>}</div>}
     </>}
   </main>;
 }

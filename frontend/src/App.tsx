@@ -6,6 +6,7 @@ import LanguageToggle from "./LanguageToggle";
 import { useI18n } from "./i18n/context";
 import { Step5Analytics } from "./components/wizard/Step5Analytics";
 import { Graph1Studio } from "./features/graph1/Graph1Studio";
+import { AnalysisStudio } from "./features/analysis/AnalysisStudio";
 import type {
   AuditLog,
   CreateJobResponse,
@@ -1303,6 +1304,8 @@ function App() {
   const [wizardStep, setWizardStep] = useState<number>(1);
   const [showAdmin, setShowAdmin] = useState<boolean>(false);
   const [showGraph1Studio, setShowGraph1Studio] = useState<boolean>(() => sessionStorage.getItem("ridepulse.graph1.open") === "1" && Boolean(sessionStorage.getItem("ridepulse.graph1.run")));
+  const [analysisRunId, setAnalysisRunId] = useState(() => sessionStorage.getItem("ridepulse.analysis.run") ?? "");
+  const [showAnalysisStudio, setShowAnalysisStudio] = useState<boolean>(() => sessionStorage.getItem("ridepulse.analysis.open") === "1" && Boolean(sessionStorage.getItem("ridepulse.analysis.run")));
   const [graph1Dataset, setGraph1Dataset] = useState<Dataset | null>(null);
   const [showDataExplorer, setShowDataExplorer] = useState<boolean>(false);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -1456,6 +1459,16 @@ function App() {
     setShowGraph1Studio(true);
   }
 
+  async function openAnalysisForGraph1(graph1RunId: string) {
+    if (isMockMode) throw new Error("Analysis Studio yêu cầu real backend.");
+    const analysisRun = await api.createAnalysisRun(graph1RunId);
+    sessionStorage.setItem("ridepulse.analysis.run", analysisRun.id);
+    sessionStorage.setItem("ridepulse.analysis.open", "1");
+    setAnalysisRunId(analysisRun.id);
+    setShowAnalysisStudio(true);
+    setShowGraph1Studio(false);
+  }
+
   useEffect(() => {
     if (authenticated) void refreshWorkspace();
   }, [authenticated, refreshWorkspace]);
@@ -1492,6 +1505,10 @@ function App() {
     sessionStorage.removeItem("ridepulse.role");
     sessionStorage.removeItem("ridepulse.username");
     sessionStorage.removeItem("ridepulse.dataset");
+    sessionStorage.removeItem("ridepulse.analysis.open");
+    sessionStorage.removeItem("ridepulse.analysis.run");
+    setShowAnalysisStudio(false);
+    setAnalysisRunId("");
     setAuthenticated(false);
   }
 
@@ -1952,6 +1969,8 @@ function App() {
                   setShowAdmin(!showAdmin);
                   sessionStorage.removeItem("ridepulse.graph1.open");
                   setShowGraph1Studio(false);
+                  sessionStorage.removeItem("ridepulse.analysis.open");
+                  setShowAnalysisStudio(false);
                 }}
               >
                 ⚙ {t("app.adminControl")}
@@ -1970,7 +1989,7 @@ function App() {
           </div>
         </header>
 
-        {!showAdmin && !showGraph1Studio && (
+        {!showAdmin && !showGraph1Studio && !showAnalysisStudio && (
           <div className="wizard-header-container">
             <nav className="wizard-stepper" aria-label="Wizard Steps">
               {[
@@ -2013,6 +2032,8 @@ function App() {
                       setShowAdmin(false);
                       sessionStorage.removeItem("ridepulse.graph1.open");
                       setShowGraph1Studio(false);
+                      sessionStorage.removeItem("ridepulse.analysis.open");
+                      setShowAnalysisStudio(false);
                       setWizardStep(step.id);
                     }}
                   >
@@ -2031,7 +2052,7 @@ function App() {
         )}
 
         <div className="page-container">
-          {!showGraph1Studio && !canOperate && (
+          {!showGraph1Studio && !showAnalysisStudio && !canOperate && (
             <div className="dev-banner">
               <span>Read-only access</span>
               <span>
@@ -2041,7 +2062,7 @@ function App() {
               <code>{role}</code>
             </div>
           )}
-          {!showGraph1Studio && isMockMode && (
+          {!showGraph1Studio && !showAnalysisStudio && isMockMode && (
             <div className="dev-banner">
               <span>Local development adapter</span>
               <span>
@@ -2051,7 +2072,7 @@ function App() {
               <code>VITE_USE_MOCK_API=false</code>
             </div>
           )}
-          {!showGraph1Studio && error && (
+          {!showGraph1Studio && !showAnalysisStudio && error && (
             <div className="alert error">
               <strong>Action failed</strong>
               <span>{error}</span>
@@ -2093,10 +2114,26 @@ function App() {
             </div>
           )}
 
-          {showGraph1Studio ? (
+          {showAnalysisStudio && analysisRunId ? (
+            <AnalysisStudio
+              analysisRunId={analysisRunId}
+              onExit={() => {
+                sessionStorage.removeItem("ridepulse.analysis.open");
+                setShowAnalysisStudio(false);
+                setAnalysisRunId("");
+              }}
+              onBackToGraph1={() => {
+                sessionStorage.removeItem("ridepulse.analysis.open");
+                sessionStorage.setItem("ridepulse.graph1.open", "1");
+                setShowAnalysisStudio(false);
+                setShowGraph1Studio(true);
+              }}
+            />
+          ) : showGraph1Studio ? (
             <Graph1Studio
               onExit={() => { sessionStorage.removeItem("ridepulse.graph1.open"); setShowGraph1Studio(false); setGraph1Dataset(null); }}
               onDatasetImported={() => void refreshWorkspace()}
+              onAnalyze={openAnalysisForGraph1}
               initialDataset={graph1Dataset ?? dataset}
             />
           ) : showAdmin && canAdmin ? (

@@ -15,9 +15,10 @@ from src.models.database import (
     Graph1RunModel,
     ProfileModel,
     RuleProposalModel,
+    RuleVersionModel,
     SemanticContractModel,
 )
-from src.services.rule_store import create_run, get_engine, save_semantic_contract
+from src.services.rule_store import ProposedRuleModel, create_run, get_engine, save_semantic_contract
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -276,30 +277,141 @@ def review_rules(db: Session, run: Graph1RunModel, decisions: list[dict[str, Any
     if not decisions or set(by_id) != {str(item.get("rule_id")) for item in decisions}:
         raise ValueError("Every proposal in this run must receive one decision.")
     approved = 0
+    edited = 0
+    rejected = 0
+    decision_by_id: dict[str, dict[str, Any]] = {}
     for item in decisions:
-        proposal = by_id[str(item["rule_id"])]
+        rule_id = str(item["rule_id"])
+        proposal = by_id[rule_id]
+        legacy = db.get(ProposedRuleModel, (run.id, rule_id))
+        if not legacy:
+            raise ValueError(f"Legacy rule snapshot is missing for {rule_id}.")
         action = str(item.get("action", "")).lower()
         if action not in {"approve", "reject", "edit"}:
             raise ValueError("Rule decision must be approve, reject, or edit.")
+        normalized_parameters: dict[str, Any] | None = None
         if action == "edit":
             rule = item.get("rule")
             if not isinstance(rule, dict) or not rule.get("type"):
                 raise ValueError("Edited rules require a valid rule payload.")
-            proposal.rule_spec = _json(rule)
+            raw_parameters = rule.get("parameters") if isinstance(rule.get("parameters"), dict) else {}
+            normalized_parameters = {
+                "min": raw_parameters.get("min", raw_parameters.get("min_value")),
+                "max": raw_parameters.get("max", raw_parameters.get("max_value")),
+                "max_null_pct": raw_parameters.get("max_null_pct"),
+                "accepted_values": raw_parameters.get("accepted_values"),
+                "regex": raw_parameters.get("regex"),
+                "target_column": raw_parameters.get("target_column"),
+                "operator": raw_parameters.get("operator"),
+                "min_row_count": raw_parameters.get("min_row_count"),
+            }
+            normalized_parameters = {
+                key: value for key, value in normalized_parameters.items()
+                if value is not None and value != ""
+            }
+            canonical_spec: dict[str, Any] = {
+                "type": str(rule["type"]),
+                "column": rule.get("column") or None,
+            }
+            if "min" in normalized_parameters:
+                canonical_spec["min_value"] = normalized_parameters["min"]
+            if "max" in normalized_parameters:
+                canonical_spec["max_value"] = normalized_parameters["max"]
+            if "accepted_values" in normalized_parameters:
+                canonical_spec["allowed_values"] = normalized_parameters["accepted_values"]
+            for key in ("max_null_pct", "regex", "target_column", "operator", "min_row_count"):
+                if key in normalized_parameters:
+                    canonical_spec[key] = normalized_parameters[key]
+            proposal.rule_type = str(rule["type"])
+            proposal.title = str(rule.get("rule_name") or proposal.title)
+            proposal.rule_name = str(rule.get("rule_name") or proposal.rule_name)
+            proposal.description = str(rule.get("rule_description") or proposal.description)
+            proposal.rule_spec = _json(canonical_spec)
             proposal.status = "APPROVED"
+            legacy.rule_type = proposal.rule_type
+            legacy.column_name = rule.get("column") or None
+            legacy.rule_name = proposal.rule_name
+            legacy.rule_description = proposal.description
+            legacy.edited_parameters = _json(normalized_parameters)
             approved += 1
+            edited += 1
         elif action == "approve":
             proposal.status = "APPROVED"
             approved += 1
         else:
             proposal.status = "REJECTED"
+            rejected += 1
+        legacy.status = proposal.status
+        legacy.reviewer = reviewer
+        legacy.reviewed_at = utc_now()
         proposal.updated_at = utc_now()
+        if proposal.status == "APPROVED":
+            version_id = f"rv_{proposal.id}"
+            version = db.get(RuleVersionModel, version_id)
+            if version:
+                version.rule_spec = proposal.rule_spec
+                version.status = "APPROVED"
+                version.created_at = utc_now()
+            else:
+                db.add(RuleVersionModel(
+                    id=version_id,
+                    rule_proposal_id=proposal.id,
+                    dataset_id=proposal.dataset_id,
+                    rule_spec=proposal.rule_spec,
+                    status="APPROVED",
+                    version=1,
+                    created_at=utc_now(),
+                ))
+        decision_by_id[rule_id] = {
+            "action": action,
+            "parameters": normalized_parameters,
+            "rule": item.get("rule") if action == "edit" else None,
+        }
     if not approved:
         raise ValueError("At least one rule must be approved or edited.")
+    reviewed_rules: list[dict[str, Any]] = []
+    for raw_rule in state.get("proposed_rules", []):
+        if not isinstance(raw_rule, dict):
+            continue
+        rule_id = str(raw_rule.get("rule_id", ""))
+        review = decision_by_id.get(rule_id, {})
+        action = str(review.get("action", "reject"))
+        next_rule = dict(raw_rule)
+        next_rule["review_action"] = action
+        next_rule["status"] = "REJECTED" if action == "reject" else "APPROVED"
+        if action == "edit" and isinstance(review.get("rule"), dict):
+            edited_rule = review["rule"]
+            next_rule.update({
+                "rule_type": edited_rule.get("type", next_rule.get("rule_type")),
+                "rule_name": edited_rule.get("rule_name", next_rule.get("rule_name")),
+                "rule_description": edited_rule.get("rule_description", next_rule.get("rule_description")),
+                "column": edited_rule.get("column"),
+                "parameters": review.get("parameters") or {},
+            })
+        reviewed_rules.append(next_rule)
+    state["proposed_rules"] = reviewed_rules
+    state["approved_rules"] = [rule for rule in reviewed_rules if rule.get("status") == "APPROVED"]
+    state["metadata"] = {
+        **(state.get("metadata") if isinstance(state.get("metadata"), dict) else {}),
+        "hitl_status": "APPROVED",
+        "reviewer": reviewer,
+    }
+    run.state_json = _json(state)
     run.status, run.current_node = "COMPLETED", "hitl_gate"
     gate = db.get(Graph1NodeExecutionModel, f"{run.id}:hitl_gate")
     if gate:
         gate.status = "SUCCEEDED"
         gate.completed_at = utc_now()
-        gate.output_json = _json({"decision": "APPROVED", "approved_count": approved, "reviewer": reviewer})
+        gate.output_json = _json({
+            "decision": "APPROVED",
+            "proposed_rules": reviewed_rules,
+            "approved_rules": state["approved_rules"],
+            "total_count": len(reviewed_rules),
+            "approved_count": approved,
+            "edited_count": edited,
+            "rejected_count": rejected,
+            "pending_count": 0,
+            "reviewer": reviewer,
+            "metadata": state["metadata"],
+        })
     db.commit()

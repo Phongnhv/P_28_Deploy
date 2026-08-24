@@ -77,3 +77,5 @@
 @media(max-width:480px){.g1-prompt-markdown{padding:15px}.g1-prompt-card>header>div:last-child{justify-content:flex-start}.g1-markdown-table-wrap{margin-inline:0}}
 
 @media(prefers-color-scheme:dark){.g1-studio .g1-summary-strip.review{border-color:#92400e;background:#422006;color:#fcd34d}.g1-studio .g1-review-validation{border-color:#991b1b;background:#450a0a;color:#fecaca}.g1-studio .g1-review-actions{box-shadow:0 -8px 20px rgb(0 0 0 / 25%)}.g1-studio .g1-review-state.approved,.g1-studio .g1-review-state.completed{background:#052e26;color:#6ee7b7}.g1-studio .g1-review-state.awaiting_review{background:#422006;color:#fcd34d}}
+
+.g1-terminal.completed{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}.g1-terminal-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.g1-terminal-actions .button{min-height:42px}.g1-terminal>small{width:100%}
