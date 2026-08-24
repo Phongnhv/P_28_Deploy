@@ -122,6 +122,7 @@ def create_graph1_run(db: Session, dataset_id: str, username: str, idempotency_k
         }),
     )
     db.add(run)
+    db.flush()
     for position, node_key in enumerate(GRAPH1_NODES, 1):
         db.add(Graph1NodeExecutionModel(
             id=f"{run_id}:{node_key}", run_id=run_id, node_key=node_key,

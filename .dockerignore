@@ -12,6 +12,7 @@ data/
 __pycache__
 *.pyc
 .pytest_cache
+.pytest_tmp/
 .ruff_cache
 docs/
 presentation/
@@ -21,4 +22,16 @@ eval/
 .dockerignore
 Dockerfile
 docker-compose.yml
+frontend/
+node_modules/
+output/
+output_pytest/
+scratch/
+.ai-log/
+.browser-harness/
+.claude/
+.codex/
+.cursor/
+.gemini/
+
 

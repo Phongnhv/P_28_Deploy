@@ -191,6 +191,10 @@ def create_analysis_run(
         idempotency_key=idempotency_key,
     )
     db.add(run)
+    # PostgreSQL enforces the child foreign key while flushing the batch.  Make
+    # the parent row visible before adding the observable node records so the
+    # Graph 2/3 launch remains atomic without violating that constraint.
+    db.flush()
     for position, (graph_name, node_key) in enumerate(ANALYSIS_NODES, 1):
         db.add(AnalysisNodeExecutionModel(
             id=f"{run_id}:{node_key}",

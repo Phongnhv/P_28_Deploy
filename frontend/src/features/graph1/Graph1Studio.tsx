@@ -41,30 +41,49 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, initialData
     else if (active) setSelectedKey(nodeKeyToStageKey(active.node_key));
   }, []);
 
+  useEffect(() => { if (initialDataset) setDataset(initialDataset); }, [initialDataset]);
   useEffect(() => {
-    if (!initialDataset || isMockMode || autoStartRef.current) return;
-    autoStartRef.current = true;
-    setDataset(initialDataset);
+    if (!dataset || isMockMode || run || autoStartRef.current) return;
     const storedRun = sessionStorage.getItem("ridepulse.graph1.run");
     const storedDataset = sessionStorage.getItem("ridepulse.graph1.dataset");
-    const start = async () => {
+    if (!storedRun || storedDataset !== dataset.id) return;
+    autoStartRef.current = true;
+    setBusy(true);
+    setMessage("Loading the saved Graph 1 run…");
+    void refresh(storedRun)
+      .then(() => setMessage(""))
+      .catch(() => {
+        if (sessionStorage.getItem("ridepulse.graph1.run") === storedRun) {
+          sessionStorage.removeItem("ridepulse.graph1.run");
+          sessionStorage.removeItem("ridepulse.graph1.dataset");
+        }
+        setMessage("");
+      })
+      .finally(() => {
+        setBusy(false);
+        autoStartRef.current = false;
+      });
+  }, [dataset, refresh, run]);
+  const start = async () => {
+    if (!dataset || isMockMode || autoStartRef.current) return;
+    autoStartRef.current = true;
+    const storedRun = sessionStorage.getItem("ridepulse.graph1.run");
+    const storedDataset = sessionStorage.getItem("ridepulse.graph1.dataset");
       setBusy(true); setError(""); setMessage("Đang khởi tạo canonical Graph 1…");
       try {
-        if (storedRun && storedDataset === initialDataset.id) await refresh(storedRun);
+        if (storedRun && storedDataset === dataset.id) await refresh(storedRun);
         else {
-          const created = await api.createGraph1Run(initialDataset.id);
+          const created = await api.createGraph1Run(dataset.id);
           sessionStorage.setItem("ridepulse.graph1.run", created.id);
-          sessionStorage.setItem("ridepulse.graph1.dataset", initialDataset.id);
+          sessionStorage.setItem("ridepulse.graph1.dataset", dataset.id);
           setRun(created); await refresh(created.id);
         }
         setMessage("");
       } catch (reason) {
         sessionStorage.removeItem("ridepulse.graph1.run"); sessionStorage.removeItem("ridepulse.graph1.dataset");
         setError(reason instanceof Error ? reason.message : "Không thể bắt đầu Graph 1."); setMessage("");
-      } finally { setBusy(false); }
-    };
-    void start();
-  }, [initialDataset, refresh]);
+      } finally { setBusy(false); autoStartRef.current = false; }
+  };
   useEffect(() => {
     if (!run || STOP.has(run.status) || !apiBaseUrl) return;
     const source = new EventSource(`${apiBaseUrl}/api/v1/graph1-runs/${encodeURIComponent(run.id)}/stream`, { withCredentials: true });
@@ -154,7 +173,7 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, initialData
     if (!run || isMockMode) return;
     setAnalysisBusy(true); setError("");
     try { await onAnalyze(run.id); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Không thể khởi tạo Graph 2 và Graph 3."); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to start Graph 2 and Graph 3."); }
     finally { setAnalysisBusy(false); }
   };
   const stages = useMemo(() => buildDisplayStages(nodes), [nodes]);
@@ -181,13 +200,17 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, initialData
   const decidedCount = Math.max(0, rules.length - pendingCount);
   const gateOutput = asRecord(nodes.find((node) => node.node_key === "hitl_gate")?.output);
   const finalApprovedCount = Number(gateOutput.approved_count ?? gateOutput.approved ?? approvedCount + editedCount);
+  const approveAllRules = () => {
+    setReviewValidation("");
+    setDecisions(Object.fromEntries(rules.map((rule, index) => [String(rule.rule_id ?? `rule-${index}`), "approve"] as const)));
+  };
   const onFile = (event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (file) void upload(file); };
   const onDrop = (event: DragEvent<HTMLDivElement>) => { event.preventDefault(); setDragging(false); const file = event.dataTransfer.files[0]; if (file) void upload(file); };
 
   return <main className="g1-studio" id="main-content">
     <header className="g1-hero"><div><div className="g1-breadcrumb"><button type="button" onClick={onExit}>Workspace</button><span>›</span><span>Graph 1</span></div><div className="g1-title-row"><div className="g1-title-icon">G1</div><div><span className="eyebrow">CANONICAL AGENT WORKFLOW</span><h1>Agent execution studio</h1><p>Upload dữ liệu và theo dõi output thật của từng node.</p></div></div></div><span className={`g1-backend-badge ${isMockMode ? "offline" : "online"}`}><span/>{isMockMode ? "MOCK DISABLED" : "REAL BACKEND"}</span></header>
     {!run && !initialDataset && <section className="g1-upload-shell"><div className={`g1-dropzone ${dragging ? "dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={onDrop}><input ref={fileInput} type="file" accept=".csv,.parquet" hidden onChange={onFile}/><div className="g1-upload-icon">↑</div><span className="eyebrow">DATASET INPUT</span><h2>Upload dataset để chạy Graph 1</h2><p>FastAPI sẽ profile file và chạy đủ canonical nodes.</p><button type="button" className="button primary" disabled={busy || isMockMode} onClick={() => fileInput.current?.click()}>{busy ? "Đang xử lý…" : "Chọn CSV hoặc Parquet"}</button><small>Tối đa 100 MB · raw rows không gửi tới LLM</small></div>{message && <div className="g1-operation" role="status"><span className="spinner"/><div><strong>{message}</strong><span>{dataset?.source_label ?? "Đang chuẩn bị"}</span></div></div>}</section>}
-    {!run && initialDataset && <section className="g1-upload-shell"><div className="g1-operation g1-operation-centered" role="status"><span className="spinner"/><div><strong>{message || "Đang mở Agent Workflow…"}</strong><span>{initialDataset.source_label}</span></div></div></section>}
+    {!run && dataset && <section className="g1-upload-shell"><div className="g1-operation g1-operation-centered"><div><strong>Ready to run Graph 1</strong><span>{dataset.source_label}</span></div><button type="button" className="button primary" disabled={busy || isMockMode} onClick={() => void start()}>{busy ? "Starting Agent…" : "Run Agent Workflow →"}</button></div></section>}
     {error && <div className="g1-error" role="alert"><strong>Graph 1 không thể tiếp tục</strong><span>{error}</span><button type="button" onClick={() => setError("")}>×</button></div>}
     {run && <><section className="g1-runbar"><div><span className="g1-live-dot"/><div><strong>{run.id}</strong><span>{dataset?.source_label ?? run.dataset_id}</span></div></div><div className="g1-run-meta"><span><small>STATUS</small><strong>{human(run.status)}</strong></span><span><small>NODES</small><strong>{done} / 9</strong></span><span><small>CURRENT</small><strong>{run.current_node ?? "QUEUED"}</strong></span><span><small>OWNER</small><strong>{run.created_by}</strong></span></div><div className="g1-progress"><span style={{ width: `${done / 9 * 100}%` }}/></div></section>
       <div className="g1-workspace">
@@ -202,7 +225,7 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, initialData
       {run.status === "AWAITING_RULE_REVIEW" && <section className="g1-review-panel g1-final-review"><header className="g1-review-header"><div><span className="eyebrow">FINAL HITL GATE</span><h2>Duyệt rule proposals</h2><p>Đọc mục đích, điều kiện và evidence; quyết định từng rule trước khi hoàn tất.</p></div><div><span>REVIEW OWNER</span><strong>{run.created_by}</strong></div></header>
         <div className="g1-review-summary six"><span><small>TOTAL</small><strong>{rules.length}</strong></span><span><small>DECIDED</small><strong>{decidedCount}/{rules.length}</strong></span><span><small>APPROVED</small><strong>{approvedCount}</strong></span><span><small>EDITED</small><strong>{editedCount}</strong></span><span><small>REJECTED</small><strong>{rejectedCount}</strong></span><span><small>PENDING</small><strong>{pendingCount}</strong></span></div>
         {reviewValidation && <div className="g1-review-validation" role="alert"><strong>Chưa thể hoàn tất review</strong><span>{reviewValidation}</span></div>}
-        <div className="g1-review-progress" aria-label={`${decidedCount} of ${rules.length} rules decided`}><div><span>Tiến độ quyết định</span><strong>{decidedCount}/{rules.length}</strong></div><progress max={Math.max(1, rules.length)} value={decidedCount}/></div>
+        <div className="g1-review-progress" aria-label={`${decidedCount} of ${rules.length} rules decided`}><div><span>Tiến độ quyết định</span><strong>{decidedCount}/{rules.length}</strong></div><progress max={Math.max(1, rules.length)} value={decidedCount}/><button type="button" className="button secondary" disabled={busy || !rules.length || approvedCount === rules.length} onClick={approveAllRules}>Approve all rules</button></div>
         <div className="g1-review-rules">{rules.map((rule, index) => {
           const id = String(rule.rule_id ?? `rule-${index}`);
           const draft = ruleEdits[id] ?? {};
