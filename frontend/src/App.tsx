@@ -444,19 +444,19 @@ function DatasetsPage({
       )}
 
       {/* Understand Data Agent Output Card */}
-      {dataset && (
+      {false && dataset && (
         <section className="panel" style={{ marginTop: "24px", padding: "24px" }}>
           <div className="panel-heading">
             <div>
               <span className="eyebrow">{t("datasets.agentCapability")}</span>
-              <h2>{t("datasets.understandAgentTitle", { name: dataset.name })}</h2>
+        <h2>{t("datasets.understandAgentTitle", { name: dataset!.name })}</h2>
               <p className="muted">{t("datasets.understandAgentDesc")}</p>
             </div>
             <button
               type="button"
               className="button primary"
-              disabled={!canOperate || importing || busy || dataset.status !== "PROFILE_READY"}
-              onClick={() => onStartUnderstand(dataset.id)}
+              disabled={!canOperate || importing || busy || dataset!.status !== "PROFILE_READY"}
+              onClick={() => onStartUnderstand(dataset!.id)}
             >
               {busy ? "Starting Agent…" : "Run Agent Workflow →"}
             </button>
@@ -467,7 +467,7 @@ function DatasetsPage({
                 className={`button secondary ${showNodeDetails ? "active" : ""}`}
                 aria-controls="graph1-details-sidebar"
                 aria-expanded={showNodeDetails}
-                onClick={() => onViewNodeDetails(dataset.id)}
+                onClick={() => onViewNodeDetails(dataset!.id)}
               >
                 <PanelRightOpen aria-hidden="true" />
                 {showNodeDetails ? "Hide node details" : "View node details"}
@@ -772,13 +772,13 @@ function WorkflowPage({
             <div>
               <span>Completeness</span>
               <strong>
-                {profile ? `${profile.completeness_score.toFixed(1)}%` : "—"}
+                {profile ? `${profile!.completeness_score.toFixed(1)}%` : "—"}
               </strong>
             </div>
             <div>
               <span>Validity</span>
               <strong>
-                {profile ? `${profile.validity_score.toFixed(1)}%` : "—"}
+                {profile ? `${profile!.validity_score.toFixed(1)}%` : "—"}
               </strong>
             </div>
             <div>
@@ -1270,6 +1270,8 @@ function App() {
   const [showGraph1Studio, setShowGraph1Studio] = useState<boolean>(() => sessionStorage.getItem("ridepulse.graph1.open") === "1" && Boolean(sessionStorage.getItem("ridepulse.graph1.run")));
   const [analysisRunId, setAnalysisRunId] = useState(() => sessionStorage.getItem("ridepulse.analysis.run") ?? "");
   const [showAnalysisStudio, setShowAnalysisStudio] = useState<boolean>(() => sessionStorage.getItem("ridepulse.analysis.open") === "1" && Boolean(sessionStorage.getItem("ridepulse.analysis.run")));
+  const [analysisStarting, setAnalysisStarting] = useState(false);
+  const [analysisLaunchError, setAnalysisLaunchError] = useState("");
   const [graph1Dataset, setGraph1Dataset] = useState<Dataset | null>(null);
   const [graph1Run, setGraph1Run] = useState<Graph1Run | null>(null);
   const [graph1Nodes, setGraph1Nodes] = useState<Graph1NodeExecution[]>([]);
@@ -1411,7 +1413,21 @@ function App() {
   }, [canAdmin, dataset]);
 
   async function selectDataset(datasetId: string) {
+    const changedDataset = datasetId !== selectedDatasetId;
     setShowGraph1Sidebar(false);
+    if (changedDataset) {
+      setGraph1Run(null);
+      setGraph1Nodes([]);
+      setGraph1Dataset(null);
+      setAnalysisRunId("");
+      setAnalysisLaunchError("");
+      setShowAnalysisStudio(false);
+      sessionStorage.removeItem("ridepulse.graph1.open");
+      sessionStorage.removeItem("ridepulse.graph1.run");
+      sessionStorage.removeItem("ridepulse.graph1.dataset");
+      sessionStorage.removeItem("ridepulse.analysis.open");
+      sessionStorage.removeItem("ridepulse.analysis.run");
+    }
     sessionStorage.setItem("ridepulse.dataset", datasetId);
     setSelectedDatasetId(datasetId);
     setWorkflow(null);
@@ -1422,6 +1438,7 @@ function App() {
   async function openGraph1ForDataset(datasetId: string) {
     if (datasetId !== selectedDatasetId) await selectDataset(datasetId);
     setGraph1Dataset(datasets.find((item) => item.id === datasetId) ?? null);
+    setAnalysisLaunchError("");
     setWizardStep(2);
     setShowAdmin(false);
     sessionStorage.setItem("ridepulse.graph1.open", "1");
@@ -1430,12 +1447,63 @@ function App() {
 
   async function openAnalysisForGraph1(graph1RunId: string) {
     if (isMockMode) throw new Error("Analysis Studio requires the real backend.");
-    const analysisRun = await api.createAnalysisRun(graph1RunId);
-    sessionStorage.setItem("ridepulse.analysis.run", analysisRun.id);
-    sessionStorage.setItem("ridepulse.analysis.open", "1");
-    setAnalysisRunId(analysisRun.id);
-    setShowAnalysisStudio(true);
-    setShowGraph1Studio(false);
+    setAnalysisStarting(true);
+    setAnalysisLaunchError("");
+    try {
+      const analysisRun = await api.createAnalysisRun(graph1RunId);
+      sessionStorage.setItem("ridepulse.analysis.run", analysisRun.id);
+      sessionStorage.setItem("ridepulse.analysis.open", "1");
+      sessionStorage.removeItem("ridepulse.graph1.open");
+      setAnalysisRunId(analysisRun.id);
+      setWizardStep(3);
+      setShowAnalysisStudio(true);
+      setShowGraph1Studio(false);
+    } catch (reason) {
+      setAnalysisLaunchError(getErrorMessage(reason, "Unable to start Graph 2 and Graph 3."));
+      sessionStorage.removeItem("ridepulse.analysis.open");
+      sessionStorage.removeItem("ridepulse.analysis.run");
+      sessionStorage.removeItem("ridepulse.graph1.open");
+      setAnalysisRunId("");
+      setWizardStep(3);
+      setShowAnalysisStudio(false);
+      setShowGraph1Studio(false);
+    } finally {
+      setAnalysisStarting(false);
+    }
+  }
+
+  function closeAnalysisStudio() {
+    sessionStorage.removeItem("ridepulse.analysis.open");
+    sessionStorage.removeItem("ridepulse.graph1.open");
+    setShowAnalysisStudio(false);
+    setAnalysisLaunchError("");
+    // Keep the durable run id so Step 3 can reopen the studio in this session.
+    setWizardStep(3);
+  }
+
+  function backToGraph1FromAnalysis() {
+    sessionStorage.removeItem("ridepulse.analysis.open");
+    sessionStorage.setItem("ridepulse.graph1.open", "1");
+    setShowAnalysisStudio(false);
+    setAnalysisLaunchError("");
+    setShowGraph1Studio(true);
+    setWizardStep(2);
+  }
+
+  async function retryAnalysisFromStep3() {
+    const storedRunId = sessionStorage.getItem("ridepulse.graph1.run") ?? "";
+    const storedDatasetId = sessionStorage.getItem("ridepulse.graph1.dataset") ?? "";
+    const currentDatasetId = dataset?.id ?? selectedDatasetId ?? "";
+    const graph1RunId = graph1Run?.dataset_id === currentDatasetId
+      ? graph1Run.id
+      : storedDatasetId === currentDatasetId
+        ? storedRunId
+        : "";
+    if (!graph1RunId) {
+      setAnalysisLaunchError("Complete Graph 1 in Step 2 before starting Graph 2 and Graph 3.");
+      return;
+    }
+    await openAnalysisForGraph1(graph1RunId);
   }
 
   async function toggleGraph1Sidebar(datasetId: string) {
@@ -1627,9 +1695,9 @@ function App() {
       await pollJob(imported.job, async () => {
         await refreshWorkspace();
         setGraph1Dataset({ ...imported.dataset, status: "PROFILE_READY" });
-        setWizardStep(2);
-        sessionStorage.setItem("ridepulse.graph1.open", "1");
-        setShowGraph1Studio(true);
+        setWizardStep(1);
+        sessionStorage.removeItem("ridepulse.graph1.open");
+        setShowGraph1Studio(false);
       });
     } catch (err) {
       setError(getErrorMessage(err, "Unable to import dataset."));
@@ -2069,11 +2137,20 @@ function App() {
                       }`}
                     onClick={() => {
                       setShowAdmin(false);
+                      setAnalysisLaunchError("");
                       setShowGraph1Sidebar(false);
                       sessionStorage.removeItem("ridepulse.graph1.open");
                       setShowGraph1Studio(false);
-                      sessionStorage.removeItem("ridepulse.analysis.open");
-                      setShowAnalysisStudio(false);
+                      const persistedAnalysisRunId = sessionStorage.getItem("ridepulse.analysis.run") ?? "";
+                      if (step.id === 3 && persistedAnalysisRunId) {
+                        setAnalysisRunId(persistedAnalysisRunId);
+                        sessionStorage.setItem("ridepulse.analysis.open", "1");
+                        setShowAnalysisStudio(true);
+                      } else {
+                        if (step.id === 3) setAnalysisRunId("");
+                        sessionStorage.removeItem("ridepulse.analysis.open");
+                        setShowAnalysisStudio(false);
+                      }
                       setWizardStep(step.id);
                     }}
                   >
@@ -2157,17 +2234,8 @@ function App() {
           {showAnalysisStudio && analysisRunId ? (
             <AnalysisStudio
               analysisRunId={analysisRunId}
-              onExit={() => {
-                sessionStorage.removeItem("ridepulse.analysis.open");
-                setShowAnalysisStudio(false);
-                setAnalysisRunId("");
-              }}
-              onBackToGraph1={() => {
-                sessionStorage.removeItem("ridepulse.analysis.open");
-                sessionStorage.setItem("ridepulse.graph1.open", "1");
-                setShowAnalysisStudio(false);
-                setShowGraph1Studio(true);
-              }}
+              onExit={closeAnalysisStudio}
+              onBackToGraph1={backToGraph1FromAnalysis}
             />
           ) : showGraph1Studio ? (
             <Graph1Studio
@@ -2208,7 +2276,7 @@ function App() {
                     onImportDataset={(file) => void importDataset(file)}
                     onSelectDataset={(id) => void selectDataset(id)}
                     onDeleteDataset={(id) => void deleteDataset(id)}
-                    onStartUnderstand={(id) => { void startGraph1InBackground(id); }}
+                    onStartUnderstand={() => undefined}
                     onViewNodeDetails={(id) => { void toggleGraph1Sidebar(id); }}
                     canOperate={canOperate}
                     importing={Boolean(activeJob)}
@@ -2221,8 +2289,19 @@ function App() {
                 </div>
               )}
 
-              {/* STEP 2: Quality Profiling (Selected Dataset Only) */}
+              {/* STEP 2: Graph 1 execution studio */}
               {wizardStep === 2 && (
+                <div>
+                  <Graph1Studio
+                    onExit={() => setWizardStep(1)}
+                    onDatasetImported={() => void refreshWorkspace()}
+                    onAnalyze={openAnalysisForGraph1}
+                    initialDataset={dataset}
+                  />
+                </div>
+              )}
+              {/* Legacy quality profiling UI retained below for reference */}
+              {false && wizardStep === 2 && (
                 <div>
                   <div className="page-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div>
@@ -2234,8 +2313,8 @@ function App() {
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" }}>
                         {profile ? (
                           <>
-                            <div style={{ width: "48px", height: "48px", borderRadius: "50%", border: `3px solid ${profile.validity_score >= 90 ? "#10b981" : profile.validity_score >= 75 ? "#f59e0b" : "#ef4444"}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "20px", fontWeight: "800", color: profile.validity_score >= 90 ? "#10b981" : profile.validity_score >= 75 ? "#f59e0b" : "#ef4444", background: "var(--surface)", boxShadow: "0 2px 10px rgba(0,0,0,0.05)" }}>
-                              {profile.validity_score >= 90 ? "A" : profile.validity_score >= 75 ? "B" : profile.validity_score >= 60 ? "C" : "D"}
+                            <div style={{ width: "48px", height: "48px", borderRadius: "50%", border: `3px solid ${profile!.validity_score >= 90 ? "#10b981" : profile!.validity_score >= 75 ? "#f59e0b" : "#ef4444"}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "20px", fontWeight: "800", color: profile!.validity_score >= 90 ? "#10b981" : profile!.validity_score >= 75 ? "#f59e0b" : "#ef4444", background: "var(--surface)", boxShadow: "0 2px 10px rgba(0,0,0,0.05)" }}>
+                              {profile!.validity_score >= 90 ? "A" : profile!.validity_score >= 75 ? "B" : profile!.validity_score >= 60 ? "C" : "D"}
                             </div>
                             <span style={{ fontSize: "10px", fontWeight: 700, color: "var(--muted)", letterSpacing: "0.5px" }}>GRADE</span>
                           </>
@@ -2276,11 +2355,11 @@ function App() {
                         <div style={{ padding: "24px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", boxShadow: "0 2px 12px rgba(0,0,0,0.03)" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "16px" }}>
                             <span style={{ fontSize: "13px", fontWeight: "700", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{t("overview.completeness")}</span>
-                            <span style={{ fontSize: "28px", fontWeight: "800", color: "var(--accent)", lineHeight: "1" }}>{profile ? `${profile.completeness_score.toFixed(1)}%` : "—"}</span>
+                            <span style={{ fontSize: "28px", fontWeight: "800", color: "var(--accent)", lineHeight: "1" }}>{profile ? `${profile!.completeness_score.toFixed(1)}%` : "—"}</span>
                           </div>
                           {profile && (
                             <div style={{ width: "100%", height: "8px", background: "var(--surface-muted)", borderRadius: "999px", overflow: "hidden", marginBottom: "16px" }}>
-                              <div style={{ width: `${profile.completeness_score}%`, height: "100%", background: "var(--accent)", borderRadius: "999px", transition: "width 1s cubic-bezier(0.4, 0, 0.2, 1)" }} />
+                              <div style={{ width: `${profile!.completeness_score}%`, height: "100%", background: "var(--accent)", borderRadius: "999px", transition: "width 1s cubic-bezier(0.4, 0, 0.2, 1)" }} />
                             </div>
                           )}
                           <div style={{ fontSize: "13px", color: "var(--muted)", lineHeight: "1.4" }}>{t("datasets.nonNullRatio")}</div>
@@ -2290,11 +2369,11 @@ function App() {
                         <div style={{ padding: "24px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", boxShadow: "0 2px 12px rgba(0,0,0,0.03)" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "16px" }}>
                             <span style={{ fontSize: "13px", fontWeight: "700", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{t("overview.duplicateRate")}</span>
-                            <span style={{ fontSize: "28px", fontWeight: "800", color: profile && profile.duplicate_rate > 5 ? "#d97706" : "#059669", lineHeight: "1" }}>{profile ? `${profile.duplicate_rate.toFixed(2)}%` : "—"}</span>
+                            <span style={{ fontSize: "28px", fontWeight: "800", color: profile && profile!.duplicate_rate > 5 ? "#d97706" : "#059669", lineHeight: "1" }}>{profile ? `${profile!.duplicate_rate.toFixed(2)}%` : "—"}</span>
                           </div>
                           {profile && (
                             <div style={{ width: "100%", height: "8px", background: "var(--surface-muted)", borderRadius: "999px", overflow: "hidden", marginBottom: "16px" }}>
-                              <div style={{ width: `${Math.min(profile.duplicate_rate, 100)}%`, height: "100%", background: profile.duplicate_rate > 5 ? "#d97706" : "#059669", borderRadius: "999px", transition: "width 1s cubic-bezier(0.4, 0, 0.2, 1)" }} />
+                              <div style={{ width: `${Math.min(profile!.duplicate_rate, 100)}%`, height: "100%", background: profile!.duplicate_rate > 5 ? "#d97706" : "#059669", borderRadius: "999px", transition: "width 1s cubic-bezier(0.4, 0, 0.2, 1)" }} />
                             </div>
                           )}
                           <div style={{ fontSize: "13px", color: "var(--muted)", lineHeight: "1.4" }}>{t("datasets.duplicateRowsRatio")}</div>
@@ -2304,11 +2383,11 @@ function App() {
                         <div style={{ padding: "24px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", boxShadow: "0 2px 12px rgba(0,0,0,0.03)" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "16px" }}>
                             <span style={{ fontSize: "13px", fontWeight: "700", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{t("datasets.validityScore")}</span>
-                            <span style={{ fontSize: "28px", fontWeight: "800", color: "#2563eb", lineHeight: "1" }}>{profile ? `${profile.validity_score.toFixed(1)}%` : "—"}</span>
+                            <span style={{ fontSize: "28px", fontWeight: "800", color: "#2563eb", lineHeight: "1" }}>{profile ? `${profile!.validity_score.toFixed(1)}%` : "—"}</span>
                           </div>
                           {profile && (
                             <div style={{ width: "100%", height: "8px", background: "var(--surface-muted)", borderRadius: "999px", overflow: "hidden", marginBottom: "16px" }}>
-                              <div style={{ width: `${profile.validity_score}%`, height: "100%", background: "#2563eb", borderRadius: "999px", transition: "width 1s cubic-bezier(0.4, 0, 0.2, 1)" }} />
+                              <div style={{ width: `${profile!.validity_score}%`, height: "100%", background: "#2563eb", borderRadius: "999px", transition: "width 1s cubic-bezier(0.4, 0, 0.2, 1)" }} />
                             </div>
                           )}
                           <div style={{ fontSize: "13px", color: "var(--muted)", lineHeight: "1.4" }}>{t("datasets.schemaDomainValidity")}</div>
@@ -2316,12 +2395,12 @@ function App() {
                       </section>
 
                       {/* Schema & Column Breakdown Table for selected dataset */}
-                      {profile?.columns && profile.columns.length > 0 ? (
+                      {profile?.columns && profile!.columns.length > 0 ? (
                         <section className="panel" style={{ marginTop: "24px", padding: "24px" }}>
                           <div className="panel-heading" style={{ marginBottom: "16px" }}>
                             <div>
                               <span className="eyebrow">{t("datasets.schemaBreakdown")}</span>
-                              <h3>{t("datasets.columnHealth").replace("{{count}}", profile.columns.length.toString())}</h3>
+                              <h3>{t("datasets.columnHealth").replace("{{count}}", profile!.columns.length.toString())}</h3>
                             </div>
                           </div>
                           <div style={{ overflowX: "auto" }}>
@@ -2336,7 +2415,7 @@ function App() {
                                 </tr>
                               </thead>
                               <tbody>
-                                {profile.columns.map((col, idx) => (
+                                {profile!.columns.map((col, idx) => (
                                   <tr key={idx} style={{ borderBottom: "1px solid var(--border, #f1f5f9)" }}>
                                     <td style={{ padding: "10px", fontWeight: 600 }}><code>{col.name}</code></td>
                                     <td style={{ padding: "10px" }}><span className="status-pill info">{col.data_type}</span></td>
@@ -2364,14 +2443,14 @@ function App() {
                           </div>
                           <div style={{ fontSize: "14px", lineHeight: "1.6", color: "var(--ink-soft)" }}>
                             <p style={{ margin: 0 }}>
-                              Dựa trên kết quả phân tích hệ thống, tập dữ liệu <strong>{dataset.name}</strong> đạt mức độ hoàn thiện <strong>{profile.completeness_score.toFixed(1)}%</strong> và độ tin cậy cấu trúc <strong>{profile.validity_score.toFixed(1)}%</strong>.
-                              {profile.duplicate_rate > 5
-                                ? ` Tuy nhiên, tỷ lệ trùng lặp đang ở ngưỡng cảnh báo (${profile.duplicate_rate.toFixed(1)}%), có thể gây ảnh hưởng đến tính toàn vẹn của các phân tích chuyên sâu.`
-                                : ` Tỷ lệ trùng lặp được duy trì ở mức an toàn (${profile.duplicate_rate.toFixed(1)}%), đảm bảo dữ liệu sạch và không bị nhiễu.`
+                              Dựa trên kết quả phân tích hệ thống, tập dữ liệu <strong>{dataset.name}</strong> đạt mức độ hoàn thiện <strong>{profile!.completeness_score.toFixed(1)}%</strong> và độ tin cậy cấu trúc <strong>{profile!.validity_score.toFixed(1)}%</strong>.
+                              {profile!.duplicate_rate > 5
+                                ? ` Tuy nhiên, tỷ lệ trùng lặp đang ở ngưỡng cảnh báo (${profile!.duplicate_rate.toFixed(1)}%), có thể gây ảnh hưởng đến tính toàn vẹn của các phân tích chuyên sâu.`
+                                : ` Tỷ lệ trùng lặp được duy trì ở mức an toàn (${profile!.duplicate_rate.toFixed(1)}%), đảm bảo dữ liệu sạch và không bị nhiễu.`
                               }
-                              {profile.validity_score < 80
+                              {profile!.validity_score < 80
                                 ? ` Khuyến nghị thiết lập thêm các quy tắc kiểm duyệt (Guardrails) nghiêm ngặt ở bước tiếp theo để ngăn chặn dữ liệu rác thâm nhập vào các luồng xử lý downstream.`
-                                : ` Chất lượng dữ liệu nhìn chung đạt chuẩn (Grade ${profile.validity_score >= 90 ? "A" : profile.validity_score >= 75 ? "B" : "C"}) và hoàn toàn đủ điều kiện sử dụng làm nguồn tham chiếu tin cậy.`
+                                : ` Chất lượng dữ liệu nhìn chung đạt chuẩn (Grade ${profile!.validity_score >= 90 ? "A" : profile!.validity_score >= 75 ? "B" : "C"}) và hoàn toàn đủ điều kiện sử dụng làm nguồn tham chiếu tin cậy.`
                               }
                             </p>
                           </div>
@@ -2384,6 +2463,57 @@ function App() {
 
               {/* STEP 3: Execution & Rules Selection & Monitoring */}
               {wizardStep === 3 && (
+                <div>
+                  {analysisRunId && showAnalysisStudio ? (
+                    <AnalysisStudio
+                      analysisRunId={analysisRunId}
+                      onExit={closeAnalysisStudio}
+                      onBackToGraph1={backToGraph1FromAnalysis}
+                    />
+                  ) : (
+                    <section className="panel" style={{ marginTop: "16px", padding: "28px", textAlign: "center" }}>
+                      <span className="eyebrow">STEP 3 · GRAPH 2 + GRAPH 3</span>
+                      <h2 style={{ margin: "8px 0" }}>Agent execution studio</h2>
+                      <p
+                        className="muted"
+                        role={analysisLaunchError ? "alert" : undefined}
+                        style={{ maxWidth: "560px", margin: "0 auto 18px" }}
+                      >
+                        {analysisLaunchError || (analysisRunId
+                          ? "The Agent execution studio is ready to resume this analysis run."
+                          : "Complete Graph 1 in Step 2, then start the Graph 2 and Graph 3 analysis.")}
+                      </p>
+                      <div style={{ display: "flex", justifyContent: "center", gap: "10px", flexWrap: "wrap" }}>
+                        {analysisRunId ? (
+                          <button
+                            type="button"
+                            className="button primary"
+                            onClick={() => {
+                              sessionStorage.setItem("ridepulse.analysis.open", "1");
+                              setShowAnalysisStudio(true);
+                            }}
+                          >
+                            Open Agent execution studio →
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="button primary"
+                            disabled={analysisStarting}
+                            onClick={() => void retryAnalysisFromStep3()}
+                          >
+                            {analysisStarting ? "Starting analysis…" : "Analyze Graph 2 & 3 →"}
+                          </button>
+                        )}
+                        <button type="button" className="button secondary" onClick={() => { setWizardStep(2); setShowAnalysisStudio(false); }}>
+                          Back to Graph 1
+                        </button>
+                      </div>
+                    </section>
+                  )}
+                </div>
+              )}
+              {false && wizardStep === 3 && (
                 <div>
                   <RulesPage
                     proposals={proposals}
@@ -2840,7 +2970,7 @@ function OverviewQualityBars({
               </div>
               <strong>
                 {row.profile
-                  ? `${row.profile.completeness_score.toFixed(1)}%`
+                  ? `${row.profile!.completeness_score.toFixed(1)}%`
                   : "—"}
               </strong>
             </div>
@@ -2851,7 +2981,7 @@ function OverviewQualityBars({
               </div>
               <strong>
                 {row.profile
-                  ? `${row.profile.validity_score.toFixed(1)}%`
+                  ? `${row.profile!.validity_score.toFixed(1)}%`
                   : "—"}
               </strong>
             </div>
@@ -3829,7 +3959,7 @@ function VisualizationPage({
         </div>
         <div style={{ padding: "18px", borderRadius: "10px", background: "var(--surface-card, #fff)", border: "1px solid var(--border, #e2e8f0)" }}>
           <span className="muted" style={{ fontSize: "12px", textTransform: "uppercase" }}>Tỷ lệ không trùng lặp</span>
-          <strong style={{ fontSize: "22px", display: "block", margin: "4px 0", color: profile && profile.duplicate_rate > 0 ? "#f59e0b" : "#10b981" }}>
+          <strong style={{ fontSize: "22px", display: "block", margin: "4px 0", color: profile && profile!.duplicate_rate > 0 ? "#f59e0b" : "#10b981" }}>
             {uniqueness.toFixed(2)}%
           </strong>
           <small className="muted">{profile?.duplicate_rate ?? 0}% trùng lặp dòng</small>

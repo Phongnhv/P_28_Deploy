@@ -131,7 +131,12 @@ def test_graph1_review_synchronizes_both_rule_stores_and_node9(test_db):
 
 
 def test_analysis_run_is_idempotent_and_initializes_observable_nodes(test_db):
+    # Keep this path representative of PostgreSQL, where FK checks are always
+    # active. SQLite leaves them disabled by default, which previously masked
+    # inserting analysis child nodes before their parent run row was flushed.
     with Session(test_db) as db:
+        db.connection().exec_driver_sql("PRAGMA foreign_keys=ON")
+        assert db.connection().exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
         _ready_dataset(db)
         graph1 = _completed_graph1(db, "idempotent")
         legacy_gate = db.get(Graph1NodeExecutionModel, f"{graph1.id}:hitl_gate")
