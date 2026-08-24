@@ -4881,32 +4881,6 @@ button.step-nav-button:disabled {
   background: color-mix(in srgb, var(--accent-soft) 52%, var(--surface));
 }
 
-/* Keep the workflow map visible as a compact left rail while preserving a wide work area. */
-.wizard-header-container {
-  position: fixed;
-  left: 20px;
-  top: 92px;
-  width: 224px;
-  margin: 0;
-  padding: 16px 12px;
-}
-.wizard-stepper {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 6px;
-}
-.wizard-step-node { width: 100%; padding: 10px 8px; }
-.wizard-connector { width: 2px; height: 18px; flex: none; margin: 0 0 0 23px; }
-.page-container { margin-left: 252px; margin-right: 24px; max-width: none; }
-
-@media (max-width: 900px) {
-  .wizard-header-container { position: static; width: auto; margin-bottom: 16px; }
-  .wizard-stepper { flex-direction: row; overflow-x: auto; align-items: center; }
-  .wizard-connector { width: auto; height: 2px; flex: 1; margin: 0 4px; }
-  .page-container { margin-left: 0; margin-right: 0; }
-}
-
 /* Compact Stage 09 sidebar review. Keep all persisted review data available while
    reducing repeated chrome and vertical scanning cost in the narrow drawer. */
 .graph1-details-sidebar .graph1-sidebar-review {

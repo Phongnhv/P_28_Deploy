@@ -20,7 +20,8 @@ def create_job(job_type: str, idempotency_key: str, linked_entity: str = None, c
             idempotency_key=idempotency_key,
             linked_entity=linked_entity,
             correlation_id=correlation_id or str(uuid.uuid4()),
-            status='PENDING'
+            status='PENDING',
+            message=f"Queued {job_type}",
         )
         session.add(new_job)
         session.commit()

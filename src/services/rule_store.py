@@ -475,6 +475,16 @@ def _migrate_local_workflow_columns(engine) -> None:
                     "ALTER TABLE rule_configurations RENAME COLUMN rule_proposal_id TO rule_id"
                 )
             for statement in (
+                # Rule identities are semantic paths, not UUIDs.  The initial
+                # Supabase schema used VARCHAR(36), which truncates valid IDs
+                # produced by the real Graph 1 proposer.  Expand every related
+                # key before proposal persistence or review can run.
+                "ALTER TABLE rule_proposals ALTER COLUMN id TYPE VARCHAR(512)",
+                "ALTER TABLE rule_versions ALTER COLUMN id TYPE VARCHAR(640)",
+                "ALTER TABLE rule_versions ALTER COLUMN rule_proposal_id TYPE VARCHAR(512)",
+                "ALTER TABLE rule_configurations ALTER COLUMN rule_id TYPE VARCHAR(512)",
+                "ALTER TABLE ruleset_versions ALTER COLUMN proposal_run_id TYPE VARCHAR(512)",
+                "ALTER TABLE dq_results ALTER COLUMN rule_id TYPE VARCHAR(512)",
                 # The first Supabase schema used different physical names from
                 # the dashboard ORM.  ``create_all`` never reconciles existing
                 # tables, so every select attempted to read columns that were
@@ -634,6 +644,7 @@ def create_run(run_id: str, dataset_id: str) -> dict:
             type="PROPOSE_RULES",
             status="PENDING",
             progress=0.0,
+            message="Queued for rule proposal generation",
             attempt_count=0,
             linked_entity=dataset_id,
             idempotency_key=f"propose-run-{run_id}",
@@ -1053,6 +1064,7 @@ def create_test_run(test_run_id: str, dataset_id: str) -> dict:
                 type="RUN_DQ",
                 status="RUNNING",
                 progress=0.0,
+                message="Running Graph 2 data-quality checks",
                 attempt_count=0,
                 linked_entity=dataset_id,
                 idempotency_key=f"run-dq-job-{test_run_id}",

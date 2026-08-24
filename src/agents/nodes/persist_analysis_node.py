@@ -147,5 +147,6 @@ async def persist_analysis_node(state: AnomalyGraphState) -> dict:
     except Exception as exc:
         logger.error("Failed to persist anomaly analysis to database: %s", exc, exc_info=True)
         return {
+            "error": f"Failed to persist anomaly analysis: {exc}",
             "metadata": {**state.get("metadata", {}), "persistence_error": str(exc)}
         }

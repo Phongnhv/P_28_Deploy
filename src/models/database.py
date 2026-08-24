@@ -134,7 +134,10 @@ class JobModel(Base):
     type: Mapped[str] = mapped_column(String(64), nullable=False)  # INGEST_PROFILE, PROPOSE_RULES, RUN_DQ
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING", index=True)
     progress: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    message: Mapped[str | None] = mapped_column(Text)
+    # The deployed Supabase schema enforces NOT NULL.  Keep the ORM contract in
+    # sync so every job creator (including Graph 1/2 compatibility jobs) gets
+    # a safe value even when it does not provide a more specific message.
+    message: Mapped[str] = mapped_column(Text, nullable=False, default="Queued")
     error: Mapped[str | None] = mapped_column(Text)
     idempotency_key: Mapped[str] = mapped_column(String(256), unique=True, index=True, nullable=False)
     linked_entity: Mapped[str | None] = mapped_column(String(256))
@@ -188,7 +191,9 @@ class ColumnProfileModel(Base):
 class RuleProposalModel(Base):
     __tablename__ = "rule_proposals"
 
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # Canonical IDs include table/column/rule semantics and can be much longer
+    # than UUID-sized legacy IDs (for example cross-field comparisons).
+    id: Mapped[str] = mapped_column(String(512), primary_key=True)
     dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
     # Proposal batches belong to a concrete steward workflow.  Keeping this nullable
     # preserves legacy dashboard rows while new workflow rows remain isolated.
@@ -339,8 +344,8 @@ class AnalysisNodeExecutionModel(Base):
 class RuleVersionModel(Base):
     __tablename__ = "rule_versions"
 
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    rule_proposal_id: Mapped[str] = mapped_column(String(64), ForeignKey("rule_proposals.id"), nullable=False)
+    id: Mapped[str] = mapped_column(String(640), primary_key=True)
+    rule_proposal_id: Mapped[str] = mapped_column(String(512), ForeignKey("rule_proposals.id"), nullable=False)
     dataset_id: Mapped[str] = mapped_column(String(256), nullable=False)
     rule_spec: Mapped[str] = mapped_column(Text, nullable=False)  # JSON
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="APPROVED")
@@ -354,7 +359,7 @@ class RuleConfigurationModel(Base):
     # Keep the public/domain attribute while mapping to the legacy physical
     # primary-key name used by the original Supabase schema.
     rule_proposal_id: Mapped[str] = mapped_column(
-        "rule_id", String(64), ForeignKey("rule_proposals.id"), primary_key=True
+        "rule_id", String(512), ForeignKey("rule_proposals.id"), primary_key=True
     )
     execution_status: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE")
     schedule_frequency: Mapped[str] = mapped_column(String(16), nullable=False, default="MANUAL")
@@ -425,7 +430,7 @@ class DqResultModel(Base):
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
     )
     run_id: Mapped[str] = mapped_column(String(64), ForeignKey("dq_runs.id"), nullable=False)
-    rule_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    rule_id: Mapped[str] = mapped_column(String(512), nullable=False)
     rule_title: Mapped[str] = mapped_column(String(256), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)  # PASS, FAIL, ERROR, SKIPPED, RESULT_MISMATCH
     checked_count: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -459,7 +464,7 @@ class RulesetVersionModel(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
     dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    proposal_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("rule_proposals.id"), nullable=True)
+    proposal_run_id: Mapped[str | None] = mapped_column(String(512), ForeignKey("rule_proposals.id"), nullable=True)
     # New dashboard rulesets are owned by a workflow batch, not one legacy proposal row.
     workflow_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workflow_runs.id"), nullable=True, index=True)
     stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

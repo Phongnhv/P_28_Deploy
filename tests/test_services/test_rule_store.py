@@ -5,9 +5,11 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import Session
 
 import src.services.rule_store as rule_store_module
 from src.main import app
+from src.models.database import DqResultModel, JobModel, RuleConfigurationModel, RuleProposalModel, RuleVersionModel
 from src.services.rule_store import (
     create_run,
     deactivate_rule,
@@ -39,6 +41,11 @@ def test_publish_approved_rules_workflow():
     dataset_id = "yellow_tripdata"
 
     create_run(run_id, dataset_id)
+
+    with Session(rule_store_module.get_engine()) as session:
+        job = session.get(JobModel, run_id)
+        assert job is not None
+        assert job.message == "Queued for rule proposal generation"
 
     mock_rules = [
         {
@@ -110,6 +117,14 @@ def test_publish_approved_rules_workflow():
     active_after_deact = get_active_rules(dataset_id)
     assert len(active_after_deact) == 1
     assert active_after_deact[0]["rule_id"] == "yellow_tripdata.fare_amount.RANGE"
+
+
+def test_canonical_rule_identifiers_are_not_uuid_limited():
+    assert RuleProposalModel.__table__.c.id.type.length == 512
+    assert RuleVersionModel.__table__.c.rule_proposal_id.type.length == 512
+    assert RuleVersionModel.__table__.c.id.type.length == 640
+    assert RuleConfigurationModel.__table__.c.rule_id.type.length == 512
+    assert DqResultModel.__table__.c.rule_id.type.length == 512
 
 
 def test_publish_api_endpoints():

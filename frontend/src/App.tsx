@@ -172,8 +172,8 @@ function LoginScreen({
           </p>
           <div className="metric-row">
             <div>
-              <strong>50k+</strong>
-              <span>dòng dữ liệu đã đăng ký</span>
+              <strong>LIVE</strong>
+              <span>dữ liệu Supabase trực tiếp</span>
             </div>
             <div>
               <strong>5</strong>
