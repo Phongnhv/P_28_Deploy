@@ -308,10 +308,17 @@ class TestResultModel(Base):
 def init_db() -> None:
     """Tạo tất cả bảng nếu chưa tồn tại. Tự động đồng bộ legacy approved rules vào active_rules."""
     engine = get_engine()
-    Base.metadata.create_all(engine)
-    _migrate_local_profile_columns(engine)
-    _migrate_local_proposal_columns(engine)
-    _migrate_local_workflow_columns(engine)
+    settings = get_settings()
+    if settings.app_env == "production":
+        # Production schema changes are a controlled release operation. Running
+        # create/alter DDL in every Cloud Run startup races active revisions,
+        # takes table locks, and can make a healthy rollout fail its probe.
+        logger.info("Skipping startup schema mutations in production.")
+    else:
+        Base.metadata.create_all(engine)
+        _migrate_local_profile_columns(engine)
+        _migrate_local_proposal_columns(engine)
+        _migrate_local_workflow_columns(engine)
     logger.info("Database đã được khởi tạo tại: %s", get_settings().database_url)
 
     # Seed default demo dataset if not present
