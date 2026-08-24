@@ -128,6 +128,7 @@ def test_deleted_pending_rule_is_retained_as_stale_and_does_not_block_review(mon
         navigate_forward(run)
         execute_step(db, run, "PROPOSE_RULES")
         rule = db.query(RuleProposalModel).filter_by(workflow_run_id=run.id).one()
+        assert len(rule.id) <= 36
         rule.status = "STALE"  # equivalent to a steward removal through the API
         with pytest.raises(WorkflowError):
             complete_rule_review(db, run)

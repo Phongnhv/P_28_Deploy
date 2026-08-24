@@ -290,7 +290,10 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
             old.status = "STALE"
         proposal_ids = []
         for proposal in proposals:
-            proposal_id = f"wf-{run.id[-8:]}-{proposal.id}"[:64]
+            # The original Supabase schema uses VARCHAR(36) for proposal IDs.
+            # Keep workflow-generated IDs within that legacy boundary while
+            # retaining enough random entropy for independent revisions.
+            proposal_id = f"wf-{run.id[-8:]}-{uuid.uuid4().hex[:20]}"
             db.add(RuleProposalModel(id=proposal_id, dataset_id=run.dataset_id, workflow_run_id=run.id,
                 title=proposal.title, description=proposal.description, severity=proposal.severity, status="PROPOSED",
                 rule_type=proposal.rule_type, rule_spec=json.dumps(proposal.rule_spec),

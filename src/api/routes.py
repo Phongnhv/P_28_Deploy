@@ -953,7 +953,29 @@ def run_workflow_step(
         db.commit()
         raise HTTPException(status_code=409, detail={"code": "WORKFLOW_STATE", "message": str(exc)})
     except Exception:
-        job.status, job.error, job.message = "FAILED", "Workflow execution failed", "Workflow step failed"
+        # A failed flush leaves the SQLAlchemy session unusable until rollback.
+        # Persist a terminal job after recovery so clients never poll a stale
+        # RUNNING record when a workflow write fails.
+        db.rollback()
+        failed_job = db.get(JobModel, job.id)
+        if not failed_job:
+            failed_job = JobModel(
+                id=job.id,
+                type=job.type,
+                status="FAILED",
+                progress=0.0,
+                message="Workflow step failed",
+                error="Workflow execution failed",
+                idempotency_key=job.idempotency_key,
+                linked_entity=run.dataset_id,
+                correlation_id=run.id,
+                attempt_count=1,
+            )
+            db.add(failed_job)
+        else:
+            failed_job.status = "FAILED"
+            failed_job.error = "Workflow execution failed"
+            failed_job.message = "Workflow step failed"
         db.commit()
         raise
     return CreateJobResponse(job_id=job.id, status="PENDING")
