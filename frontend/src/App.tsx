@@ -1431,6 +1431,39 @@ function App() {
           setDqResults(latestResults);
           setDqAnomalies(latestAnomalies);
         }
+        const rememberedWorkflowId = sessionStorage.getItem(
+          "ridepulse.workflow",
+        );
+        if (rememberedWorkflowId) {
+          try {
+            const [rememberedWorkflow, rememberedArtifacts] =
+              await Promise.all([
+                workflowApi.getWorkflow(rememberedWorkflowId),
+                workflowApi.listWorkflowArtifacts(rememberedWorkflowId),
+              ]);
+            if (
+              refreshId === workspaceRefreshSequence.current &&
+              rememberedWorkflow.dataset_id === nextDataset.id
+            ) {
+              setWorkflow(rememberedWorkflow);
+              setWorkflowArtifacts(rememberedArtifacts);
+              setProposals(
+                await api.listProposals(
+                  nextDataset.id,
+                  rememberedWorkflow.id,
+                ),
+              );
+            } else if (rememberedWorkflow.dataset_id !== nextDataset.id) {
+              sessionStorage.removeItem("ridepulse.workflow");
+            }
+          } catch (err) {
+            if (err instanceof ApiError && err.status === 404) {
+              sessionStorage.removeItem("ridepulse.workflow");
+            } else {
+              throw err;
+            }
+          }
+        }
       } else {
         setProfile(null);
         setProposals([]);
@@ -1469,6 +1502,8 @@ function App() {
   }, [canAdmin, dataset]);
 
   async function selectDataset(datasetId: string) {
+    if (datasetId !== selectedDatasetId)
+      sessionStorage.removeItem("ridepulse.workflow");
     sessionStorage.setItem("ridepulse.dataset", datasetId);
     setSelectedDatasetId(datasetId);
     setWorkflow(null);
@@ -1518,6 +1553,7 @@ function App() {
     sessionStorage.removeItem("ridepulse.role");
     sessionStorage.removeItem("ridepulse.username");
     sessionStorage.removeItem("ridepulse.dataset");
+    sessionStorage.removeItem("ridepulse.workflow");
     setAuthenticated(false);
   }
 
@@ -1824,6 +1860,7 @@ function App() {
           setDatasets(nextDatasets);
           setProfile(await api.getProfile(targetDatasetId));
           setWorkflow(currentWorkflow);
+          sessionStorage.setItem("ridepulse.workflow", currentWorkflow.id);
           setWorkflowArtifacts(
             await workflowApi.listWorkflowArtifacts(currentWorkflow.id),
           );
@@ -1839,6 +1876,7 @@ function App() {
           fresh,
         );
         setWorkflow(currentWorkflow);
+        sessionStorage.setItem("ridepulse.workflow", currentWorkflow.id);
         setWorkflowArtifacts(
           await workflowApi.listWorkflowArtifacts(currentWorkflow.id),
         );
