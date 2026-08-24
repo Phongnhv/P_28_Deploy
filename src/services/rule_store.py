@@ -43,10 +43,23 @@ def get_engine():
         _settings = get_settings()
         db_url = _settings.database_url
         connect_args = {}
+        engine_options = {}
         if "sqlite" in db_url:
             connect_args["check_same_thread"] = False
+        else:
+            # Supabase's session-mode pool has a small, project-wide client
+            # limit. Keep each Cloud Run instance bounded so overlapping
+            # revisions and autoscaling cannot exhaust every DB session.
+            engine_options.update(
+                pool_size=1,
+                max_overflow=1,
+                pool_timeout=30,
+                pool_recycle=300,
+                pool_pre_ping=True,
+                pool_use_lifo=True,
+            )
 
-        _engine = create_engine(db_url, connect_args=connect_args)
+        _engine = create_engine(db_url, connect_args=connect_args, **engine_options)
 
         @event.listens_for(_engine, "connect")
         def _set_sqlite_pragma(dbapi_conn, _connection_record):
