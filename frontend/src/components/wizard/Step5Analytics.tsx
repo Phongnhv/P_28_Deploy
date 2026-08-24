@@ -1,6 +1,6 @@
 import React from "react";
 import { useI18n } from "../../i18n/context";
-import type { DqResult, DqAnomaly } from "../../types";
+import type { DqResult, DqAnomaly, QualityTrendPoint } from "../../types";
 import {
   ResponsiveContainer,
   AreaChart,
@@ -17,6 +17,7 @@ import {
 interface Step5AnalyticsProps {
   results: DqResult[];
   anomalies: DqAnomaly[];
+  trends: QualityTrendPoint[];
   onBack: () => void;
   onStartNewRun: () => void;
 }
@@ -24,6 +25,7 @@ interface Step5AnalyticsProps {
 export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
   results,
   anomalies,
+  trends,
   onBack,
   onStartNewRun,
 }) => {
@@ -36,7 +38,11 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
   const totalRowsChecked = results.reduce((acc, r) => acc + (r.checked_count || 0), 0);
   const totalRowsFailed = results.reduce((acc, r) => acc + (r.failed_count || 0), 0);
 
-  const score = totalRules > 0 ? Math.round((passedRules / totalRules) * 100) : 100;
+  const rulePassScore = totalRules > 0 ? (passedRules / totalRules) * 100 : 100;
+  const score = trends.length > 0
+    ? trends[trends.length - 1].quality_score
+    : Number(rulePassScore.toFixed(2));
+  const scoreLabel = Number.isInteger(score) ? score.toFixed(0) : score.toFixed(2);
 
   // Grade determination
   const gradeLabel =
@@ -55,7 +61,7 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
   const ruleBreakdownData = results.map((r) => {
     const passRate =
       r.checked_count > 0
-        ? Math.round(((r.checked_count - r.failed_count) / r.checked_count) * 100)
+        ? Number((((r.checked_count - r.failed_count) / r.checked_count) * 100).toFixed(2))
         : r.status === "PASS" ? 100 : 0;
     return {
       name: r.rule_title.length > 22 ? r.rule_title.substring(0, 22) + "…" : r.rule_title,
@@ -67,13 +73,18 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
     };
   });
 
-  // Historical trend data (simulated smooth progression + current score)
-  const trendData = [
-    { run: language === "vi" ? "Lượt 1" : "Run 1", score: Math.min(100, score - 15 > 0 ? score - 15 : 65) },
-    { run: language === "vi" ? "Lượt 2" : "Run 2", score: Math.min(100, score - 8 > 0 ? score - 8 : 78) },
-    { run: language === "vi" ? "Lượt 3" : "Run 3", score: Math.min(100, score - 3 > 0 ? score - 3 : 88) },
-    { run: language === "vi" ? "Hiện tại" : "Current", score: score },
-  ];
+  // Show only persisted history. A first run must not be padded with
+  // fabricated scores that look like production evidence.
+  const trendData = trends.slice(-8).map((point, index, points) => ({
+    run:
+      index === points.length - 1
+        ? (language === "vi" ? "Hiện tại" : "Current")
+        : new Date(point.created_at).toLocaleDateString(language === "vi" ? "vi-VN" : "en-US", {
+            month: "short",
+            day: "numeric",
+          }),
+    score: point.quality_score,
+  }));
 
   return (
     <div>
@@ -151,7 +162,7 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
               marginBottom: "8px",
             }}
           >
-            {score}%
+            {scoreLabel}%
           </div>
           <span
             className={`status-pill ${score >= 80 ? "success" : score >= 60 ? "warning" : "danger"}`}
@@ -434,8 +445,11 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
                 results.map((res, i) => {
                   const passRate =
                     res.checked_count > 0
-                      ? Math.round(((res.checked_count - res.failed_count) / res.checked_count) * 100)
+                      ? Number((((res.checked_count - res.failed_count) / res.checked_count) * 100).toFixed(2))
                       : res.status === "PASS" ? 100 : 0;
+                  const passRateLabel = Number.isInteger(passRate)
+                    ? `${passRate.toFixed(0)}%`
+                    : `${passRate.toFixed(2)}%`;
 
                   return (
                     <tr key={i} style={{ borderBottom: "1px solid var(--border)", height: "48px" }}>
@@ -460,8 +474,8 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
                               }}
                             />
                           </div>
-                          <span style={{ fontSize: "12px", fontWeight: 700, width: "36px", textAlign: "right" }}>
-                            {passRate}%
+                          <span style={{ fontSize: "12px", fontWeight: 700, width: "48px", textAlign: "right" }}>
+                            {passRateLabel}
                           </span>
                         </div>
                       </td>

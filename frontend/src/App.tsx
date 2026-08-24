@@ -2206,6 +2206,9 @@ function App() {
                       ? (language === "vi" ? "Đang phân tích hồ sơ dữ liệu…" : "Building dataset profile")
                       : activeJob.type === "PROPOSE_RULES"
                         ? (language === "vi" ? "Đang sinh đề xuất quy tắc…" : "Generating rule proposals")
+                        : activeJob.type === "RUN_DQ" &&
+                            /ANALYZE_REPORT|analysis report/i.test(activeJob.message)
+                          ? (language === "vi" ? "Đang phân tích và tạo báo cáo…" : "Analyzing results and building report")
                         : (language === "vi" ? "Đang chạy kiểm thử quy tắc…" : "Running approved checks")
                   }
                 />
@@ -2479,6 +2482,7 @@ function App() {
                 <Step5Analytics
                   results={dqResults}
                   anomalies={dqAnomalies}
+                  trends={qualityTrends}
                   onBack={() => setWizardStep(3)}
                   onStartNewRun={() => setWizardStep(1)}
                 />
