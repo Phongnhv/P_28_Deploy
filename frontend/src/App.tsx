@@ -2267,7 +2267,7 @@ function App() {
           </div>
         </header>
 
-        {!showAdmin && !showGraph1Studio && !showAnalysisStudio && (
+        {!showAdmin && (
           <div className="wizard-header-container">
             <nav className="wizard-stepper" aria-label="Wizard Steps">
               {[
