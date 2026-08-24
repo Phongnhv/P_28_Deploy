@@ -1483,7 +1483,13 @@ function App() {
       setUsername(session.username);
       setAuthenticated(true);
     } catch (err) {
-      setLoginError(getErrorMessage(err, "Unable to start session."));
+      setLoginError(
+        err instanceof ApiError && err.status === 401
+          ? language === "vi"
+            ? "Tên đăng nhập hoặc mật khẩu không đúng."
+            : "The username or password is incorrect."
+          : getErrorMessage(err, "Unable to start session."),
+      );
     } finally {
       setLoginBusy(false);
     }
