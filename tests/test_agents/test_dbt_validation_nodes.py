@@ -53,6 +53,33 @@ async def test_validate_dbt_project_captures_dbt_parse_error(monkeypatch, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_unconfigured_production_storage_uses_validated_local_trace(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "src.agents.nodes.validate_dbt_project_node.run_dbt_parse",
+        lambda _dbt_dir: (True, "parse ok", 0),
+    )
+    settings = MagicMock(
+        output_dir=str(tmp_path),
+        app_env="production",
+        object_storage_endpoint_url=None,
+        object_storage_access_key_id=None,
+        object_storage_secret_access_key=None,
+    )
+    monkeypatch.setattr("src.agents.nodes.validate_dbt_project_node.get_settings", lambda: settings)
+    store = MagicMock()
+    store.upload_yaml.side_effect = RuntimeError("no local object store")
+    monkeypatch.setattr("src.agents.nodes.validate_dbt_project_node.get_dbt_artifact_store", lambda: store)
+
+    result = await validate_dbt_project_node(
+        {"test_run_id": "local-trace", "generated_dbt_yaml": VALID_YAML}
+    )
+
+    assert result["dbt_validation_valid"] is True
+    assert result["dbt_validation_error"] is None
+    assert result["dbt_trace_file_path"].endswith("generated_dq_tests.yml")
+
+
+@pytest.mark.asyncio
 async def test_llm_dbt_repair_updates_yaml_and_attempt_history(monkeypatch):
     llm = MagicMock()
     llm.ainvoke = AsyncMock(return_value=MagicMock(content=f"```yaml\n{VALID_YAML}```"))

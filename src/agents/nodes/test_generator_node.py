@@ -304,6 +304,7 @@ def validate_ruleset_contract(
     approved_rules: list,
     dataset_id: str,
     ruleset_version_id: str | None,
+    dataset_profile: dict | None = None,
 ) -> tuple[list[dict], str]:
     """Perform Phase 2.2 contract validation and calculate schema signature hash.
 
@@ -312,13 +313,6 @@ def validate_ruleset_contract(
     """
     validation_errors = []
 
-    # 1. Reflect database schema for target tables
-    try:
-        inspector = inspect(engine)
-        db_tables = inspector.get_table_names()
-    except Exception as exc:
-        return [{"type": "DB_CONNECTION_ERROR", "message": f"Cannot connect to database: {exc}"}], ""
-
     # Group rules by table to inspect
     tables_in_rules = set()
     for rule in approved_rules:
@@ -326,33 +320,60 @@ def validate_ruleset_contract(
         if t_name:
             tables_in_rules.add(t_name)
 
-    # Compute live schema signature hash
+    # Compute the target schema signature. Imported datasets are executed from
+    # their uploaded CSV/Parquet file, so their Graph 1 profile is the canonical
+    # schema. Reflecting the control-plane/Supabase database here incorrectly
+    # compares uploaded columns (for example ``career_assists``) with the pinned
+    # NYC ``source_rows`` table.
     schema_parts = []
     table_columns = {}
-
-    for t_name in sorted(tables_in_rules):
-        if t_name not in db_tables:
-            validation_errors.append({
-                "type": "MISSING_TABLE",
-                "table_name": t_name,
-                "message": f"Table '{t_name}' does not exist in the database catalog."
-            })
-            continue
-
+    profiled_tables = dataset_profile if isinstance(dataset_profile, dict) else {}
+    if profiled_tables:
+        for t_name in sorted(tables_in_rules):
+            table_profile = profiled_tables.get(t_name)
+            raw_columns = table_profile.get("columns") if isinstance(table_profile, dict) else None
+            if not isinstance(raw_columns, dict):
+                validation_errors.append({
+                    "type": "MISSING_TABLE",
+                    "table_name": t_name,
+                    "message": f"Table '{t_name}' does not exist in the dataset profile.",
+                })
+                continue
+            col_info = sorted(
+                (str(name), str(details.get("type") or "unknown"))
+                for name, details in raw_columns.items()
+                if isinstance(details, dict)
+            )
+            table_columns[t_name] = {name: type_name for name, type_name in col_info}
+            schema_parts.append(f"{t_name}({','.join(f'{name}:{type_name}' for name, type_name in col_info)})")
+    else:
+        # Legacy/CLI runs without a Graph 1 profile still validate against the
+        # physical execution database.
         try:
-            cols = inspector.get_columns(t_name)
-            col_info = sorted([(c["name"], str(c["type"])) for c in cols], key=lambda x: x[0])
-            table_columns[t_name] = {c[0]: c[1] for c in col_info}
-
-            # format table signature: table_name(col1:type1,col2:type2,...)
-            cols_str = ",".join(f"{name}:{type_str}" for name, type_str in col_info)
-            schema_parts.append(f"{t_name}({cols_str})")
+            inspector = inspect(engine)
+            db_tables = inspector.get_table_names()
         except Exception as exc:
-            validation_errors.append({
-                "type": "REFLECTION_ERROR",
-                "table_name": t_name,
-                "message": f"Failed to reflect columns for table '{t_name}': {exc}"
-            })
+            return [{"type": "DB_CONNECTION_ERROR", "message": f"Cannot connect to database: {exc}"}], ""
+
+        for t_name in sorted(tables_in_rules):
+            if t_name not in db_tables:
+                validation_errors.append({
+                    "type": "MISSING_TABLE",
+                    "table_name": t_name,
+                    "message": f"Table '{t_name}' does not exist in the database catalog.",
+                })
+                continue
+            try:
+                cols = inspector.get_columns(t_name)
+                col_info = sorted([(c["name"], str(c["type"])) for c in cols], key=lambda x: x[0])
+                table_columns[t_name] = {c[0]: c[1] for c in col_info}
+                schema_parts.append(f"{t_name}({','.join(f'{name}:{type_str}' for name, type_str in col_info)})")
+            except Exception as exc:
+                validation_errors.append({
+                    "type": "REFLECTION_ERROR",
+                    "table_name": t_name,
+                    "message": f"Failed to reflect columns for table '{t_name}': {exc}",
+                })
 
     live_schema_str = ";".join(schema_parts)
     live_schema_hash = hashlib.md5(live_schema_str.encode("utf-8")).hexdigest() if live_schema_str else ""
@@ -472,6 +493,7 @@ async def test_generator_node(state: AgentState) -> dict:
         approved_rules,
         state.get("dataset_id", "unknown"),
         ruleset_version_id,
+        (state.get("metadata") or {}).get("uploaded_dataset_profile"),
     )
 
     if validation_errors:

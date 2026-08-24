@@ -78,7 +78,12 @@ async def validate_dbt_project_node(state: AgentState) -> dict:
             )
             updates["dbt_artifact_ref"] = ref.to_dict()
         except Exception as exc:
-            if settings.app_env not in ("local", "development", "test"):
+            storage_is_configured = bool(
+                settings.object_storage_endpoint_url
+                or settings.object_storage_access_key_id
+                or settings.object_storage_secret_access_key
+            )
+            if settings.app_env not in ("local", "development", "test") and storage_is_configured:
                 updates["dbt_validation_valid"] = False
                 updates["dbt_validation_error"] = f"Unable to persist validated dbt artifact: {exc}"
             else:

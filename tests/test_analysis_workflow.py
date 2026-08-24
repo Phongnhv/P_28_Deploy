@@ -156,6 +156,23 @@ def test_analysis_run_is_idempotent_and_initializes_observable_nodes(test_db):
         assert repaired_gate["total_count"] == repaired_gate["approved_count"] == 1
 
 
+def test_failed_analysis_can_be_retried_with_a_new_idempotency_key(test_db):
+    with Session(test_db) as db:
+        _ready_dataset(db)
+        graph1 = _completed_graph1(db, "retry")
+        failed, created = create_analysis_run(db, graph1, "steward", "failed-analysis-key")
+        assert created is True
+        failed.status = "FAILED"
+        failed.error = "old deployment error"
+        db.commit()
+
+        retried, retried_created = create_analysis_run(db, graph1, "steward", "retry-analysis-key")
+
+        assert retried_created is True
+        assert retried.id == failed.id
+        assert retried.status == "PENDING"
+
+
 def test_graph3_rule_signal_threshold_projects_to_graph2_row(test_db):
     with Session(test_db) as db:
         _ready_dataset(db)

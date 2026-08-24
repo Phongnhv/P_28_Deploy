@@ -167,9 +167,50 @@ def create_analysis_run(
     username: str,
     idempotency_key: str,
 ) -> tuple[AnalysisRunModel, bool]:
-    existing = db.query(AnalysisRunModel).filter(AnalysisRunModel.graph1_run_id == graph1_run.id).first()
+    existing = (
+        db.query(AnalysisRunModel)
+        .filter(AnalysisRunModel.graph1_run_id == graph1_run.id)
+        .order_by(AnalysisRunModel.created_at.desc())
+        .first()
+    )
+    # Successful/in-flight analyses remain idempotent. A failed terminal run,
+    # however, must not permanently brick the Graph 1 snapshot. The schema has
+    # one analysis per Graph 1, so reset that failed row and its observable
+    # nodes when the UI submits a fresh idempotency key.
     if existing:
-        return existing, False
+        if existing.status != "FAILED":
+            return existing, False
+        conflicting_key = (
+            db.query(AnalysisRunModel)
+            .filter(
+                AnalysisRunModel.idempotency_key == idempotency_key,
+                AnalysisRunModel.id != existing.id,
+            )
+            .first()
+        )
+        if conflicting_key:
+            raise ValueError("Idempotency-Key is already bound to another Graph 1 run.")
+        existing.status = "PENDING"
+        existing.phase = "PREPARING"
+        existing.current_node = None
+        existing.test_run_id = None
+        existing.anomaly_run_id = None
+        existing.report_markdown = None
+        existing.report_source = None
+        existing.report_path = None
+        existing.error = None
+        existing.completed_at = None
+        existing.idempotency_key = idempotency_key
+        existing.updated_at = utc_now()
+        for node in db.query(AnalysisNodeExecutionModel).filter_by(run_id=existing.id).all():
+            node.status = "PENDING"
+            node.output_json = "{}"
+            node.error = None
+            node.started_at = None
+            node.completed_at = None
+            node.sequence += len(ANALYSIS_NODES)
+        db.commit()
+        return existing, True
     existing_key = db.query(AnalysisRunModel).filter(AnalysisRunModel.idempotency_key == idempotency_key).first()
     if existing_key:
         if existing_key.graph1_run_id != graph1_run.id:
@@ -391,6 +432,10 @@ async def execute_analysis_run(run_id: str) -> None:
         run.error = None
         graph1_run_id = run.graph1_run_id
         dataset_id = run.dataset_id
+        graph1_run = db.get(Graph1RunModel, graph1_run_id)
+        graph1_state = _payload(graph1_run.state_json, {}) if graph1_run else {}
+        graph1_metadata = graph1_state.get("metadata") if isinstance(graph1_state.get("metadata"), dict) else {}
+        uploaded_dataset_profile = graph1_metadata.get("uploaded_dataset_profile")
         db.commit()
 
     try:
@@ -420,7 +465,10 @@ async def execute_analysis_run(run_id: str) -> None:
             "test_run_id": test_run_id,
             "rule_run_id": graph1_run_id,
             "approved_rules": approved_rules,
-            "metadata": {"analysis_run_id": run_id},
+            "metadata": {
+                "analysis_run_id": run_id,
+                "uploaded_dataset_profile": uploaded_dataset_profile,
+            },
         })
         if graph2_state.get("dbt_validation_valid") is True:
             _skip_nodes(run_id, {"dbt_validation_failed"}, "Validation succeeded; failure branch was not selected.")
