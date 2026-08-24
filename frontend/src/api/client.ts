@@ -29,6 +29,12 @@ import type {
   AgentArtifact,
   ArtifactReviewInput,
   LoopDecisionInput,
+  Graph1Run,
+  Graph1NodeExecution,
+  Graph1RuleDecision,
+  AnalysisRun,
+  AnalysisNodeExecution,
+  AnalysisResult,
 } from "../types";
 
 function resolveApiBaseUrl(configuredValue: string) {
@@ -47,7 +53,7 @@ function resolveApiBaseUrl(configuredValue: string) {
   return configured;
 }
 
-const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL ?? "");
+export const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL ?? "");
 const csrfStorageKey = "ridepulse.csrf";
 let csrfToken = typeof window === "undefined" ? "" : window.sessionStorage.getItem(csrfStorageKey) ?? "";
 
@@ -293,5 +299,42 @@ export const realApiClient: ApiClient = {
       method: "POST",
       body: JSON.stringify({ target_step: targetStep }),
     });
+  },
+  createGraph1Run(datasetId: string) {
+    return request<Graph1Run>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/graph1-runs`, {
+      method: "POST",
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+    });
+  },
+  getGraph1Run(runId: string) {
+    return request<Graph1Run>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}`);
+  },
+  listGraph1Nodes(runId: string) {
+    return request<Graph1NodeExecution[]>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}/nodes`);
+  },
+  confirmGraph1Semantic(runId: string, contract: Record<string, unknown>) {
+    return request<Graph1Run>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}/semantic-review`, {
+      method: "POST", body: JSON.stringify({ contract }),
+    });
+  },
+  reviewGraph1Rules(runId: string, decisions: Graph1RuleDecision[]) {
+    return request<Graph1Run>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}/rule-review`, {
+      method: "POST", body: JSON.stringify({ decisions }),
+    });
+  },
+  createAnalysisRun(graph1RunId: string) {
+    return request<AnalysisRun>(`/api/v1/graph1-runs/${encodeURIComponent(graph1RunId)}/analysis-runs`, {
+      method: "POST",
+      headers: { "Idempotency-Key": `analysis-${graph1RunId}` },
+    });
+  },
+  getAnalysisRun(analysisRunId: string) {
+    return request<AnalysisRun>(`/api/v1/analysis-runs/${encodeURIComponent(analysisRunId)}`);
+  },
+  listAnalysisNodes(analysisRunId: string) {
+    return request<AnalysisNodeExecution[]>(`/api/v1/analysis-runs/${encodeURIComponent(analysisRunId)}/nodes`);
+  },
+  getAnalysisResult(analysisRunId: string) {
+    return request<AnalysisResult>(`/api/v1/analysis-runs/${encodeURIComponent(analysisRunId)}/result`);
   },
 };

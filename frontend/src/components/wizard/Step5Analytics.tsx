@@ -362,7 +362,7 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
                 <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 11, fill: "var(--muted)" }} />
                 <YAxis dataKey="name" type="category" tick={{ fontSize: 11, fill: "var(--ink)" }} width={120} />
                 <Tooltip
-                  formatter={(val: number) => [`${val}%`, language === "vi" ? "Tỷ lệ Đạt" : "Pass Rate"]}
+                  formatter={(val) => [`${Number(val ?? 0)}%`, language === "vi" ? "Tỷ lệ Đạt" : "Pass Rate"]}
                   contentStyle={{
                     background: "#1e293b",
                     color: "#fff",

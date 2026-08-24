@@ -99,3 +99,5 @@ class AnomalyGraphState(TypedDict, total=False):
     hypothesis_status: str
     metadata: dict
     steward_report_path: str      # Đường dẫn file báo cáo MD cho Data Steward (Graph 3 output)
+    steward_report_markdown: str  # Nội dung Markdown để API/UI không phụ thuộc filesystem
+    report_source: str            # LLM | FALLBACK

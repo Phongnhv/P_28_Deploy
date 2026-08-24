@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     mistral_api_key: str | None = os.getenv("MISTRAL_API_KEY")
     google_api_key: str | None = os.getenv("GOOGLE_API_KEY")
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    llm_request_timeout_seconds: int = Field(default=25, ge=5, le=120)
+    llm_request_timeout_seconds: int = Field(default=180, ge=5, le=180)
 
     # LLM provider selection
     llm_provider: Literal["openai", "anthropic", "mistral", "google"] = os.getenv("PROVIDER") or "openai"
@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     agent_mode: Literal["mock", "graph"] = os.getenv("AGENT_MODE") or "mock"
     rule_proposer_concurrency: int = 10
     rule_proposer_max_retries: int = 2
+    rule_proposer_batch_size: int = Field(default=8, ge=1, le=20)
     debug_dump_table_digests: bool = False
 
     # Database

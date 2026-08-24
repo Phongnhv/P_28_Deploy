@@ -18,6 +18,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -28,6 +29,8 @@ from src.models.database import (
     AnomalyHypothesisModel,
     AnomalyRunModel,
     AnomalySignalModel,
+    AnalysisNodeExecutionModel,
+    AnalysisRunModel,
     AuditEventModel,
     ColumnProfileModel,
     DatasetAccessModel,
@@ -45,6 +48,8 @@ from src.models.database import (
     UserAccountModel,
     WorkflowArtifactModel,
     WorkflowRunModel,
+    Graph1RunModel,
+    Graph1NodeExecutionModel,
 )
 from src.models.api_schemas import (
     AnomalyFeedbackRequest,
@@ -399,6 +404,50 @@ class DatasetAccessInput(BaseModel):
     access_level: str
 
 
+class Graph1SemanticReviewInput(BaseModel):
+    contract: dict[str, Any]
+
+
+class Graph1RuleDecisionInput(BaseModel):
+    rule_id: str
+    action: str
+    rule: dict[str, Any] | None = None
+
+
+class Graph1RuleReviewInput(BaseModel):
+    decisions: list[Graph1RuleDecisionInput]
+
+
+class AnalysisRunSchema(BaseModel):
+    id: str
+    graph1_run_id: str
+    dataset_id: str
+    status: str
+    phase: str
+    current_node: str | None = None
+    test_run_id: str | None = None
+    anomaly_run_id: str | None = None
+    report_available: bool
+    error: str | None = None
+    created_by: str
+    created_at: str
+    updated_at: str
+    completed_at: str | None = None
+
+
+class AnalysisNodeSchema(BaseModel):
+    graph_name: str
+    node_key: str
+    position: int
+    status: str
+    output: dict[str, Any]
+    error: str | None = None
+    sequence: int
+    started_at: str | None = None
+    completed_at: str | None = None
+    duration_ms: float | None = None
+
+
 class DatasetAccessSchema(BaseModel):
     id: str
     dataset_id: str
@@ -609,6 +658,296 @@ async def import_dataset(
             "job": {"job_id": job_id, "status": "PENDING"}}
 
 
+# ---------------------------------------------------------------------------
+# Canonical Graph 1 API (real agent execution; never falls back to fixtures)
+# ---------------------------------------------------------------------------
+
+def _require_graph_provider() -> None:
+    settings = get_settings()
+    if settings.agent_mode != "graph":
+        raise HTTPException(status_code=503, detail={"code": "GRAPH_MODE_REQUIRED", "message": "Set AGENT_MODE=graph to run Graph 1."})
+    keys = {
+        "openai": settings.openai_api_key,
+        "anthropic": settings.anthropic_api_key,
+        "mistral": settings.mistral_api_key,
+        "google": settings.google_api_key,
+    }
+    if not keys.get(settings.llm_provider):
+        raise HTTPException(status_code=503, detail={"code": "LLM_NOT_CONFIGURED", "message": f"Missing API key for provider '{settings.llm_provider}'."})
+
+
+@router.post("/datasets/{dataset_id}/graph1-runs", status_code=202)
+def start_graph1_run(
+    dataset_id: str,
+    background_tasks: BackgroundTasks,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    from src.services.graph1_workflow import create_graph1_run, execute_graph1_run, serialize_run
+
+    _require_graph_provider()
+    dataset = db.get(DatasetModel, dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    require_dataset_access(db, session, dataset_id, manage=True)
+    try:
+        run = create_graph1_run(db, dataset_id, session.username, idempotency_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail={"code": "DATASET_NOT_READY", "message": str(exc)})
+    if run.status == "PENDING":
+        background_tasks.add_task(execute_graph1_run, run.id)
+    add_audit_event(db, session.id, session.role, "GRAPH1_STARTED", "graph1_run", run.id,
+                    {"message": "Canonical Graph 1 started.", "dataset_id": dataset_id, "provider": get_settings().llm_provider})
+    return serialize_run(run)
+
+
+@router.get("/graph1-runs/{run_id}")
+def get_graph1_run(
+    run_id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    from src.services.graph1_workflow import serialize_run
+    run = db.get(Graph1RunModel, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Graph 1 run not found")
+    require_dataset_access(db, session, run.dataset_id)
+    return serialize_run(run)
+
+
+@router.get("/graph1-runs/{run_id}/nodes")
+def get_graph1_nodes(
+    run_id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    from src.services.graph1_workflow import list_nodes
+    run = db.get(Graph1RunModel, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Graph 1 run not found")
+    require_dataset_access(db, session, run.dataset_id)
+    return list_nodes(db, run_id)
+
+
+@router.get("/graph1-runs/{run_id}/stream")
+async def stream_graph1_run(
+    run_id: str,
+    request: Request,
+    after_sequence: int = Query(0, ge=0),
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    from src.services.graph1_workflow import list_nodes, serialize_run
+    run = db.get(Graph1RunModel, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Graph 1 run not found")
+    require_dataset_access(db, session, run.dataset_id)
+    dataset_id = run.dataset_id
+
+    async def events():
+        last_signature = ""
+        last_sequence = after_sequence
+        while not await request.is_disconnected():
+            with Session(get_engine()) as event_db:
+                current = event_db.get(Graph1RunModel, run_id)
+                if not current:
+                    yield "event: error\ndata: {\"message\":\"Run removed\"}\n\n"
+                    return
+                nodes = list_nodes(event_db, run_id)
+                max_sequence = max((node["sequence"] for node in nodes), default=0)
+                signature = f"{current.status}:{current.current_node}:{current.updated_at.isoformat()}:{max_sequence}"
+                if signature != last_signature and max_sequence >= last_sequence:
+                    payload = {"run": serialize_run(current), "nodes": nodes, "dataset_id": dataset_id, "sequence": max_sequence}
+                    yield f"id: {max_sequence}\nevent: snapshot\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    last_signature, last_sequence = signature, max_sequence
+                if current.status in {"COMPLETED", "FAILED", "AWAITING_SEMANTIC_REVIEW", "AWAITING_RULE_REVIEW"}:
+                    return
+            yield ": heartbeat\n\n"
+            await asyncio.sleep(0.75)
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/graph1-runs/{run_id}/semantic-review", status_code=202)
+def review_graph1_semantics(
+    run_id: str,
+    body: Graph1SemanticReviewInput,
+    background_tasks: BackgroundTasks,
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    from src.services.graph1_workflow import confirm_semantic_review, execute_graph1_run, serialize_run
+    run = db.get(Graph1RunModel, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Graph 1 run not found")
+    require_dataset_access(db, session, run.dataset_id, manage=True)
+    try:
+        confirm_semantic_review(db, run, body.contract)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail={"code": "GRAPH1_STATE", "message": str(exc)})
+    background_tasks.add_task(execute_graph1_run, run.id)
+    add_audit_event(db, session.id, session.role, "GRAPH1_SEMANTIC_APPROVED", "graph1_run", run.id,
+                    {"message": "Semantic Contract approved; Graph 1 resumed."})
+    return serialize_run(run)
+
+
+@router.post("/graph1-runs/{run_id}/rule-review")
+def review_graph1_rules(
+    run_id: str,
+    body: Graph1RuleReviewInput,
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    from src.services.graph1_workflow import review_rules, serialize_run
+    run = db.get(Graph1RunModel, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Graph 1 run not found")
+    require_dataset_access(db, session, run.dataset_id, manage=True)
+    try:
+        review_rules(db, run, [item.model_dump() for item in body.decisions], session.username)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail={"code": "GRAPH1_STATE", "message": str(exc)})
+    add_audit_event(db, session.id, session.role, "GRAPH1_RULES_REVIEWED", "graph1_run", run.id,
+                    {"message": "All Graph 1 rule decisions were recorded."})
+    return serialize_run(run)
+
+
+@router.post(
+    "/graph1-runs/{run_id}/analysis-runs",
+    response_model=AnalysisRunSchema,
+    status_code=202,
+)
+def start_analysis_run(
+    run_id: str,
+    background_tasks: BackgroundTasks,
+    response: Response,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    from src.services.analysis_workflow import (
+        create_analysis_run,
+        execute_analysis_run,
+        serialize_analysis_run,
+    )
+
+    graph1_run = db.get(Graph1RunModel, run_id)
+    if not graph1_run:
+        raise HTTPException(status_code=404, detail="Graph 1 run not found")
+    require_dataset_access(db, session, graph1_run.dataset_id, manage=True)
+    try:
+        analysis_run, created = create_analysis_run(db, graph1_run, session.username, idempotency_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail={"code": "ANALYSIS_NOT_READY", "message": str(exc)})
+    if created:
+        background_tasks.add_task(execute_analysis_run, analysis_run.id)
+        add_audit_event(
+            db,
+            session.id,
+            session.role,
+            "ANALYSIS_STARTED",
+            "analysis_run",
+            analysis_run.id,
+            {"message": "Graph 2 and Graph 3 analysis started.", "graph1_run_id": run_id},
+        )
+    else:
+        response.status_code = 200
+    return serialize_analysis_run(analysis_run)
+
+
+@router.get("/analysis-runs/{analysis_run_id}", response_model=AnalysisRunSchema)
+def get_analysis_run(
+    analysis_run_id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    from src.services.analysis_workflow import serialize_analysis_run
+
+    run = db.get(AnalysisRunModel, analysis_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Analysis run not found")
+    require_dataset_access(db, session, run.dataset_id)
+    return serialize_analysis_run(run)
+
+
+@router.get("/analysis-runs/{analysis_run_id}/nodes", response_model=list[AnalysisNodeSchema])
+def get_analysis_nodes(
+    analysis_run_id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    from src.services.analysis_workflow import list_analysis_nodes
+
+    run = db.get(AnalysisRunModel, analysis_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Analysis run not found")
+    require_dataset_access(db, session, run.dataset_id)
+    return list_analysis_nodes(db, analysis_run_id)
+
+
+@router.get("/analysis-runs/{analysis_run_id}/result")
+def get_analysis_result(
+    analysis_run_id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    from src.services.analysis_workflow import build_analysis_result
+
+    run = db.get(AnalysisRunModel, analysis_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Analysis run not found")
+    require_dataset_access(db, session, run.dataset_id)
+    return build_analysis_result(db, run)
+
+
+@router.get("/analysis-runs/{analysis_run_id}/stream")
+async def stream_analysis_run(
+    analysis_run_id: str,
+    request: Request,
+    after_sequence: int = Query(0, ge=0),
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    from src.services.analysis_workflow import list_analysis_nodes, serialize_analysis_run
+
+    run = db.get(AnalysisRunModel, analysis_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Analysis run not found")
+    require_dataset_access(db, session, run.dataset_id)
+
+    async def events():
+        last_signature = ""
+        last_sequence = after_sequence
+        while not await request.is_disconnected():
+            with Session(get_engine()) as event_db:
+                current = event_db.get(AnalysisRunModel, analysis_run_id)
+                if not current:
+                    yield "event: error\ndata: {\"message\":\"Run removed\"}\n\n"
+                    return
+                nodes = list_analysis_nodes(event_db, analysis_run_id)
+                max_sequence = max((node["sequence"] for node in nodes), default=0)
+                signature = f"{current.status}:{current.current_node}:{current.updated_at.isoformat()}:{max_sequence}"
+                if signature != last_signature and max_sequence >= last_sequence:
+                    payload = {
+                        "run": serialize_analysis_run(current),
+                        "nodes": nodes,
+                        "sequence": max_sequence,
+                    }
+                    yield f"id: {max_sequence}\nevent: snapshot\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    last_signature, last_sequence = signature, max_sequence
+                if current.status in {"COMPLETED", "PARTIAL", "FAILED"}:
+                    return
+            yield ": heartbeat\n\n"
+            await asyncio.sleep(0.75)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.delete("/datasets/{id}", status_code=204)
 def delete_dataset(
     id: str,
@@ -676,6 +1015,20 @@ def delete_dataset(
         if wf_ids:
             db.query(WorkflowArtifactModel).filter(WorkflowArtifactModel.workflow_run_id.in_(wf_ids)).delete(synchronize_session=False)
             db.query(WorkflowRunModel).filter(WorkflowRunModel.dataset_id == id).delete(synchronize_session=False)
+
+        graph1_run_ids = [row[0] for row in db.query(Graph1RunModel.id).filter(Graph1RunModel.dataset_id == id).all()]
+        if graph1_run_ids:
+            analysis_run_ids = [
+                row[0]
+                for row in db.query(AnalysisRunModel.id).filter(AnalysisRunModel.graph1_run_id.in_(graph1_run_ids)).all()
+            ]
+            if analysis_run_ids:
+                db.query(AnalysisNodeExecutionModel).filter(
+                    AnalysisNodeExecutionModel.run_id.in_(analysis_run_ids)
+                ).delete(synchronize_session=False)
+                db.query(AnalysisRunModel).filter(AnalysisRunModel.id.in_(analysis_run_ids)).delete(synchronize_session=False)
+            db.query(Graph1NodeExecutionModel).filter(Graph1NodeExecutionModel.run_id.in_(graph1_run_ids)).delete(synchronize_session=False)
+            db.query(Graph1RunModel).filter(Graph1RunModel.id.in_(graph1_run_ids)).delete(synchronize_session=False)
 
         # 6. Column Profiles & Profiles
         profiles = db.query(ProfileModel.dataset_id).filter(ProfileModel.dataset_id == id).all()
