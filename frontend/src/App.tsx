@@ -421,8 +421,22 @@ function DatasetsPage({
                     <strong>{formatTime(item.updated_at)}</strong>
                   </div>
                 </div>
-                <div className="dataset-catalog-actions" style={{ display: "flex", justifyContent: "flex-end", marginTop: "12px" }}>
+                <div className="dataset-catalog-actions" style={{ display: "flex", justifyContent: "space-between", gap: "12px", marginTop: "12px" }}>
+                  {isSelected && canOperate && item.status === "PROFILE_READY" && (
+                    <button
+                      type="button"
+                      className="button primary"
+                      disabled={busy || importing}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onStartUnderstand(item.id);
+                      }}
+                    >
+                      Generate Rules →
+                    </button>
+                  )}
                   <button
+                    type="button"
                     className="button ghost"
                     style={{ color: "#dc2626", borderColor: "#fca5a5" }}
                     onClick={(e) => {
@@ -1340,33 +1354,20 @@ function App() {
     () => proposals.filter((proposal) => proposal.status === "APPROVED"),
     [proposals],
   );
-  const understandArtifact = useMemo(
-    () =>
-      workflow && workflow.dataset_id === dataset?.id
-        ? workflowArtifactForStep(
-          workflow,
-          workflowArtifacts,
-          "UNDERSTAND_DATA",
-        )
-        : undefined,
-    [dataset?.id, workflow, workflowArtifacts],
-  );
   const canOperate = role === "STEWARD" || role === "ADMIN";
   const canAdmin = role === "ADMIN";
   const workflowAnalysisComplete = Boolean(
     workflow?.steps.find((step) => step.key === "ANALYZE_REPORT")?.status ===
       "COMPLETED",
   );
-  const maxWizardStep =
-    !dataset || !profile || (canOperate && !understandArtifact)
-      ? 1
-      : workflowAnalysisComplete
-        ? 4
-        : 3;
+  const maxWizardStep = !dataset || !profile
+    ? 1
+    : workflowAnalysisComplete
+      ? 4
+      : 3;
   const wizardNextDisabled =
     wizardStep === 4 ||
-    (wizardStep === 1 &&
-      (!dataset || !profile || (canOperate && !understandArtifact))) ||
+    (wizardStep === 1 && (!dataset || !profile)) ||
     (wizardStep === 2 && !profile) ||
     (wizardStep === 3 && !workflowAnalysisComplete);
 
@@ -2455,7 +2456,7 @@ function App() {
                     onImportDataset={(file) => void importDataset(file)}
                     onSelectDataset={(id) => void selectDataset(id)}
                     onDeleteDataset={(id) => void deleteDataset(id)}
-                    onStartUnderstand={() => undefined}
+                    onStartUnderstand={(id) => void openGraph1ForDataset(id)}
                     onViewNodeDetails={(id) => { void toggleGraph1Sidebar(id); }}
                     canOperate={canOperate}
                     importing={Boolean(activeJob)}
@@ -2815,15 +2816,19 @@ function App() {
                       ? (t("wizard.selectDatasetTooltip") || "Vui lòng chọn hoặc tải lên một bộ dữ liệu ở Bước 1")
                       : wizardStep === 1 && !profile
                         ? (language === "vi" ? "Hãy tạo profile cho tập dữ liệu trước" : "Build the dataset profile first")
-                        : wizardStep === 1 && canOperate && !understandArtifact
-                          ? (language === "vi" ? "Hãy chạy Understand Agent trước khi tiếp tục" : "Run the Understand Agent before continuing")
                       : wizardStep === 4
                         ? (t("wizard.lastStepTooltip") || "Bạn đang ở bước cuối cùng")
                         : ""
                   }
-                  onClick={() => setWizardStep((prev) => Math.min(4, prev + 1))}
+                  onClick={() => {
+                    if (wizardStep === 1 && dataset) {
+                      void openGraph1ForDataset(dataset.id);
+                      return;
+                    }
+                    setWizardStep((prev) => Math.min(4, prev + 1));
+                  }}
                 >
-                  {t("wizard.next")}
+                  {wizardStep === 1 && dataset && profile ? "Generate Rules →" : t("wizard.next")}
                 </button>
               </div>
             </>
