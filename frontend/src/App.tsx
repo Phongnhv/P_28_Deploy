@@ -361,6 +361,15 @@ function DatasetsPage({
   const hasWorkflowResults = Boolean(graph1Run || graph1Nodes.length);
   const displayStages = useMemo(() => buildDisplayStages(graph1Nodes), [graph1Nodes]);
   const stageFor = (key: string) => displayStages.find((stage) => stage.key === key);
+  const agentDisabledReason = !canOperate
+    ? "Run Agent Workflow requires a Steward or Admin session. Sign in with a steward account to start it."
+    : importing
+      ? "Wait for the dataset import and profile to finish before starting the Agent Workflow."
+      : busy
+        ? "The Agent Workflow request is being prepared. Please wait a moment."
+        : dataset?.status !== "PROFILE_READY"
+          ? "The dataset profile must be ready before the Agent Workflow can run."
+          : null;
 
   return (
     <div className="datasets-page">
@@ -452,7 +461,9 @@ function DatasetsPage({
             <button
               type="button"
               className="button primary"
-              disabled={!canOperate || importing || busy || dataset.status !== "PROFILE_READY"}
+              disabled={Boolean(agentDisabledReason)}
+              title={agentDisabledReason ?? "Generate the Data Dictionary, Semantic Contract, and Rule Proposal."}
+              aria-describedby={agentDisabledReason ? "agent-workflow-disabled-reason" : undefined}
               onClick={() => onStartUnderstand(dataset.id)}
             >
               {busy ? "Starting Agent…" : "Run Agent Workflow →"}
@@ -496,6 +507,16 @@ function DatasetsPage({
             <div className="workflow-artifact-empty" style={{ marginTop: "16px", padding: "20px", background: "var(--color-bg-subtle, #f8fafc)", borderRadius: "8px", textAlign: "center" }}>
               Run Agent Workflow to generate the Data Dictionary, Semantic Contract, and Rule Proposal.
             </div>
+          )}
+          {agentDisabledReason && (
+            <p
+              id="agent-workflow-disabled-reason"
+              className="muted"
+              role="status"
+              style={{ marginTop: "12px" }}
+            >
+              {agentDisabledReason}
+            </p>
           )}
         </section>
       )}

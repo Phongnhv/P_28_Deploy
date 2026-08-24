@@ -50,10 +50,20 @@ class Settings(BaseSettings):
     debug_dump_table_digests: bool = False
 
     # Database
-    database_url: str = Field(default="sqlite:///steward_local.db")
-    # Canonical source data can be separate from the local dashboard metadata
-    # store. In auto mode (the default), a PostgreSQL DATABASE_URL is treated as
-    # the Supabase execution surface; SQLite retains the local-MVP fallback.
+    # ``DATABASE_URL`` is the explicit control-plane database.  When it is not
+    # supplied, use the configured Supabase connection for both workflow
+    # metadata and execution instead of silently creating a local SQLite file.
+    # SQLite remains an intentional fallback only for tests or an unconfigured
+    # local checkout.
+    database_url: str = Field(
+        default_factory=lambda: (
+            os.getenv("DATABASE_URL")
+            or os.getenv("SUPABASE_DATABASE_URL")
+            or "sqlite:///steward_local.db"
+        )
+    )
+    # Canonical source data can be separate from the control-plane store when
+    # an explicit DATABASE_URL is used.
     supabase_database_url: str | None = os.getenv("SUPABASE_DATABASE_URL")
     dq_execution_backend: Literal["auto", "local", "supabase"] = os.getenv("DQ_EXECUTION_BACKEND") or "auto"
 
