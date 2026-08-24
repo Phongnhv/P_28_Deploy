@@ -1,4 +1,5 @@
 import enum
+import uuid
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
@@ -337,7 +338,12 @@ class SemanticContractModel(Base):
 class DqResultModel(Base):
     __tablename__ = "dq_results"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # The deployed Supabase schema stores this key as VARCHAR(36) without a
+    # server-side default.  Always generate it in the application so inserts
+    # work against both fresh SQLite databases and the legacy cloud schema.
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
     run_id: Mapped[str] = mapped_column(String(64), ForeignKey("dq_runs.id"), nullable=False)
     rule_id: Mapped[str] = mapped_column(String(64), nullable=False)
     rule_title: Mapped[str] = mapped_column(String(256), nullable=False)
