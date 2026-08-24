@@ -530,9 +530,21 @@ async def test_generator_node(state: AgentState) -> dict:
         logger.info("Uploaded dbt test artifact: s3://%s/%s", artifact_ref.bucket, artifact_ref.object_key)
     except Exception as exc:
         upload_error = str(exc)
-        if settings.app_env not in ("local", "development", "test") or not trace_file.exists():
+        storage_is_configured = bool(
+            settings.object_storage_endpoint_url
+            or settings.object_storage_access_key_id
+            or settings.object_storage_secret_access_key
+        )
+        if (
+            settings.app_env not in ("local", "development", "test")
+            and storage_is_configured
+        ) or not trace_file.exists():
             raise RuntimeError(f"Unable to upload generated dbt artifact for run {run_id}") from exc
-        logger.warning("Object storage upload failed; using local trace fallback for run %s: %s", run_id, exc)
+        logger.warning(
+            "Object storage is unavailable or unconfigured; using the run-scoped local trace for %s: %s",
+            run_id,
+            exc,
+        )
 
     # 5. Preserve a timestamped trace for existing debugging workflows.
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

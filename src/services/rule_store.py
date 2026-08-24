@@ -51,8 +51,8 @@ def get_engine():
             # limit. Keep each Cloud Run instance bounded so overlapping
             # revisions and autoscaling cannot exhaust every DB session.
             engine_options.update(
-                pool_size=1,
-                max_overflow=1,
+                pool_size=3,
+                max_overflow=2,
                 pool_timeout=30,
                 pool_recycle=300,
                 pool_pre_ping=True,
