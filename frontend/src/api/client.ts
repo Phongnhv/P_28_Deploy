@@ -323,7 +323,9 @@ export const realApiClient: ApiClient = {
     });
   },
   createAnalysisRun(graph1RunId: string) {
-    return request<AnalysisRun>(`/api/v1/graph1-runs/${encodeURIComponent(graph1RunId)}/analysis-runs`, {
+    // The analysis launch is idempotent by Graph 1 run. Retry a dropped
+    // connection so a committed run can still be recovered by its key.
+    return requestWithTransientRetry<AnalysisRun>(`/api/v1/graph1-runs/${encodeURIComponent(graph1RunId)}/analysis-runs`, {
       method: "POST",
       headers: { "Idempotency-Key": `analysis-${graph1RunId}` },
     });
