@@ -11,6 +11,8 @@ from src.services.anomaly_service import (
     compute_median,
     detect_anomalies,
 )
+from src.services.rule_store import TestResultModel as DbTestResultModel
+from src.services.rule_store import TestRunModel as DbTestRunModel
 
 
 def test_calculate_median_mad_basic():
@@ -71,6 +73,31 @@ def test_detect_anomalies_cold_start(test_db):
 
         assert sigs["rule_fail"]["score"] == 0.80  # Cold start static score = 0.80
         assert sigs["rule_fail"]["sufficient_history"] is False
+
+
+def test_detect_anomalies_accepts_graph2_test_run_store(test_db):
+    """Graph 3 must consume Graph 2's test_runs/test_results contract."""
+    with Session(test_db) as session:
+        session.add(DbTestRunModel(test_run_id="graph2-run", dataset_id="dataset_1", status="DONE"))
+        session.add(DbTestResultModel(
+            test_run_id="graph2-run",
+            rule_id="rule_fail",
+            table_name="source_rows",
+            column_name="fare_amount",
+            rule_type="RANGE",
+            status="FAIL",
+            violation_count=8,
+            total_rows=100,
+            violation_rate=0.08,
+            sql_text="SELECT 1",
+        ))
+        session.commit()
+
+        result = detect_anomalies(session, "graph2-run")
+
+        assert result["decision"] == "ANOMALY"
+        assert result["signals"][0]["target_id"] == "rule_fail"
+        assert result["signals"][0]["evidence_refs"] == ["test_results.graph2-run:rule_fail"]
 
 
 def test_detect_anomalies_with_exclusions(test_db):

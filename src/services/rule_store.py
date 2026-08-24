@@ -456,6 +456,24 @@ def _migrate_local_workflow_columns(engine) -> None:
     """Reconcile additive workflow provenance columns on existing databases."""
     if engine.dialect.name == "postgresql":
         with engine.begin() as connection:
+            # Older local/compose schemas used the ORM attribute name as the
+            # physical primary-key column.  The deployed Supabase contract uses
+            # ``rule_id`` instead.  Reconcile the name before ORM queries run,
+            # otherwise proposal persistence fails when SQLAlchemy issues a
+            # DELETE against a column that does not exist.
+            inspector = inspect(engine)
+            configuration_columns = (
+                {column["name"] for column in inspector.get_columns("rule_configurations")}
+                if "rule_configurations" in inspector.get_table_names()
+                else set()
+            )
+            if (
+                "rule_proposal_id" in configuration_columns
+                and "rule_id" not in configuration_columns
+            ):
+                connection.exec_driver_sql(
+                    "ALTER TABLE rule_configurations RENAME COLUMN rule_proposal_id TO rule_id"
+                )
             for statement in (
                 # The first Supabase schema used different physical names from
                 # the dashboard ORM.  ``create_all`` never reconciles existing
@@ -555,6 +573,52 @@ def _migrate_local_workflow_columns(engine) -> None:
             for name, sql_type in columns_to_add.items():
                 if name not in columns:
                     connection.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {name} {sql_type}")
+
+        # SQLite cannot rename a primary-key column in-place.  Rebuild only
+        # this small configuration table, preserving every configuration while
+        # moving its physical key from the old local name to the Supabase
+        # contract name expected by RuleConfigurationModel.
+        refreshed = inspect(engine)
+        if "rule_configurations" in refreshed.get_table_names():
+            configuration_columns = {
+                column["name"] for column in refreshed.get_columns("rule_configurations")
+            }
+            if (
+                "rule_proposal_id" in configuration_columns
+                and "rule_id" not in configuration_columns
+            ):
+                connection.exec_driver_sql(
+                    "ALTER TABLE rule_configurations RENAME TO rule_configurations_legacy_key"
+                )
+                connection.exec_driver_sql(
+                    """
+                    CREATE TABLE rule_configurations (
+                        rule_id VARCHAR(64) NOT NULL PRIMARY KEY,
+                        execution_status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
+                        schedule_frequency VARCHAR(16) NOT NULL DEFAULT 'MANUAL',
+                        timezone VARCHAR(64) NOT NULL DEFAULT 'UTC',
+                        last_run_at DATETIME,
+                        next_run_at DATETIME,
+                        model_name VARCHAR(128) NOT NULL DEFAULT 'unspecified',
+                        created_at DATETIME NOT NULL,
+                        updated_at DATETIME NOT NULL,
+                        FOREIGN KEY(rule_id) REFERENCES rule_proposals (id)
+                    )
+                    """
+                )
+                connection.exec_driver_sql(
+                    """
+                    INSERT INTO rule_configurations (
+                        rule_id, execution_status, schedule_frequency, timezone,
+                        last_run_at, next_run_at, model_name, created_at, updated_at
+                    )
+                    SELECT
+                        rule_proposal_id, execution_status, schedule_frequency, timezone,
+                        last_run_at, next_run_at, model_name, created_at, updated_at
+                    FROM rule_configurations_legacy_key
+                    """
+                )
+                connection.exec_driver_sql("DROP TABLE rule_configurations_legacy_key")
 
 
 # ---------------------------------------------------------------------------

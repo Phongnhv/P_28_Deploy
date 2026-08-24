@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 
 import src.services.rule_store as rule_store_module
 from src.main import app
@@ -157,3 +157,45 @@ def test_publish_api_endpoints():
 
     active_res_after = client.get("/api/v1/dq/active-rules")
     assert active_res_after.json()["total_rules"] == 0
+
+
+def test_sqlite_migration_renames_legacy_rule_configuration_key():
+    """Existing local databases must match the Supabase ``rule_id`` contract."""
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE rule_proposals (id VARCHAR(64) PRIMARY KEY)"))
+        connection.execute(text("INSERT INTO rule_proposals (id) VALUES ('proposal-1')"))
+        connection.execute(
+            text(
+                """
+                CREATE TABLE rule_configurations (
+                    rule_proposal_id VARCHAR(64) NOT NULL PRIMARY KEY,
+                    execution_status VARCHAR(16) NOT NULL,
+                    schedule_frequency VARCHAR(16) NOT NULL,
+                    timezone VARCHAR(64) NOT NULL,
+                    last_run_at DATETIME,
+                    next_run_at DATETIME,
+                    model_name VARCHAR(128) NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO rule_configurations VALUES
+                ('proposal-1', 'ACTIVE', 'MANUAL', 'UTC', NULL, NULL,
+                 'legacy-model', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """
+            )
+        )
+
+    rule_store_module._migrate_local_workflow_columns(engine)
+
+    columns = {column["name"] for column in inspect(engine).get_columns("rule_configurations")}
+    assert "rule_id" in columns
+    assert "rule_proposal_id" not in columns
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT rule_id FROM rule_configurations")).scalar_one() == "proposal-1"
