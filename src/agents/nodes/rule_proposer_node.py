@@ -16,6 +16,7 @@ Luồng:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -23,7 +24,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from langchain_core.messages import SystemMessage
 
 from src.agents.nodes.templates import (
     _RULE_PROPOSER_FEW_SHOT,
@@ -45,6 +47,19 @@ from src.models.rule_schemas import (
 from src.services.llm import get_llm
 
 logger = logging.getLogger(__name__)
+
+
+class CandidateProposedRule(ProposedRule):
+    """Node 8 contract: every LLM rule must point back to one server candidate."""
+
+    candidate_id: str = Field(min_length=1)
+
+
+class CandidateTableRuleProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    table: str
+    rules: list[CandidateProposedRule] = Field(default_factory=list)
 
 # ---------------------------------------------------------------------------
 # Domain context & Data dictionary injected vào mỗi lần gọi LLM
@@ -316,6 +331,96 @@ def _load_data_dictionary() -> str:
     return "None"
 
 
+def _candidate_key(candidate: dict) -> str:
+    return json.dumps(
+        {
+            "table": candidate.get("table"),
+            "column": candidate.get("column"),
+            "rule_type": candidate.get("rule_type"),
+            "parameters": candidate.get("parameters") or {},
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _dedupe_candidates(candidates: list[dict]) -> list[dict]:
+    """Dedupe candidates while retaining every distinct evidence item."""
+    merged: dict[str, dict] = {}
+    for raw in candidates:
+        if not isinstance(raw, dict):
+            continue
+        key = _candidate_key(raw)
+        candidate = dict(raw)
+        if not candidate.get("candidate_id"):
+            digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+            candidate["candidate_id"] = f"candidate-{digest}"
+        if key not in merged:
+            merged[key] = {**candidate, "evidence_items": list(candidate.get("evidence_items") or [])}
+            continue
+        existing = merged[key]
+        evidence = list(existing.get("evidence_items") or [])
+        seen = {
+            str(item.get("id"))
+            for item in evidence
+            if isinstance(item, dict) and item.get("id")
+        }
+        for item in raw.get("evidence_items") or []:
+            if not isinstance(item, dict):
+                continue
+            evidence_id = str(item.get("id") or "")
+            if evidence_id and evidence_id not in seen:
+                evidence.append(item)
+                seen.add(evidence_id)
+        existing["evidence_items"] = evidence
+    return list(merged.values())
+
+
+def _candidate_batches(candidates: list[dict], batch_size: int) -> list[list[dict]]:
+    return [candidates[index:index + batch_size] for index in range(0, len(candidates), batch_size)]
+
+
+def _related_columns(candidates: list[dict]) -> set[str]:
+    names: set[str] = set()
+    for candidate in candidates:
+        column = candidate.get("column")
+        if isinstance(column, str) and column:
+            names.add(column)
+        target = (candidate.get("parameters") or {}).get("target_column")
+        if isinstance(target, str) and target:
+            names.add(target)
+    return names
+
+
+def _filter_table_context(table_digest: dict, candidates: list[dict]) -> dict:
+    """Keep table-level metrics and only the columns referenced by a batch."""
+    names = _related_columns(candidates)
+    compact = {
+        key: value
+        for key, value in table_digest.items()
+        if key not in {"columns", "dashboard_rule_candidates"}
+    }
+    columns = table_digest.get("columns") or []
+    compact["columns"] = [
+        column for column in columns
+        if isinstance(column, dict) and column.get("name") in names
+    ]
+    return compact
+
+
+def _filter_semantic_context(semantic_contract: dict | None, candidates: list[dict]) -> dict:
+    if not isinstance(semantic_contract, dict):
+        return {}
+    names = _related_columns(candidates)
+    compact = {key: value for key, value in semantic_contract.items() if key != "columns"}
+    compact["columns"] = [
+        column for column in semantic_contract.get("columns", [])
+        if isinstance(column, dict) and column.get("name") in names
+    ]
+    return compact
+
+
 async def _propose_for_table(
     table_name: str,
     table_digest: dict,
@@ -325,7 +430,8 @@ async def _propose_for_table(
     semantic_contract: dict | None = None,
     candidates: list[dict] | None = None,
     dataset_id: str = "unknown",
-) -> TableRuleProposal:
+    specialized_system_prompt: str | None = None,
+) -> CandidateTableRuleProposal:
     """Gọi LLM một lần cho một bảng, bảo vệ bằng semaphore + retry."""
     columns = [col["name"] for col in table_digest.get("columns", [])]
     dashboard_mode = bool(table_digest.get("dashboard_candidate_mode"))
@@ -379,7 +485,17 @@ async def _propose_for_table(
                         coverage_requirements=coverage_requirements,
                         few_shot_examples=_RULE_PROPOSER_FEW_SHOT,
                     )
-                result: TableRuleProposal = await structured_llm.ainvoke(messages)
+                if specialized_system_prompt:
+                    guardrails = (
+                        "\n\nReturn only a valid TableRuleProposal. Propose rules only from the "
+                        "provided candidates, keep candidate_id and evidence references exact, "
+                        "and do not invent columns, metrics, thresholds, or evidence."
+                    )
+                    messages = [
+                        SystemMessage(content=specialized_system_prompt + guardrails),
+                        *messages[1:],
+                    ]
+                result: CandidateTableRuleProposal = await structured_llm.ainvoke(messages)
                 exit_ts = datetime.now()
                 logger.info(
                     "[%s] Hoàn thành (attempt %d) sau %.2fs — %d rules",
@@ -586,36 +702,54 @@ async def rule_proposer_node(state: AgentState) -> dict:
 
     # 3. Chuẩn bị LLM với structured output
     llm = get_llm(settings.llm_provider, temperature=0.1)
-    structured_llm = llm.with_structured_output(TableRuleProposal)
+    structured_llm = llm.with_structured_output(CandidateTableRuleProposal)
 
-    # 4. Fan-out
+    # 4. Fan-out in bounded batches. Each request sees only relevant columns.
     semaphore = asyncio.Semaphore(settings.rule_proposer_concurrency)
     table_names = list(per_table.keys())
     dataset_id = state.get("dataset_id", "unknown")
+    configured_batch_size = getattr(settings, "rule_proposer_batch_size", 8)
+    batch_size = configured_batch_size if isinstance(configured_batch_size, int) else 8
 
     contract = state.get("semantic_contract") or {}
     tables_contract = contract.get("tables", {})
 
     all_candidates = state.get("rule_candidates", [])
-    candidates_by_table = {}
+    candidates_by_table: dict[str, list[dict]] = {}
     for c in all_candidates:
-        tb = c.get("table")
-        if tb:
+        tb = c.get("table") if isinstance(c, dict) else None
+        if isinstance(tb, str) and tb:
             candidates_by_table.setdefault(tb, []).append(c)
+
+    specialized_prompts = state.get("specialized_system_prompts") or {}
+    batch_jobs: list[tuple[str, int, list[dict]]] = []
+    for table_name in table_names:
+        table_candidates = candidates_by_table.get(table_name)
+        if table_candidates is None:
+            table_candidates = _build_coverage_requirements(per_table[table_name])
+        table_candidates = _dedupe_candidates(table_candidates)
+        candidates_by_table[table_name] = table_candidates
+        for batch_index, candidate_batch in enumerate(
+            _candidate_batches(table_candidates, batch_size), start=1
+        ):
+            batch_jobs.append((table_name, batch_index, candidate_batch))
 
     results = await asyncio.gather(
         *[
             _propose_for_table(
-                table_name=t,
-                table_digest=per_table[t],
+                table_name=table_name,
+                table_digest=_filter_table_context(per_table[table_name], candidate_batch),
                 structured_llm=structured_llm,
                 semaphore=semaphore,
                 max_retries=max_retries,
-                semantic_contract=tables_contract.get(t),
-                candidates=candidates_by_table.get(t),
+                semantic_contract=_filter_semantic_context(
+                    tables_contract.get(table_name), candidate_batch
+                ),
+                candidates=candidate_batch,
                 dataset_id=dataset_id,
+                specialized_system_prompt=specialized_prompts.get(table_name),
             )
-            for t in table_names
+            for table_name, _batch_index, candidate_batch in batch_jobs
         ],
         return_exceptions=True,
     )
@@ -626,17 +760,21 @@ async def rule_proposer_node(state: AgentState) -> dict:
     errors: list[dict] = []
     used_ids: set[str] = set()
 
-    for table_name, result in zip(table_names, results):
+    stamped_rule_keys: set[str] = set()
+    for (table_name, batch_index, requirements), result in zip(batch_jobs, results):
         if isinstance(result, Exception):
-            logger.error("Bảng '%s' thất bại: %s", table_name, result)
-            errors.append({"table": table_name, "error": str(result)})
+            logger.error("Bảng '%s' batch %d thất bại: %s", table_name, batch_index, result)
+            errors.append({"table": table_name, "batch": batch_index, "error": str(result)})
             continue
 
-        proposal: TableRuleProposal = result
-        requirements = candidates_by_table.get(table_name)
-        if requirements is None:
-            requirements = _build_coverage_requirements(per_table[table_name])
-
+        # Final strict validation remains the public contract after the
+        # candidate-aware structured-output adapter has repaired provenance.
+        proposal = TableRuleProposal(
+            # The server-side batch owns the table identity. Do not allow an
+            # LLM response (or a legacy adapter) to redirect rules elsewhere.
+            table=table_name,
+            rules=[ProposedRule.model_validate(rule.model_dump()) for rule in result.rules],
+        )
         for rule in proposal.rules:
             stamped = _stamp_rule(
                 rule,
@@ -647,7 +785,27 @@ async def rule_proposer_node(state: AgentState) -> dict:
                 per_table[table_name],
             )
             if stamped:
+                stamped["selected_evidence_refs"] = list(
+                    dict.fromkeys(stamped.get("selected_evidence_refs") or [])
+                )
+                signature = json.dumps(
+                    {
+                        "table": stamped.get("table_name"),
+                        "column": stamped.get("column"),
+                        "rule_type": stamped.get("rule_type"),
+                        "parameters": stamped.get("parameters") or {},
+                    },
+                    sort_keys=True,
+                    default=str,
+                )
+                if signature in stamped_rule_keys:
+                    continue
+                stamped_rule_keys.add(signature)
                 flat_rules.append(stamped)
+
+    # Never persist a partial policy set when one of its batches failed.
+    if errors:
+        flat_rules = []
 
     logger.info(
         "rule_proposer_node hoàn thành: run_id=%s | %d rules | %d errors",
@@ -680,20 +838,16 @@ async def rule_proposer_node(state: AgentState) -> dict:
         "rule_run_id": run_id,
     }
 
-    # Thất bại toàn bộ (ví dụ LLM hết quota / mất mạng) trước đây chỉ được ghi vào
-    # `rule_proposal_errors` rồi graph vẫn chạy tiếp và runner báo DONE với 0 rules —
-    # không phân biệt được với trường hợp hợp lệ "dataset sạch, không cần rule nào".
-    if errors and not flat_rules:
+    if errors:
         result["error"] = (
-            f"Rule proposer thất bại trên toàn bộ {len(errors)}/{len(table_names)} bảng: "
-            + "; ".join(f"{e.get('table')}: {e.get('error')}" for e in errors[:3])
+            f"Rule proposer failed closed because {len(errors)}/{len(batch_jobs)} batch(es) failed: "
+            + "; ".join(
+                f"{e.get('table')} batch {e.get('batch')}: {e.get('error')}"
+                for e in errors[:3]
+            )
         )
-    elif errors:
-        logger.warning(
-            "rule_proposer_node thành công một phần: %d/%d bảng thất bại",
-            len(errors),
-            len(table_names),
-        )
+    elif not flat_rules:
+        result["error"] = "Rule proposer returned no valid structured proposals."
 
     return result
 

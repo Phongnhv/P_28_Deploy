@@ -3,6 +3,7 @@ import { en } from "./locales/en";
 import { vi } from "./locales/vi";
 
 type Language = "en" | "vi";
+type Translations = Record<string, any>;
 
 interface I18nContextType {
   language: Language;

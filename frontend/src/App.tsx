@@ -5,6 +5,11 @@ import ThemeControl from "./ThemeControl";
 import LanguageToggle from "./LanguageToggle";
 import { useI18n } from "./i18n/context";
 import { Step5Analytics } from "./components/wizard/Step5Analytics";
+import { Graph1Studio } from "./features/graph1/Graph1Studio";
+import { Graph1DetailsSidebar } from "./features/graph1/Graph1DetailsSidebar";
+import { StagePresenter, buildDisplayStages } from "./features/graph1/presenters";
+import { AnalysisStudio } from "./features/analysis/AnalysisStudio";
+import { PanelRightOpen } from "lucide-react";
 import type {
   AuditLog,
   CreateJobResponse,
@@ -35,6 +40,8 @@ import type {
   WorkflowRun,
   WorkflowStep,
   WorkflowStepKey,
+  Graph1Run,
+  Graph1NodeExecution,
 } from "./types";
 
 type View =
@@ -319,9 +326,11 @@ function DatasetsPage({
   canOperate,
   importing,
   busy,
-  workflow,
-  artifacts,
-  profile,
+  graph1Run,
+  graph1Nodes,
+  onViewNodeDetails,
+  showNodeDetails,
+  onRefreshGraph1,
 }: {
   datasets: Dataset[];
   dataset?: Dataset;
@@ -333,9 +342,11 @@ function DatasetsPage({
   canOperate: boolean;
   importing: boolean;
   busy: boolean;
-  workflow: WorkflowRun | null;
-  artifacts: AgentArtifact[];
-  profile: DatasetProfile | null;
+  graph1Run: Graph1Run | null;
+  graph1Nodes: Graph1NodeExecution[];
+  onViewNodeDetails: (datasetId: string) => void;
+  showNodeDetails: boolean;
+  onRefreshGraph1: (runId: string) => Promise<unknown>;
 }) {
   const { t, language } = useI18n();
 
@@ -347,24 +358,9 @@ function DatasetsPage({
     return status.replaceAll("_", " ").toUpperCase();
   };
 
-  const activeArtifact = dataset
-    ? (workflow && workflow.dataset_id === dataset.id
-      ? workflowArtifactForStep(workflow, artifacts, "UNDERSTAND_DATA")
-      : undefined) ||
-    artifacts.find(
-      (a) => a.type === "SEMANTIC_CONTRACT"
-    )
-    : undefined;
-
-  const payload = activeArtifact?.payload && typeof activeArtifact.payload === "object"
-    ? (activeArtifact.payload as Record<string, unknown>)
-    : null;
-
-  const contractColumns = payload && Array.isArray(payload.columns)
-    ? (payload.columns.filter((column): column is Record<string, unknown> =>
-      Boolean(column && typeof column === "object"),
-    ))
-    : [];
+  const hasWorkflowResults = Boolean(graph1Run || graph1Nodes.length);
+  const displayStages = useMemo(() => buildDisplayStages(graph1Nodes), [graph1Nodes]);
+  const stageFor = (key: string) => displayStages.find((stage) => stage.key === key);
 
   return (
     <div className="datasets-page">
@@ -453,84 +449,52 @@ function DatasetsPage({
               <h2>{t("datasets.understandAgentTitle", { name: dataset.name })}</h2>
               <p className="muted">{t("datasets.understandAgentDesc")}</p>
             </div>
-            {canOperate && (
+            <button
+              type="button"
+              className="button primary"
+              disabled={!canOperate || importing || busy || dataset.status !== "PROFILE_READY"}
+              onClick={() => onStartUnderstand(dataset.id)}
+            >
+              {busy ? "Starting Agent…" : "Run Agent Workflow →"}
+            </button>
+            {graph1Run && (
               <button
+                id="graph1-details-trigger"
                 type="button"
-                className="button primary"
-                disabled={busy || importing}
-                onClick={() => onStartUnderstand(dataset.id)}
+                className={`button secondary ${showNodeDetails ? "active" : ""}`}
+                aria-controls="graph1-details-sidebar"
+                aria-expanded={showNodeDetails}
+                onClick={() => onViewNodeDetails(dataset.id)}
               >
-                {busy || importing
-                  ? (language === "vi" ? "Đang xử lý…" : "Working…")
-                  : activeArtifact
-                    ? (language === "vi" ? "⚡ Chạy lại Understand Agent" : "⚡ Re-run Understand Agent")
-                    : profile
-                      ? (language === "vi" ? "⚡ Chạy Understand Agent" : "⚡ Run Understand Agent")
-                      : (language === "vi" ? "⚡ Tạo profile và phân tích" : "⚡ Profile & understand")}
+                <PanelRightOpen aria-hidden="true" />
+                {showNodeDetails ? "Hide node details" : "View node details"}
               </button>
             )}
           </div>
 
-          {payload ? (
+          {hasWorkflowResults ? (
             <div className="understanding-holder" style={{ marginTop: "16px" }}>
               <div className="understanding-summary" style={{ padding: "16px", background: "var(--surface-muted, #f8fafc)", borderRadius: "8px", borderLeft: "4px solid var(--accent, #2563eb)" }}>
-                <span className="eyebrow">
-                  {t("datasets.semanticContract")} · {t("datasets.mode")}: {String(payload.agent_mode ?? "profile-backed").toUpperCase()}
-                </span>
-                <p style={{ marginTop: "8px", fontSize: "15px", lineHeight: "1.5", color: "var(--ink)", whiteSpace: "nowrap" }}>
-                  {String(payload.summary ?? t("datasets.agentAnalysisCompleted"))}
-                </p>
+                <span className="eyebrow">AGENT WORKFLOW · {String(graph1Run?.status ?? "RUNNING").replaceAll("_", " ")}</span>
+                <p style={{ marginTop: "8px", fontSize: "15px", lineHeight: "1.5", color: "var(--ink)" }}>Results below are read from persisted Agent Workflow node outputs.</p>
               </div>
-
-              {/* SEMANTIC CONTRACT INFERRED SCHEMA TABLE */}
-              {contractColumns.length > 0 && (
-                <div className="understanding-section" style={{ marginTop: "20px" }}>
-                  <div className="panel-heading" style={{ marginBottom: "12px" }}>
-                    <div>
-                      <span className="eyebrow">{t("datasets.semanticContract")}</span>
-                      <h3 style={{ margin: 0 }}>{t("datasets.inferredSchemas", { count: contractColumns.length })}</h3>
-                    </div>
-                  </div>
-                  <div style={{ overflowX: "auto", border: "1px solid var(--border, #e2e8f0)", borderRadius: "8px" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
-                      <thead>
-                        <tr style={{ background: "var(--surface-muted, #f1f5f9)", textAlign: "left", borderBottom: "2px solid var(--border, #cbd5e1)" }}>
-                          <th style={{ padding: "10px 12px" }}>{t("datasets.colName")}</th>
-                          <th style={{ padding: "10px 12px" }}>{t("datasets.colSemanticType")}</th>
-                          <th style={{ padding: "10px 12px" }}>{t("datasets.colNullable")}</th>
-                          <th style={{ padding: "10px 12px" }}>{t("datasets.colConfidence")}</th>
-                          <th style={{ padding: "10px 12px" }}>{t("datasets.colDescription")}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {contractColumns.map((col, idx) => (
-                          <tr key={String(col.name ?? idx)} style={{ borderBottom: "1px solid var(--border, #e2e8f0)", background: idx % 2 === 0 ? "transparent" : "var(--surface-muted, #f8fafc)" }}>
-                            <td style={{ padding: "10px 12px", fontWeight: 600 }}><code>{String(col.name ?? "")}</code></td>
-                            <td style={{ padding: "10px 12px" }}><span className="status-pill info">{String(col.semantic_type ?? "unknown")}</span></td>
-                            <td style={{ padding: "10px 12px" }}>{col.nullable ? t("datasets.yes") : t("datasets.no")}</td>
-                            <td style={{ padding: "10px 12px" }}>
-                              <span style={{ fontWeight: 600, color: (Number(col.confidence ?? 0) >= 0.8) ? "#16a34a" : "#d97706" }}>
-                                {typeof col.confidence === "number" ? `${(col.confidence * 100).toFixed(0)}%` : "N/A"}
-                              </span>
-                            </td>
-                            <td style={{ padding: "10px 12px", color: "var(--muted)", fontSize: "12px" }}>
-                              {String(col.description ?? col.reasoning ?? col.type ?? "—")}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
+              <div className="workflow-result-chain">
+                {[
+                  ["Data Dictionary", "data_dictionary_generator"],
+                  ["Semantic Contract", "understanding_semantic"],
+                  ["Rule Proposal", "rule_proposer"],
+                ].map(([label, key]) => {
+                  const stage = stageFor(String(key));
+                  return <section className="panel" key={String(label)}>
+                    <div className="workflow-artifact-heading"><div><span className="eyebrow">{String(label)}</span><strong>{stage?.description ?? "Persisted Agent Workflow output"}</strong></div><span className={`g1-chip ${stage?.status === "SUCCEEDED" ? "success" : stage?.status === "FAILED" ? "danger" : "warning"}`}>{stage?.status ? stage.status.replaceAll("_", " ") : "PENDING"}</span></div>
+                    <div className="workflow-artifact-content">{stage ? <StagePresenter stage={stage} /> : <div className="workflow-artifact-empty-inline">Waiting for persisted output…</div>}</div>
+                  </section>
+                })}
+              </div>
             </div>
           ) : (
             <div className="workflow-artifact-empty" style={{ marginTop: "16px", padding: "20px", background: "var(--color-bg-subtle, #f8fafc)", borderRadius: "8px", textAlign: "center" }}>
-              {profile
-                ? t("datasets.noUnderstandArtifactDesc")
-                : (language === "vi"
-                  ? "Tập dữ liệu chưa có profile hoàn chỉnh. Nút phía trên sẽ tạo profile trước, sau đó chạy Understand Agent."
-                  : "This dataset does not have a complete profile. The action above will profile it before running the Understand Agent.")}
+              Run Agent Workflow to generate the Data Dictionary, Semantic Contract, and Rule Proposal.
             </div>
           )}
         </section>
@@ -1300,6 +1264,14 @@ function App() {
   const [view, setView] = useState<View>("overview");
   const [wizardStep, setWizardStep] = useState<number>(1);
   const [showAdmin, setShowAdmin] = useState<boolean>(false);
+  const [showGraph1Studio, setShowGraph1Studio] = useState<boolean>(() => sessionStorage.getItem("ridepulse.graph1.open") === "1" && Boolean(sessionStorage.getItem("ridepulse.graph1.run")));
+  const [analysisRunId, setAnalysisRunId] = useState(() => sessionStorage.getItem("ridepulse.analysis.run") ?? "");
+  const [showAnalysisStudio, setShowAnalysisStudio] = useState<boolean>(() => sessionStorage.getItem("ridepulse.analysis.open") === "1" && Boolean(sessionStorage.getItem("ridepulse.analysis.run")));
+  const [graph1Dataset, setGraph1Dataset] = useState<Dataset | null>(null);
+  const [graph1Run, setGraph1Run] = useState<Graph1Run | null>(null);
+  const [graph1Nodes, setGraph1Nodes] = useState<Graph1NodeExecution[]>([]);
+  const [graph1Starting, setGraph1Starting] = useState(false);
+  const [showGraph1Sidebar, setShowGraph1Sidebar] = useState(false);
   const [showDataExplorer, setShowDataExplorer] = useState<boolean>(false);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(
@@ -1502,14 +1474,102 @@ function App() {
   }, [canAdmin, dataset]);
 
   async function selectDataset(datasetId: string) {
-    if (datasetId !== selectedDatasetId)
-      sessionStorage.removeItem("ridepulse.workflow");
+    setShowGraph1Sidebar(false);
     sessionStorage.setItem("ridepulse.dataset", datasetId);
     setSelectedDatasetId(datasetId);
     setWorkflow(null);
     setWorkflowArtifacts([]);
     await refreshWorkspace();
   }
+
+  async function openGraph1ForDataset(datasetId: string) {
+    if (datasetId !== selectedDatasetId) await selectDataset(datasetId);
+    setGraph1Dataset(datasets.find((item) => item.id === datasetId) ?? null);
+    setWizardStep(2);
+    setShowAdmin(false);
+    sessionStorage.setItem("ridepulse.graph1.open", "1");
+    setShowGraph1Studio(true);
+  }
+
+  async function openAnalysisForGraph1(graph1RunId: string) {
+    if (isMockMode) throw new Error("Analysis Studio requires the real backend.");
+    const analysisRun = await api.createAnalysisRun(graph1RunId);
+    sessionStorage.setItem("ridepulse.analysis.run", analysisRun.id);
+    sessionStorage.setItem("ridepulse.analysis.open", "1");
+    setAnalysisRunId(analysisRun.id);
+    setShowAnalysisStudio(true);
+    setShowGraph1Studio(false);
+  }
+
+  async function toggleGraph1Sidebar(datasetId: string) {
+    if (datasetId !== selectedDatasetId) {
+      await selectDataset(datasetId);
+      setShowGraph1Sidebar(true);
+      return;
+    }
+    setShowGraph1Sidebar((current) => !current);
+  }
+
+  function closeGraph1Sidebar() {
+    setShowGraph1Sidebar(false);
+    window.requestAnimationFrame(() => document.getElementById("graph1-details-trigger")?.focus());
+  }
+
+  const refreshGraph1 = useCallback(async (runId: string) => {
+    const [nextRun, nextNodes] = await Promise.all([
+      api.getGraph1Run(runId),
+      api.listGraph1Nodes(runId),
+    ]);
+    setGraph1Run(nextRun);
+    setGraph1Nodes(nextNodes);
+    return nextRun;
+  }, []);
+
+  async function startGraph1InBackground(datasetId: string) {
+    if (!canOperate || graph1Starting) return;
+    setError("");
+    setGraph1Starting(true);
+    try {
+      if (datasetId !== selectedDatasetId) await selectDataset(datasetId);
+      const storedRun = sessionStorage.getItem("ridepulse.graph1.run");
+      const storedDataset = sessionStorage.getItem("ridepulse.graph1.dataset");
+      const nextRun = storedRun && storedDataset === datasetId
+        ? await api.getGraph1Run(storedRun)
+        : await api.createGraph1Run(datasetId);
+      sessionStorage.setItem("ridepulse.graph1.run", nextRun.id);
+      sessionStorage.setItem("ridepulse.graph1.dataset", datasetId);
+      setGraph1Run(nextRun);
+      setGraph1Nodes(await api.listGraph1Nodes(nextRun.id));
+      setToast("Agent Workflow is running in the background.");
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to start Agent Workflow."));
+    } finally {
+      setGraph1Starting(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!dataset) return;
+    const storedRun = sessionStorage.getItem("ridepulse.graph1.run");
+    const storedDataset = sessionStorage.getItem("ridepulse.graph1.dataset");
+    if (!storedRun || storedDataset !== dataset.id) {
+      setGraph1Run(null);
+      setGraph1Nodes([]);
+      return;
+    }
+    void refreshGraph1(storedRun).catch(() => {
+      sessionStorage.removeItem("ridepulse.graph1.run");
+      sessionStorage.removeItem("ridepulse.graph1.dataset");
+      setGraph1Run(null);
+      setGraph1Nodes([]);
+    });
+  }, [dataset?.id, refreshGraph1]);
+
+  useEffect(() => {
+    if (!graph1Run || ["COMPLETED", "FAILED", "AWAITING_SEMANTIC_REVIEW", "AWAITING_RULE_REVIEW"].includes(graph1Run.status)) return;
+    const timer = window.setInterval(() => void refreshGraph1(graph1Run.id), 2500);
+    return () => window.clearInterval(timer);
+  }, [graph1Run?.id, graph1Run?.status, refreshGraph1]);
 
   useEffect(() => {
     if (authenticated) void refreshWorkspace();
@@ -1553,7 +1613,10 @@ function App() {
     sessionStorage.removeItem("ridepulse.role");
     sessionStorage.removeItem("ridepulse.username");
     sessionStorage.removeItem("ridepulse.dataset");
-    sessionStorage.removeItem("ridepulse.workflow");
+    sessionStorage.removeItem("ridepulse.analysis.open");
+    sessionStorage.removeItem("ridepulse.analysis.run");
+    setShowAnalysisStudio(false);
+    setAnalysisRunId("");
     setAuthenticated(false);
   }
 
@@ -1632,6 +1695,10 @@ function App() {
       setView("datasets");
       await pollJob(imported.job, async () => {
         await refreshWorkspace();
+        setGraph1Dataset({ ...imported.dataset, status: "PROFILE_READY" });
+        setWizardStep(2);
+        sessionStorage.setItem("ridepulse.graph1.open", "1");
+        setShowGraph1Studio(true);
       });
     } catch (err) {
       setError(getErrorMessage(err, "Unable to import dataset."));
@@ -2086,7 +2153,13 @@ function App() {
               <button
                 type="button"
                 className={`button secondary ${showAdmin ? "active" : ""}`}
-                onClick={() => setShowAdmin(!showAdmin)}
+                onClick={() => {
+                  setShowAdmin(!showAdmin);
+                  sessionStorage.removeItem("ridepulse.graph1.open");
+                  setShowGraph1Studio(false);
+                  sessionStorage.removeItem("ridepulse.analysis.open");
+                  setShowAnalysisStudio(false);
+                }}
               >
                 ⚙ {t("app.adminControl")}
               </button>
@@ -2104,7 +2177,7 @@ function App() {
           </div>
         </header>
 
-        {!showAdmin && (
+        {!showAdmin && !showGraph1Studio && !showAnalysisStudio && (
           <div className="wizard-header-container">
             <nav className="wizard-stepper" aria-label="Wizard Steps">
               {[
@@ -2151,6 +2224,11 @@ function App() {
                     onClick={() => {
                       if (step.id > maxWizardStep) return;
                       setShowAdmin(false);
+                      setShowGraph1Sidebar(false);
+                      sessionStorage.removeItem("ridepulse.graph1.open");
+                      setShowGraph1Studio(false);
+                      sessionStorage.removeItem("ridepulse.analysis.open");
+                      setShowAnalysisStudio(false);
                       setWizardStep(step.id);
                     }}
                   >
@@ -2169,7 +2247,7 @@ function App() {
         )}
 
         <div className="page-container">
-          {!canOperate && (
+          {!showGraph1Studio && !showAnalysisStudio && !canOperate && (
             <div className="dev-banner">
               <span>Read-only access</span>
               <span>
@@ -2179,7 +2257,7 @@ function App() {
               <code>{role}</code>
             </div>
           )}
-          {isMockMode && (
+          {!showGraph1Studio && !showAnalysisStudio && isMockMode && (
             <div className="dev-banner">
               <span>Local development adapter</span>
               <span>
@@ -2189,7 +2267,7 @@ function App() {
               <code>VITE_USE_MOCK_API=false</code>
             </div>
           )}
-          {error && (
+          {!showGraph1Studio && !showAnalysisStudio && error && (
             <div className="alert error">
               <strong>Action failed</strong>
               <span>{error}</span>
@@ -2234,7 +2312,36 @@ function App() {
             </div>
           )}
 
-          {showAdmin && canAdmin ? (
+          {showAnalysisStudio && analysisRunId ? (
+            <AnalysisStudio
+              analysisRunId={analysisRunId}
+              onExit={() => {
+                sessionStorage.removeItem("ridepulse.analysis.open");
+                setShowAnalysisStudio(false);
+                setAnalysisRunId("");
+              }}
+              onBackToGraph1={() => {
+                sessionStorage.removeItem("ridepulse.analysis.open");
+                sessionStorage.setItem("ridepulse.graph1.open", "1");
+                setShowAnalysisStudio(false);
+                setShowGraph1Studio(true);
+              }}
+            />
+          ) : showGraph1Studio ? (
+            <Graph1Studio
+              onExit={() => {
+                sessionStorage.removeItem("ridepulse.graph1.open");
+                setShowGraph1Studio(false);
+                setGraph1Dataset(null);
+                setWizardStep(1);
+                const runId = sessionStorage.getItem("ridepulse.graph1.run");
+                if (runId) void refreshGraph1(runId);
+              }}
+              onDatasetImported={() => void refreshWorkspace()}
+              onAnalyze={openAnalysisForGraph1}
+              initialDataset={graph1Dataset ?? dataset}
+            />
+          ) : showAdmin && canAdmin ? (
             <AdminPage
               users={adminUsers}
               access={datasetAccess}
@@ -2259,15 +2366,15 @@ function App() {
                     onImportDataset={(file) => void importDataset(file)}
                     onSelectDataset={(id) => void selectDataset(id)}
                     onDeleteDataset={(id) => void deleteDataset(id)}
-                    onStartUnderstand={(id) =>
-                      void startDatasetUnderstanding(id)
-                    }
+                    onStartUnderstand={(id) => { void startGraph1InBackground(id); }}
+                    onViewNodeDetails={(id) => { void toggleGraph1Sidebar(id); }}
                     canOperate={canOperate}
                     importing={Boolean(activeJob)}
-                    busy={workflowActionBusy}
-                    workflow={workflow}
-                    artifacts={workflowArtifacts}
-                    profile={profile}
+                    busy={workflowActionBusy || graph1Starting}
+                    graph1Run={graph1Run}
+                    graph1Nodes={graph1Nodes}
+                    showNodeDetails={showGraph1Sidebar}
+                    onRefreshGraph1={refreshGraph1}
                   />
                 </div>
               )}
@@ -2525,6 +2632,16 @@ function App() {
                 </button>
               </div>
             </>
+          )}
+          {showGraph1Sidebar && wizardStep === 1 && !showAdmin && !showGraph1Studio && (
+            <Graph1DetailsSidebar
+              run={graph1Run}
+              nodes={graph1Nodes}
+              dataset={dataset}
+              onClose={closeGraph1Sidebar}
+              canOperate={canOperate}
+              onRefresh={refreshGraph1}
+            />
           )}
         </div>
       </main>
