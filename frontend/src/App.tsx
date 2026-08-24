@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, isMockMode, workflowApi } from "./api";
 import { ApiError, clearApiSession } from "./api/client";
 import ThemeControl from "./ThemeControl";
@@ -1225,7 +1225,7 @@ function WorkflowPage({
               onSaveConfiguration={onSaveConfiguration}
               onCreateManual={onCreateManualRule}
               onRun={() => undefined}
-              pipelineMode
+              pipelineMode={false}
             />
           )}
           {currentPhaseIndex !== 3 && <div className="workflow-actions">
@@ -1335,6 +1335,7 @@ function App() {
     null,
   );
   const [manualRuleOpen, setManualRuleOpen] = useState(false);
+  const workspaceRefreshSequence = useRef(0);
 
   const dataset = useMemo(
     () => datasets.find((item) => item.id === selectedDatasetId) ?? datasets[0],
@@ -1357,13 +1358,25 @@ function App() {
   );
   const canOperate = role === "STEWARD" || role === "ADMIN";
   const canAdmin = role === "ADMIN";
+  const workflowAnalysisComplete = Boolean(
+    workflow?.steps.find((step) => step.key === "ANALYZE_REPORT")?.status ===
+      "COMPLETED",
+  );
+  const maxWizardStep =
+    !dataset || !profile || (canOperate && !understandArtifact)
+      ? 1
+      : workflowAnalysisComplete
+        ? 4
+        : 3;
   const wizardNextDisabled =
     wizardStep === 4 ||
     (wizardStep === 1 &&
       (!dataset || !profile || (canOperate && !understandArtifact))) ||
-    (wizardStep === 2 && !profile);
+    (wizardStep === 2 && !profile) ||
+    (wizardStep === 3 && !workflowAnalysisComplete);
 
   const refreshWorkspace = useCallback(async () => {
+    const refreshId = ++workspaceRefreshSequence.current;
     setLoading(true);
     setError("");
     try {
@@ -1371,6 +1384,7 @@ function App() {
         api.listDatasets(),
         api.listAuditLogs(),
       ]);
+      if (refreshId !== workspaceRefreshSequence.current) return;
       setDatasets(nextDatasets);
       setAuditLogs(nextAudit);
       const profileEntries = await Promise.all(
@@ -1385,6 +1399,7 @@ function App() {
           Boolean(entry[1]),
         ),
       ) as Record<string, DatasetProfile>;
+      if (refreshId !== workspaceRefreshSequence.current) return;
       setDatasetProfiles(nextProfiles);
       const rememberedDatasetId = sessionStorage.getItem("ridepulse.dataset");
       const nextDataset =
@@ -1401,6 +1416,7 @@ function App() {
             api.getLatestDqRun(nextDataset.id),
             api.getQualityTrends(nextDataset.id),
           ]);
+        if (refreshId !== workspaceRefreshSequence.current) return;
         const nextProfile = nextProfiles[nextDataset.id] ?? null;
         setProfile(nextProfile);
         setProposals(nextProposals);
@@ -1421,6 +1437,7 @@ function App() {
         setRuleConfigurations([]);
       }
     } catch (err) {
+      if (refreshId !== workspaceRefreshSequence.current) return;
       if (err instanceof ApiError && err.status === 401) {
         clearApiSession();
         sessionStorage.removeItem("ridepulse.auth");
@@ -1430,7 +1447,7 @@ function App() {
       }
       setError(getErrorMessage(err, "Unable to load workspace."));
     } finally {
-      setLoading(false);
+      if (refreshId === workspaceRefreshSequence.current) setLoading(false);
     }
   }, []);
 
@@ -1841,6 +1858,24 @@ function App() {
           setProposals(
             await api.listProposals(targetDatasetId, currentWorkflow!.id),
           );
+          setRuleConfigurations(
+            await api.listRuleConfigurations(targetDatasetId),
+          );
+          if (step === "RUN_CHECKS" || step === "ANALYZE_REPORT") {
+            const latestRun = await api.getLatestDqRun(targetDatasetId);
+            setActiveRun(latestRun);
+            if (latestRun?.status === "SUCCEEDED") {
+              const [latestResults, latestAnomalies, nextTrends] =
+                await Promise.all([
+                  api.getDqResults(latestRun.id),
+                  api.getDqAnomalies(latestRun.id),
+                  api.getQualityTrends(targetDatasetId),
+                ]);
+              setDqResults(latestResults);
+              setDqAnomalies(latestAnomalies);
+              setQualityTrends(nextTrends);
+            }
+          }
           setAuditLogs(await api.listAuditLogs());
         },
         workflowApi,
@@ -1854,6 +1889,10 @@ function App() {
 
   async function startDatasetUnderstanding(datasetId: string) {
     if (!canOperate || workflowActionBusy || activeJob) return;
+    // Prevent a slower initial workspace refresh from overwriting the new
+    // workflow-scoped profile, proposals, and artifacts with dataset history.
+    workspaceRefreshSequence.current += 1;
+    setLoading(false);
     sessionStorage.setItem("ridepulse.dataset", datasetId);
     setSelectedDatasetId(datasetId);
     setError("");
@@ -2060,6 +2099,11 @@ function App() {
                   )}
                   <button
                     type="button"
+                    disabled={
+                      step.id > maxWizardStep ||
+                      Boolean(activeJob) ||
+                      workflowActionBusy
+                    }
                     className={`wizard-step-node ${wizardStep === step.id
                       ? "active"
                       : wizardStep > step.id
@@ -2067,6 +2111,7 @@ function App() {
                         : ""
                       }`}
                     onClick={() => {
+                      if (step.id > maxWizardStep) return;
                       setShowAdmin(false);
                       setWizardStep(step.id);
                     }}
@@ -2357,82 +2402,38 @@ function App() {
 
               {/* STEP 3: Execution & Rules Selection & Monitoring */}
               {wizardStep === 3 && (
-                <div>
-                  <RulesPage
-                    proposals={proposals}
-                    configurations={ruleConfigurations}
-                    profileReady={Boolean(profile || dataset)}
-                    busy={Boolean(activeJob)}
-                    canOperate={canOperate}
-                    onRequestProposals={() => void requestProposals()}
-                    onApprove={(id) => void reviewProposal(id, "approve")}
-                    onReject={(id) => void reviewProposal(id, "reject")}
-                    onEdit={setEditingProposal}
-                    onDelete={(id) => void deleteProposal(id)}
-                    onSaveConfiguration={(id, input) =>
-                      void saveRuleConfiguration(id, input)
-                    }
-                    onCreateManual={() => setManualRuleOpen(true)}
-                    onRun={() => void runApprovedRules()}
-                    pipelineMode={false}
-                  />
-
-                  {/* Execution Section: Show action banner if approved rules exist but no active run yet */}
-                  {!activeRun && approvedRules.length > 0 && (
-                    <div style={{
-                      marginTop: "24px",
-                      padding: "20px 24px",
-                      background: "linear-gradient(135deg, rgba(37, 99, 235, 0.04) 0%, rgba(16, 185, 129, 0.04) 100%)",
-                      border: "1px solid var(--border)",
-                      borderRadius: "16px",
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center"
-                    }}>
-                      <div>
-                        <span className="status-pill success" style={{ fontSize: "11px", marginBottom: "6px", display: "inline-flex" }}>
-                          ✓ {approvedRules.length} quy tắc đã sẵn sàng
-                        </span>
-                        <h3 style={{ fontSize: "16px", fontWeight: "700", color: "var(--ink)", margin: "4px 0" }}>
-                          {t("runs.title")}
-                        </h3>
-                        <p style={{ fontSize: "13px", color: "var(--muted)", margin: 0 }}>
-                          {t("runs.noRunDesc")}
-                        </p>
-                      </div>
-                      <button
-                        className="button primary"
-                        style={{ fontSize: "14px", padding: "10px 20px" }}
-                        onClick={() => void runApprovedRules()}
-                        disabled={Boolean(activeJob) || !canOperate}
-                      >
-                        ⚡ {t("runs.runApproved")}
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Show full execution monitoring page if a run exists */}
-                  {activeRun && (
-                    <div style={{ marginTop: "32px", borderTop: "1px solid var(--border)", paddingTop: "24px" }}>
-                      <RunsPage
-                        activeRun={activeRun}
-                        results={dqResults}
-                        anomalies={dqAnomalies}
-                        approvedCount={approvedRules.length}
-                        busy={Boolean(activeJob)}
-                        canOperate={canOperate}
-                        onRun={() => void runApprovedRules()}
-                      />
-                    </div>
-                  )}
-
-                  {/* Audit History Log */}
-                  {auditLogs.length > 0 && (
-                    <div style={{ marginTop: "40px", borderTop: "1px solid var(--border)", paddingTop: "24px" }}>
-                      <AuditPage logs={auditLogs} />
-                    </div>
-                  )}
-                </div>
+                <WorkflowPage
+                  dataset={dataset}
+                  profile={profile}
+                  datasets={datasets}
+                  workflow={workflow}
+                  artifacts={workflowArtifacts}
+                  proposals={proposals}
+                  configurations={ruleConfigurations}
+                  activeJob={activeJob}
+                  busy={workflowActionBusy}
+                  canOperate={canOperate}
+                  onStartStep={(step, fresh) =>
+                    void startWorkflowStep(step, fresh)
+                  }
+                  onAdvanceStep={() => void navigateForwardWorkflowStep()}
+                  onReviewArtifact={(id, input) =>
+                    void reviewWorkflowArtifact(id, input)
+                  }
+                  onLoopDecision={(input) => void decideWorkflowLoop(input)}
+                  onApproveRule={(id) => void reviewProposal(id, "approve")}
+                  onRejectRule={(id) => void reviewProposal(id, "reject")}
+                  onEditRule={setEditingProposal}
+                  onDeleteRule={(id) => void deleteProposal(id)}
+                  onSaveConfiguration={(id, input) =>
+                    void saveRuleConfiguration(id, input)
+                  }
+                  onCreateManualRule={() => setManualRuleOpen(true)}
+                  onRewindStep={(step) => void rewindWorkflowStage(step)}
+                  onSelectDataset={(id) => void selectDataset(id)}
+                  onUploadPreview={(file) => void importDataset(file)}
+                  onBackToDatasetSelection={() => setWizardStep(1)}
+                />
               )}
 
               {/* STEP 4: Analytics Dashboard */}
