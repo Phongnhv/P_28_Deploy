@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+from typing import Awaitable, Callable
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -185,7 +186,39 @@ async def _fail_dbt_validation_node(state: AgentState) -> dict:
     return {"error": error, "test_generation_errors": errors}
 
 
-def build_execution_graph() -> StateGraph:
+NodeObserver = Callable[[str, str, dict | None, Exception | None], Awaitable[None] | None]
+
+
+def _observed_node(
+    graph_name: str,
+    node_key: str,
+    node_fn: Callable[[dict], Awaitable[dict]],
+    observer: NodeObserver | None,
+):
+    if observer is None:
+        return node_fn
+
+    async def wrapped(state: dict) -> dict:
+        started = observer(graph_name, node_key, None, None)
+        if started is not None:
+            await started
+        try:
+            output = await node_fn(state)
+        except Exception as exc:
+            failed = observer(graph_name, node_key, None, exc)
+            if failed is not None:
+                await failed
+            raise
+        semantic_error = RuntimeError(str(output.get("error"))) if isinstance(output, dict) and output.get("error") else None
+        completed = observer(graph_name, node_key, output, semantic_error)
+        if completed is not None:
+            await completed
+        return output
+
+    return wrapped
+
+
+def build_execution_graph(observer: NodeObserver | None = None) -> StateGraph:
     """Xây dựng graph cho Run 2 (Execution Graph - Deterministic).
 
     Luồng:
@@ -198,11 +231,11 @@ def build_execution_graph() -> StateGraph:
 
     graph = StateGraph(AgentState)
 
-    graph.add_node("test_generator", test_generator_node)
-    graph.add_node("validate_dbt_project", validate_dbt_project_node)
-    graph.add_node("dbt_validation_failed", _fail_dbt_validation_node)
-    graph.add_node("test_runner", test_runner_node)
-    graph.add_node("persist_report", persist_report_node)
+    graph.add_node("test_generator", _observed_node("GRAPH2", "test_generator", test_generator_node, observer))
+    graph.add_node("validate_dbt_project", _observed_node("GRAPH2", "validate_dbt_project", validate_dbt_project_node, observer))
+    graph.add_node("dbt_validation_failed", _observed_node("GRAPH2", "dbt_validation_failed", _fail_dbt_validation_node, observer))
+    graph.add_node("test_runner", _observed_node("GRAPH2", "test_runner", test_runner_node, observer))
+    graph.add_node("persist_report", _observed_node("GRAPH2", "persist_report", persist_report_node, observer))
 
     graph.set_entry_point("test_generator")
 
@@ -227,7 +260,7 @@ def build_execution_graph() -> StateGraph:
 # Run 3: Anomaly Graph (Detector ➔ Hypothesis ➔ Persist)
 # ---------------------------------------------------------------------------
 
-def build_anomaly_graph() -> StateGraph:
+def build_anomaly_graph(observer: NodeObserver | None = None) -> StateGraph:
     """Xây dựng graph cho Run 3 (Anomaly Analysis Graph).
 
     Luồng:
@@ -241,10 +274,10 @@ def build_anomaly_graph() -> StateGraph:
 
     graph = StateGraph(AnomalyGraphState)
 
-    graph.add_node("anomaly_detector", anomaly_detector_node)
-    graph.add_node("hypothesis_agent", steward_insights_node)
-    graph.add_node("persist_analysis", persist_analysis_node)
-    graph.add_node("report_writer", report_writer_node)
+    graph.add_node("anomaly_detector", _observed_node("GRAPH3", "anomaly_detector", anomaly_detector_node, observer))
+    graph.add_node("hypothesis_agent", _observed_node("GRAPH3", "hypothesis_agent", steward_insights_node, observer))
+    graph.add_node("persist_analysis", _observed_node("GRAPH3", "persist_analysis", persist_analysis_node, observer))
+    graph.add_node("report_writer", _observed_node("GRAPH3", "report_writer", report_writer_node, observer))
 
     graph.set_entry_point("anomaly_detector")
     graph.add_edge("anomaly_detector", "hypothesis_agent")

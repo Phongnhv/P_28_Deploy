@@ -32,6 +32,9 @@ import type {
   Graph1Run,
   Graph1NodeExecution,
   Graph1RuleDecision,
+  AnalysisRun,
+  AnalysisNodeExecution,
+  AnalysisResult,
 } from "../types";
 
 function resolveApiBaseUrl(configuredValue: string) {
@@ -318,5 +321,20 @@ export const realApiClient: ApiClient = {
     return request<Graph1Run>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}/rule-review`, {
       method: "POST", body: JSON.stringify({ decisions }),
     });
+  },
+  createAnalysisRun(graph1RunId: string) {
+    return request<AnalysisRun>(`/api/v1/graph1-runs/${encodeURIComponent(graph1RunId)}/analysis-runs`, {
+      method: "POST",
+      headers: { "Idempotency-Key": `analysis-${graph1RunId}` },
+    });
+  },
+  getAnalysisRun(analysisRunId: string) {
+    return request<AnalysisRun>(`/api/v1/analysis-runs/${encodeURIComponent(analysisRunId)}`);
+  },
+  listAnalysisNodes(analysisRunId: string) {
+    return request<AnalysisNodeExecution[]>(`/api/v1/analysis-runs/${encodeURIComponent(analysisRunId)}/nodes`);
+  },
+  getAnalysisResult(analysisRunId: string) {
+    return request<AnalysisResult>(`/api/v1/analysis-runs/${encodeURIComponent(analysisRunId)}/result`);
   },
 };

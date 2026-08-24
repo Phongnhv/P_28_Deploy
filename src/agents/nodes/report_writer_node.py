@@ -260,7 +260,7 @@ async def report_writer_node(state: AnomalyGraphState) -> dict:
     """LangGraph Node: Viết báo cáo Markdown tiếng Việt bằng LLM cho Data Steward.
 
     Là node cuối cùng trong Graph 3, chạy sau persist_analysis_node.
-    Trả về `steward_report_path` trong state.
+    Trả về path, nội dung Markdown và nguồn LLM/FALLBACK trong state.
     """
     execution_run_id = state.get("execution_run_id") or state.get("anomaly_run_id", "unknown")
     dataset_id = state.get("dataset_id", "unknown")
@@ -336,8 +336,11 @@ async def report_writer_node(state: AnomalyGraphState) -> dict:
     metadata = dict(state.get("metadata") or {})
     metadata["steward_report_path"] = report_path
     metadata["steward_report_llm_used"] = llm_used
+    metadata["report_source"] = "LLM" if llm_used else "FALLBACK"
 
     return {
         "steward_report_path": report_path,
+        "steward_report_markdown": md_content,
+        "report_source": metadata["report_source"],
         "metadata": metadata,
     }

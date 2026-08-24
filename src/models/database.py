@@ -290,6 +290,51 @@ class Graph1NodeExecutionModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
 
+class AnalysisRunModel(Base):
+    """Durable orchestration state for Graph 2, Graph 3, and the steward report."""
+
+    __tablename__ = "analysis_runs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    graph1_run_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("graph1_runs.id"), nullable=False, unique=True, index=True
+    )
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING", index=True)
+    phase: Mapped[str] = mapped_column(String(32), nullable=False, default="PREPARING")
+    current_node: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    test_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    anomaly_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    report_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    report_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    report_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(256), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AnalysisNodeExecutionModel(Base):
+    """Latest observable status and safe output summary for one analysis node."""
+
+    __tablename__ = "analysis_node_executions"
+
+    id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), ForeignKey("analysis_runs.id"), nullable=False, index=True)
+    graph_name: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    node_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
+    output_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+
+
 class RuleVersionModel(Base):
     __tablename__ = "rule_versions"
 

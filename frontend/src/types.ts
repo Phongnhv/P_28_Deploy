@@ -362,6 +362,123 @@ export interface Graph1RuleDecision {
   rule?: Record<string, unknown>;
 }
 
+export type AnalysisRunStatus = "PENDING" | "RUNNING" | "PARTIAL" | "COMPLETED" | "FAILED";
+export type AnalysisPhase = "PREPARING" | "GRAPH2" | "GRAPH3" | "REPORT";
+export type AnalysisNodeStatus = "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED" | "SKIPPED";
+
+export interface AnalysisRun {
+  id: string;
+  graph1_run_id: string;
+  dataset_id: string;
+  status: AnalysisRunStatus;
+  phase: AnalysisPhase;
+  current_node?: string | null;
+  test_run_id?: string | null;
+  anomaly_run_id?: string | null;
+  report_available: boolean;
+  error?: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+}
+
+export interface AnalysisNodeExecution {
+  graph_name: "PREPARING" | "GRAPH2" | "GRAPH3" | "REPORT";
+  node_key: string;
+  position: number;
+  status: AnalysisNodeStatus;
+  output: Record<string, unknown>;
+  error?: string | null;
+  sequence: number;
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+}
+
+export interface AnalysisAnomalyAnnotation {
+  flagged: boolean;
+  signal_id?: string;
+  score?: number;
+  reliability?: number;
+  family?: string;
+  explanation?: string;
+}
+
+export type AnalysisResultStatus = "PASS" | "FAIL" | "ERROR" | "SKIPPED" | "RESULT_MISMATCH";
+
+export interface AnalysisGraph2Result {
+  rule_id: string;
+  rule_title: string;
+  rule_type: string;
+  table_name: string;
+  column?: string | null;
+  severity: string;
+  dimension: string;
+  status: AnalysisResultStatus;
+  checked_count: number;
+  failed_count: number;
+  violation_rate: number;
+  duration_ms: number;
+  dbt_status: string;
+  metrics_status: string;
+  sample_row_ids: string[];
+  evidence_refs: string[];
+  error?: string | null;
+  anomaly: AnalysisAnomalyAnnotation;
+}
+
+export interface AnalysisSignal {
+  signal_id: string;
+  family: string;
+  target_type: string;
+  target_id: string;
+  score: number;
+  reliability: number;
+  observed_value?: string | null;
+  baseline: Record<string, unknown>;
+  sufficient_history: boolean;
+  detector_name: string;
+  detector_version: string;
+  explanation: string;
+  evidence_refs: string[];
+}
+
+export interface AnalysisHypothesis {
+  id: string;
+  hypothesis_type: string;
+  summary: string;
+  confidence: number;
+  supporting_signal_ids: string[];
+  contradicting_signal_ids: string[];
+  evidence_refs: string[];
+  recommended_checks: string[];
+  missing_evidence?: string | null;
+  limitations?: string | null;
+  model_name: string;
+  prompt_version: string;
+  latency_ms: number;
+  fallback_used: boolean;
+}
+
+export interface AnalysisResult {
+  run: AnalysisRun;
+  nodes: AnalysisNodeExecution[];
+  graph2: {
+    available: boolean;
+    summary: { total: number; passed: number; failed: number; errors: number; skipped: number; total_checked: number; total_failed: number; duration_ms: number };
+    dbt: { generated_tests_count: number; validation_status: string; validation_skipped: boolean; validation_error?: string | null; validation_attempts: number; execution_mode: string; artifact: Record<string, unknown> };
+    results: AnalysisGraph2Result[];
+  };
+  graph3: {
+    available: boolean;
+    decision?: { decision: string; score: number; confidence: number; severity: string; dominant_family?: string | null; override_reason?: string | null } | null;
+    signals: AnalysisSignal[];
+    hypotheses: AnalysisHypothesis[];
+  };
+  report: { available: boolean; markdown: string; source?: "LLM" | "FALLBACK" | null; file_name?: string | null; generated_at?: string | null };
+}
+
 export interface ArtifactReviewInput {
   action: "approve" | "request_revision" | "reject";
   comment?: string;
@@ -415,4 +532,8 @@ export interface ApiClient {
   listGraph1Nodes(runId: string): Promise<Graph1NodeExecution[]>;
   confirmGraph1Semantic(runId: string, contract: Record<string, unknown>): Promise<Graph1Run>;
   reviewGraph1Rules(runId: string, decisions: Graph1RuleDecision[]): Promise<Graph1Run>;
+  createAnalysisRun(graph1RunId: string): Promise<AnalysisRun>;
+  getAnalysisRun(analysisRunId: string): Promise<AnalysisRun>;
+  listAnalysisNodes(analysisRunId: string): Promise<AnalysisNodeExecution[]>;
+  getAnalysisResult(analysisRunId: string): Promise<AnalysisResult>;
 }

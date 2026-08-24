@@ -6,9 +6,6 @@ import LanguageToggle from "./LanguageToggle";
 import { useI18n } from "./i18n/context";
 import { Step5Analytics } from "./components/wizard/Step5Analytics";
 import { Graph1Studio } from "./features/graph1/Graph1Studio";
-import { Graph1DetailsSidebar } from "./features/graph1/Graph1DetailsSidebar";
-import { StagePresenter, buildDisplayStages } from "./features/graph1/presenters";
-import { PanelRightOpen } from "lucide-react";
 import type {
   AuditLog,
   CreateJobResponse,
@@ -1267,6 +1264,8 @@ function App() {
   const [wizardStep, setWizardStep] = useState<number>(1);
   const [showAdmin, setShowAdmin] = useState<boolean>(false);
   const [showGraph1Studio, setShowGraph1Studio] = useState<boolean>(() => sessionStorage.getItem("ridepulse.graph1.open") === "1" && Boolean(sessionStorage.getItem("ridepulse.graph1.run")));
+  const [analysisRunId, setAnalysisRunId] = useState(() => sessionStorage.getItem("ridepulse.analysis.run") ?? "");
+  const [showAnalysisStudio, setShowAnalysisStudio] = useState<boolean>(() => sessionStorage.getItem("ridepulse.analysis.open") === "1" && Boolean(sessionStorage.getItem("ridepulse.analysis.run")));
   const [graph1Dataset, setGraph1Dataset] = useState<Dataset | null>(null);
   const [graph1Run, setGraph1Run] = useState<Graph1Run | null>(null);
   const [graph1Nodes, setGraph1Nodes] = useState<Graph1NodeExecution[]>([]);
@@ -1416,75 +1415,14 @@ function App() {
     await refreshWorkspace();
   }
 
-  async function toggleGraph1Sidebar(datasetId: string) {
-    if (datasetId !== selectedDatasetId) {
-      await selectDataset(datasetId);
-      setShowGraph1Sidebar(true);
-      return;
-    }
-    setShowGraph1Sidebar((current) => !current);
+  async function openGraph1ForDataset(datasetId: string) {
+    if (datasetId !== selectedDatasetId) await selectDataset(datasetId);
+    setGraph1Dataset(datasets.find((item) => item.id === datasetId) ?? null);
+    setWizardStep(2);
+    setShowAdmin(false);
+    sessionStorage.setItem("ridepulse.graph1.open", "1");
+    setShowGraph1Studio(true);
   }
-
-  function closeGraph1Sidebar() {
-    setShowGraph1Sidebar(false);
-    window.requestAnimationFrame(() => document.getElementById("graph1-details-trigger")?.focus());
-  }
-
-  const refreshGraph1 = useCallback(async (runId: string) => {
-    const [nextRun, nextNodes] = await Promise.all([
-      api.getGraph1Run(runId),
-      api.listGraph1Nodes(runId),
-    ]);
-    setGraph1Run(nextRun);
-    setGraph1Nodes(nextNodes);
-    return nextRun;
-  }, []);
-
-  async function startGraph1InBackground(datasetId: string) {
-    if (!canOperate || graph1Starting) return;
-    setError("");
-    setGraph1Starting(true);
-    try {
-      if (datasetId !== selectedDatasetId) await selectDataset(datasetId);
-      const storedRun = sessionStorage.getItem("ridepulse.graph1.run");
-      const storedDataset = sessionStorage.getItem("ridepulse.graph1.dataset");
-      const nextRun = storedRun && storedDataset === datasetId
-        ? await api.getGraph1Run(storedRun)
-        : await api.createGraph1Run(datasetId);
-      sessionStorage.setItem("ridepulse.graph1.run", nextRun.id);
-      sessionStorage.setItem("ridepulse.graph1.dataset", datasetId);
-      setGraph1Run(nextRun);
-      setGraph1Nodes(await api.listGraph1Nodes(nextRun.id));
-      setToast("Agent Workflow is running in the background.");
-    } catch (err) {
-      setError(getErrorMessage(err, "Unable to start Agent Workflow."));
-    } finally {
-      setGraph1Starting(false);
-    }
-  }
-
-  useEffect(() => {
-    if (!dataset) return;
-    const storedRun = sessionStorage.getItem("ridepulse.graph1.run");
-    const storedDataset = sessionStorage.getItem("ridepulse.graph1.dataset");
-    if (!storedRun || storedDataset !== dataset.id) {
-      setGraph1Run(null);
-      setGraph1Nodes([]);
-      return;
-    }
-    void refreshGraph1(storedRun).catch(() => {
-      sessionStorage.removeItem("ridepulse.graph1.run");
-      sessionStorage.removeItem("ridepulse.graph1.dataset");
-      setGraph1Run(null);
-      setGraph1Nodes([]);
-    });
-  }, [dataset?.id, refreshGraph1]);
-
-  useEffect(() => {
-    if (!graph1Run || ["COMPLETED", "FAILED", "AWAITING_SEMANTIC_REVIEW", "AWAITING_RULE_REVIEW"].includes(graph1Run.status)) return;
-    const timer = window.setInterval(() => void refreshGraph1(graph1Run.id), 2500);
-    return () => window.clearInterval(timer);
-  }, [graph1Run?.id, graph1Run?.status, refreshGraph1]);
 
   useEffect(() => {
     if (authenticated) void refreshWorkspace();
@@ -1522,6 +1460,10 @@ function App() {
     sessionStorage.removeItem("ridepulse.role");
     sessionStorage.removeItem("ridepulse.username");
     sessionStorage.removeItem("ridepulse.dataset");
+    sessionStorage.removeItem("ridepulse.analysis.open");
+    sessionStorage.removeItem("ridepulse.analysis.run");
+    setShowAnalysisStudio(false);
+    setAnalysisRunId("");
     setAuthenticated(false);
   }
 
@@ -1982,6 +1924,8 @@ function App() {
                   setShowAdmin(!showAdmin);
                   sessionStorage.removeItem("ridepulse.graph1.open");
                   setShowGraph1Studio(false);
+                  sessionStorage.removeItem("ridepulse.analysis.open");
+                  setShowAnalysisStudio(false);
                 }}
               >
                 ⚙ {t("app.adminControl")}
@@ -2000,7 +1944,7 @@ function App() {
           </div>
         </header>
 
-        {!showAdmin && !showGraph1Studio && (
+        {!showAdmin && !showGraph1Studio && !showAnalysisStudio && (
           <div className="wizard-header-container">
             <nav className="wizard-stepper" aria-label="Wizard Steps">
               {[
@@ -2044,6 +1988,8 @@ function App() {
                       setShowGraph1Sidebar(false);
                       sessionStorage.removeItem("ridepulse.graph1.open");
                       setShowGraph1Studio(false);
+                      sessionStorage.removeItem("ridepulse.analysis.open");
+                      setShowAnalysisStudio(false);
                       setWizardStep(step.id);
                     }}
                   >
@@ -2062,7 +2008,7 @@ function App() {
         )}
 
         <div className="page-container">
-          {!showGraph1Studio && !canOperate && (
+          {!showGraph1Studio && !showAnalysisStudio && !canOperate && (
             <div className="dev-banner">
               <span>Read-only access</span>
               <span>
@@ -2072,7 +2018,7 @@ function App() {
               <code>{role}</code>
             </div>
           )}
-          {!showGraph1Studio && isMockMode && (
+          {!showGraph1Studio && !showAnalysisStudio && isMockMode && (
             <div className="dev-banner">
               <span>Local development adapter</span>
               <span>
@@ -2082,7 +2028,7 @@ function App() {
               <code>VITE_USE_MOCK_API=false</code>
             </div>
           )}
-          {!showGraph1Studio && error && (
+          {!showGraph1Studio && !showAnalysisStudio && error && (
             <div className="alert error">
               <strong>Action failed</strong>
               <span>{error}</span>
@@ -2124,7 +2070,22 @@ function App() {
             </div>
           )}
 
-          {showGraph1Studio ? (
+          {showAnalysisStudio && analysisRunId ? (
+            <AnalysisStudio
+              analysisRunId={analysisRunId}
+              onExit={() => {
+                sessionStorage.removeItem("ridepulse.analysis.open");
+                setShowAnalysisStudio(false);
+                setAnalysisRunId("");
+              }}
+              onBackToGraph1={() => {
+                sessionStorage.removeItem("ridepulse.analysis.open");
+                sessionStorage.setItem("ridepulse.graph1.open", "1");
+                setShowAnalysisStudio(false);
+                setShowGraph1Studio(true);
+              }}
+            />
+          ) : showGraph1Studio ? (
             <Graph1Studio
               onExit={() => {
                 sessionStorage.removeItem("ridepulse.graph1.open");
@@ -2135,6 +2096,7 @@ function App() {
                 if (runId) void refreshGraph1(runId);
               }}
               onDatasetImported={() => void refreshWorkspace()}
+              onAnalyze={openAnalysisForGraph1}
               initialDataset={graph1Dataset ?? dataset}
             />
           ) : showAdmin && canAdmin ? (
