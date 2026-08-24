@@ -2,101 +2,42 @@ import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useSta
 import { api, isMockMode } from "../../api";
 import { apiBaseUrl } from "../../api/client";
 import type { Dataset, Graph1NodeExecution, Graph1RuleDecision, Graph1Run, Job } from "../../types";
+import { buildDisplayStages, EvidenceOverview, nodeKeyToStageKey, stageDuration, stageEvidence, StagePresenter } from "./presenters";
 import "./graph1-studio.css";
 
-const META: Record<string, [string, string]> = {
-  raw_profiler: ["Raw profiler", "Profile thật của dataset đã upload."], profiler_digest: ["Profiler digest", "Tín hiệu chất lượng chuẩn hóa cho agent."],
-  data_dictionary_generator: ["Data dictionary", "Từ điển dữ liệu được LLM suy luận."], dataset_understanding: ["Dataset understanding", "Semantic Contract từ profile và dictionary."],
-  hitl_semantic_gate: ["Semantic review", "Steward xác nhận ngữ nghĩa."], rule_candidate_builder: ["Rule candidates", "Ứng viên rule deterministic có evidence."],
-  prompt_customizer: ["Prompt customizer", "Prompt chuyên biệt theo dataset."], rule_proposer: ["Rule proposer", "Rule do LLM đề xuất."], hitl_gate: ["Rule approval", "Steward duyệt rules cuối."],
-};
 const STOP = new Set(["COMPLETED", "FAILED", "AWAITING_SEMANTIC_REVIEW", "AWAITING_RULE_REVIEW"]);
+type RuleDecisionState = Graph1RuleDecision["action"] | "undecided";
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 const pretty = (value: unknown) => JSON.stringify(value ?? {}, null, 2);
 const human = (value: string) => value.replaceAll("_", " ");
 
 const asRecord = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-const asRecords = (value: unknown): Record<string, unknown>[] => Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item))) : [];
-const show = (value: unknown, fallback = "—") => value === undefined || value === null || value === "" ? fallback : typeof value === "object" ? pretty(value) : String(value);
-const pick = (source: Record<string, unknown>, keys: string[]) => keys.map((key) => source[key]).find((value) => value !== undefined && value !== null);
-const nodeDuration = (node: Graph1NodeExecution) => {
-  if (!node.started_at) return "—";
-  const end = node.completed_at ? new Date(node.completed_at).getTime() : Date.now();
-  const seconds = Math.max(0, Math.round((end - new Date(node.started_at).getTime()) / 1000));
-  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-};
-
-function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
-  if (!rows.length) return null;
-  const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 8);
-  return <div className="g1-table-wrap"><table className="g1-table"><thead><tr>{columns.map((key) => <th key={key}>{human(key)}</th>)}</tr></thead><tbody>{rows.slice(0, 20).map((row, index) => <tr key={index}>{columns.map((key) => <td key={key}>{show(row[key])}</td>)}</tr>)}</tbody></table></div>;
-}
-
-function RuleCards({ rules }: { rules: Record<string, unknown>[] }) {
-  return <div className="g1-proposal-list">{rules.map((rule, index) => {
-    const confidence = pick(rule, ["confidence", "confidence_score", "score"]);
-    const evidence = pick(rule, ["selected_evidence_refs", "evidence_refs", "evidence"]);
-    return <article className="g1-proposal-card" key={show(pick(rule, ["rule_id", "id"]), String(index))}><div className="g1-proposal-main"><span>{show(pick(rule, ["rule_id", "id"]), `RULE-${index + 1}`)}</span><strong>{show(pick(rule, ["rule_name", "name", "title", "rule_description"]), "Rule proposal")}</strong><p>{show(pick(rule, ["rule_description", "description", "ai_reasoning", "reasoning"]), "No description returned.")}</p><code>{show(pick(rule, ["expression", "condition", "parameters", "rule_type"]))}</code>{evidence !== undefined && <small>Evidence: {show(evidence)}</small>}</div>{confidence !== undefined && <strong className="g1-confidence">{typeof confidence === "number" && confidence <= 1 ? Math.round(confidence * 100) : show(confidence)}%</strong>}</article>;
-  })}</div>;
-}
-
-function NodePresenter({ node }: { node: Graph1NodeExecution }) {
-  const output = asRecord(node.output);
-  if (!Object.keys(output).length) return <div className="g1-empty"><strong>Chưa có output</strong><span>Node sẽ cập nhật khi backend thực thi.</span></div>;
-  if (node.node_key === "raw_profiler") {
-    const profile = asRecord(output.dataset_profile); const source = asRecord(Object.values(profile)[0] ?? profile); const metadata = asRecord(pick(source, ["table_metadata", "metadata"])); const columns = asRecords(pick(source, ["columns", "column_profiles"])); const quality = asRecord(source.quality_summary);
-    return <div className="g1-presenter"><div className="g1-metric-grid"><div><span>ROWS</span><strong>{show(pick(metadata, ["total_rows", "row_count"]))}</strong></div><div><span>COLUMNS</span><strong>{columns.length || show(pick(metadata, ["column_count", "total_columns"]))}</strong></div><div><span>COMPLETENESS</span><strong>{show(pick(quality, ["completeness", "completeness_score"]))}</strong></div><div><span>DUPLICATES</span><strong>{show(pick(quality, ["duplicate_rows", "duplicate_rate"]))}</strong></div></div><DataTable rows={columns}/></div>;
-  }
-  if (node.node_key === "profiler_digest") {
-    const digest = asRecord(output.dataset_profile_digest); const source = asRecord(Object.values(digest)[0] ?? digest); const rows = asRecords(pick(source, ["columns", "column_signals", "fields"]));
-    return <div className="g1-presenter"><p className="g1-summary">{show(pick(source, ["summary", "dataset_summary", "description"]), "Profiler digest generated by backend.")}</p><DataTable rows={rows}/><details><summary>Technical output</summary><pre>{pretty(digest)}</pre></details></div>;
-  }
-  if (node.node_key === "data_dictionary_generator") {
-    const dictionary = output.normalized_data_dictionary ?? output.data_dictionary; const dictionaryRecord = asRecord(dictionary); const rows = asRecords(pick(dictionaryRecord, ["columns", "fields", "entries"]));
-    return <div className="g1-presenter"><p className="g1-summary">Source: {show(output.data_dictionary_source)}</p>{rows.length ? <DataTable rows={rows}/> : <pre>{pretty(dictionary)}</pre>}</div>;
-  }
-  if (node.node_key === "dataset_understanding") {
-    const contract = asRecord(output.semantic_contract); const fields = asRecords(pick(contract, ["columns", "fields", "entities"]));
-    return <div className="g1-presenter"><div className="g1-understanding-hero"><span>SEMANTIC CONTRACT</span><h3>{show(pick(contract, ["dataset_name", "name", "title"]), "Dataset understanding")}</h3><p>{show(pick(contract, ["purpose", "description", "business_context"]))}</p></div><div className="g1-fact-grid"><div><span>GRAIN</span><strong>{show(pick(contract, ["grain", "row_grain"]))}</strong></div><div><span>PRIMARY KEY</span><strong>{show(pick(contract, ["primary_key", "primary_keys"]))}</strong></div></div><DataTable rows={fields}/><details><summary>Full contract</summary><pre>{pretty(contract)}</pre></details></div>;
-  }
-  if (node.node_key === "rule_candidate_builder") return <RuleCards rules={asRecords(output.rule_candidates)}/>;
-  if (node.node_key === "prompt_customizer") { const prompts = asRecord(output.specialized_system_prompts ?? output.customized_prompts); return <div className="g1-prompt-list">{Object.entries(prompts).map(([key, value]) => <section className="g1-prompt-block" key={key}><strong>{human(key)}</strong><pre>{show(value)}</pre></section>)}</div>; }
-  if (node.node_key === "rule_proposer") return <RuleCards rules={asRecords(output.proposed_rules)}/>;
-  return <OutputView node={node}/>;
-}
-
-function collectEvidence(value: unknown, path = "output"): { path: string; value: unknown }[] {
-  if (!value || typeof value !== "object") return [];
-  return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) => key.toLowerCase().includes("evidence") ? [{ path: `${path}.${key}`, value: child }] : collectEvidence(child, `${path}.${key}`));
-}
-
-function OutputView({ node }: { node: Graph1NodeExecution }) {
-  const entries = Object.entries(node.output ?? {});
-  if (!entries.length) return <div className="g1-empty"><strong>Chưa có output</strong><span>Node sẽ cập nhật khi backend thực thi.</span></div>;
-  return <div className="g1-real-output">{entries.map(([key, value]) => <section className="g1-json-section" key={key}><div><span>{human(key)}</span><small>{Array.isArray(value) ? `${value.length} items` : typeof value}</small></div>{typeof value === "string" && value.length < 240 ? <p>{value}</p> : <pre>{pretty(value)}</pre>}</section>)}</div>;
-}
 
 export function Graph1Studio({ onExit, onDatasetImported, initialDataset }: { onExit: () => void; onDatasetImported?: () => void; initialDataset?: Dataset | null }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [dataset, setDataset] = useState<Dataset | null>(initialDataset ?? null);
   const [run, setRun] = useState<Graph1Run | null>(null);
   const [nodes, setNodes] = useState<Graph1NodeExecution[]>([]);
-  const [selectedKey, setSelectedKey] = useState("raw_profiler");
+  const [selectedKey, setSelectedKey] = useState("profile_info");
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [semanticText, setSemanticText] = useState("");
-  const [decisions, setDecisions] = useState<Record<string, Graph1RuleDecision["action"]>>({});
-  const [ruleEdits, setRuleEdits] = useState<Record<string, string>>({});
+  const [decisions, setDecisions] = useState<Record<string, RuleDecisionState>>({});
+  const [ruleEdits, setRuleEdits] = useState<Record<string, Record<string, string>>>({});
+  const [reviewValidation, setReviewValidation] = useState("");
   const [activeTab, setActiveTab] = useState<"output" | "evidence" | "activity">("output");
   const autoStartRef = useRef(false);
+  const reviewRunRef = useRef("");
 
   const refresh = useCallback(async (id: string) => {
     const [nextRun, nextNodes] = await Promise.all([api.getGraph1Run(id), api.listGraph1Nodes(id)]);
     setRun(nextRun); setNodes(nextNodes);
     const active = nextNodes.find((node) => ["RUNNING", "WAITING_REVIEW", "FAILED"].includes(node.status));
-    if (active) setSelectedKey(active.node_key);
+    const savedStage = sessionStorage.getItem(`ridepulse.graph1.stage.${id}`);
+    if (savedStage) setSelectedKey(savedStage);
+    else if (active) setSelectedKey(nodeKeyToStageKey(active.node_key));
   }, []);
 
   useEffect(() => {
@@ -126,16 +67,46 @@ export function Graph1Studio({ onExit, onDatasetImported, initialDataset }: { on
   useEffect(() => {
     if (!run || STOP.has(run.status) || !apiBaseUrl) return;
     const source = new EventSource(`${apiBaseUrl}/api/v1/graph1-runs/${encodeURIComponent(run.id)}/stream`, { withCredentials: true });
-    source.addEventListener("snapshot", (event) => { const data = JSON.parse((event as MessageEvent).data) as { run: Graph1Run; nodes: Graph1NodeExecution[] }; setRun(data.run); setNodes(data.nodes); const active = data.nodes.find((node) => ["RUNNING", "WAITING_REVIEW", "FAILED"].includes(node.status)); if (active) setSelectedKey(active.node_key); });
+    source.addEventListener("snapshot", (event) => { const data = JSON.parse((event as MessageEvent).data) as { run: Graph1Run; nodes: Graph1NodeExecution[] }; setRun(data.run); setNodes(data.nodes); const savedStage = sessionStorage.getItem(`ridepulse.graph1.stage.${data.run.id}`); const active = data.nodes.find((node) => ["RUNNING", "WAITING_REVIEW", "FAILED"].includes(node.status)); if (savedStage) setSelectedKey(savedStage); else if (active) setSelectedKey(nodeKeyToStageKey(active.node_key)); });
     source.onerror = () => { source.close(); void refresh(run.id); };
     return () => source.close();
   }, [run?.id, run?.status, refresh]);
   useEffect(() => { if (!run || STOP.has(run.status)) return; const timer = window.setInterval(() => void refresh(run.id), 2500); return () => window.clearInterval(timer); }, [run?.id, run?.status, refresh]);
+  useEffect(() => { if (run) sessionStorage.setItem(`ridepulse.graph1.stage.${run.id}`, selectedKey); }, [run?.id, selectedKey]);
 
   const semanticNode = nodes.find((node) => node.node_key === "dataset_understanding");
-  useEffect(() => { if (run?.status === "AWAITING_SEMANTIC_REVIEW" && !semanticText && semanticNode?.output.semantic_contract) setSemanticText(pretty(semanticNode.output.semantic_contract)); }, [run?.status, semanticNode, semanticText]);
+  useEffect(() => {
+    if (run?.status !== "AWAITING_SEMANTIC_REVIEW" || semanticText) return;
+    const savedDraft = sessionStorage.getItem(`ridepulse.graph1.semantic.${run.id}`);
+    if (savedDraft) setSemanticText(savedDraft);
+    else if (semanticNode?.output.semantic_contract) setSemanticText(pretty(semanticNode.output.semantic_contract));
+  }, [run?.id, run?.status, semanticNode, semanticText]);
+  useEffect(() => { if (run?.status === "AWAITING_SEMANTIC_REVIEW" && semanticText) sessionStorage.setItem(`ridepulse.graph1.semantic.${run.id}`, semanticText); }, [run?.id, run?.status, semanticText]);
   const rules = useMemo(() => { const value = nodes.find((node) => node.node_key === "rule_proposer")?.output.proposed_rules; return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object")) : []; }, [nodes]);
-  useEffect(() => { if (rules.length && !Object.keys(decisions).length) { setDecisions(Object.fromEntries(rules.map((rule, index) => [String(rule.rule_id ?? `rule-${index}`), "approve"]))); setRuleEdits(Object.fromEntries(rules.map((rule, index) => { const id = String(rule.rule_id ?? `rule-${index}`); return [id, pretty({ type: rule.rule_type, column: rule.column, ...(typeof rule.parameters === "object" ? rule.parameters : {}) })]; }))); } }, [rules, decisions]);
+  useEffect(() => {
+    if (!run || !rules.length) return;
+    if (reviewRunRef.current === run.id && Object.keys(decisions).length) return;
+    reviewRunRef.current = run.id;
+    const storageKey = `ridepulse.graph1.review.${run.id}`;
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as { decisions?: Record<string, RuleDecisionState>; edits?: Record<string, Record<string, string>> };
+      if (stored.decisions && Object.keys(stored.decisions).length) {
+        setDecisions(stored.decisions);
+        setRuleEdits(stored.edits ?? {});
+        return;
+      }
+    } catch { /* Ignore an invalid local draft and start clean. */ }
+    setDecisions(Object.fromEntries(rules.map((rule, index) => [String(rule.rule_id ?? `rule-${index}`), "undecided"])));
+    setRuleEdits(Object.fromEntries(rules.map((rule, index) => {
+      const id = String(rule.rule_id ?? `rule-${index}`);
+      const parameters = rule.parameters && typeof rule.parameters === "object" && !Array.isArray(rule.parameters) ? rule.parameters as Record<string, unknown> : {};
+      return [id, { type: String(rule.rule_type ?? ""), name: String(rule.rule_name ?? ""), description: String(rule.rule_description ?? ""), column: String(rule.column ?? ""), min_value: String(parameters.min_value ?? parameters.min ?? ""), max_value: String(parameters.max_value ?? parameters.max ?? ""), max_null_pct: String(parameters.max_null_pct ?? ""), accepted_values: Array.isArray(parameters.accepted_values) ? parameters.accepted_values.join(", ") : "", regex: String(parameters.regex ?? ""), target_column: String(parameters.target_column ?? ""), operator: String(parameters.operator ?? ""), min_row_count: String(parameters.min_row_count ?? "") }];
+    })));
+  }, [run, rules, decisions]);
+  useEffect(() => {
+    if (!run || !Object.keys(decisions).length) return;
+    sessionStorage.setItem(`ridepulse.graph1.review.${run.id}`, JSON.stringify({ decisions, edits: ruleEdits }));
+  }, [run, decisions, ruleEdits]);
 
   const upload = async (file: File) => {
     setError("");
@@ -151,13 +122,55 @@ export function Graph1Studio({ onExit, onDatasetImported, initialDataset }: { on
       setMessage("Đang khởi tạo canonical Graph 1…"); const created = await api.createGraph1Run(imported.dataset.id); sessionStorage.setItem("ridepulse.graph1.run", created.id); sessionStorage.setItem("ridepulse.graph1.dataset", imported.dataset.id); setRun(created); await refresh(created.id); setMessage("");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Không thể bắt đầu Graph 1."); setMessage(""); } finally { setBusy(false); }
   };
-  const confirmSemantic = async () => { if (!run) return; setBusy(true); setError(""); try { const next = await api.confirmGraph1Semantic(run.id, JSON.parse(semanticText)); setRun(next); setSelectedKey("rule_candidate_builder"); await refresh(run.id); } catch (reason) { setError(reason instanceof Error ? reason.message : "Semantic Contract không hợp lệ."); } finally { setBusy(false); } };
-  const confirmRules = async () => { if (!run) return; setBusy(true); setError(""); try { const payload = rules.map((rule, index) => { const id = String(rule.rule_id ?? `rule-${index}`); const action = decisions[id] ?? "reject"; return { rule_id: id, action, ...(action === "edit" ? { rule: JSON.parse(ruleEdits[id]) } : {}) } as Graph1RuleDecision; }); const next = await api.reviewGraph1Rules(run.id, payload); setRun(next); await refresh(run.id); } catch (reason) { setError(reason instanceof Error ? reason.message : "Không thể lưu quyết định rule."); } finally { setBusy(false); } };
-  const reset = () => { sessionStorage.removeItem("ridepulse.graph1.run"); sessionStorage.removeItem("ridepulse.graph1.dataset"); setRun(null); setNodes([]); setDataset(null); setError(""); setSemanticText(""); setDecisions({}); setRuleEdits({}); onExit(); };
-  const selected = nodes.find((node) => node.node_key === selectedKey);
+  const confirmSemantic = async () => { if (!run) return; setBusy(true); setError(""); try { const next = await api.confirmGraph1Semantic(run.id, JSON.parse(semanticText)); sessionStorage.removeItem(`ridepulse.graph1.semantic.${run.id}`); sessionStorage.setItem(`ridepulse.graph1.stage.${run.id}`, "rule_candidate_builder"); setRun(next); setSelectedKey("rule_candidate_builder"); await refresh(run.id); } catch (reason) { setError(reason instanceof Error ? reason.message : "Semantic Contract không hợp lệ."); } finally { setBusy(false); } };
+  const confirmRules = async () => {
+    if (!run) return;
+    const firstUndecided = rules.findIndex((rule, index) => decisions[String(rule.rule_id ?? `rule-${index}`)] === "undecided" || !decisions[String(rule.rule_id ?? `rule-${index}`)]);
+    if (firstUndecided >= 0) {
+      setReviewValidation(`Còn ${rules.filter((rule, index) => { const value = decisions[String(rule.rule_id ?? `rule-${index}`)]; return !value || value === "undecided"; }).length} rule chưa được quyết định.`);
+      document.getElementById(`g1-review-rule-${firstUndecided}`)?.focus();
+      return;
+    }
+    if (!Object.values(decisions).some((value) => value === "approve" || value === "edit")) {
+      setReviewValidation("Cần approve hoặc edit & approve ít nhất một rule để hoàn tất Graph 1.");
+      return;
+    }
+    setBusy(true); setError(""); setReviewValidation("");
+    try {
+      const payload = rules.map((rule, index) => {
+        const id = String(rule.rule_id ?? `rule-${index}`);
+        const action = decisions[id] as Graph1RuleDecision["action"];
+        const draft = ruleEdits[id] ?? {};
+        const numeric = (key: string) => draft[key] === "" || draft[key] === undefined ? undefined : Number(draft[key]);
+        const editedRule = { type: draft.type, rule_name: draft.name, rule_description: draft.description, column: draft.column || null, parameters: { min_value: numeric("min_value"), max_value: numeric("max_value"), max_null_pct: numeric("max_null_pct"), accepted_values: draft.accepted_values ? draft.accepted_values.split(",").map((item) => item.trim()).filter(Boolean) : undefined, regex: draft.regex || undefined, target_column: draft.target_column || undefined, operator: draft.operator || undefined, min_row_count: numeric("min_row_count") } };
+        return { rule_id: id, action, ...(action === "edit" ? { rule: editedRule } : {}) } as Graph1RuleDecision;
+      });
+      const next = await api.reviewGraph1Rules(run.id, payload); setRun(next); await refresh(run.id);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Không thể lưu quyết định rule."); } finally { setBusy(false); }
+  };
+  const reset = () => { if (run) { sessionStorage.removeItem(`ridepulse.graph1.review.${run.id}`); sessionStorage.removeItem(`ridepulse.graph1.stage.${run.id}`); sessionStorage.removeItem(`ridepulse.graph1.semantic.${run.id}`); } sessionStorage.removeItem("ridepulse.graph1.run"); sessionStorage.removeItem("ridepulse.graph1.dataset"); setRun(null); setNodes([]); setDataset(null); setError(""); setSemanticText(""); setDecisions({}); setRuleEdits({}); setReviewValidation(""); reviewRunRef.current = ""; onExit(); };
+  const stages = useMemo(() => buildDisplayStages(nodes), [nodes]);
+  const selected = stages.find((stage) => stage.key === selectedKey) ?? stages[0];
   useEffect(() => setActiveTab("output"), [selectedKey]);
-  const selectedEvidence = selected ? collectEvidence(selected.output) : [];
+  const selectedEvidence = selected ? stageEvidence(selected) : [];
+  const semanticDraft = useMemo(() => {
+    try { return asRecord(JSON.parse(semanticText || "{}")); } catch { return {}; }
+  }, [semanticText]);
+  const updateSemanticColumn = (tableKey: string, index: number, field: string, value: string | boolean | number) => {
+    const next = structuredClone(semanticDraft);
+    const tables = asRecord(next.tables);
+    const table = asRecord(tables[tableKey]);
+    const columns = Array.isArray(table.columns) ? [...table.columns] as Record<string, unknown>[] : [];
+    columns[index] = { ...asRecord(columns[index]), [field]: value };
+    table.columns = columns; tables[tableKey] = table; next.tables = tables;
+    setSemanticText(pretty(next));
+  };
   const done = nodes.filter((node) => ["SUCCEEDED", "SKIPPED"].includes(node.status)).length;
+  const approvedCount = Object.values(decisions).filter((value) => value === "approve").length;
+  const editedCount = Object.values(decisions).filter((value) => value === "edit").length;
+  const rejectedCount = Object.values(decisions).filter((value) => value === "reject").length;
+  const pendingCount = rules.filter((rule, index) => { const value = decisions[String(rule.rule_id ?? `rule-${index}`)]; return !value || value === "undecided"; }).length;
+  const decidedCount = Math.max(0, rules.length - pendingCount);
   const onFile = (event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (file) void upload(file); };
   const onDrop = (event: DragEvent<HTMLDivElement>) => { event.preventDefault(); setDragging(false); const file = event.dataTransfer.files[0]; if (file) void upload(file); };
 
@@ -168,16 +181,35 @@ export function Graph1Studio({ onExit, onDatasetImported, initialDataset }: { on
     {error && <div className="g1-error" role="alert"><strong>Graph 1 không thể tiếp tục</strong><span>{error}</span><button type="button" onClick={() => setError("")}>×</button></div>}
     {run && <><section className="g1-runbar"><div><span className="g1-live-dot"/><div><strong>{run.id}</strong><span>{dataset?.source_label ?? run.dataset_id}</span></div></div><div className="g1-run-meta"><span><small>STATUS</small><strong>{human(run.status)}</strong></span><span><small>NODES</small><strong>{done} / 9</strong></span><span><small>CURRENT</small><strong>{run.current_node ?? "QUEUED"}</strong></span><span><small>OWNER</small><strong>{run.created_by}</strong></span></div><div className="g1-progress"><span style={{ width: `${done / 9 * 100}%` }}/></div></section>
       <div className="g1-workspace">
-        <aside className="g1-node-rail" aria-label="Graph 1 nodes"><div className="g1-rail-heading"><div><span>EXECUTION PATH</span><strong>9 canonical nodes</strong></div></div><ol>{nodes.map((node) => <li key={node.node_key} className={node.status.toLowerCase()}><button type="button" className={selectedKey === node.node_key ? "active" : ""} onClick={() => setSelectedKey(node.node_key)}><span className="g1-node-state">{node.status === "SUCCEEDED" ? "✓" : node.position}</span><span className="g1-node-copy"><span>{String(node.position).padStart(2, "0")} · {node.node_key}</span><strong>{META[node.node_key]?.[0]}</strong><small>{human(node.status)}</small></span><span className="g1-node-chevron">›</span></button></li>)}</ol></aside>
+        <aside className="g1-node-rail" aria-label="Graph 1 display stages"><div className="g1-rail-heading"><div><span>EXECUTION PATH</span><strong>7 display stages · 9 backend nodes</strong></div></div><ol>{stages.map((stage) => <li key={stage.key} className={stage.status.toLowerCase()}><button type="button" className={selectedKey === stage.key ? "active" : ""} onClick={() => setSelectedKey(stage.key)}><span className="g1-node-state">{stage.status === "SUCCEEDED" ? "✓" : stage.canonicalLabel}</span><span className="g1-node-copy"><span>{stage.canonicalLabel} · {stage.key}</span><strong>{stage.title}</strong><small>{human(stage.status)}</small></span><span className="g1-node-chevron">›</span></button></li>)}</ol></aside>
         <section className="g1-output" aria-live="polite">{selected ? <>
-          <header className="g1-output-header"><div className="g1-output-title"><div className="g1-icon-tile">{selected.position}</div><div><span>NODE {String(selected.position).padStart(2, "0")} OUTPUT</span><h2>{META[selected.node_key]?.[0]}</h2><p>{META[selected.node_key]?.[1]}</p></div></div><div className="g1-output-status"><span className={`g1-chip ${selected.status === "SUCCEEDED" ? "success" : selected.status === "FAILED" ? "danger" : "warning"}`}>{human(selected.status)}</span><small>{nodeDuration(selected)}</small></div></header>
+          <header className="g1-output-header"><div className="g1-output-title"><div className="g1-icon-tile">{selected.canonicalLabel}</div><div><span>STAGE {selected.canonicalLabel} OUTPUT</span><h2>{selected.title}</h2><p>{selected.description}</p></div></div><div className="g1-output-status"><span className={`g1-chip ${selected.status === "SUCCEEDED" ? "success" : selected.status === "FAILED" ? "danger" : "warning"}`}>{human(selected.status)}</span><small>{stageDuration(selected)}</small></div></header>
           <nav className="g1-output-tabs" aria-label="Node output views"><button type="button" className={activeTab === "output" ? "active" : ""} onClick={() => setActiveTab("output")}>Output</button><button type="button" className={activeTab === "evidence" ? "active" : ""} onClick={() => setActiveTab("evidence")}>Evidence <span>{selectedEvidence.length}</span></button><button type="button" className={activeTab === "activity" ? "active" : ""} onClick={() => setActiveTab("activity")}>Activity</button></nav>
-          <div className="g1-output-body">{activeTab === "output" && <NodePresenter node={selected}/>} {activeTab === "evidence" && (selectedEvidence.length ? <div className="g1-evidence-list">{selectedEvidence.map((item) => <article key={item.path}><strong>{item.path}</strong><pre>{pretty(item.value)}</pre></article>)}</div> : <div className="g1-empty"><strong>No evidence returned</strong><span>This node output has no evidence fields.</span></div>)} {activeTab === "activity" && <div className="g1-activity-list"><article><span>STATUS</span><strong>{human(selected.status)}</strong></article><article><span>STARTED</span><strong>{selected.started_at ? new Date(selected.started_at).toLocaleString() : "—"}</strong></article><article><span>COMPLETED</span><strong>{selected.completed_at ? new Date(selected.completed_at).toLocaleString() : "—"}</strong></article>{selected.error && <article className="failed"><span>ERROR</span><strong>{selected.error}</strong></article>}</div>}</div>
-          <footer className="g1-output-footer"><span>Output persisted by backend</span><strong>{nodeDuration(selected)}</strong></footer>
+          <div className="g1-output-body">{activeTab === "output" && <StagePresenter stage={selected} semanticReview={selected.key === "understanding_semantic" ? { editable: run.status === "AWAITING_SEMANTIC_REVIEW", contract: semanticDraft, busy, onColumnChange: updateSemanticColumn, onConfirm: () => void confirmSemantic() } : undefined}/>} {activeTab === "evidence" && <EvidenceOverview evidence={selectedEvidence}/>} {activeTab === "activity" && <div className="g1-activity-list">{selected.nodes.map((node) => <article className={node.status === "FAILED" ? "failed" : ""} key={node.node_key}><div><span>{node.node_key}</span><strong>{human(node.status)}</strong></div><div><span>STARTED</span><strong>{node.started_at ? new Date(node.started_at).toLocaleString() : "—"}</strong></div><div><span>COMPLETED</span><strong>{node.completed_at ? new Date(node.completed_at).toLocaleString() : "—"}</strong></div>{node.error && <p>{node.error}</p>}</article>)}</div>}</div>
+          <footer className="g1-output-footer"><span>Output persisted by backend · {selected.nodes.length} canonical node{selected.nodes.length > 1 ? "s" : ""}</span><strong>{stageDuration(selected)}</strong></footer>
         </> : <div className="g1-empty"><strong>Đang khởi tạo nodes</strong></div>}</section>
       </div>
-      {run.status === "AWAITING_SEMANTIC_REVIEW" && <section className="g1-review-panel"><div><span className="eyebrow">HITL SEMANTIC GATE</span><h2>Xác nhận Semantic Contract</h2><p>Graph chỉ tiếp tục sau khi steward xác nhận.</p></div><label htmlFor="semantic-contract">Semantic Contract JSON</label><textarea id="semantic-contract" value={semanticText} onChange={(event) => setSemanticText(event.target.value)} rows={16} spellCheck={false}/><button type="button" className="button primary" disabled={busy || !semanticText} onClick={() => void confirmSemantic()}>Xác nhận và tiếp tục</button></section>}
-      {run.status === "AWAITING_RULE_REVIEW" && <section className="g1-review-panel"><div><span className="eyebrow">FINAL HITL GATE</span><h2>Duyệt rule proposals</h2><p>Mọi rule phải có quyết định và ít nhất một rule được duyệt.</p></div><div className="g1-review-rules">{rules.map((rule, index) => { const id = String(rule.rule_id ?? `rule-${index}`); return <article key={id}><div><span>{id}</span><strong>{String(rule.rule_name ?? rule.rule_description ?? "Rule proposal")}</strong><p>{String(rule.ai_reasoning ?? "Không có reasoning.")}</p>{decisions[id] === "edit" && <textarea aria-label={`Edited rule JSON for ${id}`} value={ruleEdits[id] ?? "{}"} onChange={(event) => setRuleEdits((current) => ({ ...current, [id]: event.target.value }))} rows={7} spellCheck={false}/>}</div><select aria-label={`Decision for ${id}`} value={decisions[id] ?? "approve"} onChange={(event) => setDecisions((current) => ({ ...current, [id]: event.target.value as Graph1RuleDecision["action"] }))}><option value="approve">Approve</option><option value="edit">Edit & approve</option><option value="reject">Reject</option></select></article>; })}</div><button type="button" className="button primary" disabled={busy || !rules.length} onClick={() => void confirmRules()}>Lưu quyết định và hoàn tất</button></section>}
+      {run.status === "AWAITING_RULE_REVIEW" && <section className="g1-review-panel g1-final-review"><header className="g1-review-header"><div><span className="eyebrow">FINAL HITL GATE</span><h2>Duyệt rule proposals</h2><p>Đọc mục đích, điều kiện và evidence; quyết định từng rule trước khi hoàn tất.</p></div><div><span>REVIEW OWNER</span><strong>{run.created_by}</strong></div></header>
+        <div className="g1-review-summary six"><span><small>TOTAL</small><strong>{rules.length}</strong></span><span><small>DECIDED</small><strong>{decidedCount}/{rules.length}</strong></span><span><small>APPROVED</small><strong>{approvedCount}</strong></span><span><small>EDITED</small><strong>{editedCount}</strong></span><span><small>REJECTED</small><strong>{rejectedCount}</strong></span><span><small>PENDING</small><strong>{pendingCount}</strong></span></div>
+        {reviewValidation && <div className="g1-review-validation" role="alert"><strong>Chưa thể hoàn tất review</strong><span>{reviewValidation}</span></div>}
+        <div className="g1-review-progress" aria-label={`${decidedCount} of ${rules.length} rules decided`}><div><span>Tiến độ quyết định</span><strong>{decidedCount}/{rules.length}</strong></div><progress max={Math.max(1, rules.length)} value={decidedCount}/></div>
+        <div className="g1-review-rules">{rules.map((rule, index) => {
+          const id = String(rule.rule_id ?? `rule-${index}`);
+          const draft = ruleEdits[id] ?? {};
+          const parameters = asRecord(rule.parameters);
+          const refs = Array.isArray(rule.selected_evidence_refs) ? rule.selected_evidence_refs.map(String) : [];
+          const rawConfidence = typeof rule.confidence_score === "number" ? rule.confidence_score : asRecord(rule.confidence).overall;
+          const confidence = typeof rawConfidence === "number" ? `${Math.round((rawConfidence <= 1 ? rawConfidence * 100 : rawConfidence) * 10) / 10}%` : "—";
+          const updateDraft = (key: string, value: string) => setRuleEdits((current) => ({ ...current, [id]: { ...(current[id] ?? {}), [key]: value } }));
+          return <article id={`g1-review-rule-${index}`} tabIndex={-1} className={`g1-review-rule ${decisions[id] ?? "undecided"}`} key={id}>
+            <div className="g1-review-rule-head"><div className="g1-review-identity"><code>{id}</code><strong>{String(rule.rule_name ?? rule.rule_description ?? "Rule proposal")}</strong><p>{String(rule.rule_description ?? "Chưa có mô tả.")}</p></div><label className="g1-decision"><span>Decision</span><select aria-label={`Decision for ${id}`} value={decisions[id] ?? "undecided"} onChange={(event) => { setReviewValidation(""); setDecisions((current) => ({ ...current, [id]: event.target.value as RuleDecisionState })); }}><option value="undecided">Chưa quyết định</option><option value="approve">Approve</option><option value="edit">Edit & approve</option><option value="reject">Reject</option></select></label></div>
+            <div className="g1-review-rule-grid"><section><span>TARGET</span><strong>{String(rule.table_name ?? "Table")}.{String(rule.column ?? "Table-level")}</strong></section><section><span>CONDITION</span><strong>{String(rule.rule_type ?? "—")}</strong><small>{Object.entries(parameters).filter(([, value]) => value !== null && value !== undefined && value !== "").map(([key, value]) => `${human(key)}: ${Array.isArray(value) ? value.join(", ") : String(value)}`).join(" · ") || "Không có tham số"}</small></section><section><span>RISK</span><strong>{String(rule.severity ?? "—")} · {String(rule.dimension ?? "—")}</strong></section><section><span>CONFIDENCE / EVIDENCE</span><strong>{confidence} · {refs.length} refs</strong><small>{refs.join(" · ") || "Không có evidence reference"}</small></section></div>
+            <p className="g1-review-reasoning"><span>REASONING</span>{String(rule.ai_reasoning ?? rule.business_rationale ?? "Không có reasoning.")}</p>
+            {decisions[id] === "edit" && <fieldset className="g1-rule-edit"><legend>Chỉnh sửa rule theo trường</legend><div className="g1-rule-edit-group"><h3>Định danh và mục đích</h3><label>Rule name<input value={draft.name ?? ""} onChange={(event) => updateDraft("name", event.target.value)} /></label><label>Rule type<input value={draft.type ?? ""} onChange={(event) => updateDraft("type", event.target.value)} required /></label><label className="wide">Description<textarea rows={2} value={draft.description ?? ""} onChange={(event) => updateDraft("description", event.target.value)} /></label><label>Column<input value={draft.column ?? ""} onChange={(event) => updateDraft("column", event.target.value)} /></label></div><div className="g1-rule-edit-group"><h3>Điều kiện và ngưỡng</h3><label>Min value<input type="number" value={draft.min_value ?? ""} onChange={(event) => updateDraft("min_value", event.target.value)} /></label><label>Max value<input type="number" value={draft.max_value ?? ""} onChange={(event) => updateDraft("max_value", event.target.value)} /></label><label>Max null %<input type="number" value={draft.max_null_pct ?? ""} onChange={(event) => updateDraft("max_null_pct", event.target.value)} /></label><label className="wide">Accepted values<input value={draft.accepted_values ?? ""} onChange={(event) => updateDraft("accepted_values", event.target.value)} /></label><label className="wide">Regex<input value={draft.regex ?? ""} onChange={(event) => updateDraft("regex", event.target.value)} /></label><label>Target column<input value={draft.target_column ?? ""} onChange={(event) => updateDraft("target_column", event.target.value)} /></label><label>Operator<input value={draft.operator ?? ""} onChange={(event) => updateDraft("operator", event.target.value)} /></label><label>Min row count<input type="number" value={draft.min_row_count ?? ""} onChange={(event) => updateDraft("min_row_count", event.target.value)} /></label></div></fieldset>}
+          </article>;
+        })}</div>
+        <div className="g1-review-actions"><div><strong>{pendingCount ? `${pendingCount} rule đang chờ quyết định` : "Tất cả rule đã có quyết định"}</strong><span>Cần ít nhất một rule Approve hoặc Edit & approve.</span></div><button type="button" className="button primary" disabled={busy || !rules.length} onClick={() => void confirmRules()}>{busy ? "Đang lưu…" : "Lưu quyết định và hoàn tất"}</button></div>
+      </section>}
       {run.status === "FAILED" && <div className="g1-terminal failed"><strong>Graph 1 failed</strong><p>{run.error}</p><button type="button" className="button secondary" onClick={reset}>Upload dataset khác</button></div>}{run.status === "COMPLETED" && <div className="g1-terminal completed"><strong>Graph 1 đã hoàn thành</strong><p>Rules đã được lưu thật vào backend.</p><button type="button" className="button secondary" onClick={reset}>Chạy dataset khác</button></div>}
     </>}
   </main>;

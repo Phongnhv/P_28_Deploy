@@ -1,6 +1,7 @@
 """Integration tests for LangGraph workflows (Proposal Graph & Execution Graph)."""
 
 import uuid
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -86,6 +87,33 @@ def test_conditional_edges_routing():
 
     state_fail = {"dbt_validation_valid": False}
     assert _should_run_or_fail(state_fail) == "fail"
+
+
+@pytest.mark.asyncio
+async def test_proposal_graph_skips_hitl_gate_when_rule_proposer_fails(monkeypatch):
+    async def candidates(_state):
+        return {"rule_candidates": [{"table": "source_rows", "rule_type": "ROW_COUNT"}]}
+
+    async def prompts(_state):
+        return {"specialized_system_prompts": {"source_rows": "prompt"}}
+
+    async def failed_proposer(_state):
+        return {"proposed_rules": [], "error": "batch timeout", "rule_proposal_errors": [{"batch": 1}]}
+
+    gate = AsyncMock(return_value={"metadata": {"rules_saved": 0}})
+    monkeypatch.setattr("src.agents.nodes.rule_candidate_builder_node.rule_candidate_builder_node", candidates)
+    monkeypatch.setattr("src.agents.nodes.prompt_customizer_node.prompt_customizer_node", prompts)
+    monkeypatch.setattr("src.agents.nodes.rule_proposer_node.rule_proposer_node", failed_proposer)
+    monkeypatch.setattr("src.agents.nodes.hitl_gate_node.hitl_gate_node", gate)
+
+    graph = build_proposal_graph()
+    final_state = await graph.ainvoke({
+        "dataset_id": "uploaded-1",
+        "semantic_contract": {"status": "confirmed", "tables": {}},
+    })
+
+    assert final_state["error"] == "batch timeout"
+    gate.assert_not_awaited()
 
 
 @pytest.mark.asyncio

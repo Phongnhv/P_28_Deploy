@@ -5,8 +5,8 @@ import pytest
 from sqlalchemy.orm import Session
 
 from src.config import get_settings
-from src.models.database import ColumnProfileModel, DatasetAccessModel, DatasetModel, Graph1NodeExecutionModel, ProfileModel
-from src.services.graph1_workflow import GRAPH1_NODES, confirm_semantic_review, create_graph1_run, list_nodes
+from src.models.database import ColumnProfileModel, DatasetAccessModel, DatasetModel, Graph1NodeExecutionModel, Graph1RunModel, ProfileModel
+from src.services.graph1_workflow import GRAPH1_NODES, confirm_semantic_review, create_graph1_run, execute_graph1_run, list_nodes
 from src.services.rule_store import get_engine
 from src.time_utils import utc_now
 
@@ -69,3 +69,32 @@ async def test_graph1_api_creates_real_run_without_fixture(client, monkeypatch):
     nodes = await client.get(f"/api/v1/graph1-runs/{run_id}/nodes")
     assert nodes.status_code == 200
     assert len(nodes.json()) == 9
+
+
+@pytest.mark.asyncio
+async def test_rule_proposer_failure_marks_hitl_gate_skipped(test_db, monkeypatch):
+    with Session(test_db) as db:
+        _ready_dataset(db)
+        run = create_graph1_run(db, "uploaded-1", "steward", "idem-node8-fail")
+        run_id = run.id
+
+    class FailedRuleGraph:
+        async def astream(self, _state, stream_mode):
+            assert stream_mode == "updates"
+            yield {"rule_proposer": {
+                "proposed_rules": [],
+                "rule_proposal_errors": [{"table": "source_rows", "batch": 1, "error": "timeout"}],
+                "error": "Rule proposer failed closed",
+            }}
+
+    monkeypatch.setattr("src.agents.graph.build_proposal_graph", lambda: FailedRuleGraph())
+    await execute_graph1_run(run_id)
+
+    with Session(test_db) as db:
+        run = db.get(Graph1RunModel, run_id)
+        proposer = db.get(Graph1NodeExecutionModel, f"{run_id}:rule_proposer")
+        gate = db.get(Graph1NodeExecutionModel, f"{run_id}:hitl_gate")
+        assert run and run.status == "FAILED" and run.current_node == "rule_proposer"
+        assert proposer and proposer.status == "FAILED"
+        assert gate and gate.status == "SKIPPED"
+        assert json.loads(gate.output_json)["blocked_by"] == "rule_proposer"

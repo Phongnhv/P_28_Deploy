@@ -63,6 +63,12 @@ def build_proposal_graph() -> StateGraph:
             return "rule_candidate_builder"
         return "raw_profiler"
 
+    def _route_after_rule_proposer(state: AgentState) -> str:
+        rules = state.get("proposed_rules") or []
+        if state.get("error") or not rules:
+            return END
+        return "hitl_gate"
+
     graph = StateGraph(AgentState)
 
     graph.add_node("raw_profiler", raw_profiler_node)
@@ -129,7 +135,11 @@ def build_proposal_graph() -> StateGraph:
         {"next": "rule_proposer", END: END},
     )
 
-    graph.add_edge("rule_proposer", "hitl_gate")
+    graph.add_conditional_edges(
+        "rule_proposer",
+        _route_after_rule_proposer,
+        {"hitl_gate": "hitl_gate", END: END},
+    )
     graph.add_edge("hitl_gate", END)
 
     return graph.compile()

@@ -1302,7 +1302,8 @@ function App() {
   const [view, setView] = useState<View>("overview");
   const [wizardStep, setWizardStep] = useState<number>(1);
   const [showAdmin, setShowAdmin] = useState<boolean>(false);
-  const [showGraph1Studio, setShowGraph1Studio] = useState<boolean>(false);
+  const [showGraph1Studio, setShowGraph1Studio] = useState<boolean>(() => sessionStorage.getItem("ridepulse.graph1.open") === "1" && Boolean(sessionStorage.getItem("ridepulse.graph1.run")));
+  const [graph1Dataset, setGraph1Dataset] = useState<Dataset | null>(null);
   const [showDataExplorer, setShowDataExplorer] = useState<boolean>(false);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(
@@ -1448,8 +1449,10 @@ function App() {
 
   async function openGraph1ForDataset(datasetId: string) {
     if (datasetId !== selectedDatasetId) await selectDataset(datasetId);
+    setGraph1Dataset(datasets.find((item) => item.id === datasetId) ?? null);
     setWizardStep(2);
     setShowAdmin(false);
+    sessionStorage.setItem("ridepulse.graph1.open", "1");
     setShowGraph1Studio(true);
   }
 
@@ -1567,7 +1570,9 @@ function App() {
       setView("datasets");
       await pollJob(imported.job, async () => {
         await refreshWorkspace();
+        setGraph1Dataset({ ...imported.dataset, status: "PROFILE_READY" });
         setWizardStep(2);
+        sessionStorage.setItem("ridepulse.graph1.open", "1");
         setShowGraph1Studio(true);
       });
     } catch (err) {
@@ -1945,6 +1950,7 @@ function App() {
                 className={`button secondary ${showAdmin ? "active" : ""}`}
                 onClick={() => {
                   setShowAdmin(!showAdmin);
+                  sessionStorage.removeItem("ridepulse.graph1.open");
                   setShowGraph1Studio(false);
                 }}
               >
@@ -2005,6 +2011,7 @@ function App() {
                       }`}
                     onClick={() => {
                       setShowAdmin(false);
+                      sessionStorage.removeItem("ridepulse.graph1.open");
                       setShowGraph1Studio(false);
                       setWizardStep(step.id);
                     }}
@@ -2088,9 +2095,9 @@ function App() {
 
           {showGraph1Studio ? (
             <Graph1Studio
-              onExit={() => setShowGraph1Studio(false)}
+              onExit={() => { sessionStorage.removeItem("ridepulse.graph1.open"); setShowGraph1Studio(false); setGraph1Dataset(null); }}
               onDatasetImported={() => void refreshWorkspace()}
-              initialDataset={dataset}
+              initialDataset={graph1Dataset ?? dataset}
             />
           ) : showAdmin && canAdmin ? (
             <AdminPage

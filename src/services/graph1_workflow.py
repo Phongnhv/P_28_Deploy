@@ -161,6 +161,24 @@ def _mark_skipped_before(db: Session, run_id: str, current_position: int) -> Non
             node.completed_at = utc_now()
 
 
+def _mark_blocked_after(db: Session, run_id: str, current_node: str) -> None:
+    """Mark canonical nodes after a failed node as intentionally not executed."""
+    try:
+        current_position = GRAPH1_NODES.index(current_node) + 1
+    except ValueError:
+        return
+    now = utc_now()
+    for node in db.query(Graph1NodeExecutionModel).filter_by(run_id=run_id, status="PENDING").all():
+        if node.position > current_position:
+            node.status = "SKIPPED"
+            node.error = None
+            node.output_json = _json({
+                "blocked_by": current_node,
+                "reason": f"Node was not executed because {current_node} failed.",
+            })
+            node.completed_at = now
+
+
 async def execute_graph1_run(run_id: str) -> None:
     from src.agents.graph import build_proposal_graph
 
@@ -219,6 +237,7 @@ async def execute_graph1_run(run_id: str) -> None:
                 node = db.get(Graph1NodeExecutionModel, f"{run_id}:{run.current_node}")
                 if node:
                     node.status, node.error = "FAILED", run.error
+                _mark_blocked_after(db, run_id, run.current_node)
             db.commit()
 
 
