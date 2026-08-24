@@ -6,6 +6,10 @@ import LanguageToggle from "./LanguageToggle";
 import { useI18n } from "./i18n/context";
 import { Step5Analytics } from "./components/wizard/Step5Analytics";
 import { Graph1Studio } from "./features/graph1/Graph1Studio";
+import { Graph1DetailsSidebar } from "./features/graph1/Graph1DetailsSidebar";
+import { StagePresenter, buildDisplayStages } from "./features/graph1/presenters";
+import { AnalysisStudio } from "./features/analysis/AnalysisStudio";
+import { PanelRightOpen } from "lucide-react";
 import type {
   AuditLog,
   CreateJobResponse,
@@ -1423,6 +1427,86 @@ function App() {
     sessionStorage.setItem("ridepulse.graph1.open", "1");
     setShowGraph1Studio(true);
   }
+
+  async function openAnalysisForGraph1(graph1RunId: string) {
+    if (isMockMode) throw new Error("Analysis Studio requires the real backend.");
+    const analysisRun = await api.createAnalysisRun(graph1RunId);
+    sessionStorage.setItem("ridepulse.analysis.run", analysisRun.id);
+    sessionStorage.setItem("ridepulse.analysis.open", "1");
+    setAnalysisRunId(analysisRun.id);
+    setShowAnalysisStudio(true);
+    setShowGraph1Studio(false);
+  }
+
+  async function toggleGraph1Sidebar(datasetId: string) {
+    if (datasetId !== selectedDatasetId) {
+      await selectDataset(datasetId);
+      setShowGraph1Sidebar(true);
+      return;
+    }
+    setShowGraph1Sidebar((current) => !current);
+  }
+
+  function closeGraph1Sidebar() {
+    setShowGraph1Sidebar(false);
+    window.requestAnimationFrame(() => document.getElementById("graph1-details-trigger")?.focus());
+  }
+
+  const refreshGraph1 = useCallback(async (runId: string) => {
+    const [nextRun, nextNodes] = await Promise.all([
+      api.getGraph1Run(runId),
+      api.listGraph1Nodes(runId),
+    ]);
+    setGraph1Run(nextRun);
+    setGraph1Nodes(nextNodes);
+    return nextRun;
+  }, []);
+
+  async function startGraph1InBackground(datasetId: string) {
+    if (!canOperate || graph1Starting) return;
+    setError("");
+    setGraph1Starting(true);
+    try {
+      if (datasetId !== selectedDatasetId) await selectDataset(datasetId);
+      const storedRun = sessionStorage.getItem("ridepulse.graph1.run");
+      const storedDataset = sessionStorage.getItem("ridepulse.graph1.dataset");
+      const nextRun = storedRun && storedDataset === datasetId
+        ? await api.getGraph1Run(storedRun)
+        : await api.createGraph1Run(datasetId);
+      sessionStorage.setItem("ridepulse.graph1.run", nextRun.id);
+      sessionStorage.setItem("ridepulse.graph1.dataset", datasetId);
+      setGraph1Run(nextRun);
+      setGraph1Nodes(await api.listGraph1Nodes(nextRun.id));
+      setToast("Agent Workflow is running in the background.");
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to start Agent Workflow."));
+    } finally {
+      setGraph1Starting(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!dataset) return;
+    const storedRun = sessionStorage.getItem("ridepulse.graph1.run");
+    const storedDataset = sessionStorage.getItem("ridepulse.graph1.dataset");
+    if (!storedRun || storedDataset !== dataset.id) {
+      setGraph1Run(null);
+      setGraph1Nodes([]);
+      return;
+    }
+    void refreshGraph1(storedRun).catch(() => {
+      sessionStorage.removeItem("ridepulse.graph1.run");
+      sessionStorage.removeItem("ridepulse.graph1.dataset");
+      setGraph1Run(null);
+      setGraph1Nodes([]);
+    });
+  }, [dataset?.id, refreshGraph1]);
+
+  useEffect(() => {
+    if (!graph1Run || ["COMPLETED", "FAILED", "AWAITING_SEMANTIC_REVIEW", "AWAITING_RULE_REVIEW"].includes(graph1Run.status)) return;
+    const timer = window.setInterval(() => void refreshGraph1(graph1Run.id), 2500);
+    return () => window.clearInterval(timer);
+  }, [graph1Run?.id, graph1Run?.status, refreshGraph1]);
 
   useEffect(() => {
     if (authenticated) void refreshWorkspace();

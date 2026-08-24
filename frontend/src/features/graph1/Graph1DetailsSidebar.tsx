@@ -10,7 +10,7 @@ type SidebarTab = "output" | "evidence" | "activity";
 const statusTone = (status: Graph1NodeStatus) => status === "SUCCEEDED" ? "success" : status === "FAILED" ? "danger" : "warning";
 const human = (value: string) => value.replaceAll("_", " ");
 type Row = Record<string, any>;
-type Decision = "undecided" | "approve" | "edit" | "reject";
+type Decision = "undecided" | "approve" | "reject";
 const record = (value: unknown): Row => value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
 const rulesFromNodes = (nodes: Graph1NodeExecution[]) => {
   const value = nodes.find((node) => node.node_key === "rule_proposer")?.output.proposed_rules;
@@ -29,7 +29,6 @@ export function Graph1DetailsSidebar({ run, nodes, dataset, onClose, canOperate,
   const [actionError, setActionError] = useState("");
   const [semanticText, setSemanticText] = useState("");
   const [decisions, setDecisions] = useState<Record<string, Decision>>({});
-  const [ruleEdits, setRuleEdits] = useState<Record<string, Record<string, string>>>({});
   const selected = stages.find((stage) => stage.key === selectedKey) ?? stages[0];
   const selectedEvidence = useMemo(() => selected ? stageEvidence(selected) : [], [selected]);
   const rules = useMemo(() => rulesFromNodes(nodes), [nodes]);
@@ -42,7 +41,6 @@ export function Graph1DetailsSidebar({ run, nodes, dataset, onClose, canOperate,
   useEffect(() => {
     if (!rules.length) return;
     setDecisions((current) => Object.keys(current).length ? current : Object.fromEntries(rules.map((rule, index) => [String(rule.rule_id ?? `rule-${index}`), "undecided"])));
-    setRuleEdits((current) => Object.keys(current).length ? current : Object.fromEntries(rules.map((rule, index) => { const id = String(rule.rule_id ?? `rule-${index}`); const params = record(rule.parameters); return [id, { type: String(rule.rule_type ?? ""), name: String(rule.rule_name ?? ""), description: String(rule.rule_description ?? ""), column: String(rule.column ?? ""), min_value: String(params.min_value ?? ""), max_value: String(params.max_value ?? "") }]; })));
   }, [rules]);
 
   useEffect(() => setActiveTab("output"), [selectedKey]);
@@ -98,16 +96,28 @@ export function Graph1DetailsSidebar({ run, nodes, dataset, onClose, canOperate,
   const confirmRules = async () => {
     if (!run || !rules.length) return;
     const pending = rules.filter((rule, index) => !decisions[String(rule.rule_id ?? `rule-${index}`)] || decisions[String(rule.rule_id ?? `rule-${index}`)] === "undecided").length;
-    if (pending || !Object.values(decisions).some((value) => value === "approve" || value === "edit")) { setActionError(pending ? `${pending} rule${pending === 1 ? " is" : "s are"} still awaiting a decision.` : "Approve at least one rule to continue."); return; }
+    if (pending || !Object.values(decisions).some((value) => value === "approve")) { setActionError(pending ? `${pending} rule${pending === 1 ? " is" : "s are"} still awaiting a decision.` : "Select at least one rule to review."); return; }
     setBusy(true); setActionError("");
     try {
-      const payload = rules.map((rule, index) => { const id = String(rule.rule_id ?? `rule-${index}`); const action = decisions[id] as Graph1RuleDecision["action"]; const draft = ruleEdits[id] ?? {}; return { rule_id: id, action, ...(action === "edit" ? { rule: { type: draft.type, rule_name: draft.name, rule_description: draft.description, column: draft.column || null, parameters: { min_value: draft.min_value === "" ? undefined : Number(draft.min_value), max_value: draft.max_value === "" ? undefined : Number(draft.max_value) } } } : {}) }; });
+      const payload = rules.map((rule, index) => { const id = String(rule.rule_id ?? `rule-${index}`); const action = decisions[id] as Graph1RuleDecision["action"]; return { rule_id: id, action }; });
       await api.reviewGraph1Rules(run.id, payload); await onRefresh(run.id); setSelectedKey("hitl_gate");
     } catch (error) { setActionError(error instanceof Error ? error.message : "Unable to save rule approvals."); }
     finally { setBusy(false); }
   };
 
-  const reviewPanel = selected?.key === "hitl_gate" && run?.status === "AWAITING_RULE_REVIEW" && canOperate ? <div className="graph1-sidebar-review"><div><strong>Rule approval required</strong><span>Choose a decision for every persisted proposal, then approve to continue.</span></div>{rules.map((rule, index) => { const id = String(rule.rule_id ?? `rule-${index}`); return <label key={id}><span>{id} · {String(rule.rule_name ?? rule.rule_description ?? "Rule proposal")}</span><select value={decisions[id] ?? "undecided"} onChange={(event) => setDecisions((current) => ({ ...current, [id]: event.target.value as Decision }))}><option value="undecided">Choose decision</option><option value="approve">Approve</option><option value="edit">Edit & approve</option><option value="reject">Reject</option></select></label>; })}<button type="button" className="button primary" disabled={busy} onClick={() => void confirmRules()}>{busy ? "Saving…" : "Approve and continue"}</button>{actionError && <p role="alert">{actionError}</p>}</div> : null;
+  const decidedCount = Object.values(decisions).filter((value) => value && value !== "undecided").length;
+  const approvedCount = Object.values(decisions).filter((value) => value === "approve").length;
+  const reviewPanel = selected?.key === "hitl_gate" && run?.status === "AWAITING_RULE_REVIEW" && canOperate ? <section className="graph1-sidebar-review" aria-labelledby="graph1-sidebar-review-title">
+    <header className="graph1-sidebar-review-header"><div><span className="eyebrow">STAGE 09 · HUMAN REVIEW</span><h3 id="graph1-sidebar-review-title">Select rules to review</h3><p>Choose Review or Do not review for each persisted rule.</p></div><span className="g1-chip warning">ACTION REQUIRED</span></header>
+    <div className="graph1-sidebar-review-summary"><div><span>DECIDED</span><strong>{decidedCount}/{rules.length}</strong></div><div><span>TO REVIEW</span><strong>{approvedCount}</strong></div><div><span>REMAINING</span><strong>{Math.max(0, rules.length - decidedCount)}</strong></div></div>
+    <progress className="graph1-sidebar-review-progress" max={Math.max(1, rules.length)} value={decidedCount} aria-label={`${decidedCount} of ${rules.length} rules decided`} />
+    <div className="graph1-sidebar-review-list">{rules.map((rule, index) => {
+      const id = String(rule.rule_id ?? `rule-${index}`); const decision = decisions[id] ?? "undecided";
+      return <fieldset className={`graph1-sidebar-review-choice ${decision}`} key={id}><legend>{id}</legend><label><input type="radio" name={`review-${id}`} value="approve" checked={decision === "approve"} onChange={() => { setActionError(""); setDecisions((current) => ({ ...current, [id]: "approve" })); }} /><span>Review</span></label><label><input type="radio" name={`review-${id}`} value="reject" checked={decision === "reject"} onChange={() => { setActionError(""); setDecisions((current) => ({ ...current, [id]: "reject" })); }} /><span>Do not review</span></label></fieldset>;
+    })}</div>
+    <footer className="graph1-sidebar-review-actions"><div><strong>{rules.length - decidedCount ? `${rules.length - decidedCount} rule${rules.length - decidedCount === 1 ? "" : "s"} still needs a selection` : "All rules have a selection"}</strong><span>Select at least one rule to review.</span></div><button type="button" className="button primary" disabled={busy || !rules.length} onClick={() => void confirmRules()}>{busy ? "Saving…" : "Save selection and continue"}</button></footer>
+    {actionError && <p className="graph1-sidebar-review-error" role="alert">{actionError}</p>}
+  </section> : null;
 
   return <aside id="graph1-details-sidebar" className="g1-studio graph1-details-sidebar" style={{ "--graph1-sidebar-width": `${sidebarWidth}px`, "--graph1-sidebar-height": `${sidebarHeight}px` } as CSSProperties} aria-label="Agent Execution Studio node details">
     <div
