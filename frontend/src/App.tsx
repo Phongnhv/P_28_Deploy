@@ -91,12 +91,16 @@ function getErrorMessage(error: unknown, fallback: string) {
       error.message || "The workflow cannot continue from its current state."
     );
   if (error.status === 422)
-    return "The request is not valid for the current workflow state.";
+    return error.message || "The request is not valid for the current workflow state.";
   if (error.status === 429)
     return "The demo quota has been reached. Please try again later.";
   if (error.status >= 500)
     return "The service is temporarily unavailable. Retry when it is ready.";
   return error.message || fallback;
+}
+
+function isVersionedDataset(dataset?: Dataset) {
+  return Boolean(dataset?.dataset_version_id || dataset?.manifest_version === "versioned-v1");
 }
 
 function StatusPill({
@@ -422,7 +426,7 @@ function DatasetsPage({
                   </div>
                 </div>
                 <div className="dataset-catalog-actions" style={{ display: "flex", justifyContent: "space-between", gap: "12px", marginTop: "12px" }}>
-                  {isSelected && item.status === "PROFILE_READY" && (
+                  {isSelected && item.status === "PROFILE_READY" && item.data_explorer_available === true && (
                     <button
                       type="button"
                       className="button ghost"
@@ -1677,8 +1681,8 @@ function App() {
     if (authenticated) void refreshWorkspace();
   }, [authenticated, refreshWorkspace]);
   useEffect(() => {
-    if (view === "admin") void refreshAdmin();
-  }, [refreshAdmin, view]);
+    if (showAdmin) void refreshAdmin();
+  }, [refreshAdmin, showAdmin]);
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(""), 3500);
@@ -1759,7 +1763,7 @@ function App() {
   }
 
   async function startAnalysis() {
-    if (!dataset) return;
+    if (!dataset || isVersionedDataset(dataset)) return;
     setError("");
     setRetryAction(null);
     try {
@@ -1780,7 +1784,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (wizardStep === 2 && dataset && !profile && !activeJob) {
+    if (wizardStep === 2 && dataset && !isVersionedDataset(dataset) && !profile && !activeJob) {
       void startAnalysis();
     }
   }, [wizardStep, dataset, profile, activeJob]); // eslint-disable-line react-hooks/exhaustive-deps

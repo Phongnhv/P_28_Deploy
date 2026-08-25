@@ -15,7 +15,15 @@ from src.services.versioned_dataset import (
     safe_source_object_key,
     schema_hash,
 )
-from src.models.database import UserAccountModel, WorkspaceMembershipModel, WorkspaceModel, DatasetVersionModel, ProfileRunSnapshotModel
+from src.models.database import (
+    DatasetAccessModel,
+    DatasetModel,
+    DatasetVersionModel,
+    ProfileRunSnapshotModel,
+    UserAccountModel,
+    WorkspaceMembershipModel,
+    WorkspaceModel,
+)
 from src.services.rule_store import get_engine
 
 
@@ -104,8 +112,66 @@ async def test_versioned_import_creates_two_immutable_versions(client, monkeypat
     assert version1["id"] != version2["id"]
     assert version1["version_number"] == 1
     assert version2["version_number"] == 2
+    profile = await client.get("/api/v1/datasets/orders/profile")
+    assert profile.status_code == 200, profile.text
+    assert {column["name"] for column in profile.json()["columns"]} >= {"order_id", "amount", "status"}
     with Session(get_engine()) as db:
         versions = db.query(DatasetVersionModel).filter_by(dataset_id="orders").order_by(DatasetVersionModel.version_number).all()
         assert [version.status for version in versions] == ["READY", "READY"]
         assert db.get(ProfileRunSnapshotModel, f"profile-{version1['id']}").status == "COMPLETED"
         assert db.get(ProfileRunSnapshotModel, f"profile-{version2['id']}").status == "COMPLETED"
+
+
+@pytest.mark.asyncio
+async def test_generic_uploaded_rows_use_schema_without_supabase_table_assumption(client, monkeypatch, tmp_path):
+    """A generic import must be queryable even when Supabase is configured."""
+    monkeypatch.chdir(tmp_path)
+    upload_dir = tmp_path / "data" / "uploads"
+    upload_dir.mkdir(parents=True)
+    (upload_dir / "orders.csv").write_text("order_id,amount,status\na-1,12.5,paid\na-2,4.0,pending\n", encoding="utf-8")
+
+    with Session(get_engine()) as db:
+        account = db.query(UserAccountModel).filter_by(username="steward").first()
+        db.add(DatasetModel(
+            id="orders",
+            name="Orders",
+            description="Generic import",
+            status="PROFILE_READY",
+            row_count=2,
+            source_label="orders.csv",
+            manifest_version="import-v1",
+            checksum="sha-orders",
+        ))
+        db.add(DatasetAccessModel(
+            id="access-orders-steward",
+            dataset_id="orders",
+            username=account.username,
+            access_level="MANAGE",
+            granted_by=account.username,
+        ))
+        db.commit()
+
+    login = await client.post("/api/v1/session", json={"username": "steward", "password": "steward"})
+    csrf = login.json()["csrf_token"]
+    listed = await client.get("/api/v1/datasets")
+    dataset = next(item for item in listed.json() if item["id"] == "orders")
+    assert dataset["data_explorer_available"] is True
+
+    rows = await client.get(
+        "/api/v1/datasets/orders/rows",
+        headers={"X-CSRF-Token": csrf},
+        params={"sort_by": "amount", "sort_direction": "desc", "limit": 10},
+    )
+    assert rows.status_code == 200, rows.text
+    payload = rows.json()
+    assert [column["name"] for column in payload["schema"]] == ["order_id", "amount", "status"]
+    assert payload["rows"][0] == {"order_id": "a-1", "amount": 12.5, "status": "paid"}
+    assert "source_row_id" not in payload["rows"][0]
+
+    invalid_filter = await client.get(
+        "/api/v1/datasets/orders/rows",
+        headers={"X-CSRF-Token": csrf},
+        params={"filter_column": "missing", "filter_value": "x"},
+    )
+    assert invalid_filter.status_code == 422
+    assert invalid_filter.json()["code"] == "INVALID_DATASET_FILTER"

@@ -94,6 +94,9 @@ export interface Dataset {
   manifest_version: string;
   checksum: string;
   updated_at: string;
+  data_explorer_available?: boolean;
+  dataset_version_id?: string;
+  version_number?: number;
 }
 
 export interface DatasetImportResponse {

@@ -54,6 +54,7 @@ function resolveApiBaseUrl(configuredValue: string) {
 }
 
 export const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL ?? "");
+const workspaceId = (import.meta.env.VITE_WORKSPACE_ID ?? "").trim();
 const csrfStorageKey = "ridepulse.csrf";
 let csrfToken = typeof window === "undefined" ? "" : window.sessionStorage.getItem(csrfStorageKey) ?? "";
 
@@ -153,9 +154,44 @@ export const realApiClient: ApiClient = {
     return request<Dataset[]>("/api/v1/datasets");
   },
   async importDataset(file) {
+    if (!workspaceId) {
+      throw new ApiError(503, "WORKSPACE_NOT_CONFIGURED", "VITE_WORKSPACE_ID is not configured for versioned dataset import.");
+    }
+    const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+    const checksum = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
     const body = new FormData();
     body.append("file", file);
-    return request<DatasetImportResponse>("/api/v1/datasets/import", { method: "POST", body });
+    body.append("dataset_name", file.name.replace(/\.[^.]+$/, ""));
+    body.append("client_sha256", checksum);
+    const payload = await request<{
+      dataset: { id: string; name: string; status?: Dataset["status"] };
+      version: { id: string; version_number: number; status: string; checksum: string; row_count: number };
+      job: { job_id: string; status: string };
+    }>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/datasets/import`, {
+      method: "POST",
+      headers: { "Idempotency-Key": `ui-${checksum}` },
+      body,
+    });
+    return {
+      dataset: {
+        id: payload.dataset.id,
+        name: payload.dataset.name,
+        description: "Generic versioned CSV/Parquet dataset",
+        status: payload.dataset.status ?? "REGISTERED",
+        row_count: payload.version.row_count,
+        source_label: file.name,
+        manifest_version: "versioned-v1",
+        checksum: payload.version.checksum,
+        updated_at: new Date().toISOString(),
+        data_explorer_available: payload.version.status === "READY",
+        dataset_version_id: payload.version.id,
+        version_number: payload.version.version_number,
+      },
+      job: {
+        job_id: payload.job.job_id,
+        status: payload.job.status === "RUNNING" ? "RUNNING" : "PENDING",
+      },
+    } satisfies DatasetImportResponse;
   },
   async deleteDataset(id) {
     await request<void>(`/api/v1/datasets/${id}`, { method: "DELETE" });

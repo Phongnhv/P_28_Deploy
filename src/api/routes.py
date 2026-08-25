@@ -44,6 +44,7 @@ from src.models.database import (
     GovernanceAuditEventModel,
     JobModel,
     ProfileModel,
+    ProfileRunSnapshotModel,
     RuleConfigurationModel,
     RuleProposalModel,
     RulesetVersionModel,
@@ -118,6 +119,7 @@ from src.time_utils import utc_now
 from src.services.versioned_dataset import (
     DatasetContractError,
     SourceIntegrityError,
+    canonical_schema_manifest,
     inspect_upload,
     schema_hash,
     store_source_artifact,
@@ -348,10 +350,12 @@ class DatasetRowSchema(BaseModel):
 
 class DatasetRowsResponse(BaseModel):
     dataset_id: str
+    dataset_version_id: str | None = None
     total: int
     limit: int
     offset: int
-    rows: list[DatasetRowSchema]
+    rows: list[dict[str, Any]]
+    schema: list[dict[str, Any]] | None = None
 
 
 class QualityTrendPointSchema(BaseModel):
@@ -607,8 +611,16 @@ def list_datasets(
             .all()
         }
         datasets = [dataset for dataset in datasets if dataset.id in allowed_ids]
-    return [
-        {
+    response = []
+    for d in datasets:
+        latest_version = (
+            db.query(DatasetVersionModel)
+            .filter_by(dataset_id=d.id, status="READY")
+            .order_by(DatasetVersionModel.version_number.desc())
+            .first()
+        )
+        has_local_source = any((Path("data/uploads") / f"{d.id}{suffix}").exists() for suffix in (".parquet", ".csv"))
+        response.append({
             "id": d.id,
             "name": d.name,
             "description": d.description,
@@ -618,9 +630,11 @@ def list_datasets(
             "manifest_version": d.manifest_version,
             "checksum": d.checksum,
             "updated_at": d.updated_at.isoformat(),
-        }
-        for d in datasets
-    ]
+            "data_explorer_available": bool(latest_version or has_local_source),
+            "dataset_version_id": latest_version.id if latest_version else None,
+            "version_number": latest_version.version_number if latest_version else None,
+        })
+    return response
 
 
 @router.post("/datasets/import")
@@ -1371,41 +1385,92 @@ def get_dataset_profile(
     require_dataset_access(db, session, id)
 
     profile = db.query(ProfileModel).filter(ProfileModel.dataset_id == id).first()
-    if not profile or dataset.status != "PROFILE_READY":
+    if profile and dataset.status == "PROFILE_READY":
+        cols = db.query(ColumnProfileModel).filter(ColumnProfileModel.profile_dataset_id == id).all()
+
+        columns_list = [
+            ColumnProfileSchema(
+                name=c.name,
+                data_type=c.data_type,
+                null_rate=c.null_rate,
+                distinct_count=c.distinct_count,
+                non_null_count=c.non_null_count,
+                negative_rate=c.negative_rate,
+                quantiles=json.loads(c.quantiles_json or "{}"),
+                out_of_domain_rate=c.out_of_domain_rate,
+                full_distinct_count=c.full_distinct_count,
+                uniqueness_rate=c.uniqueness_rate,
+                is_unique_full_table=c.is_unique_full_table,
+                min_value=c.min_value,
+                max_value=c.max_value,
+                sample_value=c.sample_value,
+            )
+            for c in cols
+        ]
+
+        return DatasetProfileSchema(
+            dataset_id=profile.dataset_id,
+            row_count=profile.row_count,
+            completeness_score=profile.completeness_score,
+            validity_score=profile.validity_score,
+            duplicate_rate=profile.duplicate_rate,
+            columns=columns_list,
+            cross_field_metrics=json.loads(profile.cross_field_metrics_json or "[]"),
+            evidence_keys=json.loads(profile.evidence_keys),
+            generated_at=profile.generated_at.isoformat(),
+        )
+
+    # Canonical versioned profiles are immutable snapshots rather than legacy
+    # ProfileModel rows. Adapt the aggregate snapshot to the existing
+    # dashboard contract so the UI does not make a second, domain-specific
+    # profiling request after a successful versioned import.
+    latest_version = (
+        db.query(DatasetVersionModel)
+        .filter_by(dataset_id=id, status="READY")
+        .order_by(DatasetVersionModel.version_number.desc())
+        .first()
+    )
+    version_profile = (
+        db.query(ProfileRunSnapshotModel)
+        .filter_by(dataset_version_id=latest_version.id, status="COMPLETED")
+        .order_by(ProfileRunSnapshotModel.completed_at.desc())
+        .first()
+        if latest_version
+        else None
+    )
+    if not version_profile or dataset.status != "PROFILE_READY":
         raise HTTPException(status_code=404, detail="Profile not generated or dataset not fully profiled yet")
 
-    cols = db.query(ColumnProfileModel).filter(ColumnProfileModel.profile_dataset_id == id).all()
-
+    metrics = json.loads(version_profile.metrics_json or "{}")
+    version_columns = metrics.get("columns") or json.loads(version_profile.schema_json or "[]")
     columns_list = [
         ColumnProfileSchema(
-            name=c.name,
-            data_type=c.data_type,
-            null_rate=c.null_rate,
-            distinct_count=c.distinct_count,
-            non_null_count=c.non_null_count,
-            negative_rate=c.negative_rate,
-            quantiles=json.loads(c.quantiles_json or "{}"),
-            out_of_domain_rate=c.out_of_domain_rate,
-            full_distinct_count=c.full_distinct_count,
-            uniqueness_rate=c.uniqueness_rate,
-            is_unique_full_table=c.is_unique_full_table,
-            min_value=c.min_value,
-            max_value=c.max_value,
-            sample_value=c.sample_value,
+            name=str(column.get("name")),
+            data_type=str(column.get("logical_type") or column.get("physical_type") or "string"),
+            null_rate=float(column.get("null_rate") or 0.0),
+            distinct_count=int(column.get("distinct_count") or 0),
+            non_null_count=int(column.get("non_null_count") or 0),
+            quantiles={},
+            full_distinct_count=int(column.get("distinct_count") or 0),
+            uniqueness_rate=float(column.get("uniqueness_rate") or 0.0),
+            is_unique_full_table=column.get("is_unique_full_table"),
+            sample_value="Aggregate profile only",
         )
-        for c in cols
+        for column in version_columns
+        if isinstance(column, dict) and column.get("name")
     ]
-
+    evidence_keys = ["profile.row_count", "profile.completeness_score", "profile.validity_score", "profile.duplicate_rate"]
+    evidence_keys.extend(f"profile.column.{column.name}.null_rate" for column in columns_list)
     return DatasetProfileSchema(
-        dataset_id=profile.dataset_id,
-        row_count=profile.row_count,
-        completeness_score=profile.completeness_score,
-        validity_score=profile.validity_score,
-        duplicate_rate=profile.duplicate_rate,
+        dataset_id=id,
+        row_count=version_profile.row_count,
+        completeness_score=float(version_profile.completeness_score or metrics.get("completeness_score") or 0.0),
+        validity_score=float(version_profile.validity_score or metrics.get("validity_score") or 0.0),
+        duplicate_rate=float(version_profile.duplicate_rate or metrics.get("duplicate_rate") or 0.0),
         columns=columns_list,
-        cross_field_metrics=json.loads(profile.cross_field_metrics_json or "[]"),
-        evidence_keys=json.loads(profile.evidence_keys),
-        generated_at=profile.generated_at.isoformat(),
+        cross_field_metrics=[],
+        evidence_keys=evidence_keys,
+        generated_at=(version_profile.completed_at or version_profile.created_at).isoformat(),
     )
 
 
@@ -1764,6 +1829,73 @@ def query_dataset_rows(
 
     policy = get_dataset_rule_policy(id)
     allowed_payments = policy.governed_value_sets.get("payment_type", []) if policy else []
+    uploaded_path = None
+    for suffix in (".parquet", ".csv"):
+        candidate = Path("data/uploads") / f"{id}{suffix}"
+        if candidate.exists():
+            uploaded_path = candidate
+            break
+
+    if uploaded_path:
+        import pandas as pd
+        df = pd.read_parquet(uploaded_path) if uploaded_path.suffix.lower() == ".parquet" else pd.read_csv(uploaded_path)
+        schema = canonical_schema_manifest(df)
+        columns = [item["name"] for item in schema]
+        if filter_column:
+            if filter_column not in columns:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": "INVALID_DATASET_FILTER", "message": f"Unknown dataset column: {filter_column}"},
+                )
+            df = df[df[filter_column].astype(str) == str(filter_value or "")]
+        if sort_by and sort_by in columns:
+            df = df.sort_values(sort_by, ascending=sort_direction == "asc", kind="stable")
+        total = len(df)
+        if dataset.row_count == 0 and total > 0:
+            dataset.row_count = total
+            db.commit()
+
+        sub_df = df.iloc[offset : offset + limit]
+        def json_value(value: Any) -> Any:
+            if value is None:
+                return None
+            try:
+                if bool(pd.isna(value)):
+                    return None
+            except (TypeError, ValueError):
+                pass
+            if hasattr(value, "item"):
+                value = value.item()
+            if hasattr(value, "isoformat"):
+                return value.isoformat()
+            return value
+
+        rows_list = [
+            {column: json_value(row[column]) for column in columns}
+            for _, row in sub_df.iterrows()
+        ]
+        return DatasetRowsResponse(
+            dataset_id=id,
+            total=total,
+            limit=limit,
+            offset=offset,
+            rows=rows_list,
+            schema=schema,
+        )
+
+    # The Supabase source adapter is a compatibility path for the original
+    # demo dataset only. Generic imports without a local compatibility file
+    # must have a canonical version artifact instead of guessing a domain
+    # table name such as trips_canonical.
+    if dataset.manifest_version not in {"v1", "1.0.0"}:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "VERSIONED_SOURCE_REQUIRED",
+                "message": "This dataset has no queryable versioned source artifact.",
+            },
+        )
+
     source_url = _supabase_source_url()
     if source_url:
         source_engine = create_supabase_engine(source_url)
@@ -1790,47 +1922,7 @@ def query_dataset_rows(
             total=total,
             limit=limit,
             offset=offset,
-            rows=[DatasetRowSchema(**row) for row in rows],
-        )
-
-    uploaded_path = None
-    for suffix in (".parquet", ".csv"):
-        candidate = Path("data/uploads") / f"{id}{suffix}"
-        if candidate.exists():
-            uploaded_path = candidate
-            break
-
-    if uploaded_path:
-        import pandas as pd
-        df = pd.read_parquet(uploaded_path) if uploaded_path.suffix.lower() == ".parquet" else pd.read_csv(uploaded_path)
-        total = len(df)
-        if dataset.row_count == 0 and total > 0:
-            dataset.row_count = total
-            db.commit()
-
-        sub_df = df.iloc[offset : offset + limit]
-        rows_list = []
-        for idx, row in sub_df.iterrows():
-            r = row.to_dict()
-            rows_list.append(
-                DatasetRowSchema(
-                    source_row_id=str(r.get("source_row_id", r.get("id", idx + 1))),
-                    vendor_id=str(r.get("vendor_id")) if pd.notna(r.get("vendor_id")) else None,
-                    pickup_at=str(r.get("pickup_at")) if pd.notna(r.get("pickup_at")) else None,
-                    dropoff_at=str(r.get("dropoff_at")) if pd.notna(r.get("dropoff_at")) else None,
-                    passenger_count=int(r.get("passenger_count")) if pd.notna(r.get("passenger_count")) and str(r.get("passenger_count")).isdigit() else None,
-                    trip_distance=float(r.get("trip_distance")) if pd.notna(r.get("trip_distance")) else None,
-                    payment_type=str(r.get("payment_type")) if pd.notna(r.get("payment_type")) else None,
-                    fare_amount=float(r.get("fare_amount")) if pd.notna(r.get("fare_amount")) else None,
-                    total_amount=float(r.get("total_amount")) if pd.notna(r.get("total_amount")) else None,
-                )
-            )
-        return DatasetRowsResponse(
-            dataset_id=id,
-            total=total,
-            limit=limit,
-            offset=offset,
-            rows=rows_list,
+            rows=[dict(row) for row in rows],
         )
 
     query = db.query(SourceRowModel).filter(SourceRowModel.dataset_id == id)
@@ -1890,7 +1982,7 @@ def query_dataset_rows(
                 payment_type=row.payment_type,
                 fare_amount=row.fare_amount,
                 total_amount=row.total_amount,
-            )
+            ).model_dump()
             for row in rows
         ],
     )
