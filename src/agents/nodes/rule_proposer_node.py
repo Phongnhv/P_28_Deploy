@@ -16,6 +16,7 @@ Luồng:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -23,7 +24,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from langchain_core.messages import SystemMessage
 
 from src.agents.nodes.templates import (
     _RULE_PROPOSER_FEW_SHOT,
@@ -38,13 +40,68 @@ from src.agents.tools.profile_digest import (
 )
 from src.config import get_settings
 from src.models.rule_schemas import (
+    DataQualityDimension,
+    ParameterProvenance,
+    ProposalBasis,
     ProposedRule,
+    RuleConfidence,
     RuleEvidenceSnapshot,
+    RuleParameters,
+    RuleType,
+    Severity,
     TableRuleProposal,
 )
 from src.services.llm import get_llm
 
 logger = logging.getLogger(__name__)
+
+
+class CandidateProposedRule(ProposedRule):
+    """Node 8 contract: every LLM rule must point back to one server candidate."""
+
+    candidate_id: str = Field(min_length=1)
+
+
+class CandidateTableRuleProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    table: str
+    rules: list[CandidateProposedRule] = Field(default_factory=list)
+
+
+class CandidateProposedRuleDraft(BaseModel):
+    """LLM-facing schema before server-owned candidate fields are restored.
+
+    Rule-specific parameter validation intentionally does not run here. Models can
+    omit or alter a parameter even when the allow-listed candidate already contains
+    the authoritative value. The server binds those fields back from the candidate
+    before validating the strict ``CandidateProposedRule`` contract.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str | None = Field(default=None, min_length=1)
+    column: str | None = None
+    rule_type: RuleType
+    parameters: RuleParameters = Field(default_factory=RuleParameters)
+    rule_name: str = Field(min_length=1)
+    business_rationale: str = Field(min_length=1)
+    proposal_basis: ProposalBasis
+    selected_evidence_refs: list[str] = Field(default_factory=list)
+    parameter_provenance: list[ParameterProvenance] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    confidence: RuleConfidence
+    severity: Severity
+    dimension: DataQualityDimension
+    rule_description: str = Field(min_length=1)
+    ai_reasoning: str = Field(min_length=1)
+
+
+class CandidateTableRuleDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    table: str
+    rules: list[CandidateProposedRuleDraft] = Field(default_factory=list)
 
 # ---------------------------------------------------------------------------
 # Domain context & Data dictionary injected vào mỗi lần gọi LLM
@@ -316,65 +373,216 @@ def _load_data_dictionary() -> str:
     return "None"
 
 
-def _raw_to_dict(raw_message) -> dict | None:
-    """Lấy payload JSON từ phản hồi thô của LLM.
+def _candidate_key(candidate: dict) -> str:
+    return json.dumps(
+        {
+            "table": candidate.get("table"),
+            "column": candidate.get("column"),
+            "rule_type": candidate.get("rule_type"),
+            "parameters": candidate.get("parameters") or {},
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
 
-    Structured output của OpenAI trả kết quả qua tool call, nhưng một số đường đi
-    trả thẳng JSON trong nội dung tin nhắn. Thử cả hai, trả None nếu không đọc được
-    — người gọi coi đó là thất bại đáng thử lại, chứ không phải "không có rule nào".
+
+def _dedupe_candidates(candidates: list[dict]) -> list[dict]:
+    """Dedupe candidates while retaining every distinct evidence item."""
+    merged: dict[str, dict] = {}
+    for raw in candidates:
+        if not isinstance(raw, dict):
+            continue
+        key = _candidate_key(raw)
+        candidate = dict(raw)
+        if not candidate.get("candidate_id"):
+            digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+            candidate["candidate_id"] = f"candidate-{digest}"
+        if key not in merged:
+            merged[key] = {**candidate, "evidence_items": list(candidate.get("evidence_items") or [])}
+            continue
+        existing = merged[key]
+        evidence = list(existing.get("evidence_items") or [])
+        seen = {
+            str(item.get("id"))
+            for item in evidence
+            if isinstance(item, dict) and item.get("id")
+        }
+        for item in raw.get("evidence_items") or []:
+            if not isinstance(item, dict):
+                continue
+            evidence_id = str(item.get("id") or "")
+            if evidence_id and evidence_id not in seen:
+                evidence.append(item)
+                seen.add(evidence_id)
+        existing["evidence_items"] = evidence
+    return list(merged.values())
+
+
+def _bind_proposal_to_candidates(
+    table_name: str,
+    proposal: BaseModel | dict,
+    candidates: list[dict],
+) -> CandidateTableRuleProposal | TableRuleProposal:
+    """Restore the server-owned rule contract before strict validation.
+
+    Candidate identity, scope, type, parameters, and evidence references are
+    deterministic inputs created by Node 6. The LLM may write the steward-facing
+    narrative and confidence fields, but it cannot remove or mutate those core
+    execution fields.
     """
-    if raw_message is None:
-        return None
-    tool_calls = getattr(raw_message, "tool_calls", None) or []
-    for call in tool_calls:
-        args = call.get("args") if isinstance(call, dict) else getattr(call, "args", None)
-        if isinstance(args, dict):
-            return args
-    content = getattr(raw_message, "content", None)
-    if isinstance(content, str) and content.strip().startswith("{"):
-        try:
-            return json.loads(content)
-        except (json.JSONDecodeError, ValueError):
-            return None
-    return None
 
+    # Preserve the legacy/internal test seam. Production calls this helper with
+    # CandidateTableRuleDraft because ``with_structured_output`` is configured
+    # with that schema below; an already-strict TableRuleProposal has therefore
+    # already passed the old public contract and needs no candidate repair.
+    if isinstance(proposal, TableRuleProposal) and not isinstance(
+        proposal, CandidateTableRuleProposal
+    ):
+        return proposal
 
-def _salvage_rules(raw_payload: dict, table_name: str) -> tuple[list[ProposedRule], list[dict]]:
-    """Kiểm định TỪNG rule, giữ cái hợp lệ, ghi nhận cái bị từ chối.
-
-    ``with_structured_output`` kiểm định cả ``TableRuleProposal`` một lần, nên một
-    rule sai làm hỏng toàn bộ lô. Đo ngày 23/08: LLM sinh 34 rule, 14 trượt, và
-    **20 rule hợp lệ bị vứt sạch** — ba lần thử liên tiếp đều đúng 14 lỗi, tức đây
-    là hành vi hệ thống chứ không phải trục trặc ngẫu nhiên. Thử lại chỉ tốn thêm
-    thời gian và tiền API.
-
-    Kể cả một prompt hoàn hảo cũng không đảm bảo 34/34 rule đúng mọi lần. Với kiểm
-    định theo lô thì **một rule sai luôn bằng không output**, và đó là điều kiện
-    không thể đạt được một cách đáng tin.
-
-    Rule bị từ chối vẫn được trả về để gọi lên trên ghi lại: tỷ lệ từ chối là một
-    phép đo chất lượng model, không phải thứ nên nuốt im lặng.
-    """
-    accepted: list[ProposedRule] = []
-    rejected: list[dict] = []
-    for index, item in enumerate(raw_payload.get("rules") or []):
-        try:
-            accepted.append(ProposedRule.model_validate(item))
-        except ValidationError as exc:
-            rejected.append(
-                {
-                    "index": index,
-                    "column": (item or {}).get("column"),
-                    "rule_type": (item or {}).get("rule_type"),
-                    "error": str(exc)[:400],
-                }
-            )
-    if rejected:
-        logger.warning(
-            "[%s] %d/%d rule bị từ chối bởi validator, giữ lại %d rule hợp lệ",
-            table_name, len(rejected), len(accepted) + len(rejected), len(accepted),
+    proposal_payload = (
+        proposal.model_dump()
+        if isinstance(proposal, BaseModel)
+        else dict(proposal)
+    )
+    raw_rules = proposal_payload.get("rules") or []
+    if len(raw_rules) < len(candidates):
+        raise ValueError(
+            "LLM must return one narrative per server candidate: "
+            f"expected {len(candidates)}, received {len(raw_rules)}"
         )
-    return accepted, rejected
+    raw_payloads = [
+        raw_rule.model_dump() if isinstance(raw_rule, BaseModel) else dict(raw_rule)
+        for raw_rule in raw_rules
+    ]
+    unused_payload_indexes = set(range(len(raw_payloads)))
+    ordered_payloads: list[dict] = []
+
+    # Associate one model narrative with every server candidate. Correct IDs win;
+    # then an exact column/type match; finally checklist order. This tolerates the
+    # provider duplicating IDs or emitting an extra narrative without ever trusting
+    # model-owned execution fields.
+    for candidate in candidates:
+        candidate_id = str(candidate.get("candidate_id") or "")
+        selected_index = next(
+            (
+                index
+                for index in sorted(unused_payload_indexes)
+                if str(raw_payloads[index].get("candidate_id") or "") == candidate_id
+            ),
+            None,
+        )
+        if selected_index is None:
+            selected_index = next(
+                (
+                    index
+                    for index in sorted(unused_payload_indexes)
+                    if raw_payloads[index].get("column") == candidate.get("column")
+                    and str(
+                        raw_payloads[index].get("rule_type").value
+                        if isinstance(raw_payloads[index].get("rule_type"), RuleType)
+                        else raw_payloads[index].get("rule_type")
+                    ) == str(candidate.get("rule_type"))
+                ),
+                None,
+            )
+        if selected_index is None and unused_payload_indexes:
+            selected_index = min(unused_payload_indexes)
+        if selected_index is None:
+            raise ValueError(
+                f"No LLM narrative remains for server candidate {candidate_id!r}"
+            )
+        ordered_payloads.append(raw_payloads[selected_index])
+        unused_payload_indexes.remove(selected_index)
+
+    if unused_payload_indexes:
+        logger.warning(
+            "[%s] Ignoring %d extra LLM rule narrative(s); server checklist has %d candidates",
+            table_name,
+            len(unused_payload_indexes),
+            len(candidates),
+        )
+
+    bound_rules: list[CandidateProposedRule] = []
+    used_candidate_ids: set[str] = set()
+
+    for payload, candidate in zip(ordered_payloads, candidates):
+        candidate_id = str(candidate.get("candidate_id") or "")
+        if not candidate_id:
+            raise ValueError("Server candidate is missing candidate_id after deduplication")
+        if candidate_id in used_candidate_ids:
+            raise ValueError(
+                f"Server candidate binding reused candidate_id={candidate_id!r}"
+            )
+
+        evidence_refs = [
+            str(item.get("id"))
+            for item in candidate.get("evidence_items") or []
+            if isinstance(item, dict) and item.get("id")
+        ]
+        if not evidence_refs:
+            raise ValueError(f"Candidate {candidate_id!r} has no evidence reference")
+
+        # These fields are owned by the server-side candidate. Clearing provenance
+        # lets ProposedRule's bounded compatibility adapter recreate one exact entry
+        # per active candidate parameter from the deterministic evidence refs.
+        payload.update({
+            "candidate_id": candidate_id,
+            "column": candidate.get("column"),
+            "rule_type": candidate.get("rule_type"),
+            "parameters": candidate.get("parameters") or {},
+            "selected_evidence_refs": evidence_refs,
+            "parameter_provenance": [],
+        })
+        bound_rules.append(CandidateProposedRule.model_validate(payload))
+        used_candidate_ids.add(candidate_id)
+
+    return CandidateTableRuleProposal(table=table_name, rules=bound_rules)
+
+
+def _candidate_batches(candidates: list[dict], batch_size: int) -> list[list[dict]]:
+    return [candidates[index:index + batch_size] for index in range(0, len(candidates), batch_size)]
+
+
+def _related_columns(candidates: list[dict]) -> set[str]:
+    names: set[str] = set()
+    for candidate in candidates:
+        column = candidate.get("column")
+        if isinstance(column, str) and column:
+            names.add(column)
+        target = (candidate.get("parameters") or {}).get("target_column")
+        if isinstance(target, str) and target:
+            names.add(target)
+    return names
+
+
+def _filter_table_context(table_digest: dict, candidates: list[dict]) -> dict:
+    """Keep table-level metrics and only the columns referenced by a batch."""
+    names = _related_columns(candidates)
+    compact = {
+        key: value
+        for key, value in table_digest.items()
+        if key not in {"columns", "dashboard_rule_candidates"}
+    }
+    columns = table_digest.get("columns") or []
+    compact["columns"] = [
+        column for column in columns
+        if isinstance(column, dict) and column.get("name") in names
+    ]
+    return compact
+
+
+def _filter_semantic_context(semantic_contract: dict | None, candidates: list[dict]) -> dict:
+    if not isinstance(semantic_contract, dict):
+        return {}
+    names = _related_columns(candidates)
+    compact = {key: value for key, value in semantic_contract.items() if key != "columns"}
+    compact["columns"] = [
+        column for column in semantic_contract.get("columns", [])
+        if isinstance(column, dict) and column.get("name") in names
+    ]
+    return compact
 
 
 async def _propose_for_table(
@@ -386,156 +594,118 @@ async def _propose_for_table(
     semantic_contract: dict | None = None,
     candidates: list[dict] | None = None,
     dataset_id: str = "unknown",
-) -> TableRuleProposal:
+    specialized_system_prompt: str | None = None,
+) -> CandidateTableRuleProposal:
     """Gọi LLM một lần cho một bảng, bảo vệ bằng semaphore + retry."""
     columns = [col["name"] for col in table_digest.get("columns", [])]
     dashboard_mode = bool(table_digest.get("dashboard_candidate_mode"))
     historical = [] if dashboard_mode else query_historical_rules(table_name, columns)
 
-    if candidates is not None:
-        coverage_requirements_list = candidates
-    else:
-        coverage_requirements_list = _build_coverage_requirements(table_digest)
+    async with semaphore:
+        last_exc: Exception | None = None
+        for attempt in range(max_retries + 1):
+            try:
+                entry_ts = datetime.now()
+                logger.info(
+                    "[%s] Bắt đầu gọi LLM (attempt %d/%d) lúc %s",
+                    table_name,
+                    attempt + 1,
+                    max_retries + 1,
+                    entry_ts.isoformat(),
+                )
 
-    chunk_size = 15
-    chunks = [coverage_requirements_list[i:i + chunk_size] for i in range(0, len(coverage_requirements_list), chunk_size)]
-    if not chunks:
-        chunks = [[]]
+                is_taxi = dataset_id.lower().startswith("nyc-yellow") or "taxi" in dataset_id.lower()
 
-    is_taxi = dataset_id.lower().startswith("nyc-yellow") or "taxi" in dataset_id.lower()
-
-    async def _invoke_chunk(chunk_reqs: list, chunk_index: int) -> TableRuleProposal:
-        async with semaphore:
-            last_exc: Exception | None = None
-            for attempt in range(max_retries + 1):
-                try:
-                    entry_ts = datetime.now()
-                    logger.info(
-                        "[%s|Chunk %d/%d] Bắt đầu gọi LLM (attempt %d/%d) lúc %s",
-                        table_name, chunk_index + 1, len(chunks), attempt + 1, max_retries + 1, entry_ts.isoformat()
+                if candidates is not None:
+                    coverage_requirements = json.dumps(candidates, ensure_ascii=False)
+                else:
+                    coverage_requirements = json.dumps(
+                        _build_coverage_requirements(table_digest),
+                        ensure_ascii=False,
                     )
-                    coverage_requirements = json.dumps(chunk_reqs, ensure_ascii=False)
 
-                    if dashboard_mode:
-                        messages = dashboard_rule_proposer_prompt.format_messages(
-                            table_name=table_name,
-                            table_digest=json.dumps(table_digest, ensure_ascii=False),
-                            coverage_requirements=coverage_requirements,
-                        )
-                    elif not is_taxi and semantic_contract:
-                        from src.agents.nodes.templates import generic_rule_proposer_prompt
-                        messages = generic_rule_proposer_prompt.format_messages(
-                            table_name=table_name,
-                            table_digest=json.dumps(table_digest, ensure_ascii=False),
-                            semantic_contract=json.dumps(semantic_contract, ensure_ascii=False),
-                            historical_rules=json.dumps(historical, ensure_ascii=False),
-                            coverage_requirements=coverage_requirements,
-                        )
-                    else:
-                        messages = rule_proposer_prompt.format_messages(
-                            table_name=table_name,
-                            table_digest=json.dumps(table_digest, ensure_ascii=False),
-                            domain_context=DOMAIN_CONTEXT,
-                            data_dictionary=_load_data_dictionary(),
-                            historical_rules=json.dumps(historical, ensure_ascii=False),
-                            coverage_requirements=coverage_requirements,
-                            few_shot_examples=_RULE_PROPOSER_FEW_SHOT,
-                        )
+                if dashboard_mode:
+                    messages = dashboard_rule_proposer_prompt.format_messages(
+                        table_name=table_name,
+                        table_digest=json.dumps(table_digest, ensure_ascii=False),
+                        coverage_requirements=coverage_requirements,
+                    )
+                elif not is_taxi and semantic_contract:
+                    from src.agents.nodes.templates import generic_rule_proposer_prompt
+                    messages = generic_rule_proposer_prompt.format_messages(
+                        table_name=table_name,
+                        table_digest=json.dumps(table_digest, ensure_ascii=False),
+                        semantic_contract=json.dumps(semantic_contract, ensure_ascii=False),
+                        historical_rules=json.dumps(historical, ensure_ascii=False),
+                        coverage_requirements=coverage_requirements,
+                    )
+                else:
+                    messages = rule_proposer_prompt.format_messages(
+                        table_name=table_name,
+                        table_digest=json.dumps(table_digest, ensure_ascii=False),
+                        domain_context=DOMAIN_CONTEXT,
+                        data_dictionary=_load_data_dictionary(),
+                        historical_rules=json.dumps(historical, ensure_ascii=False),
+                        coverage_requirements=coverage_requirements,
+                        few_shot_examples=_RULE_PROPOSER_FEW_SHOT,
+                    )
+                system_additions: list[str] = []
+                if specialized_system_prompt:
+                    system_additions.append(
+                        "=== NODE 7 DOMAIN CONTEXT ===\n" + specialized_system_prompt
+                    )
+                if candidates is not None:
+                    system_additions.append(
+                        "=== SERVER CANDIDATE CONTRACT ===\n"
+                        "Return every provided candidate exactly once. Copy candidate_id, column, "
+                        "rule_type, parameters, and evidence item IDs exactly. These fields are "
+                        "server-owned; do not omit, alter, or invent them."
+                    )
+                if last_exc is not None:
+                    system_additions.append(
+                        "=== PREVIOUS OUTPUT REJECTED ===\n"
+                        f"Validation error: {str(last_exc)[:1200]}\n"
+                        "Correct the structured output and return the complete candidate batch."
+                    )
+                if system_additions:
+                    original_system = str(messages[0].content)
+                    messages = [
+                        SystemMessage(content=original_system + "\n\n" + "\n\n".join(system_additions)),
+                        *messages[1:],
+                    ]
+                draft: CandidateTableRuleDraft = await structured_llm.ainvoke(messages)
+                result = _bind_proposal_to_candidates(table_name, draft, candidates or [])
+                exit_ts = datetime.now()
+                logger.info(
+                    "[%s] Hoàn thành (attempt %d) sau %.2fs — %d rules",
+                    table_name,
+                    attempt + 1,
+                    (exit_ts - entry_ts).total_seconds(),
+                    len(result.rules),
+                )
+                return result
 
-                    # include_raw=True normally returns an envelope. Tests and
-                    # providers without include_raw support may return the parsed
-                    # TableRuleProposal directly, so support both shapes.
-                    envelope = await structured_llm.ainvoke(messages)
-                    exit_ts = datetime.now()
-
-                    if isinstance(envelope, dict):
-                        parsed = envelope.get("parsed")
-                        parsing_error = envelope.get("parsing_error")
-                        raw_message = envelope.get("raw")
-                    else:
-                        parsed, parsing_error, raw_message = envelope, None, None
-
-                    if parsed is not None and not parsing_error:
-                        result = parsed
-                        rejected: list[dict] = []
-                    else:
-                        payload = _raw_to_dict(raw_message)
-                        if payload is None:
-                            raise parsing_error or ValueError(
-                                "không đọc được payload thô từ LLM"
-                            )
-                        accepted, rejected = _salvage_rules(payload, table_name)
-                        if not accepted:
-                            raise parsing_error or ValueError(
-                                "không rule nào qua được kiểm định"
-                            )
-                        result = TableRuleProposal(
-                            table=payload.get("table") or table_name,
-                            rules=accepted,
-                        )
-
-                    result.rejected_rules = rejected
-                    logger.info(
-                        "[%s|Chunk %d/%d] Hoàn thành (attempt %d) sau %.2fs — "
-                        "%d rules, %d bị từ chối",
+            except (ValidationError, Exception) as exc:
+                last_exc = exc
+                if attempt < max_retries:
+                    wait_seconds = 2 ** attempt  # 1s, 2s, 4s …
+                    logger.warning(
+                        "[%s] Lỗi attempt %d: %s — thử lại sau %ds",
                         table_name,
-                        chunk_index + 1,
-                        len(chunks),
                         attempt + 1,
-                        (exit_ts - entry_ts).total_seconds(),
-                        len(result.rules),
-                        len(rejected),
+                        exc,
+                        wait_seconds,
                     )
-                    return result
+                    await asyncio.sleep(wait_seconds)
+                else:
+                    logger.error(
+                        "[%s] Đã thử %d lần, từ bỏ. Lỗi cuối: %s",
+                        table_name,
+                        max_retries + 1,
+                        exc,
+                    )
 
-                except Exception as exc:
-                    last_exc = exc
-                    if attempt < max_retries:
-                        wait_seconds = 2 ** attempt
-                        logger.warning(
-                            "[%s|Chunk %d] Lỗi attempt %d: %s — thử lại sau %ds",
-                            table_name,
-                            chunk_index + 1,
-                            attempt + 1,
-                            exc,
-                            wait_seconds,
-                        )
-                        await asyncio.sleep(wait_seconds)
-                    else:
-                        logger.error(
-                            "[%s|Chunk %d] Đã thử %d lần, từ bỏ. Lỗi cuối: %s",
-                            table_name,
-                            chunk_index + 1,
-                            max_retries + 1,
-                            exc,
-                        )
-            raise last_exc  # type: ignore[misc]
-
-    chunk_results = await asyncio.gather(
-        *[_invoke_chunk(chunk, index) for index, chunk in enumerate(chunks)],
-        return_exceptions=True,
-    )
-
-    all_rules: list[ProposedRule] = []
-    all_rejected: list[dict] = []
-    first_exc: Exception | None = None
-    for res in chunk_results:
-        if isinstance(res, Exception):
-            logger.error("[%s] Chunk failed: %s", table_name, res)
-            if first_exc is None:
-                first_exc = res
-        else:
-            all_rules.extend(res.rules)
-            all_rejected.extend(res.rejected_rules)
-
-    if not all_rules and first_exc:
-        raise first_exc
-
-    return TableRuleProposal(
-        table=table_name,
-        rules=all_rules,
-        rejected_rules=all_rejected,
-    )
+        raise last_exc  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
@@ -711,39 +881,54 @@ async def rule_proposer_node(state: AgentState) -> dict:
 
     # 3. Chuẩn bị LLM với structured output
     llm = get_llm(settings.llm_provider, temperature=0.1)
-    # include_raw giữ lại phản hồi gốc để _salvage_rules cứu được rule hợp lệ khi
-    # một phần lô trượt kiểm định. Schema vẫn được đưa cho model như cũ, nên chất
-    # lượng hướng dẫn không đổi.
-    structured_llm = llm.with_structured_output(TableRuleProposal, include_raw=True)
+    structured_llm = llm.with_structured_output(CandidateTableRuleDraft)
 
-    # 4. Fan-out
+    # 4. Fan-out in bounded batches. Each request sees only relevant columns.
     semaphore = asyncio.Semaphore(settings.rule_proposer_concurrency)
     table_names = list(per_table.keys())
     dataset_id = state.get("dataset_id", "unknown")
+    configured_batch_size = getattr(settings, "rule_proposer_batch_size", 8)
+    batch_size = configured_batch_size if isinstance(configured_batch_size, int) else 8
 
     contract = state.get("semantic_contract") or {}
     tables_contract = contract.get("tables", {})
 
     all_candidates = state.get("rule_candidates", [])
-    candidates_by_table = {}
+    candidates_by_table: dict[str, list[dict]] = {}
     for c in all_candidates:
-        tb = c.get("table")
-        if tb:
+        tb = c.get("table") if isinstance(c, dict) else None
+        if isinstance(tb, str) and tb:
             candidates_by_table.setdefault(tb, []).append(c)
+
+    specialized_prompts = state.get("specialized_system_prompts") or {}
+    batch_jobs: list[tuple[str, int, list[dict]]] = []
+    for table_name in table_names:
+        table_candidates = candidates_by_table.get(table_name)
+        if table_candidates is None:
+            table_candidates = _build_coverage_requirements(per_table[table_name])
+        table_candidates = _dedupe_candidates(table_candidates)
+        candidates_by_table[table_name] = table_candidates
+        for batch_index, candidate_batch in enumerate(
+            _candidate_batches(table_candidates, batch_size), start=1
+        ):
+            batch_jobs.append((table_name, batch_index, candidate_batch))
 
     results = await asyncio.gather(
         *[
             _propose_for_table(
-                table_name=t,
-                table_digest=per_table[t],
+                table_name=table_name,
+                table_digest=_filter_table_context(per_table[table_name], candidate_batch),
                 structured_llm=structured_llm,
                 semaphore=semaphore,
                 max_retries=max_retries,
-                semantic_contract=tables_contract.get(t),
-                candidates=candidates_by_table.get(t),
+                semantic_contract=_filter_semantic_context(
+                    tables_contract.get(table_name), candidate_batch
+                ),
+                candidates=candidate_batch,
                 dataset_id=dataset_id,
+                specialized_system_prompt=specialized_prompts.get(table_name),
             )
-            for t in table_names
+            for table_name, _batch_index, candidate_batch in batch_jobs
         ],
         return_exceptions=True,
     )
@@ -752,22 +937,23 @@ async def rule_proposer_node(state: AgentState) -> dict:
     run_id = state.get("rule_run_id") or uuid.uuid4().hex
     flat_rules: list[dict] = []
     errors: list[dict] = []
-    rejected_rules: list[dict] = []
     used_ids: set[str] = set()
 
-    for table_name, result in zip(table_names, results):
+    stamped_rule_keys: set[str] = set()
+    for (table_name, batch_index, requirements), result in zip(batch_jobs, results):
         if isinstance(result, Exception):
-            logger.error("Bảng '%s' thất bại: %s", table_name, result)
-            errors.append({"table": table_name, "error": str(result)})
+            logger.error("Bảng '%s' batch %d thất bại: %s", table_name, batch_index, result)
+            errors.append({"table": table_name, "batch": batch_index, "error": str(result)})
             continue
 
-        proposal: TableRuleProposal = result
-        for item in getattr(proposal, "rejected_rules", None) or []:
-            rejected_rules.append({"table": table_name, **item})
-        requirements = candidates_by_table.get(table_name)
-        if requirements is None:
-            requirements = _build_coverage_requirements(per_table[table_name])
-
+        # Final strict validation remains the public contract after the
+        # candidate-aware structured-output adapter has repaired provenance.
+        proposal = TableRuleProposal(
+            # The server-side batch owns the table identity. Do not allow an
+            # LLM response (or a legacy adapter) to redirect rules elsewhere.
+            table=table_name,
+            rules=[ProposedRule.model_validate(rule.model_dump()) for rule in result.rules],
+        )
         for rule in proposal.rules:
             stamped = _stamp_rule(
                 rule,
@@ -778,7 +964,27 @@ async def rule_proposer_node(state: AgentState) -> dict:
                 per_table[table_name],
             )
             if stamped:
+                stamped["selected_evidence_refs"] = list(
+                    dict.fromkeys(stamped.get("selected_evidence_refs") or [])
+                )
+                signature = json.dumps(
+                    {
+                        "table": stamped.get("table_name"),
+                        "column": stamped.get("column"),
+                        "rule_type": stamped.get("rule_type"),
+                        "parameters": stamped.get("parameters") or {},
+                    },
+                    sort_keys=True,
+                    default=str,
+                )
+                if signature in stamped_rule_keys:
+                    continue
+                stamped_rule_keys.add(signature)
                 flat_rules.append(stamped)
+
+    # Never persist a partial policy set when one of its batches failed.
+    if errors:
+        flat_rules = []
 
     logger.info(
         "rule_proposer_node hoàn thành: run_id=%s | %d rules | %d errors",
@@ -795,15 +1001,9 @@ async def rule_proposer_node(state: AgentState) -> dict:
         dump_payload = {
             "run_id": run_id,
             "generated_at": datetime.now().isoformat(),
-            "dataset_id": dataset_id,
             "total_rules": len(flat_rules),
             "total_errors": len(errors),
-            # Rule model đề xuất nhưng validator từ chối. Ghi lại vì tỷ lệ từ chối
-            # là một phép đo chất lượng model — nuốt im lặng thì không ai biết
-            # model đang sinh ra bao nhiêu thứ không dùng được.
-            "total_rejected": len(rejected_rules),
             "proposed_rules": flat_rules,
-            "rejected_rules": rejected_rules,
             "errors": errors,
         }
         dump_file.write_text(json.dumps(dump_payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -817,20 +1017,16 @@ async def rule_proposer_node(state: AgentState) -> dict:
         "rule_run_id": run_id,
     }
 
-    # Thất bại toàn bộ (ví dụ LLM hết quota / mất mạng) trước đây chỉ được ghi vào
-    # `rule_proposal_errors` rồi graph vẫn chạy tiếp và runner báo DONE với 0 rules —
-    # không phân biệt được với trường hợp hợp lệ "dataset sạch, không cần rule nào".
-    if errors and not flat_rules:
+    if errors:
         result["error"] = (
-            f"Rule proposer thất bại trên toàn bộ {len(errors)}/{len(table_names)} bảng: "
-            + "; ".join(f"{e.get('table')}: {e.get('error')}" for e in errors[:3])
+            f"Rule proposer failed closed because {len(errors)}/{len(batch_jobs)} batch(es) failed: "
+            + "; ".join(
+                f"{e.get('table')} batch {e.get('batch')}: {e.get('error')}"
+                for e in errors[:3]
+            )
         )
-    elif errors:
-        logger.warning(
-            "rule_proposer_node thành công một phần: %d/%d bảng thất bại",
-            len(errors),
-            len(table_names),
-        )
+    elif not flat_rules:
+        result["error"] = "Rule proposer returned no valid structured proposals."
 
     return result
 

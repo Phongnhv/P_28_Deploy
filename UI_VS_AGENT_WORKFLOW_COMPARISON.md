@@ -1,5 +1,93 @@
 # BÁO CÁO PHÂN TÍCH VÀ ĐỐI CHIẾU: LUỒNG WEB UI VS. AGENT WORKFLOW GỐC (LANGGRAPH)
 
+> **Cập nhật implementation 24/08/2026:** Phần 0 là kết quả hiện hành sau khi tích hợp Analysis Studio. Báo cáo cũ ở phần phụ lục mô tả dashboard trước tích hợp và không còn là nguồn sự thật.
+
+## 0. Trạng thái hiện hành sau tích hợp
+
+### 0.1. Ma trận UI và agent workflow
+
+| Workflow | Source thực thi từ UI hiện tại | Mức tích hợp |
+|---|---|---:|
+| Graph 1 | `Graph1Studio` → protected Graph 1 routes → `build_proposal_graph()`; đủ 9 canonical backend nodes và 2 HITL gates | 100% |
+| Graph 2 | Nút `Analyze Graph 2 & 3` → `analysis_workflow.execute_analysis_run()` → `build_execution_graph()` | 100% |
+| Graph 3 | Cùng analysis run, chỉ chạy sau Graph 2 success → `build_anomaly_graph()` | 100% |
+| Steward report | `report_writer_node` trả Markdown + source và được persist trong `analysis_runs` | 100% |
+
+Luồng dashboard cũ `POST /api/v1/dq-runs` vẫn tồn tại cho màn hình legacy. Analysis Studio không sử dụng endpoint cũ `/api/v1/dq/execution-runs` và không gọi wrapper `run_execution_graph()`; service điều phối gọi trực tiếp hai graph builders để thu telemetry từng node.
+
+### 0.2. Handoff Graph 1 → Graph 2
+
+- Review Node 9 cập nhật transactionally `RuleProposalModel` và snapshot `ProposedRuleModel` thuộc đúng Graph 1 run.
+- Rule `approve`/`edit` tạo hoặc cập nhật `RuleVersionModel`; rule rejected không đi vào Graph 2.
+- Parameter edit được chuẩn hóa `min_value/max_value` → `min/max`, đồng thời giữ `accepted_values`, `regex`, `target_column`, `operator`, `min_row_count`.
+- Output Node 9 không còn ghi đè làm mất rules: trả `proposed_rules`, `approved_rules`, total/approved/edited/rejected/pending và reviewer.
+- Analyze đọc snapshot approved của chính `graph1_run_id`; không publish đè global `active_rules`.
+
+### 0.3. Graph 2 thực tế
+
+```mermaid
+flowchart LR
+    A[test_generator] --> B[validate_dbt_project]
+    B -->|valid hoặc local dbt skipped| C[test_runner]
+    B -->|invalid| D[dbt_validation_failed]
+    C --> E[persist_report]
+```
+
+Graph 2 dùng template/compiler deterministic để sinh executable SQL và dbt YAML. Không có LLM free-form code generation hay repair loop. Khi thiếu dbt executable trong local/dev/test, validator ghi `SKIPPED` và runner tiếp tục bằng deterministic SQL fallback; UI công khai trạng thái này thay vì gọi là dbt success.
+
+Analysis Studio hiển thị dữ liệu thật:
+
+- KPI total/PASS/FAIL/ERROR/SKIPPED, checked rows, failed rows và duration.
+- Donut status và bar chart violation rate; không tạo trend giả.
+- dbt generated test count, validation status/skipped/error, execution mode và safe artifact metadata.
+- Bảng rule-level hỗ trợ filter/sort/search/expand. Expanded detail chỉ có source row IDs, evidence refs và error, không có raw source values.
+- Status contract mới hỗ trợ `RESULT_MISMATCH` mà không thay đổi type dashboard legacy.
+
+### 0.4. Graph 3 thực tế
+
+```mermaid
+flowchart LR
+    A[anomaly_detector] --> B[hypothesis_agent]
+    B --> C[persist_analysis]
+    C --> D[report_writer]
+```
+
+- Detector thật: robust median/MAD z-score, cold-start static detector, business invariant, volume/freshness/execution detectors.
+- Isolation Forest: **NOT FOUND**.
+- ChromaDB/RAG retrieval: **NOT FOUND**; retrieval hiện là stub rỗng.
+- Hypothesis dùng structured LLM khi khả dụng và deterministic fallback khi lỗi.
+- Projection đánh dấu dòng Graph 2 anomaly chỉ khi signal `target_type=RULE`, cùng `rule_id`, score `>= 0.70`.
+- Panel Graph 3 dùng detector name/version thật, ranked signals, signal table và hypothesis cards; không hiển thị nhãn Isolation Forest hoặc RAG.
+- Report Markdown gồm 8 phần, có badge `LLM GENERATED` hoặc `DETERMINISTIC FALLBACK`, hỗ trợ copy/download client-side.
+
+### 0.5. Orchestration, failure và resume
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> RUNNING
+    RUNNING --> COMPLETED: Graph 2 + Graph 3 hoàn tất
+    RUNNING --> PARTIAL: Graph 2 có dữ liệu, Graph 3 lỗi
+    RUNNING --> FAILED: Graph 2 lỗi
+```
+
+- `analysis_runs.graph1_run_id` unique nên double-click, refresh hoặc gọi lại không tạo run trùng.
+- `analysis_node_executions` lưu 10 bước với status, timestamps, duration, sequence, safe output summary và error.
+- Nếu Graph 2 lỗi, Graph 3/report được đánh dấu `SKIPPED`.
+- Nếu Graph 3 lỗi, Graph 2 vẫn hiển thị và run ở `PARTIAL`.
+- Frontend lưu `analysis_run_id` trong session storage và resume bằng SSE + polling fallback.
+- API yêu cầu session, CSRF, RBAC và dataset access; POST chỉ dành cho STEWARD/ADMIN có quyền manage.
+
+### 0.6. UI Analysis Studio
+
+Desktop sử dụng grid 38%/62%: report bên trái; Graph 2 và Graph 3 xếp dọc bên phải. Dưới 1180px chuyển thành Report → Graph 2 → Graph 3. UI dùng React/Vite/TypeScript, custom CSS, Recharts và React Markdown; không dùng Next.js hoặc Ant Design.
+
+Các capability sau vẫn là **NOT FOUND** trong source: Isolation Forest, functional RAG/Chroma retrieval, Dagster orchestration và Slack notification.
+
+---
+
+## Phụ lục — báo cáo trước tích hợp (đã bị thay thế)
+
 > **Ngày lập báo cáo:** 23/08/2026  
 > **Dự án:** RidePulse DQ (AI Data Quality Agent)  
 > **Trạng thái đối chiếu:** Xác thực 100% dựa trên mã nguồn thực tế tại kho lưu trữ.

@@ -58,6 +58,15 @@ async def raw_profiler_node(state: AgentState) -> dict:
     Quét toàn bộ các bảng trong database và tổng hợp kết quả thống kê.
     """
     metadata = state.get("metadata", {})
+    # Uploaded datasets are profiled by the bounded CSV/Parquet profiler during
+    # ingestion. Reuse that real, persisted result so this node remains scoped to
+    # the selected dataset instead of scanning RidePulse's metadata database.
+    uploaded_profile = metadata.get("uploaded_dataset_profile")
+    if isinstance(uploaded_profile, dict) and uploaded_profile:
+        return {
+            "dataset_profile": uploaded_profile,
+            "progress_state": "PROFILE_COMPLETE",
+        }
     connection_string = metadata.get("connection_string")
     sampling_rate = metadata.get("sampling_rate", 1.0)
     max_concurrent_tables = metadata.get("max_concurrent_tables", DEFAULT_MAX_CONCURRENT_TABLES)
