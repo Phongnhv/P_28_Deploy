@@ -677,6 +677,16 @@ def build_analysis_result(db: Session, run: AnalysisRunModel) -> dict[str, Any]:
     generator_output = node_by_key.get("test_generator", {}).get("output", {})
     validation_output = node_by_key.get("validate_dbt_project", {}).get("output", {})
     runner_output = node_by_key.get("test_runner", {}).get("output", {})
+    generated_tests_count = int(generator_output.get("generated_tests_count") or 0)
+    if (
+        generated_tests_count == 0
+        and runner_output.get("execution_mode") == "not_run_versioned_source_adapter"
+    ):
+        # Older persisted node summaries were written before versioned adapter
+        # checks were represented in ``generated_tests``. The result rows are
+        # the durable one-to-one execution evidence, so repair the observable
+        # counter without rewriting historical node payloads.
+        generated_tests_count = len(result_rows)
     dominant_signal = max(signals, key=lambda item: (item.score, item.reliability), default=None)
 
     graph3_signals = [{
@@ -728,7 +738,7 @@ def build_analysis_result(db: Session, run: AnalysisRunModel) -> dict[str, Any]:
                 "duration_ms": round(total_duration, 2),
             },
             "dbt": {
-                "generated_tests_count": generator_output.get("generated_tests_count", 0),
+                "generated_tests_count": generated_tests_count,
                 "validation_status": "SKIPPED" if validation_output.get("skipped") else "PASS" if validation_output.get("valid") else "FAIL",
                 "validation_skipped": bool(validation_output.get("skipped")),
                 "validation_error": validation_output.get("error"),
