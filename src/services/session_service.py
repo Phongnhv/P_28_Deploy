@@ -50,10 +50,10 @@ def ensure_default_users(db: Session) -> None:
     for username, display_name, role, password_env in DEFAULT_USERS:
         # Secret Manager values supplied through stdin commonly retain a final
         # newline; it is not part of the intended password.
-        password = (os.getenv(password_env) or "").strip()
-        if production and not password:
+        configured_password = (os.getenv(password_env) or "").strip()
+        if production and not configured_password:
             raise RuntimeError(f"{password_env} must be configured in production")
-        password = password or username
+        password = configured_password or username
         account = db.query(UserAccountModel).filter(UserAccountModel.username == username).first()
         if not account:
             db.add(
@@ -67,8 +67,11 @@ def ensure_default_users(db: Session) -> None:
                     created_by="system-seed",
                 )
             )
-        elif account.created_by == "system-seed":
-            account.password_hash = hash_password(password)
+        elif account.created_by == "system-seed" and configured_password:
+            # A local process may point at the shared production database. If
+            # its demo password env vars are absent, never replace an existing
+            # production hash with the development username fallback.
+            account.password_hash = hash_password(configured_password)
     db.commit()
 
 

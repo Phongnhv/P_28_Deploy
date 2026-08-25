@@ -45,6 +45,14 @@ class DbtArtifactStore:
     @property
     def client(self) -> Any:
         if self._client is None:
+            if self.settings.object_storage_provider == "gcs":
+                from google.cloud import storage
+
+                # Cloud Run resolves this through the revision's attached
+                # service account. Local runs use ADC or a credential file.
+                self._client = storage.Client()
+                return self._client
+
             import boto3
             from botocore.config import Config
 
@@ -87,29 +95,45 @@ class DbtArtifactStore:
             metadata["dataset-id"] = dataset_id
         if rule_run_id:
             metadata["rule-run-id"] = rule_run_id
-        response = self.client.put_object(
-            Bucket=self.settings.object_storage_bucket,
-            Key=object_key,
-            Body=content,
-            ContentType="application/yaml",
-            Metadata=metadata,
-        )
+        if self.settings.object_storage_provider == "gcs":
+            blob = self.client.bucket(self.settings.object_storage_bucket).blob(object_key)
+            blob.metadata = metadata
+            blob.upload_from_string(content, content_type="application/yaml")
+            etag = blob.etag
+            version_id = str(blob.generation) if blob.generation is not None else None
+        else:
+            response = self.client.put_object(
+                Bucket=self.settings.object_storage_bucket,
+                Key=object_key,
+                Body=content,
+                ContentType="application/yaml",
+                Metadata=metadata,
+            )
+            etag = response.get("ETag", "").strip('"') or None
+            version_id = response.get("VersionId")
         return DbtArtifactRef(
             bucket=self.settings.object_storage_bucket,
             object_key=object_key,
             sha256=digest,
             size_bytes=len(content),
-            etag=response.get("ETag", "").strip('"') or None,
-            version_id=response.get("VersionId"),
+            etag=etag,
+            version_id=version_id,
         )
 
     def download_yaml(self, artifact: DbtArtifactRef | dict[str, Any]) -> bytes:
         ref = artifact if isinstance(artifact, DbtArtifactRef) else DbtArtifactRef(**artifact)
-        request: dict[str, Any] = {"Bucket": ref.bucket, "Key": ref.object_key}
-        if ref.version_id:
-            request["VersionId"] = ref.version_id
-        response = self.client.get_object(**request)
-        content = response["Body"].read()
+        if self.settings.object_storage_provider == "gcs":
+            blob = self.client.bucket(ref.bucket).blob(
+                ref.object_key,
+                generation=int(ref.version_id) if ref.version_id else None,
+            )
+            content = blob.download_as_bytes()
+        else:
+            request: dict[str, Any] = {"Bucket": ref.bucket, "Key": ref.object_key}
+            if ref.version_id:
+                request["VersionId"] = ref.version_id
+            response = self.client.get_object(**request)
+            content = response["Body"].read()
         if len(content) != ref.size_bytes:
             raise ValueError("Downloaded dbt artifact size does not match its metadata")
         if artifact_sha256(content) != ref.sha256:
@@ -125,20 +149,25 @@ class DbtArtifactStore:
         object_key = f"datasets/{dataset_id}/{filename}"
         bucket = self.settings.object_storage_bucket
         try:
-            try:
-                self.client.head_bucket(Bucket=bucket)
-            except Exception:
-                self.client.create_bucket(Bucket=bucket)
+            if self.settings.object_storage_provider == "gcs":
+                blob = self.client.bucket(bucket).blob(object_key)
+                blob.metadata = {"dataset-id": dataset_id, "filename": filename}
+                blob.upload_from_string(content)
+            else:
+                try:
+                    self.client.head_bucket(Bucket=bucket)
+                except Exception:
+                    self.client.create_bucket(Bucket=bucket)
 
-            self.client.put_object(
-                Bucket=bucket,
-                Key=object_key,
-                Body=content,
-                Metadata={"dataset-id": dataset_id, "filename": filename},
-            )
-            logger.info("Successfully uploaded dataset %s to MinIO bucket %s at key %s", dataset_id, bucket, object_key)
+                self.client.put_object(
+                    Bucket=bucket,
+                    Key=object_key,
+                    Body=content,
+                    Metadata={"dataset-id": dataset_id, "filename": filename},
+                )
+            logger.info("Successfully uploaded dataset %s to object storage bucket %s at key %s", dataset_id, bucket, object_key)
         except Exception as e:
-            logger.warning("Failed to upload dataset %s to MinIO: %s", dataset_id, e)
+            logger.warning("Failed to upload dataset %s to object storage: %s", dataset_id, e)
         return object_key
 
 

@@ -79,7 +79,8 @@ async def validate_dbt_project_node(state: AgentState) -> dict:
             updates["dbt_artifact_ref"] = ref.to_dict()
         except Exception as exc:
             storage_is_configured = bool(
-                settings.object_storage_endpoint_url
+                settings.object_storage_provider == "gcs"
+                or settings.object_storage_endpoint_url
                 or settings.object_storage_access_key_id
                 or settings.object_storage_secret_access_key
             )
