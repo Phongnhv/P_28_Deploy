@@ -13,6 +13,8 @@ from src.models.database import (
     DatasetModel,
     Graph1NodeExecutionModel,
     Graph1RunModel,
+    DatasetVersionModel,
+    ProfileRunSnapshotModel,
     ProfileModel,
     RuleProposalModel,
     RuleVersionModel,
@@ -102,23 +104,110 @@ def _uploaded_profile(db: Session, dataset_id: str) -> dict[str, Any]:
     }
 
 
-def create_graph1_run(db: Session, dataset_id: str, username: str, idempotency_key: str) -> Graph1RunModel:
+def _versioned_profile(
+    db: Session,
+    dataset_id: str,
+    dataset_version_id: str,
+    profile_run_id: str,
+) -> tuple[str, dict[str, Any]]:
+    """Build Graph 1 evidence from the explicitly selected immutable snapshot."""
+    version = db.query(DatasetVersionModel).filter_by(id=dataset_version_id, dataset_id=dataset_id).first()
+    profile = db.query(ProfileRunSnapshotModel).filter_by(
+        id=profile_run_id, dataset_id=dataset_id, dataset_version_id=dataset_version_id, status="COMPLETED"
+    ).first()
+    if not version or not profile:
+        raise ValueError("The requested dataset version/profile snapshot is not available.")
+    try:
+        schema = json.loads(profile.schema_json or "[]")
+        metrics = json.loads(profile.metrics_json or "{}")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("The selected profile snapshot is not valid JSON evidence.") from exc
+    if not isinstance(schema, list) or not schema:
+        raise ValueError("The selected profile snapshot has no immutable schema evidence.")
+    raw_columns: dict[str, Any] = {}
+    for item in schema:
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        name = str(item["name"])
+        raw_columns[name] = {
+            "type": item.get("logical_type") or item.get("data_type") or "string",
+            "null_count": item.get("null_count", 0),
+            "null_pct": float(item.get("null_rate", 0.0)) * 100,
+            "distinct_in_sample": item.get("distinct_count", 0),
+            "full_distinct_count": item.get("distinct_count", 0),
+            "is_unique_full_table": item.get("is_unique_full_table"),
+            "min": item.get("min"),
+            "max": item.get("max"),
+            "negative_pct": float(item.get("negative_rate", 0.0) or 0.0) * 100,
+            "percentiles": item.get("quantiles", {}),
+            "sample_values": [],
+            "is_categorical": item.get("logical_type") in {"string", "boolean"},
+            "semantic_role": item.get("semantic_role"),
+        }
+    return version.workspace_id, {
+        "version_source": {
+            "table_metadata": {
+                "table_name": "version_source",
+                "total_rows": profile.row_count,
+                "sampled_rows": profile.row_count,
+                "sampling_rate": 1.0,
+                "is_sampled": False,
+                "dataset_id": dataset_id,
+                "dataset_version_id": dataset_version_id,
+                "profile_run_id": profile_run_id,
+                "schema_hash": version.schema_hash,
+            },
+            "schema_constraints": {"primary_key": [], "foreign_keys": [], "unique_constraints": []},
+            "cross_column_hints": metrics.get("cross_field_metrics", []) if isinstance(metrics, dict) else [],
+            "columns": raw_columns,
+            "quality_summary": {
+                "completeness_score": profile.completeness_score,
+                "validity_score": profile.validity_score,
+                "duplicate_rate": profile.duplicate_rate,
+            },
+        }
+    }
+
+
+def create_graph1_run(
+    db: Session,
+    dataset_id: str,
+    username: str,
+    idempotency_key: str,
+    *,
+    workspace_id: str | None = None,
+    dataset_version_id: str | None = None,
+    profile_run_id: str | None = None,
+) -> Graph1RunModel:
     existing = db.query(Graph1RunModel).filter(Graph1RunModel.idempotency_key == idempotency_key).first()
     if existing:
         return existing
-    profile = _uploaded_profile(db, dataset_id)
+    if dataset_version_id:
+        if not profile_run_id:
+            raise ValueError("profile_run_id is required when dataset_version_id is specified.")
+        resolved_workspace_id, profile = _versioned_profile(db, dataset_id, dataset_version_id, profile_run_id)
+        workspace_id = workspace_id or resolved_workspace_id
+    else:
+        profile = _uploaded_profile(db, dataset_id)
     run_id = f"g1-{uuid.uuid4().hex[:20]}"
     run = Graph1RunModel(
         id=run_id,
         dataset_id=dataset_id,
+        workspace_id=workspace_id,
+        dataset_version_id=dataset_version_id,
+        profile_run_id=profile_run_id,
         status="PENDING",
         created_by=username,
         idempotency_key=idempotency_key,
         state_json=_json({
             "dataset_id": dataset_id,
             "rule_run_id": run_id,
-            "target_tables": ["source_rows"],
-            "metadata": {"uploaded_dataset_profile": profile, "workflow": "graph1-studio"},
+            "target_tables": ["version_source" if dataset_version_id else "source_rows"],
+            "workspace_id": workspace_id,
+            "dataset_version_id": dataset_version_id,
+                "profile_run_id": profile_run_id,
+            "source_checksum": (db.get(DatasetVersionModel, dataset_version_id).checksum if dataset_version_id else None),
+            "metadata": {"uploaded_dataset_profile": profile, "workflow": "graph1-studio", "allowed_columns": list(next(iter(profile.values())).get("columns", {}).keys())},
         }),
     )
     db.add(run)
@@ -137,6 +226,8 @@ def create_graph1_run(db: Session, dataset_id: str, username: str, idempotency_k
 def serialize_run(run: Graph1RunModel) -> dict[str, Any]:
     return {
         "id": run.id, "dataset_id": run.dataset_id, "status": run.status,
+        "workspace_id": run.workspace_id, "dataset_version_id": run.dataset_version_id,
+        "profile_run_id": run.profile_run_id,
         "current_node": run.current_node, "error": run.error,
         "created_by": run.created_by,
         "created_at": run.created_at.isoformat(), "updated_at": run.updated_at.isoformat(),

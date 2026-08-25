@@ -135,6 +135,14 @@ def data_explorer(
     dataset_id: str,
     dataset_version_id: str,
     profile_run_id: str | None = None,
+    include_rows: bool = False,
+    columns: str | None = None,
+    filter_column: str | None = None,
+    filter_value: str | None = None,
+    sort_by: str | None = None,
+    sort_direction: str = Query("asc", pattern="^(asc|desc)$"),
+    limit: int = Query(100, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     session: SessionModel = Depends(get_session),
     db: Session = Depends(get_db),
 ):
@@ -145,7 +153,16 @@ def data_explorer(
             dataset_id=dataset_id,
             dataset_version_id=dataset_version_id,
             profile_run_id=profile_run_id,
+            include_rows=include_rows,
+            selected_columns=[item for item in (columns or "").split(",") if item] or None,
+            filters={filter_column: filter_value} if filter_column and filter_value is not None else None,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+            limit=limit,
+            offset=offset,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"code": "INVALID_EXPLORER_QUERY", "message": str(exc)}) from exc
     except (ResourceNotFoundError, AccessDeniedError) as exc:
         _translate_access_error(exc)
 

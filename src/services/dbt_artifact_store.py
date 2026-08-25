@@ -170,6 +170,49 @@ class DbtArtifactStore:
             logger.warning("Failed to upload dataset %s to object storage: %s", dataset_id, e)
         return object_key
 
+    def upload_source_file(
+        self,
+        object_key: str,
+        content: bytes,
+        *,
+        checksum: str,
+    ) -> DbtArtifactRef:
+        """Upload an immutable CSV/Parquet source object.
+
+        Unlike the historical ``upload_dataset_file`` compatibility helper,
+        this method never swallows an object-storage error.  Callers can
+        therefore keep a version non-executable when storage is unavailable.
+        """
+        if not object_key or object_key.startswith(("/", "\\")) or ".." in object_key.split("/"):
+            raise ValueError("Unsafe source object key")
+        bucket = self.settings.object_storage_bucket
+        if self.settings.object_storage_provider == "gcs":
+            blob = self.client.bucket(bucket).blob(object_key)
+            blob.metadata = {"sha256": checksum, "size-bytes": str(len(content))}
+            blob.upload_from_string(content, if_generation_match=0)
+            return DbtArtifactRef(bucket, object_key, checksum, len(content), blob.etag, str(blob.generation) if blob.generation else None)
+        response = self.client.put_object(
+            Bucket=bucket,
+            Key=object_key,
+            Body=content,
+            ContentType="application/octet-stream",
+            Metadata={"sha256": checksum, "size-bytes": str(len(content))},
+            IfNoneMatch="*",
+        )
+        return DbtArtifactRef(
+            bucket=bucket,
+            object_key=object_key,
+            sha256=checksum,
+            size_bytes=len(content),
+            etag=response.get("ETag", "").strip('"') or None,
+            version_id=response.get("VersionId"),
+        )
+
+    def download_source_file(self, artifact: DbtArtifactRef | dict[str, Any]) -> bytes:
+        """Download a source object and verify its recorded size/checksum."""
+        content = self.download_yaml(artifact)
+        return content
+
 
 @lru_cache
 def get_dbt_artifact_store() -> DbtArtifactStore:

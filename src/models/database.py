@@ -268,6 +268,9 @@ class Graph1RunModel(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    workspace_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=True, index=True)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=True, index=True)
+    profile_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("profile_runs.id"), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="PENDING", index=True)
     current_node: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -306,6 +309,10 @@ class AnalysisRunModel(Base):
         String(64), ForeignKey("graph1_runs.id"), nullable=False, unique=True, index=True
     )
     dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    workspace_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=True, index=True)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=True, index=True)
+    profile_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("profile_runs.id"), nullable=True, index=True)
+    rule_review_snapshot_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("rule_review_snapshots.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING", index=True)
     phase: Mapped[str] = mapped_column(String(32), nullable=False, default="PREPARING")
     current_node: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -347,6 +354,7 @@ class RuleVersionModel(Base):
     id: Mapped[str] = mapped_column(String(640), primary_key=True)
     rule_proposal_id: Mapped[str] = mapped_column(String(512), ForeignKey("rule_proposals.id"), nullable=False)
     dataset_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=True, index=True)
     rule_spec: Mapped[str] = mapped_column(Text, nullable=False)  # JSON
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="APPROVED")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -384,6 +392,11 @@ class DqRunModel(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     job_id: Mapped[str] = mapped_column(String(64), ForeignKey("jobs.id"), nullable=False)
     dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False)
+    workspace_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=True, index=True)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=True, index=True)
+    profile_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("profile_runs.id"), nullable=True, index=True)
+    rule_review_snapshot_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("rule_review_snapshots.id"), nullable=True)
+    source_checksum: Mapped[str | None] = mapped_column(String(256), nullable=True)
     rule_ids: Mapped[str] = mapped_column(Text, nullable=False)  # JSON
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
     total_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -622,6 +635,10 @@ class DatasetStewardModel(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    # Nullable for compatibility with pre-versioned taxi demo runs.
+    workspace_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=True, index=True)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=True, index=True)
+    profile_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("profile_runs.id"), nullable=True, index=True)
     user_id: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
     assigned_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
     assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
@@ -639,6 +656,11 @@ class DatasetVersionModel(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
     dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False)
+    workspace_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=True, index=True)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=True, index=True)
+    profile_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("profile_runs.id"), nullable=True, index=True)
+    rule_review_snapshot_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("rule_review_snapshots.id"), nullable=True)
+    source_checksum: Mapped[str | None] = mapped_column(String(256), nullable=True)
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     parent_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="READY")

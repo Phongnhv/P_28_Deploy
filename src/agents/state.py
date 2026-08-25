@@ -24,6 +24,12 @@ class AgentState(TypedDict, total=False):
 
     # RidePulse DQ specific state fields
     dataset_id: str
+    workspace_id: str
+    dataset_version_id: str
+    profile_run_id: str
+    rule_review_snapshot_id: str
+    source_checksum: str
+    graph2_status: str
     proposed_rules: list
     approved_rules: list
     execution_results: dict

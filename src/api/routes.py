@@ -11,6 +11,7 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     File,
+    Form,
     Header,
     HTTPException,
     Query,
@@ -34,9 +35,13 @@ from src.models.database import (
     AuditEventModel,
     ColumnProfileModel,
     DatasetAccessModel,
+    DatasetGovernanceModel,
     DatasetModel,
+    DatasetVersionModel,
     DqResultModel,
     DqRunModel,
+    GovernedArtifactModel,
+    GovernanceAuditEventModel,
     JobModel,
     ProfileModel,
     RuleConfigurationModel,
@@ -50,6 +55,7 @@ from src.models.database import (
     WorkflowRunModel,
     Graph1RunModel,
     Graph1NodeExecutionModel,
+    WorkspaceMembershipModel,
 )
 from src.models.api_schemas import (
     AnomalyFeedbackRequest,
@@ -109,6 +115,13 @@ from src.services.session_service import (
 from src.services.supabase_dataset import create_supabase_engine
 from src.services.supabase_dataset import query_dataset_rows as query_supabase_dataset_rows
 from src.time_utils import utc_now
+from src.services.versioned_dataset import (
+    DatasetContractError,
+    SourceIntegrityError,
+    inspect_upload,
+    schema_hash,
+    store_source_artifact,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -668,6 +681,149 @@ async def import_dataset(
             "job": {"job_id": job_id, "status": "PENDING"}}
 
 
+@router.post("/workspaces/{workspace_id}/datasets/import", status_code=202)
+async def import_versioned_dataset(
+    workspace_id: str,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    dataset_id: str | None = Form(None),
+    dataset_name: str | None = Form(None),
+    client_sha256: str | None = Form(None),
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """Canonical arbitrary CSV/Parquet import with immutable version lineage."""
+    account = db.query(UserAccountModel).filter_by(username=session.username).first()
+    membership = db.query(WorkspaceMembershipModel).filter_by(
+        workspace_id=workspace_id,
+        user_id=account.id if account else "",
+        status="ACTIVE",
+    ).first()
+    if not account or not membership:
+        raise HTTPException(status_code=404, detail={"code": "WORKSPACE_NOT_FOUND", "message": "Workspace not found"})
+    if membership.role not in {"ADMIN", "STEWARD"} and session.role not in {"ADMIN", "STEWARD"}:
+        raise HTTPException(status_code=403, detail={"code": "WORKSPACE_MANAGE_FORBIDDEN", "message": "Workspace management permission is required"})
+    payload = await file.read()
+    try:
+        inspected = inspect_upload(payload, file.filename or "dataset.csv", file.content_type)
+    except DatasetContractError as exc:
+        raise HTTPException(status_code=422, detail={"code": "INVALID_DATASET", "message": str(exc)}) from exc
+    if client_sha256 and client_sha256.lower() != inspected.checksum:
+        raise HTTPException(status_code=422, detail={"code": "CHECKSUM_MISMATCH", "message": "Uploaded checksum does not match content"})
+
+    logical_id = dataset_id or f"dataset-import-{uuid.uuid4().hex[:20]}"
+    existing_dataset = db.get(DatasetModel, logical_id)
+    if existing_dataset:
+        governance = db.query(DatasetGovernanceModel).filter_by(dataset_id=logical_id, workspace_id=workspace_id).first()
+        if not governance:
+            raise HTTPException(status_code=404, detail={"code": "DATASET_NOT_FOUND", "message": "Dataset not found in workspace"})
+    else:
+        governance = None
+
+    # Idempotency is stored in sanitized version metadata so this remains
+    # additive and works without a second idempotency table.
+    for candidate in db.query(DatasetVersionModel).filter_by(workspace_id=workspace_id, dataset_id=logical_id).all():
+        try:
+            metadata = json.loads(candidate.source_metadata_json or "{}")
+        except ValueError:
+            metadata = {}
+        if metadata.get("idempotency_key") == idempotency_key or candidate.checksum == inspected.checksum:
+            job = db.query(JobModel).filter(JobModel.linked_entity == candidate.id).order_by(JobModel.created_at.desc()).first()
+            return {
+                "dataset": {"id": logical_id, "name": existing_dataset.name if existing_dataset else logical_id},
+                "version": {"id": candidate.id, "version_number": candidate.version_number, "status": candidate.status, "checksum": candidate.checksum, "schema_hash": candidate.schema_hash, "row_count": candidate.row_count},
+                "profile_run_id": f"profile-{candidate.id}",
+                "job": {"job_id": job.id if job else None, "status": job.status if job else "COMPLETED"},
+                "idempotent_replay": True,
+            }
+
+    version_number = (db.query(DatasetVersionModel.version_number).filter_by(workspace_id=workspace_id, dataset_id=logical_id).order_by(DatasetVersionModel.version_number.desc()).first() or (0,))[0] + 1
+    parent = db.query(DatasetVersionModel).filter_by(workspace_id=workspace_id, dataset_id=logical_id).order_by(DatasetVersionModel.version_number.desc()).first()
+    version_id = f"dv-{uuid.uuid4().hex[:24]}"
+    try:
+        artifact_ref = store_source_artifact(payload, inspected, workspace_id=workspace_id, dataset_id=logical_id, dataset_version_id=version_id)
+    except SourceIntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=502, detail={"code": "SOURCE_STORAGE_FAILED", "message": str(exc)}) from exc
+    artifact_id = f"artifact-{uuid.uuid4().hex}"
+    metadata = {
+        "filename": inspected.filename,
+        "format": inspected.format,
+        "content_type": file.content_type,
+        "size_bytes": inspected.size_bytes,
+        "checksum": inspected.checksum,
+        "schema": inspected.schema,
+        "schema_hash": schema_hash(inspected.schema),
+        "source_artifact_id": artifact_id,
+        "bucket": artifact_ref.bucket,
+        "object_key": artifact_ref.object_key,
+        "idempotency_key": idempotency_key,
+    }
+    if not existing_dataset:
+        existing_dataset = DatasetModel(
+            id=logical_id,
+            name=(dataset_name or Path(inspected.filename).stem or logical_id)[:256],
+            description="Generic versioned CSV/Parquet dataset",
+            status="REGISTERED",
+            row_count=inspected.row_count,
+            source_label=inspected.filename,
+            manifest_version="versioned-v1",
+            checksum=inspected.checksum,
+        )
+        db.add(existing_dataset)
+        db.flush()
+        governance = DatasetGovernanceModel(dataset_id=logical_id, workspace_id=workspace_id, owner_user_id=account.id)
+        db.add(governance)
+    else:
+        existing_dataset.checksum = inspected.checksum
+        existing_dataset.source_label = inspected.filename
+        existing_dataset.row_count = inspected.row_count
+    version = DatasetVersionModel(
+        id=version_id,
+        workspace_id=workspace_id,
+        dataset_id=logical_id,
+        version_number=version_number,
+        parent_version_id=parent.id if parent else None,
+        status="READY",
+        checksum=inspected.checksum,
+        schema_hash=metadata["schema_hash"],
+        row_count=inspected.row_count,
+        source_metadata_json=json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+        created_by=account.id,
+    )
+    job_id = f"job-{uuid.uuid4().hex[:24]}"
+    job = JobModel(
+        id=job_id, type="INGEST_PROFILE", status="PENDING", progress=0.0,
+        message="Queued for immutable version profiling", idempotency_key=f"versioned-import-{idempotency_key}",
+        linked_entity=version_id, correlation_id=str(uuid.uuid4()), attempt_count=1,
+    )
+    db.add_all([version, GovernedArtifactModel(
+        id=artifact_id, workspace_id=workspace_id, dataset_id=logical_id, dataset_version_id=version_id,
+        artifact_type="SOURCE_DATASET", storage_locator=artifact_ref.storage_locator,
+        checksum=inspected.checksum, created_by=account.id,
+    ), job, DatasetAccessModel(
+        id=str(uuid.uuid4()), dataset_id=logical_id, username=session.username,
+        access_level="MANAGE", granted_by=session.username,
+    )])
+    db.add(GovernanceAuditEventModel(
+        id=f"gaudit-{uuid.uuid4().hex}", workspace_id=workspace_id, actor_id=account.id,
+        actor_role=membership.role, action="DATASET_VERSION_CREATED", entity_type="dataset_version", entity_id=version_id,
+        dataset_id=logical_id, dataset_version_id=version_id, run_id=job_id, correlation_id=job.correlation_id,
+        request_metadata_json=json.dumps({"filename": inspected.filename, "content_type": file.content_type}, ensure_ascii=False),
+        detail_json=json.dumps({"checksum": inspected.checksum, "schema_hash": metadata["schema_hash"], "row_count": inspected.row_count}, ensure_ascii=False),
+        source="API", occurred_at=utc_now(),
+    ))
+    db.commit()
+    background_tasks.add_task(run_ingest_profile, job_id, logical_id, session.id, session.role, version_id)
+    return {
+        "dataset": {"id": logical_id, "name": existing_dataset.name, "status": existing_dataset.status},
+        "version": {"id": version.id, "version_number": version.version_number, "status": version.status, "checksum": version.checksum, "schema_hash": version.schema_hash, "row_count": version.row_count},
+        "profile_run_id": f"profile-{version.id}",
+        "job": {"job_id": job.id, "status": job.status},
+    }
+
+
 # ---------------------------------------------------------------------------
 # Canonical Graph 1 API (real agent execution; never falls back to fixtures)
 # ---------------------------------------------------------------------------
@@ -691,6 +847,8 @@ def start_graph1_run(
     dataset_id: str,
     background_tasks: BackgroundTasks,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    dataset_version_id: str | None = Query(None),
+    profile_run_id: str | None = Query(None),
     session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
@@ -701,8 +859,21 @@ def start_graph1_run(
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
     require_dataset_access(db, session, dataset_id, manage=True)
+    if dataset_version_id:
+        selected_version = db.query(DatasetVersionModel).filter_by(
+            id=dataset_version_id, dataset_id=dataset_id, status="READY"
+        ).first()
+        if not selected_version:
+            raise HTTPException(status_code=404, detail={"code": "DATASET_VERSION_NOT_FOUND", "message": "Dataset version not found"})
+        if not profile_run_id:
+            raise HTTPException(status_code=422, detail={"code": "PROFILE_RUN_REQUIRED", "message": "profile_run_id is required for a versioned Graph 1 run"})
     try:
-        run = create_graph1_run(db, dataset_id, session.username, idempotency_key)
+        run = create_graph1_run(
+            db, dataset_id, session.username, idempotency_key,
+            workspace_id=selected_version.workspace_id if dataset_version_id else None,
+            dataset_version_id=dataset_version_id,
+            profile_run_id=profile_run_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail={"code": "DATASET_NOT_READY", "message": str(exc)})
     if run.status == "PENDING":

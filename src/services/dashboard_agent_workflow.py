@@ -134,7 +134,10 @@ def get_dataset_rule_policy(dataset_id: str, columns: list[Any] | None = None) -
         return policy
     if columns:
         return infer_dataset_rule_policy(columns)
-    return doc.datasets.get("dataset-nyc-yellow-taxi-50k")
+    # Unknown datasets must not inherit NYC Taxi semantics. Callers that have
+    # no immutable schema evidence receive no domain policy and can only use
+    # explicitly supplied semantic contracts.
+    return None
 
 
 

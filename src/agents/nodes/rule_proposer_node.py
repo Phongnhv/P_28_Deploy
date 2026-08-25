@@ -466,12 +466,12 @@ async def _propose_for_table(
                         table_digest=json.dumps(table_digest, ensure_ascii=False),
                         coverage_requirements=coverage_requirements,
                     )
-                elif not is_taxi and semantic_contract:
+                elif not is_taxi:
                     from src.agents.nodes.templates import generic_rule_proposer_prompt
                     messages = generic_rule_proposer_prompt.format_messages(
                         table_name=table_name,
                         table_digest=json.dumps(table_digest, ensure_ascii=False),
-                        semantic_contract=json.dumps(semantic_contract, ensure_ascii=False),
+                        semantic_contract=json.dumps(semantic_contract or {}, ensure_ascii=False),
                         historical_rules=json.dumps(historical, ensure_ascii=False),
                         coverage_requirements=coverage_requirements,
                     )

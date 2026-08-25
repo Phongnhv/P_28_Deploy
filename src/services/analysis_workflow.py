@@ -126,6 +126,7 @@ def ensure_completed_graph1_snapshot(db: Session, run: Graph1RunModel) -> int:
                 id=version_id,
                 rule_proposal_id=proposal.id,
                 dataset_id=proposal.dataset_id,
+                dataset_version_id=run.dataset_version_id,
                 rule_spec=proposal.rule_spec,
                 status="APPROVED",
                 version=1,
@@ -226,6 +227,9 @@ def create_analysis_run(
         id=run_id,
         graph1_run_id=graph1_run.id,
         dataset_id=graph1_run.dataset_id,
+        workspace_id=graph1_run.workspace_id,
+        dataset_version_id=graph1_run.dataset_version_id,
+        profile_run_id=graph1_run.profile_run_id,
         status="PENDING",
         phase="PREPARING",
         created_by=username,
@@ -256,6 +260,9 @@ def serialize_analysis_run(run: AnalysisRunModel) -> dict[str, Any]:
         "id": run.id,
         "graph1_run_id": run.graph1_run_id,
         "dataset_id": run.dataset_id,
+        "workspace_id": run.workspace_id,
+        "dataset_version_id": run.dataset_version_id,
+        "profile_run_id": run.profile_run_id,
         "status": run.status,
         "phase": run.phase,
         "current_node": run.current_node,
@@ -436,6 +443,9 @@ async def execute_analysis_run(run_id: str) -> None:
         graph1_state = _payload(graph1_run.state_json, {}) if graph1_run else {}
         graph1_metadata = graph1_state.get("metadata") if isinstance(graph1_state.get("metadata"), dict) else {}
         uploaded_dataset_profile = graph1_metadata.get("uploaded_dataset_profile")
+        workspace_id = run.workspace_id or (graph1_run.workspace_id if graph1_run else None)
+        dataset_version_id = run.dataset_version_id or (graph1_run.dataset_version_id if graph1_run else None)
+        profile_run_id = run.profile_run_id or (graph1_run.profile_run_id if graph1_run else None)
         db.commit()
 
     try:
@@ -462,17 +472,24 @@ async def execute_analysis_run(run_id: str) -> None:
         graph2 = build_execution_graph(observer=observer)
         graph2_state = await graph2.ainvoke({
             "dataset_id": dataset_id,
+            "workspace_id": workspace_id,
+            "dataset_version_id": dataset_version_id,
+            "profile_run_id": profile_run_id,
             "test_run_id": test_run_id,
             "rule_run_id": graph1_run_id,
             "approved_rules": approved_rules,
             "metadata": {
                 "analysis_run_id": run_id,
                 "uploaded_dataset_profile": uploaded_dataset_profile,
+                "source_checksum": graph1_metadata.get("source_checksum"),
             },
         })
+        graph2_status = graph2_state.get("graph2_status") or (graph2_state.get("metadata") or {}).get("graph2_status")
+        if dataset_version_id and (graph2_state.get("execution_mode") == "versioned_source_adapter" or (graph2_state.get("metadata") or {}).get("execution_mode") == "versioned_source_adapter"):
+            graph2_state.setdefault("dbt_validation_valid", True)
         if graph2_state.get("dbt_validation_valid") is True:
             _skip_nodes(run_id, {"dbt_validation_failed"}, "Validation succeeded; failure branch was not selected.")
-        if graph2_state.get("error") or graph2_state.get("dbt_validation_valid") is not True:
+        if graph2_state.get("error") or (not dataset_version_id and graph2_state.get("dbt_validation_valid") is not True):
             message = str(graph2_state.get("error") or graph2_state.get("dbt_validation_error") or "Graph 2 failed.")
             update_test_run_status(test_run_id, "FAILED", error=message)
             _skip_nodes(
@@ -489,6 +506,21 @@ async def execute_analysis_run(run_id: str) -> None:
                     db.commit()
             return
 
+        if graph2_status == "FAILED":
+            message = "Graph 2 produced no usable rule evidence."
+            update_test_run_status(test_run_id, "FAILED", error=message)
+            _skip_nodes(run_id, {"anomaly_detector", "hypothesis_agent", "persist_analysis", "report_writer"}, message)
+            with Session(get_engine()) as db:
+                failed_run = db.get(AnalysisRunModel, run_id)
+                if failed_run:
+                    failed_run.status = "FAILED"
+                    failed_run.phase = "GRAPH2"
+                    failed_run.error = message
+                    failed_run.completed_at = utc_now()
+                    db.commit()
+            return
+        graph2_partial = graph2_status == "PARTIAL"
+
         anomaly_run_id = f"anom-{uuid.uuid4().hex[:12]}"
         with Session(get_engine()) as db:
             run = db.get(AnalysisRunModel, run_id)
@@ -501,6 +533,9 @@ async def execute_analysis_run(run_id: str) -> None:
             "anomaly_run_id": anomaly_run_id,
             "execution_run_id": test_run_id,
             "dataset_id": dataset_id,
+            "workspace_id": workspace_id,
+            "dataset_version_id": dataset_version_id,
+            "profile_run_id": profile_run_id,
             "detector_config_version": "anomaly-v1",
             "metadata": {"analysis_run_id": run_id},
         }
@@ -538,10 +573,14 @@ async def execute_analysis_run(run_id: str) -> None:
                 run.report_markdown = report_markdown
                 run.report_source = report_source or "FALLBACK"
                 run.report_path = report_path or None
-                run.status = "PARTIAL" if graph3_failed else "COMPLETED"
+                run.status = "PARTIAL" if graph3_failed or graph2_partial else "COMPLETED"
                 run.phase = "REPORT"
                 run.current_node = "report_writer"
-                run.error = str(graph3_state.get("error"))[:2000] if graph3_failed else None
+                run.error = (
+                    str(graph3_state.get("error"))[:2000]
+                    if graph3_failed
+                    else ("Graph 2 completed partially; some rule evidence is unavailable." if graph2_partial else None)
+                )
                 run.completed_at = utc_now()
                 db.commit()
     except Exception as exc:

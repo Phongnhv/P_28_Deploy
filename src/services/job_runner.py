@@ -16,6 +16,10 @@ from src.models.database import (
     DatasetModel,
     DqResultModel,
     DqRunModel,
+    DatasetVersionModel,
+    GovernedArtifactModel,
+    GovernanceAuditEventModel,
+    ProfileRunSnapshotModel,
     JobModel,
     ProfileModel,
     RuleConfigurationModel,
@@ -40,6 +44,12 @@ from src.services.supabase_dataset import (
     profile_dataset as profile_supabase_dataset,
 )
 from src.time_utils import utc_now
+from src.services.versioned_dataset import (
+    materialize_source_artifact,
+    profile_frame,
+    read_verified_frame,
+    schema_hash,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +297,105 @@ def add_audit_event(db: Session, session_id: str | None, actor_role: str, action
     db.add(evt)
     db.commit()
 
-def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = None, actor_role: str = "STEWARD"):
+def _versioned_profile_run(
+    db: Session,
+    job: JobModel,
+    dataset_version_id: str,
+    *,
+    session_id: str | None,
+    actor_role: str,
+) -> str:
+    """Profile one verified immutable source artifact and never overwrite history."""
+    version = db.get(DatasetVersionModel, dataset_version_id)
+    if not version or version.status != "READY":
+        raise ValueError("Dataset version is not READY")
+    metadata = json.loads(version.source_metadata_json or "{}")
+    artifact_id = metadata.get("source_artifact_id")
+    artifact = db.query(GovernedArtifactModel).filter_by(
+        id=artifact_id,
+        workspace_id=version.workspace_id,
+        dataset_id=version.dataset_id,
+        dataset_version_id=version.id,
+        artifact_type="SOURCE_DATASET",
+    ).first() if artifact_id else None
+    if not artifact or artifact.checksum != version.checksum:
+        raise ValueError("READY dataset version has no matching SOURCE_DATASET artifact")
+    profile_id = f"profile-{version.id}"
+    existing = db.get(ProfileRunSnapshotModel, profile_id)
+    if existing and existing.status == "COMPLETED":
+        return profile_id
+    if existing is None:
+        existing = ProfileRunSnapshotModel(
+            id=profile_id,
+            workspace_id=version.workspace_id,
+            dataset_id=version.dataset_id,
+            dataset_version_id=version.id,
+            status="RUNNING",
+            triggered_by=version.created_by,
+            profiler_version="versioned-profiler-v1",
+        )
+        db.add(existing)
+    else:
+        existing.status = "RUNNING"
+    db.commit()
+    source_ref = {
+        "bucket": metadata.get("bucket"),
+        "object_key": metadata.get("object_key") or artifact.storage_locator,
+        "checksum": version.checksum,
+        "size_bytes": int(metadata.get("size_bytes") or 0),
+        "format": metadata.get("format") or "csv",
+        "filename": metadata.get("filename") or "dataset.csv",
+        "storage_locator": artifact.storage_locator,
+    }
+    path = materialize_source_artifact(source_ref)
+    temporary = source_ref["storage_locator"].startswith("object://")
+    try:
+        frame = read_verified_frame(path, checksum=version.checksum, size_bytes=source_ref["size_bytes"], schema=metadata.get("schema"))
+        metrics = profile_frame(frame, schema=metadata.get("schema"))
+        if int(metrics["row_count"]) != int(version.row_count) or schema_hash(metadata.get("schema") or []) != version.schema_hash:
+            raise ValueError("Profile evidence does not match the immutable version contract")
+        existing.row_count = version.row_count
+        existing.completeness_score = metrics.get("completeness_score")
+        existing.validity_score = metrics.get("validity_score")
+        existing.uniqueness_score = metrics.get("uniqueness_score")
+        existing.duplicate_rate = metrics.get("duplicate_rate")
+        existing.quality_score = metrics.get("quality_score")
+        existing.schema_json = json.dumps(metadata.get("schema") or [], ensure_ascii=False, sort_keys=True)
+        existing.metrics_json = json.dumps(metrics, ensure_ascii=False, default=str)
+        existing.sanitized_samples_json = "[]"
+        existing.status = "COMPLETED"
+        existing.completed_at = utc_now()
+        db.query(DatasetModel).filter_by(id=version.dataset_id).update({"status": "PROFILE_READY", "row_count": version.row_count, "updated_at": utc_now()})
+        db.add(GovernanceAuditEventModel(
+            id=f"gaudit-{uuid.uuid4().hex}", workspace_id=version.workspace_id, actor_id=version.created_by,
+            actor_role=actor_role, action="PROFILE_COMPLETED", entity_type="profile_run", entity_id=profile_id,
+            dataset_id=version.dataset_id, dataset_version_id=version.id, run_id=job.id,
+            correlation_id=job.correlation_id or str(uuid.uuid4()), request_metadata_json="{}",
+            detail_json=json.dumps({"row_count": version.row_count, "schema_hash": version.schema_hash}, ensure_ascii=False),
+            source="WORKER", occurred_at=utc_now(),
+        ))
+        db.commit()
+        return profile_id
+    except Exception:
+        db.rollback()
+        failed = db.get(ProfileRunSnapshotModel, profile_id)
+        if failed:
+            failed.status = "FAILED"
+            failed.completed_at = utc_now()
+            db.commit()
+        raise
+    finally:
+        if temporary:
+            path.unlink(missing_ok=True)
+
+
+def run_ingest_profile(
+    job_id: str,
+    dataset_id: str,
+    session_id: str | None = None,
+    actor_role: str = "STEWARD",
+    dataset_version_id: str | None = None,
+):
     """
     Step 5: Background ingestion and profiling of NYC Yellow Taxi Parquet.
     """
@@ -303,6 +411,18 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
         db.commit()
 
         try:
+            if dataset_version_id:
+                job.message = "Verifying immutable source artifact and creating versioned profile..."
+                db.commit()
+                profile_id = _versioned_profile_run(
+                    db, job, dataset_version_id, session_id=session_id, actor_role=actor_role
+                )
+                job.status = "SUCCEEDED"
+                job.progress = 100.0
+                job.message = "Versioned profile completed"
+                job.linked_entity = dataset_version_id
+                db.commit()
+                return profile_id
             uploaded_path = _uploaded_dataset_path(dataset_id)
             if uploaded_path:
                 job.progress = 35.0

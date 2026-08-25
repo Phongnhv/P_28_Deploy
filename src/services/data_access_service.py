@@ -32,6 +32,7 @@ from src.models.database import (
     WorkspaceMembershipModel,
 )
 from src.time_utils import utc_now
+from src.services.versioned_dataset import materialize_source_artifact, read_verified_frame
 
 PERMISSIONS = {
     "DISCOVER",
@@ -474,6 +475,13 @@ def get_data_explorer(
     dataset_id: str,
     dataset_version_id: str,
     profile_run_id: str | None = None,
+    include_rows: bool = False,
+    selected_columns: list[str] | None = None,
+    filters: dict[str, Any] | None = None,
+    sort_by: str | None = None,
+    sort_direction: str = "asc",
+    limit: int = 100,
+    offset: int = 0,
 ) -> dict[str, Any]:
     permissions = require_permission(db, ctx, dataset_id, "DISCOVER", dataset_version_id)
     version = _dataset_version(db, ctx, dataset_id, dataset_version_id)
@@ -517,6 +525,82 @@ def get_data_explorer(
         reports = db.query(AnalysisSummaryModel).filter_by(dataset_version_id=version.id).all()
         artifacts = db.query(GovernedArtifactModel).filter_by(dataset_version_id=version.id).all()
 
+    try:
+        version_metadata = json.loads(version.source_metadata_json or "{}")
+    except ValueError:
+        version_metadata = {}
+    version_schema = version_metadata.get("schema") if isinstance(version_metadata.get("schema"), list) else []
+    rows: list[dict[str, Any]] = []
+    rows_authorized = "VIEW_ROWS" in permissions
+    if include_rows:
+        require_permission(db, ctx, dataset_id, "VIEW_ROWS", dataset_version_id)
+        if sort_direction not in {"asc", "desc"} or limit < 1 or limit > 100 or offset < 0:
+            raise ValueError("Invalid bounded explorer query")
+        allowed_columns = {str(item.get("name")) for item in version_schema if isinstance(item, dict) and item.get("name")}
+        selected = selected_columns or [str(item.get("name")) for item in version_schema if isinstance(item, dict) and item.get("name")]
+        if any(column not in allowed_columns for column in selected):
+            raise ValueError("Explorer query references a column outside the immutable schema")
+        if sort_by and sort_by not in allowed_columns:
+            raise ValueError("Explorer sorting references a column outside the immutable schema")
+        filter_values = filters or {}
+        if any(column not in allowed_columns for column in filter_values):
+            raise ValueError("Explorer filter references a column outside the immutable schema")
+        artifact = (
+            db.query(GovernedArtifactModel)
+            .filter_by(
+                workspace_id=ctx.workspace_id, dataset_id=dataset_id,
+                dataset_version_id=dataset_version_id, artifact_type="SOURCE_DATASET",
+            )
+            .first()
+        )
+        if not artifact or artifact.checksum != version.checksum:
+            raise ResourceNotFoundError("Verified source artifact not found")
+        source_ref = {
+            "bucket": version_metadata.get("bucket"),
+            "object_key": version_metadata.get("object_key") or artifact.storage_locator,
+            "checksum": version.checksum,
+            "size_bytes": int(version_metadata.get("size_bytes") or 0),
+            "format": version_metadata.get("format") or "csv",
+            "filename": version_metadata.get("filename") or "dataset.csv",
+            "storage_locator": artifact.storage_locator,
+        }
+        path = materialize_source_artifact(source_ref)
+        temporary = source_ref["storage_locator"].startswith("object://")
+        try:
+            frame = read_verified_frame(path, checksum=version.checksum, size_bytes=source_ref["size_bytes"], schema=version_schema)
+            for column, expected in filter_values.items():
+                frame = frame[frame[column].astype(str) == str(expected)]
+            if sort_by:
+                frame = frame.sort_values(sort_by, ascending=sort_direction == "asc", kind="stable")
+            frame = frame.iloc[offset:offset + limit]
+            sensitive = {
+                str(item.get("name")) for item in version_schema
+                if isinstance(item, dict) and (item.get("sensitivity") in {"PII", "SENSITIVE", "SECRET"} or item.get("masking") not in {None, "NONE"})
+            }
+            for _, raw in frame[selected].iterrows():
+                item: dict[str, Any] = {}
+                for column in selected:
+                    value = raw[column]
+                    if column in sensitive and value == value:
+                        item[column] = "[MASKED]"
+                    elif value != value:
+                        item[column] = None
+                    elif hasattr(value, "isoformat"):
+                        item[column] = value.isoformat()
+                    else:
+                        item[column] = value.item() if hasattr(value, "item") else value
+                rows.append(item)
+            append_audit_event(
+                db, ctx, actor_role=_active_membership(db, ctx).role,
+                action="ROWS_ACCESSED", entity_type="dataset_rows", entity_id=dataset_version_id,
+                dataset_id=dataset_id, dataset_version_id=dataset_version_id,
+                detail={"columns": selected, "limit": limit, "offset": offset},
+            )
+            db.commit()
+        finally:
+            if temporary:
+                path.unlink(missing_ok=True)
+
     def profile_payload(profile: ProfileRunSnapshotModel) -> dict[str, Any]:
         return {
             "profile_run_id": profile.id,
@@ -537,6 +621,7 @@ def get_data_explorer(
             "version_number": version.version_number,
             "row_count": version.row_count,
             "schema_hash": version.schema_hash,
+            "schema": version_schema,
         },
         "permissions": sorted(permissions),
         "profile_history": [profile_payload(profile) for profile in profile_history],
@@ -553,6 +638,9 @@ def get_data_explorer(
             for row in reports
         ],
         "artifacts": [{"id": row.id, "artifact_type": row.artifact_type} for row in artifacts],
+        "rows_authorized": rows_authorized,
+        "rows": rows,
+        "row_limit": limit if include_rows else 0,
     }
 
 
@@ -564,7 +652,6 @@ def get_governed_artifact(
     dataset_version_id: str,
     artifact_id: str,
 ) -> GovernedArtifactModel:
-    require_permission(db, ctx, dataset_id, "VIEW_REPORTS", dataset_version_id)
     artifact = (
         db.query(GovernedArtifactModel)
         .filter_by(
@@ -577,6 +664,12 @@ def get_governed_artifact(
     )
     if not artifact:
         raise ResourceNotFoundError("Artifact not found")
+    required_permission = {
+        "SOURCE_DATASET": "DISCOVER",
+        "PROFILE_SNAPSHOT": "VIEW_PROFILE",
+        "ROW_SAMPLE": "VIEW_ROWS",
+    }.get(artifact.artifact_type, "VIEW_REPORTS")
+    require_permission(db, ctx, dataset_id, required_permission, dataset_version_id)
     return artifact
 
 

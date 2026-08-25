@@ -21,13 +21,21 @@ from pathlib import Path
 
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from src.agents.nodes.dbt_validation import get_state_dbt_yaml, materialize_dbt_project, validate_dbt_yaml_structure
 from src.agents.nodes.test_generator_node import _build_row_predicate
 from src.agents.state import AgentState
 from src.config import get_settings
 from src.models.rule_schemas import RuleType
+from src.models.database import DatasetVersionModel, GovernedArtifactModel
 from src.services.rule_store import get_engine
+from src.services.versioned_dataset import (
+    SOURCE_ADAPTER_VERSION,
+    execute_rules_frame,
+    materialize_source_artifact,
+    read_verified_frame,
+)
 from src.services.supabase_dataset import (
     CANONICAL_COLUMNS,
     create_supabase_engine,
@@ -589,6 +597,71 @@ def _run_dbt_cli_test(dbt_dir: Path) -> bool:
 
 async def test_runner_node(state: AgentState) -> dict:
     """LangGraph Node: Thực thi dbt test CLI (nếu có) hoặc fallback thực thi các test queries đã sinh."""
+    # Canonical path for arbitrary CSV/Parquet uploads. It deliberately does
+    # not compile or execute SQL and therefore cannot reach a taxi table.
+    if state.get("dataset_version_id"):
+        version_id = str(state["dataset_version_id"])
+        dataset_id = str(state.get("dataset_id") or "")
+        with Session(get_engine()) as db:
+            version = db.query(DatasetVersionModel).filter_by(id=version_id, dataset_id=dataset_id).first()
+            if not version or version.status != "READY":
+                raise RuntimeError("The requested dataset version is not READY for execution")
+            artifact_id = None
+            source_metadata = json.loads(version.source_metadata_json or "{}")
+            artifact_id = source_metadata.get("source_artifact_id")
+            artifact = db.query(GovernedArtifactModel).filter_by(
+                id=artifact_id,
+                workspace_id=version.workspace_id,
+                dataset_id=version.dataset_id,
+                dataset_version_id=version.id,
+                artifact_type="SOURCE_DATASET",
+            ).first() if artifact_id else None
+            if not artifact or artifact.checksum != version.checksum:
+                raise RuntimeError("A verified SOURCE_DATASET artifact is required for execution")
+            source_ref = {
+                "bucket": source_metadata.get("bucket"),
+                "object_key": source_metadata.get("object_key") or artifact.storage_locator,
+                "checksum": version.checksum,
+                "size_bytes": int(source_metadata.get("size_bytes") or 0),
+                "format": source_metadata.get("format") or Path(source_metadata.get("filename", "dataset.csv")).suffix.lstrip("."),
+                "filename": source_metadata.get("filename") or "dataset.csv",
+                "storage_locator": artifact.storage_locator,
+            }
+        path = materialize_source_artifact(source_ref)
+        temporary = source_ref["storage_locator"].startswith("object://")
+        try:
+            frame = read_verified_frame(
+                path,
+                checksum=version.checksum,
+                size_bytes=source_ref["size_bytes"],
+                schema=source_metadata.get("schema"),
+            )
+            results = execute_rules_frame(frame, list(state.get("approved_rules") or []))
+        finally:
+            if temporary:
+                path.unlink(missing_ok=True)
+        normalized = [{
+            **result,
+            "rule_version": result.get("rule_version", "rule-v1"),
+            "severity": next((r.get("severity", "MEDIUM") for r in state.get("approved_rules", []) if r.get("rule_id") == result.get("rule_id")), "MEDIUM"),
+            "dimension": next((r.get("dimension", "VALIDITY") for r in state.get("approved_rules", []) if r.get("rule_id") == result.get("rule_id")), "VALIDITY"),
+            "dbt_status": "NOT_RUN",
+            "metrics_status": result.get("status", "ERROR"),
+        } for result in results]
+        return {
+            "test_results": normalized,
+            "source_checksum": version.checksum,
+            "metadata": {
+                **state.get("metadata", {}),
+                "execution_mode": "versioned_source_adapter",
+                "dbt_execution_mode": "not_run_versioned_source_adapter",
+                "dbt_status": "NOT_RUN",
+                "metrics_status": "SUCCESS" if any(r.get("status") in {"PASS", "FAIL"} for r in normalized) else "ERROR",
+                "source_checksum": version.checksum,
+                "compiler_version": SOURCE_ADAPTER_VERSION,
+            },
+        }
+
     # These deterministic SQL queries remain the compatibility metrics source.
     # The dbt artifact quality gate, rather than per-query EXPLAIN, authorizes execution.
     tests = [{**test, "valid": True, "error": None} for test in state.get("generated_tests", [])]
