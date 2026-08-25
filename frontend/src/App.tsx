@@ -422,6 +422,18 @@ function DatasetsPage({
                   </div>
                 </div>
                 <div className="dataset-catalog-actions" style={{ display: "flex", justifyContent: "space-between", gap: "12px", marginTop: "12px" }}>
+                  {isSelected && item.status === "PROFILE_READY" && (
+                    <button
+                      type="button"
+                      className="button ghost"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onOpenExplorer(item.id);
+                      }}
+                    >
+                      Open Data Explorer
+                    </button>
+                  )}
                   {isSelected && canOperate && item.status === "PROFILE_READY" && (
                     <button
                       type="button"
