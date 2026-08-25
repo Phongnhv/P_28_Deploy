@@ -806,14 +806,38 @@ async def import_versioned_dataset(
         id=str(uuid.uuid4()), dataset_id=logical_id, username=session.username,
         access_level="MANAGE", granted_by=session.username,
     )])
-    db.add(GovernanceAuditEventModel(
-        id=f"gaudit-{uuid.uuid4().hex}", workspace_id=workspace_id, actor_id=account.id,
-        actor_role=membership.role, action="DATASET_VERSION_CREATED", entity_type="dataset_version", entity_id=version_id,
-        dataset_id=logical_id, dataset_version_id=version_id, run_id=job_id, correlation_id=job.correlation_id,
-        request_metadata_json=json.dumps({"filename": inspected.filename, "content_type": file.content_type}, ensure_ascii=False),
-        detail_json=json.dumps({"checksum": inspected.checksum, "schema_hash": metadata["schema_hash"], "row_count": inspected.row_count}, ensure_ascii=False),
-        source="API", occurred_at=utc_now(),
-    ))
+    audit_common = {
+        "workspace_id": workspace_id,
+        "actor_id": account.id,
+        "actor_role": membership.role,
+        "dataset_id": logical_id,
+        "dataset_version_id": version_id,
+        "run_id": job_id,
+        "correlation_id": job.correlation_id,
+        "request_metadata_json": json.dumps({"filename": inspected.filename, "content_type": file.content_type}, ensure_ascii=False),
+        "source": "API",
+        "occurred_at": utc_now(),
+    }
+    db.add_all([
+        GovernanceAuditEventModel(
+            id=f"gaudit-{uuid.uuid4().hex}", action="DATASET_UPLOAD_ACCEPTED",
+            entity_type="dataset", entity_id=logical_id,
+            detail_json=json.dumps({"size_bytes": inspected.size_bytes, "format": inspected.format}, ensure_ascii=False),
+            **audit_common,
+        ),
+        GovernanceAuditEventModel(
+            id=f"gaudit-{uuid.uuid4().hex}", action="SOURCE_ARTIFACT_REGISTERED",
+            entity_type="governed_artifact", entity_id=artifact_id,
+            detail_json=json.dumps({"artifact_type": "SOURCE_DATASET", "checksum": inspected.checksum}, ensure_ascii=False),
+            **audit_common,
+        ),
+        GovernanceAuditEventModel(
+            id=f"gaudit-{uuid.uuid4().hex}", action="DATASET_VERSION_CREATED",
+            entity_type="dataset_version", entity_id=version_id,
+            detail_json=json.dumps({"checksum": inspected.checksum, "schema_hash": metadata["schema_hash"], "row_count": inspected.row_count}, ensure_ascii=False),
+            **audit_common,
+        ),
+    ])
     db.commit()
     background_tasks.add_task(run_ingest_profile, job_id, logical_id, session.id, session.role, version_id)
     return {
@@ -1665,16 +1689,19 @@ def confirm_semantic_contract(
     return {"message": "Semantic contract confirmed successfully. Resumed proposals job.", "job_id": job.id}
 
 
-@router.get("/datasets/{id}/rows", response_model=DatasetRowsResponse)
+@router.get("/datasets/{id}/rows")
 def query_dataset_rows(
     id: str,
+    dataset_version_id: str | None = Query(None, max_length=64),
     vendor_id: str | None = None,
     payment_type: str | None = None,
     min_distance: float | None = None,
     max_distance: float | None = None,
     quality_status: str = Query("ALL", pattern="^(ALL|VALID|ISSUE)$"),
-    sort_by: str = Query("pickup_at", pattern="^(pickup_at|trip_distance|fare_amount|total_amount)$"),
+    sort_by: str = Query("pickup_at", min_length=0, max_length=128),
     sort_direction: str = Query("desc", pattern="^(asc|desc)$"),
+    filter_column: str | None = Query(None, max_length=128),
+    filter_value: str | None = Query(None, max_length=512),
     limit: int = Query(25, ge=1, le=100),
     offset: int = Query(0, ge=0),
     session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
@@ -1686,6 +1713,53 @@ def query_dataset_rows(
     dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
+
+    # Versioned uploads are served through the workspace authorization and
+    # schema-driven source adapter. The legacy taxi projection below remains
+    # available only for datasets without a canonical version artifact.
+    version_query = db.query(DatasetVersionModel).filter_by(dataset_id=id, status="READY")
+    if dataset_version_id:
+        version_query = version_query.filter(DatasetVersionModel.id == dataset_version_id)
+    latest_version = version_query.order_by(DatasetVersionModel.version_number.desc()).first()
+    governance = db.query(DatasetGovernanceModel).filter_by(dataset_id=id).first() if latest_version else None
+    account = db.query(UserAccountModel).filter_by(username=session.username).first() if latest_version else None
+    if latest_version and governance and account:
+        from src.services.data_access_service import AccessContext, get_data_explorer
+        try:
+            version_metadata = json.loads(latest_version.source_metadata_json or "{}")
+            version_columns = {str(item.get("name")) for item in version_metadata.get("schema", []) if isinstance(item, dict) and item.get("name")}
+            explorer = get_data_explorer(
+                db,
+                AccessContext(user_id=account.id, workspace_id=governance.workspace_id),
+                dataset_id=id,
+                dataset_version_id=latest_version.id,
+                include_rows=True,
+                filters={filter_column: filter_value} if filter_column and filter_value is not None else None,
+                sort_by=sort_by if sort_by in version_columns else None,
+                sort_direction=sort_direction,
+                limit=limit,
+                offset=offset,
+            )
+        except Exception as exc:
+            from src.services.data_access_service import AccessDeniedError, ResourceNotFoundError
+            if isinstance(exc, ResourceNotFoundError):
+                raise HTTPException(status_code=404, detail="Dataset not found") from exc
+            if isinstance(exc, AccessDeniedError):
+                raise HTTPException(status_code=403, detail="Rows access is not granted") from exc
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {
+            "dataset_id": id,
+            "dataset_version_id": latest_version.id,
+            "total": explorer["total_rows"],
+            "limit": limit,
+            "offset": offset,
+            "schema": explorer["dataset_version"].get("schema", []),
+            "rows": explorer["rows"],
+        }
+
+    # Only the explicitly legacy projection uses the old DatasetAccess table.
+    # A shared versioned dataset may be authorized solely through workspace
+    # grants and must not be blocked by this compatibility check.
     require_dataset_access(db, session, id)
 
     policy = get_dataset_rule_policy(id)

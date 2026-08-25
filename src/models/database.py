@@ -635,10 +635,6 @@ class DatasetStewardModel(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
-    # Nullable for compatibility with pre-versioned taxi demo runs.
-    workspace_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=True, index=True)
-    dataset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=True, index=True)
-    profile_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("profile_runs.id"), nullable=True, index=True)
     user_id: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
     assigned_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
     assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
@@ -656,11 +652,6 @@ class DatasetVersionModel(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
     dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False)
-    workspace_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=True, index=True)
-    dataset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=True, index=True)
-    profile_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("profile_runs.id"), nullable=True, index=True)
-    rule_review_snapshot_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("rule_review_snapshots.id"), nullable=True)
-    source_checksum: Mapped[str | None] = mapped_column(String(256), nullable=True)
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     parent_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="READY")

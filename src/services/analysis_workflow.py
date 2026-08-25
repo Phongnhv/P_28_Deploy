@@ -121,6 +121,7 @@ def ensure_completed_graph1_snapshot(db: Session, run: Graph1RunModel) -> int:
         if version:
             version.rule_spec = proposal.rule_spec
             version.status = "APPROVED"
+            version.dataset_version_id = run.dataset_version_id
         else:
             db.add(RuleVersionModel(
                 id=version_id,
@@ -223,6 +224,7 @@ def create_analysis_run(
     if not approved:
         raise ValueError("Graph 1 has no approved rules for Graph 2.")
     run_id = f"analysis-{uuid.uuid4().hex[:18]}"
+    graph1_state = _payload(graph1_run.state_json, {}) or {}
     run = AnalysisRunModel(
         id=run_id,
         graph1_run_id=graph1_run.id,
@@ -230,6 +232,7 @@ def create_analysis_run(
         workspace_id=graph1_run.workspace_id,
         dataset_version_id=graph1_run.dataset_version_id,
         profile_run_id=graph1_run.profile_run_id,
+        rule_review_snapshot_id=graph1_state.get("rule_review_snapshot_id"),
         status="PENDING",
         phase="PREPARING",
         created_by=username,
@@ -446,6 +449,7 @@ async def execute_analysis_run(run_id: str) -> None:
         workspace_id = run.workspace_id or (graph1_run.workspace_id if graph1_run else None)
         dataset_version_id = run.dataset_version_id or (graph1_run.dataset_version_id if graph1_run else None)
         profile_run_id = run.profile_run_id or (graph1_run.profile_run_id if graph1_run else None)
+        rule_review_snapshot_id = run.rule_review_snapshot_id or graph1_state.get("rule_review_snapshot_id")
         db.commit()
 
     try:
@@ -475,6 +479,7 @@ async def execute_analysis_run(run_id: str) -> None:
             "workspace_id": workspace_id,
             "dataset_version_id": dataset_version_id,
             "profile_run_id": profile_run_id,
+            "rule_review_snapshot_id": rule_review_snapshot_id,
             "test_run_id": test_run_id,
             "rule_run_id": graph1_run_id,
             "approved_rules": approved_rules,
@@ -536,6 +541,7 @@ async def execute_analysis_run(run_id: str) -> None:
             "workspace_id": workspace_id,
             "dataset_version_id": dataset_version_id,
             "profile_run_id": profile_run_id,
+            "rule_review_snapshot_id": rule_review_snapshot_id,
             "detector_config_version": "anomaly-v1",
             "metadata": {"analysis_run_id": run_id},
         }

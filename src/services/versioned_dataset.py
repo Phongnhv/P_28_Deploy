@@ -415,8 +415,11 @@ def execute_rule_frame(frame: Any, rule: dict[str, Any], *, failure_limit: int =
     failed_indices = [position for position, value in enumerate(failed_mask.tolist()) if bool(value)]
     failed_count = len(failed_indices)
     if error:
-        status = "FAIL"
-        failed_count = 1
+        # A freshness parse/evaluation failure is an execution-health issue,
+        # not a trusted data violation. Keep it distinct from FAIL so Graph 2
+        # can aggregate it as PARTIAL/FAILED honestly.
+        status = "ERROR"
+        failed_count = 0
     else:
         status = "FAIL" if failed_count else "PASS"
     return {

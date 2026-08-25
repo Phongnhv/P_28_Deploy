@@ -28,7 +28,13 @@ from src.agents.nodes.test_generator_node import _build_row_predicate
 from src.agents.state import AgentState
 from src.config import get_settings
 from src.models.rule_schemas import RuleType
-from src.models.database import DatasetVersionModel, GovernedArtifactModel
+from src.models.database import (
+    DatasetVersionModel,
+    GovernedArtifactModel,
+    ProfileRunSnapshotModel,
+    RuleReviewSnapshotModel,
+    RuleVersionModel,
+)
 from src.services.rule_store import get_engine
 from src.services.versioned_dataset import (
     SOURCE_ADAPTER_VERSION,
@@ -193,6 +199,13 @@ def _execute_supabase_rules(rules: list[dict], dataset_id: str, database_url: st
                     "error": error,
                 })
             except Exception as exc:
+                # PostgreSQL marks the transaction failed after one bad
+                # statement. Roll it back before the next rule so an
+                # independent rule is still evaluated deterministically.
+                try:
+                    connection.rollback()
+                except Exception:
+                    logger.debug("Unable to rollback failed rule boundary", exc_info=True)
                 results.append({
                     "rule_id": rule.get("rule_id", ""), "table_name": "trips_canonical",
                     "column": rule.get("column"), "rule_type": rule_type,
@@ -606,6 +619,40 @@ async def test_runner_node(state: AgentState) -> dict:
             version = db.query(DatasetVersionModel).filter_by(id=version_id, dataset_id=dataset_id).first()
             if not version or version.status != "READY":
                 raise RuntimeError("The requested dataset version is not READY for execution")
+            profile_run_id = str(state.get("profile_run_id") or "")
+            review_snapshot_id = str(state.get("rule_review_snapshot_id") or "")
+            if not profile_run_id or not review_snapshot_id:
+                raise RuntimeError("Versioned execution requires the selected profile and rule-review snapshot")
+            profile = db.query(ProfileRunSnapshotModel).filter_by(
+                id=profile_run_id,
+                workspace_id=version.workspace_id,
+                dataset_id=dataset_id,
+                dataset_version_id=version_id,
+                status="COMPLETED",
+            ).first()
+            snapshot = db.query(RuleReviewSnapshotModel).filter_by(
+                id=review_snapshot_id,
+                workspace_id=version.workspace_id,
+                dataset_id=dataset_id,
+                dataset_version_id=version_id,
+                profile_run_id=profile_run_id,
+                status="APPROVED",
+            ).first()
+            if not profile or not snapshot:
+                raise RuntimeError("The selected profile or rule-review snapshot does not match the source version")
+            selected_rule_ids = {
+                str(rule.get("rule_id")) for rule in state.get("approved_rules", [])
+                if isinstance(rule, dict) and rule.get("rule_id")
+            }
+            if selected_rule_ids:
+                rule_versions = db.query(RuleVersionModel).filter(
+                    RuleVersionModel.rule_proposal_id.in_(selected_rule_ids),
+                    RuleVersionModel.dataset_id == dataset_id,
+                    RuleVersionModel.dataset_version_id == version_id,
+                    RuleVersionModel.status == "APPROVED",
+                ).all()
+                if {row.rule_proposal_id for row in rule_versions} != selected_rule_ids:
+                    raise RuntimeError("Approved rules do not belong to the selected dataset version")
             artifact_id = None
             source_metadata = json.loads(version.source_metadata_json or "{}")
             artifact_id = source_metadata.get("source_artifact_id")

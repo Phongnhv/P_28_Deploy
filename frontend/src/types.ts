@@ -233,6 +233,7 @@ export interface DqAnomaly {
 
 export interface DatasetRow {
   source_row_id: string;
+  [key: string]: unknown;
   vendor_id?: string;
   pickup_at?: string;
   dropoff_at?: string;
@@ -245,19 +246,24 @@ export interface DatasetRow {
 
 export interface DatasetRowsResponse {
   dataset_id: string;
+  dataset_version_id?: string;
   total: number;
   limit: number;
   offset: number;
   rows: DatasetRow[];
+  schema?: Array<{ name: string; logical_type?: string; physical_type?: string; nullable?: boolean }>;
 }
 
 export interface DatasetRowQuery {
+  dataset_version_id?: string;
   vendor_id?: string;
   payment_type?: string;
   min_distance?: number;
   max_distance?: number;
   quality_status?: "ALL" | "VALID" | "ISSUE";
-  sort_by?: "pickup_at" | "trip_distance" | "fare_amount" | "total_amount";
+  filter_column?: string;
+  filter_value?: string;
+  sort_by?: string;
   sort_direction?: "asc" | "desc";
   limit?: number;
   offset?: number;

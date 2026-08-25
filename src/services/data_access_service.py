@@ -449,6 +449,7 @@ def get_overview_metrics(db: Session, ctx: AccessContext) -> dict[str, Any]:
 def list_accessible_datasets(db: Session, ctx: AccessContext) -> list[dict[str, Any]]:
     _active_membership(db, ctx)
     rows: list[dict[str, Any]] = []
+    total_rows = version.row_count
     for governance, dataset in (
         db.query(DatasetGovernanceModel, DatasetModel)
         .join(DatasetModel, DatasetModel.id == DatasetGovernanceModel.dataset_id)
@@ -523,7 +524,16 @@ def get_data_explorer(
     if "VIEW_REPORTS" in permissions:
         rules = db.query(RuleReviewSnapshotModel).filter_by(dataset_version_id=version.id).all()
         reports = db.query(AnalysisSummaryModel).filter_by(dataset_version_id=version.id).all()
-        artifacts = db.query(GovernedArtifactModel).filter_by(dataset_version_id=version.id).all()
+    artifact_permission = {
+        "SOURCE_DATASET": "DISCOVER",
+        "PROFILE_SNAPSHOT": "VIEW_PROFILE",
+        "ROW_SAMPLE": "VIEW_ROWS",
+    }
+    all_artifacts = db.query(GovernedArtifactModel).filter_by(dataset_version_id=version.id).all()
+    artifacts = [
+        artifact for artifact in all_artifacts
+        if artifact_permission.get(artifact.artifact_type, "VIEW_REPORTS") in permissions
+    ]
 
     try:
         version_metadata = json.loads(version.source_metadata_json or "{}")
@@ -570,6 +580,7 @@ def get_data_explorer(
             frame = read_verified_frame(path, checksum=version.checksum, size_bytes=source_ref["size_bytes"], schema=version_schema)
             for column, expected in filter_values.items():
                 frame = frame[frame[column].astype(str) == str(expected)]
+            total_rows = int(len(frame))
             if sort_by:
                 frame = frame.sort_values(sort_by, ascending=sort_direction == "asc", kind="stable")
             frame = frame.iloc[offset:offset + limit]
@@ -640,6 +651,7 @@ def get_data_explorer(
         "artifacts": [{"id": row.id, "artifact_type": row.artifact_type} for row in artifacts],
         "rows_authorized": rows_authorized,
         "rows": rows,
+        "total_rows": total_rows,
         "row_limit": limit if include_rows else 0,
     }
 

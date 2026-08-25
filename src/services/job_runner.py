@@ -337,6 +337,14 @@ def _versioned_profile_run(
         db.add(existing)
     else:
         existing.status = "RUNNING"
+    db.add(GovernanceAuditEventModel(
+        id=f"gaudit-{uuid.uuid4().hex}", workspace_id=version.workspace_id, actor_id=version.created_by,
+        actor_role=actor_role, action="PROFILE_STARTED", entity_type="profile_run", entity_id=profile_id,
+        dataset_id=version.dataset_id, dataset_version_id=version.id, run_id=job.id,
+        correlation_id=job.correlation_id or str(uuid.uuid4()), request_metadata_json="{}",
+        detail_json=json.dumps({"schema_hash": version.schema_hash}, ensure_ascii=False),
+        source="WORKER", occurred_at=utc_now(),
+    ))
     db.commit()
     source_ref = {
         "bucket": metadata.get("bucket"),
@@ -347,9 +355,10 @@ def _versioned_profile_run(
         "filename": metadata.get("filename") or "dataset.csv",
         "storage_locator": artifact.storage_locator,
     }
-    path = materialize_source_artifact(source_ref)
+    path = None
     temporary = source_ref["storage_locator"].startswith("object://")
     try:
+        path = materialize_source_artifact(source_ref)
         frame = read_verified_frame(path, checksum=version.checksum, size_bytes=source_ref["size_bytes"], schema=metadata.get("schema"))
         metrics = profile_frame(frame, schema=metadata.get("schema"))
         if int(metrics["row_count"]) != int(version.row_count) or schema_hash(metadata.get("schema") or []) != version.schema_hash:
@@ -376,16 +385,24 @@ def _versioned_profile_run(
         ))
         db.commit()
         return profile_id
-    except Exception:
+    except Exception as exc:
         db.rollback()
         failed = db.get(ProfileRunSnapshotModel, profile_id)
         if failed:
             failed.status = "FAILED"
             failed.completed_at = utc_now()
-            db.commit()
+        db.add(GovernanceAuditEventModel(
+            id=f"gaudit-{uuid.uuid4().hex}", workspace_id=version.workspace_id, actor_id=version.created_by,
+            actor_role=actor_role, action="PROFILE_FAILED", entity_type="profile_run", entity_id=profile_id,
+            dataset_id=version.dataset_id, dataset_version_id=version.id, run_id=job.id,
+            correlation_id=job.correlation_id or str(uuid.uuid4()), request_metadata_json="{}",
+            detail_json=json.dumps({"error": str(exc)[:500]}, ensure_ascii=False),
+            source="WORKER", occurred_at=utc_now(),
+        ))
+        db.commit()
         raise
     finally:
-        if temporary:
+        if temporary and path is not None:
             path.unlink(missing_ok=True)
 
 
@@ -414,9 +431,16 @@ def run_ingest_profile(
             if dataset_version_id:
                 job.message = "Verifying immutable source artifact and creating versioned profile..."
                 db.commit()
-                profile_id = _versioned_profile_run(
-                    db, job, dataset_version_id, session_id=session_id, actor_role=actor_role
-                )
+                try:
+                    profile_id = _versioned_profile_run(
+                        db, job, dataset_version_id, session_id=session_id, actor_role=actor_role
+                    )
+                except Exception as exc:
+                    job.status = "FAILED"
+                    job.error = str(exc)[:2000]
+                    job.message = "Versioned profile failed"
+                    db.commit()
+                    raise
                 job.status = "SUCCEEDED"
                 job.progress = 100.0
                 job.message = "Versioned profile completed"

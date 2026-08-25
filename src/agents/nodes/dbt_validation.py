@@ -55,8 +55,45 @@ def get_state_dbt_yaml(state: dict) -> str:
     raise ValueError("No generated dbt YAML is available")
 
 
-def materialize_dbt_project(template_dir: Path, workspace: Path, content: str) -> Path:
+def materialize_dbt_project(
+    template_dir: Path,
+    workspace: Path,
+    content: str,
+    *,
+    generic: bool = False,
+) -> Path:
     dbt_dir = workspace / "dbt_project"
+    if generic:
+        # Versioned CSV/Parquet runs execute through the verified source
+        # adapter. Their validation project must not inherit the legacy taxi
+        # stg_trips/source definitions.
+        dbt_dir.mkdir(parents=True, exist_ok=True)
+        (dbt_dir / "models").mkdir(parents=True, exist_ok=True)
+        (dbt_dir / "dbt_project.yml").write_text(
+            "name: ridepulse_versioned\n"
+            "version: '1.0.0'\n"
+            "config-version: 2\n"
+            "profile: ridepulse_versioned\n"
+            "model-paths: [models]\n",
+            encoding="utf-8",
+        )
+        (dbt_dir / "profiles.yml").write_text(
+            "ridepulse_versioned:\n"
+            "  target: dev\n"
+            "  outputs:\n"
+            "    dev:\n"
+            "      type: postgres\n"
+            "      host: \"{{ env_var('DBT_HOST', 'localhost') }}\"\n"
+            "      port: \"{{ env_var('DBT_PORT', '5432') | int }}\"\n"
+            "      user: \"{{ env_var('DBT_USER', 'ridepulse_dbt') }}\"\n"
+            "      pass: \"{{ env_var('DBT_PASSWORD', 'postgres') }}\"\n"
+            "      dbname: \"{{ env_var('DBT_DBNAME', 'ridepulse') }}\"\n"
+            "      schema: \"{{ env_var('DBT_SCHEMA', 'analytics') }}\"\n"
+            "      threads: 1\n",
+            encoding="utf-8",
+        )
+        (dbt_dir / "models" / "generated_dq_tests.yml").write_text(content, encoding="utf-8")
+        return dbt_dir
     shutil.copytree(
         template_dir,
         dbt_dir,

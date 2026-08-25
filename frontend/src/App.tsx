@@ -2443,8 +2443,21 @@ function App() {
             />
           ) : (
             <>
-              {/* STEP 1: Dataset Preparation */}
-              {wizardStep === 1 && (
+              {/* Schema-driven explorer for the selected immutable version. */}
+              {showDataExplorer && dataset ? (
+                <div>
+                  <div className="page-heading">
+                    <button
+                      type="button"
+                      className="step-nav-button backward"
+                      onClick={() => setShowDataExplorer(false)}
+                    >
+                      ← Back to datasets
+                    </button>
+                  </div>
+                  <DataExplorerPage dataset={dataset} />
+                </div>
+              ) : wizardStep === 1 ? (
                 <div>
                   <DatasetsPage
                     datasets={datasets}
@@ -2467,7 +2480,7 @@ function App() {
                     onRefreshGraph1={refreshGraph1}
                   />
                 </div>
-              )}
+              ) : null}
 
               {/* STEP 2: Graph 1 execution studio */}
               {wizardStep === 2 && (
@@ -4251,19 +4264,13 @@ function VisualizationPage({
   );
 }
 
-function rowHasQualityIssue(row: DatasetRow) {
-  return (
-    (row.trip_distance ?? 0) < 0 ||
-    (row.fare_amount ?? 0) < 0 ||
-    Boolean(row.payment_type?.startsWith("Invalid")) ||
-    Boolean(
-      row.pickup_at && row.dropoff_at && row.pickup_at > row.dropoff_at,
-    ) ||
-    !row.vendor_id
-  );
+// Row-level quality is sourced from persisted rule evidence. The explorer
+// deliberately does not infer quality from domain-specific taxi heuristics.
+function rowHasQualityIssue(_row: DatasetRow) {
+  return false;
 }
 
-function DataExplorerPage({ dataset }: { dataset?: Dataset }) {
+function LegacyDataExplorerPage({ dataset }: { dataset?: Dataset }) {
   const [query, setQuery] = useState<DatasetRowQuery>({
     quality_status: "ALL",
     sort_by: "pickup_at",
@@ -4282,8 +4289,9 @@ function DataExplorerPage({ dataset }: { dataset?: Dataset }) {
       setBusy(true);
       setQueryError("");
       try {
-        setResponse(await api.queryDatasetRows(dataset.id, nextQuery));
-        setQuery(nextQuery);
+        const loaded = await api.queryDatasetRows(dataset.id, nextQuery);
+        setResponse(loaded);
+        setQuery({ ...nextQuery, dataset_version_id: loaded.dataset_version_id ?? nextQuery.dataset_version_id });
       } catch (requestError) {
         setQueryError(
           getErrorMessage(requestError, "Unable to query dataset rows."),
@@ -4624,6 +4632,110 @@ function DataExplorerPage({ dataset }: { dataset?: Dataset }) {
             Next →
           </button>
         </div>
+      </section>
+    </>
+  );
+}
+
+function DataExplorerPage({ dataset }: { dataset?: Dataset }) {
+  const [query, setQuery] = useState<DatasetRowQuery>({
+    filter_column: undefined,
+    filter_value: undefined,
+    sort_by: undefined,
+    sort_direction: "asc",
+    limit: 25,
+    offset: 0,
+  });
+  const [response, setResponse] = useState<DatasetRowsResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [queryError, setQueryError] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  const loadRows = useCallback(async (nextQuery: DatasetRowQuery) => {
+    if (!dataset) return;
+    setBusy(true);
+    setQueryError("");
+    try {
+      const loaded = await api.queryDatasetRows(dataset.id, nextQuery);
+      setResponse(loaded);
+      setQuery({ ...nextQuery, dataset_version_id: loaded.dataset_version_id ?? nextQuery.dataset_version_id });
+    } catch (requestError) {
+      setQueryError(getErrorMessage(requestError, "Unable to query dataset rows."));
+    } finally {
+      setBusy(false);
+    }
+  }, [dataset]);
+
+  useEffect(() => {
+    if (dataset) void loadRows(query);
+  }, [dataset, loadRows]);
+
+  const schemaColumns = response?.schema?.map((column) => column.name) ?? [];
+  const columns = schemaColumns.length
+    ? schemaColumns
+    : response?.rows.length
+      ? Object.keys(response.rows[0])
+      : [];
+  const page = response ? Math.floor(response.offset / response.limit) + 1 : 1;
+  const pageCount = response ? Math.max(1, Math.ceil(response.total / response.limit)) : 1;
+  const updateQuery = (patch: Partial<DatasetRowQuery>) =>
+    setQuery((current) => ({ ...current, ...patch, offset: 0 }));
+  const activeFilterCount = [query.filter_column, query.filter_value, query.sort_by].filter(Boolean).length;
+  const filterSummary = query.filter_column && query.filter_value
+    ? `${query.filter_column}: ${query.filter_value}`
+    : "All authorized rows";
+  const formatCell = (value: unknown, column: string) => {
+    if (value === null || value === undefined || value === "") return "—";
+    if (typeof value === "number") return value.toLocaleString(undefined, { maximumFractionDigits: 4 });
+    if (typeof value === "boolean") return value ? "true" : "false";
+    const textValue = String(value);
+    if (/(date|time|_at|timestamp)/i.test(column)) {
+      const date = new Date(textValue);
+      if (!Number.isNaN(date.getTime())) return date.toLocaleString();
+    }
+    return textValue;
+  };
+
+  return (
+    <>
+      <div className="page-heading data-explorer-heading">
+        <div>
+          <span className="eyebrow">BOUNDED READ ACCESS</span>
+          <h1>Data explorer</h1>
+          <p>Browse the selected version using only its authorized schema and persisted quality evidence.</p>
+        </div>
+        <span className="data-count">{response?.total.toLocaleString() ?? "—"}<small>matching rows</small></span>
+      </div>
+      <section className={`panel filter-panel ${filtersOpen ? "is-open" : "is-collapsed"}`}>
+        <div className="filter-toolbar">
+          <div className="filter-toolbar-copy">
+            <span className="eyebrow">QUERY CONTROLS</span>
+            <button type="button" className="filter-toggle" aria-expanded={filtersOpen} aria-controls="data-explorer-filters" onClick={() => setFiltersOpen((open) => !open)}>
+              <span className="filter-toggle-icon" aria-hidden="true">{filtersOpen ? "−" : "+"}</span>
+              <span>{filtersOpen ? "Hide filters" : "Filter rows"}</span>
+            </button>
+            {!filtersOpen && <span className="filter-summary">{filterSummary}</span>}
+          </div>
+          <div className="filter-toolbar-state"><span className={activeFilterCount ? "filter-active-count" : "filter-default-state"}>{activeFilterCount ? `${activeFilterCount} active` : "Default view"}</span><span>Read-only</span></div>
+        </div>
+        {filtersOpen && (
+          <form id="data-explorer-filters" onSubmit={(event) => { event.preventDefault(); void loadRows({ ...query, offset: 0 }); }}>
+            <label>Filter column<select value={query.filter_column ?? ""} onChange={(event) => updateQuery({ filter_column: event.target.value || undefined })}><option value="">Any column</option>{columns.map((column) => <option key={column}>{column}</option>)}</select></label>
+            <label>Filter value<input value={query.filter_value ?? ""} onChange={(event) => updateQuery({ filter_value: event.target.value || undefined })} placeholder="Exact value" /></label>
+            <label>Sort by<select value={query.sort_by ?? ""} onChange={(event) => updateQuery({ sort_by: event.target.value || undefined })}><option value="">Source order</option>{columns.map((column) => <option key={column}>{column}</option>)}</select></label>
+            <label>Direction<select value={query.sort_direction ?? "asc"} onChange={(event) => updateQuery({ sort_direction: event.target.value as "asc" | "desc" })}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
+            <button className="button primary filter-apply" disabled={busy}>{busy ? "Querying…" : "Apply filters"}</button>
+          </form>
+        )}
+        {filtersOpen && <div className="filter-note">Read-only · up to 100 authorized rows</div>}
+      </section>
+      {queryError && <div className="alert error"><strong>Query failed</strong><span>{queryError}</span></div>}
+      <section className="panel data-panel">
+        <div className="panel-heading"><div><span className="eyebrow">QUERY RESULT</span><h3>Dataset rows</h3></div><span className="panel-caption">page {page} / {pageCount}</span></div>
+        {busy && !response ? <div className="data-skeleton">Loading bounded dataset projection…</div> : response?.rows.length ? (
+          <div className="data-table-wrap"><table className="data-table"><thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{response.rows.map((row, index) => <tr key={String(row.source_row_id ?? row.id ?? index)}>{columns.map((column) => <td key={column} title={formatCell(row[column], column)}>{formatCell(row[column], column)}</td>)}</tr>)}</tbody></table></div>
+        ) : <div className="table-empty">No authorized rows match the current filters.</div>}
+        <div className="pagination"><button className="button ghost" disabled={!response || response.offset === 0 || busy} onClick={() => void loadRows({ ...query, offset: Math.max(0, (response?.offset ?? 0) - (response?.limit ?? 25)) })}>← Previous</button><span>{response ? `${response.offset + 1}–${Math.min(response.offset + response.limit, response.total)} of ${response.total.toLocaleString()}` : "No result"}</span><button className="button ghost" disabled={!response || response.offset + response.limit >= response.total || busy} onClick={() => void loadRows({ ...query, offset: (response?.offset ?? 0) + (response?.limit ?? 25) })}>Next →</button></div>
       </section>
     </>
   );

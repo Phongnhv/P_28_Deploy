@@ -511,13 +511,16 @@ export const mockApi: ApiClient = {
       if (query.payment_type && row.payment_type !== query.payment_type) return false;
       if (query.min_distance !== undefined && (row.trip_distance ?? 0) < query.min_distance) return false;
       if (query.max_distance !== undefined && (row.trip_distance ?? 0) > query.max_distance) return false;
+      if (query.filter_column && String(row[query.filter_column] ?? "") !== String(query.filter_value ?? "")) return false;
       if (query.quality_status === "ISSUE" && !rowHasIssue(row)) return false;
       if (query.quality_status === "VALID" && rowHasIssue(row)) return false;
       return true;
     });
-    const sortBy = query.sort_by ?? "pickup_at";
-    const direction = query.sort_direction === "asc" ? 1 : -1;
-    filtered = filtered.sort((left, right) => String(left[sortBy] ?? "").localeCompare(String(right[sortBy] ?? "")) * direction);
+    if (query.sort_by) {
+      const direction = query.sort_direction === "asc" ? 1 : -1;
+      const sortBy = query.sort_by;
+      filtered = filtered.sort((left, right) => String(left[sortBy] ?? "").localeCompare(String(right[sortBy] ?? "")) * direction);
+    }
     const offset = query.offset ?? 0;
     const limit = query.limit ?? 25;
     return { dataset_id: id, total: filtered.length, offset, limit, rows: filtered.slice(offset, offset + limit) };

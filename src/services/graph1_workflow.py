@@ -18,10 +18,12 @@ from src.models.database import (
     ProfileModel,
     RuleProposalModel,
     RuleVersionModel,
+    RuleReviewSnapshotModel,
     SemanticContractModel,
 )
 from src.services.rule_store import ProposedRuleModel, create_run, get_engine, save_semantic_contract
 from src.time_utils import utc_now
+from src.services.versioned_dataset import validate_rule_spec
 
 logger = logging.getLogger(__name__)
 
@@ -205,9 +207,14 @@ def create_graph1_run(
             "target_tables": ["version_source" if dataset_version_id else "source_rows"],
             "workspace_id": workspace_id,
             "dataset_version_id": dataset_version_id,
-                "profile_run_id": profile_run_id,
+            "profile_run_id": profile_run_id,
             "source_checksum": (db.get(DatasetVersionModel, dataset_version_id).checksum if dataset_version_id else None),
-            "metadata": {"uploaded_dataset_profile": profile, "workflow": "graph1-studio", "allowed_columns": list(next(iter(profile.values())).get("columns", {}).keys())},
+            "metadata": {
+                "uploaded_dataset_profile": profile,
+                "workflow": "graph1-studio",
+                "allowed_columns": list(next(iter(profile.values())).get("columns", {}).keys()),
+                "source_checksum": (db.get(DatasetVersionModel, dataset_version_id).checksum if dataset_version_id else None),
+            },
         }),
     )
     db.add(run)
@@ -372,12 +379,23 @@ def review_rules(db: Session, run: Graph1RunModel, decisions: list[dict[str, Any
     edited = 0
     rejected = 0
     decision_by_id: dict[str, dict[str, Any]] = {}
+    allowed_columns = set()
+    if run.dataset_version_id:
+        metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+        allowed_columns = set(metadata.get("allowed_columns") or [])
+        if not allowed_columns:
+            raise ValueError("Immutable version schema is missing from Graph 1 state.")
     for item in decisions:
         rule_id = str(item["rule_id"])
         proposal = by_id[rule_id]
         legacy = db.get(ProposedRuleModel, (run.id, rule_id))
         if not legacy:
             raise ValueError(f"Legacy rule snapshot is missing for {rule_id}.")
+        if run.dataset_version_id:
+            try:
+                validate_rule_spec(json.loads(proposal.rule_spec or "{}"), allowed_columns)
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise ValueError(f"Rule {rule_id} references a column outside the selected version schema.") from exc
         action = str(item.get("action", "")).lower()
         if action not in {"approve", "reject", "edit"}:
             raise ValueError("Rule decision must be approve, reject, or edit.")
@@ -414,6 +432,11 @@ def review_rules(db: Session, run: Graph1RunModel, decisions: list[dict[str, Any
             for key in ("max_null_pct", "regex", "target_column", "operator", "min_row_count"):
                 if key in normalized_parameters:
                     canonical_spec[key] = normalized_parameters[key]
+            if run.dataset_version_id:
+                try:
+                    validate_rule_spec(canonical_spec, allowed_columns)
+                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                    raise ValueError("Edited rule references a column outside the selected version schema.") from exc
             proposal.rule_type = str(rule["type"])
             proposal.title = str(rule.get("rule_name") or proposal.title)
             proposal.rule_name = str(rule.get("rule_name") or proposal.rule_name)
@@ -449,6 +472,7 @@ def review_rules(db: Session, run: Graph1RunModel, decisions: list[dict[str, Any
                     id=version_id,
                     rule_proposal_id=proposal.id,
                     dataset_id=proposal.dataset_id,
+                    dataset_version_id=run.dataset_version_id,
                     rule_spec=proposal.rule_spec,
                     status="APPROVED",
                     version=1,
@@ -488,6 +512,17 @@ def review_rules(db: Session, run: Graph1RunModel, decisions: list[dict[str, Any
         "hitl_status": "APPROVED",
         "reviewer": reviewer,
     }
+    if run.dataset_version_id:
+        review_snapshot_id = f"review-{run.id}-{uuid.uuid4().hex[:12]}"
+        db.add(RuleReviewSnapshotModel(
+            id=review_snapshot_id,
+            workspace_id=run.workspace_id or "unknown",
+            dataset_id=run.dataset_id,
+            dataset_version_id=run.dataset_version_id,
+            profile_run_id=run.profile_run_id or "unknown",
+            status="APPROVED",
+        ))
+        state["rule_review_snapshot_id"] = review_snapshot_id
     run.state_json = _json(state)
     run.status, run.current_node = "COMPLETED", "hitl_gate"
     gate = db.get(Graph1NodeExecutionModel, f"{run.id}:hitl_gate")
