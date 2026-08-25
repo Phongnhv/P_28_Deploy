@@ -619,6 +619,14 @@ def list_datasets(
             .order_by(DatasetVersionModel.version_number.desc())
             .first()
         )
+        latest_profile = (
+            db.query(ProfileRunSnapshotModel)
+            .filter_by(dataset_version_id=latest_version.id, status="COMPLETED")
+            .order_by(ProfileRunSnapshotModel.completed_at.desc())
+            .first()
+            if latest_version
+            else None
+        )
         has_local_source = any((Path("data/uploads") / f"{d.id}{suffix}").exists() for suffix in (".parquet", ".csv"))
         response.append({
             "id": d.id,
@@ -633,6 +641,7 @@ def list_datasets(
             "data_explorer_available": bool(latest_version or has_local_source),
             "dataset_version_id": latest_version.id if latest_version else None,
             "version_number": latest_version.version_number if latest_version else None,
+            "profile_run_id": latest_profile.id if latest_profile else None,
         })
     return response
 

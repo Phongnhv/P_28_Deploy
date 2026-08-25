@@ -97,6 +97,7 @@ export interface Dataset {
   data_explorer_available?: boolean;
   dataset_version_id?: string;
   version_number?: number;
+  profile_run_id?: string;
 }
 
 export interface DatasetImportResponse {
@@ -536,7 +537,7 @@ export interface ApiClient {
   reviewArtifact(artifactId: string, input: ArtifactReviewInput): Promise<AgentArtifact>;
   continueLoop(workflowRunId: string, input: LoopDecisionInput): Promise<WorkflowRun>;
   rewindWorkflow(workflowRunId: string, targetStep: WorkflowStepKey): Promise<WorkflowRun>;
-  createGraph1Run(datasetId: string): Promise<Graph1Run>;
+  createGraph1Run(datasetId: string, datasetVersionId?: string, profileRunId?: string): Promise<Graph1Run>;
   getGraph1Run(runId: string): Promise<Graph1Run>;
   listGraph1Nodes(runId: string): Promise<Graph1NodeExecution[]>;
   confirmGraph1Semantic(runId: string, contract: Record<string, unknown>): Promise<Graph1Run>;

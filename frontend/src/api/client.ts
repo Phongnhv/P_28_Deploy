@@ -167,6 +167,7 @@ export const realApiClient: ApiClient = {
       dataset: { id: string; name: string; status?: Dataset["status"] };
       version: { id: string; version_number: number; status: string; checksum: string; row_count: number };
       job: { job_id: string; status: string };
+      profile_run_id?: string;
     }>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/datasets/import`, {
       method: "POST",
       headers: { "Idempotency-Key": `ui-${checksum}` },
@@ -186,6 +187,7 @@ export const realApiClient: ApiClient = {
         data_explorer_available: payload.version.status === "READY",
         dataset_version_id: payload.version.id,
         version_number: payload.version.version_number,
+        profile_run_id: payload.profile_run_id,
       },
       job: {
         job_id: payload.job.job_id,
@@ -336,8 +338,12 @@ export const realApiClient: ApiClient = {
       body: JSON.stringify({ target_step: targetStep }),
     });
   },
-  createGraph1Run(datasetId: string) {
-    return request<Graph1Run>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/graph1-runs`, {
+  createGraph1Run(datasetId: string, datasetVersionId?: string, profileRunId?: string) {
+    const query = new URLSearchParams();
+    if (datasetVersionId) query.set("dataset_version_id", datasetVersionId);
+    if (profileRunId) query.set("profile_run_id", profileRunId);
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return request<Graph1Run>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/graph1-runs${suffix}`, {
       method: "POST",
       headers: { "Idempotency-Key": crypto.randomUUID() },
     });

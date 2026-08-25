@@ -73,7 +73,7 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, initialData
       try {
         if (storedRun && storedDataset === dataset.id) await refresh(storedRun);
         else {
-          const created = await api.createGraph1Run(dataset.id);
+          const created = await api.createGraph1Run(dataset.id, dataset.dataset_version_id, dataset.profile_run_id);
           sessionStorage.setItem("ridepulse.graph1.run", created.id);
           sessionStorage.setItem("ridepulse.graph1.dataset", dataset.id);
           setRun(created); await refresh(created.id);
@@ -139,7 +139,7 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, initialData
       let job: Job = await api.getJob(imported.job.job_id); setMessage("Đang profile dữ liệu thật…");
       while (!["SUCCEEDED", "FAILED"].includes(job.status)) { await wait(700); job = await api.getJob(imported.job.job_id); setMessage(job.message || `Profiling ${Math.round(job.progress)}%`); }
       if (job.status === "FAILED") throw new Error(job.error || "Dataset profiling thất bại.");
-      setMessage("Đang khởi tạo canonical Graph 1…"); const created = await api.createGraph1Run(imported.dataset.id); sessionStorage.setItem("ridepulse.graph1.run", created.id); sessionStorage.setItem("ridepulse.graph1.dataset", imported.dataset.id); setRun(created); await refresh(created.id); setMessage("");
+      setMessage("Đang khởi tạo canonical Graph 1…"); const created = await api.createGraph1Run(imported.dataset.id, imported.dataset.dataset_version_id, imported.dataset.profile_run_id); sessionStorage.setItem("ridepulse.graph1.run", created.id); sessionStorage.setItem("ridepulse.graph1.dataset", imported.dataset.id); setRun(created); await refresh(created.id); setMessage("");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Không thể bắt đầu Graph 1."); setMessage(""); } finally { setBusy(false); }
   };
   const confirmSemantic = async () => { if (!run) return; setBusy(true); setError(""); try { const next = await api.confirmGraph1Semantic(run.id, JSON.parse(semanticText)); sessionStorage.removeItem(`ridepulse.graph1.semantic.${run.id}`); sessionStorage.setItem(`ridepulse.graph1.stage.${run.id}`, "rule_candidate_builder"); setRun(next); setSelectedKey("rule_candidate_builder"); await refresh(run.id); } catch (reason) { setError(reason instanceof Error ? reason.message : "Semantic Contract không hợp lệ."); } finally { setBusy(false); } };

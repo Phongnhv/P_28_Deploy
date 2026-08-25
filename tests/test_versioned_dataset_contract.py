@@ -82,6 +82,7 @@ def test_freshness_parse_failure_is_execution_error_not_data_failure():
 async def test_versioned_import_creates_two_immutable_versions(client, monkeypatch, tmp_path):
     from src.config import get_settings
     import src.services.versioned_dataset as versioned_dataset
+    from unittest.mock import AsyncMock
 
     monkeypatch.setattr(get_settings(), "app_env", "test")
     monkeypatch.setattr(versioned_dataset, "_local_storage_root", lambda: tmp_path / "source-artifacts")
@@ -120,6 +121,18 @@ async def test_versioned_import_creates_two_immutable_versions(client, monkeypat
         assert [version.status for version in versions] == ["READY", "READY"]
         assert db.get(ProfileRunSnapshotModel, f"profile-{version1['id']}").status == "COMPLETED"
         assert db.get(ProfileRunSnapshotModel, f"profile-{version2['id']}").status == "COMPLETED"
+
+    monkeypatch.setattr(get_settings(), "agent_mode", "graph")
+    monkeypatch.setattr(get_settings(), "openai_api_key", "test-key")
+    monkeypatch.setattr("src.services.graph1_workflow.execute_graph1_run", AsyncMock())
+    graph1 = await client.post(
+        "/api/v1/datasets/orders/graph1-runs",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "orders-graph1-v2"},
+        params={"dataset_version_id": version2["id"], "profile_run_id": f"profile-{version2['id']}"},
+    )
+    assert graph1.status_code == 202, graph1.text
+    assert graph1.json()["dataset_version_id"] == version2["id"]
+    assert graph1.json()["profile_run_id"] == f"profile-{version2['id']}"
 
 
 @pytest.mark.asyncio
