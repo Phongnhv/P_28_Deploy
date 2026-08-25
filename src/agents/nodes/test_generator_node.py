@@ -359,6 +359,28 @@ def generate_versioned_dbt_test_yaml(
     return yaml.dump({"version": 2, "models": [model]}, sort_keys=False, allow_unicode=True)
 
 
+def build_versioned_generated_tests(approved_rules: list[dict]) -> list[dict]:
+    """Return one observable generated-check record per approved versioned rule.
+
+    Versioned datasets execute through the immutable source adapter rather than
+    the legacy SQL-query compiler, so ``generated_tests`` used to be left empty
+    even though the governed YAML artifact and adapter executed every approved
+    rule.  These records are metadata for counters/observability; the runner
+    still evaluates the immutable source with ``approved_rules`` directly.
+    """
+    return [
+        {
+            "rule_id": rule.get("rule_id"),
+            "rule_type": rule.get("rule_type"),
+            "table_name": rule.get("table_name") or "version_source",
+            "column_name": rule.get("column") or None,
+            "execution_mode": "versioned_source_adapter",
+        }
+        for rule in approved_rules
+        if isinstance(rule, dict) and rule.get("rule_id")
+    ]
+
+
 def _persist_versioned_dbt_artifact(
     state: AgentState,
     *,
@@ -699,7 +721,7 @@ async def test_generator_node(state: AgentState) -> dict:
     # manifest and the fixed adapter alias; the legacy SQL query compiler is
     # retained below for the explicit taxi compatibility path.
     if versioned_schema:
-        all_generated = []
+        all_generated = build_versioned_generated_tests(approved_rules)
         dbt_yaml_content = generate_versioned_dbt_test_yaml(
             versioned_schema,
             approved_rules,

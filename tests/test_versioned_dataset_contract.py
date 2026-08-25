@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from src.agents.nodes.persist_report_node import aggregate_graph2_status
 from src.agents.nodes.dbt_validation import validate_dbt_yaml_structure
-from src.agents.nodes.test_generator_node import generate_versioned_dbt_test_yaml
+from src.agents.nodes.test_generator_node import build_versioned_generated_tests, generate_versioned_dbt_test_yaml
 from src.services.dashboard_agent_workflow import get_dataset_rule_policy
 from src.services.versioned_dataset import (
     DatasetContractError,
@@ -66,6 +66,15 @@ def test_versioned_dbt_artifact_is_schema_driven_and_non_taxi():
     assert "trips_canonical" not in content
     assert "stg_trips" not in content
     assert "order_id" in content and "amount" in content
+
+
+def test_versioned_generated_test_counter_tracks_adapter_checks():
+    generated = build_versioned_generated_tests([
+        {"rule_id": "not-null", "rule_type": "NOT_NULL", "table_name": "version_source", "column": "order_id"},
+        {"rule_id": "row-count", "rule_type": "ROW_COUNT", "table_name": "version_source", "column": "_table"},
+    ])
+    assert len(generated) == 2
+    assert {item["execution_mode"] for item in generated} == {"versioned_source_adapter"}
 
 
 def test_freshness_parse_failure_is_execution_error_not_data_failure():
