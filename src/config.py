@@ -37,7 +37,7 @@ class Settings(BaseSettings):
 
     # Set model based on provider
     # model_name: str = os.getenv("MISTRAL_MODEL") or "mistral-medium-latest"
-    openai_model_name: str = os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
+    openai_model_name: str = os.getenv("OPENAI_MODEL") or "gpt-5.6-luna"
     anthropic_model_name: str = os.getenv("ANTHROPIC_MODEL") or "claude-opus-5"
     mistral_model_name: str = os.getenv("MISTRAL_MODEL") or "mistral-medium-latest"
     google_model_name: str = os.getenv("GOOGLE_MODEL") or "gemini-3.1-flash-lite"
@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     # an explicit DATABASE_URL is used.
     supabase_database_url: str | None = os.getenv("SUPABASE_DATABASE_URL")
     dq_execution_backend: Literal["auto", "local", "supabase"] = os.getenv("DQ_EXECUTION_BACKEND") or "auto"
+    database_pool_size: int = Field(default=5, ge=1, le=20)
+    database_max_overflow: int = Field(default=5, ge=0, le=20)
+    database_pool_timeout_seconds: int = Field(default=30, ge=1, le=120)
 
     # Vector Store
     chroma_persist_dir: str = "./data/chroma" # Change to .env later

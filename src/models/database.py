@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from src.time_utils import utc_now
@@ -541,3 +541,241 @@ class AnomalyFeedbackModel(Base):
     feedback_label: Mapped[str] = mapped_column(String(64), nullable=False)  # TRUE_ANOMALY, FALSE_POSITIVE, EXPECTED_CHANGE, RULE_MISCONFIGURATION, UNKNOWN
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+
+
+# ---------------------------------------------------------------------------
+# Workspace-scoped data access contract (v2)
+# ---------------------------------------------------------------------------
+
+
+class WorkspaceModel(Base):
+    __tablename__ = "workspaces"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    created_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class WorkspaceMembershipModel(Base):
+    __tablename__ = "workspace_memberships"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "user_id", name="uq_workspace_membership_user"),
+        Index("ix_workspace_membership_user_status", "user_id", "workspace_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="USER")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class DataGroupModel(Base):
+    __tablename__ = "data_groups"
+    __table_args__ = (UniqueConstraint("workspace_id", "name", name="uq_data_group_name"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class DataGroupMembershipModel(Base):
+    __tablename__ = "data_group_memberships"
+    __table_args__ = (
+        UniqueConstraint("group_id", "user_id", name="uq_data_group_membership_user"),
+        Index("ix_data_group_membership_user_status", "user_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    group_id: Mapped[str] = mapped_column(String(64), ForeignKey("data_groups.id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class DatasetGovernanceModel(Base):
+    """Workspace and ownership sidecar for the legacy logical datasets table."""
+
+    __tablename__ = "dataset_governance"
+    __table_args__ = (
+        Index("ix_dataset_governance_workspace_owner", "workspace_id", "owner_user_id"),
+    )
+
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    owner_user_id: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="PRIVATE")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class DatasetStewardModel(Base):
+    __tablename__ = "dataset_stewards"
+    __table_args__ = (UniqueConstraint("dataset_id", "user_id", name="uq_dataset_steward_user"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    assigned_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DatasetVersionModel(Base):
+    __tablename__ = "dataset_versions"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "version_number", name="uq_dataset_version_number"),
+        Index("ix_dataset_version_history", "dataset_id", "created_at"),
+        Index("ix_dataset_version_workspace", "workspace_id", "dataset_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="READY")
+    checksum: Mapped[str] = mapped_column(String(256), nullable=False)
+    schema_hash: Mapped[str] = mapped_column(String(256), nullable=False)
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    source_metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class DatasetGrantModel(Base):
+    __tablename__ = "dataset_grants"
+    __table_args__ = (
+        Index(
+            "ix_dataset_grant_principal",
+            "workspace_id",
+            "grantee_type",
+            "grantee_id",
+            "permission",
+        ),
+        Index("ix_dataset_grant_resource", "dataset_id", "dataset_version_id", "revoked_at"),
+        Index("ix_dataset_grant_set", "grant_set_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    grant_set_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"))
+    grantee_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    grantee_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    permission: Mapped[str] = mapped_column(String(32), nullable=False)
+    granted_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+
+
+class ProfileRunSnapshotModel(Base):
+    __tablename__ = "profile_runs"
+    __table_args__ = (
+        Index("ix_profile_run_version_history", "dataset_version_id", "completed_at"),
+        Index("ix_profile_run_dataset_history", "workspace_id", "dataset_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False)
+    dataset_version_id: Mapped[str] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
+    triggered_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    profiler_version: Mapped[str] = mapped_column(String(64), nullable=False, default="local-v1")
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completeness_score: Mapped[float | None] = mapped_column(Float)
+    validity_score: Mapped[float | None] = mapped_column(Float)
+    uniqueness_score: Mapped[float | None] = mapped_column(Float)
+    duplicate_rate: Mapped[float | None] = mapped_column(Float)
+    quality_score: Mapped[float | None] = mapped_column(Float)
+    schema_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    metrics_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    sanitized_samples_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RuleReviewSnapshotModel(Base):
+    __tablename__ = "rule_review_snapshots"
+    __table_args__ = (Index("ix_rule_review_version_status", "dataset_version_id", "status"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False)
+    dataset_version_id: Mapped[str] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=False)
+    profile_run_id: Mapped[str] = mapped_column(String(64), ForeignKey("profile_runs.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class AnalysisSummaryModel(Base):
+    __tablename__ = "analysis_summaries"
+    __table_args__ = (Index("ix_analysis_summary_version_history", "dataset_version_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False)
+    dataset_version_id: Mapped[str] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=False)
+    profile_run_id: Mapped[str] = mapped_column(String(64), ForeignKey("profile_runs.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
+    tests_passed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tests_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    anomaly_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    report_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GovernedArtifactModel(Base):
+    __tablename__ = "governed_artifacts"
+    __table_args__ = (Index("ix_governed_artifact_version", "dataset_version_id", "artifact_type"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False)
+    dataset_version_id: Mapped[str] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=False)
+    run_id: Mapped[str | None] = mapped_column(String(64))
+    artifact_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_locator: Mapped[str] = mapped_column(Text, nullable=False)
+    checksum: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class GovernanceAuditEventModel(Base):
+    __tablename__ = "governance_audit_events"
+    __table_args__ = (
+        Index("ix_governance_audit_workspace_time", "workspace_id", "occurred_at"),
+        Index("ix_governance_audit_dataset_time", "dataset_id", "occurred_at"),
+        Index("ix_governance_audit_actor_time", "actor_id", "occurred_at"),
+        Index("ix_governance_audit_action_time", "action", "occurred_at"),
+        Index("ix_governance_audit_run_time", "run_id", "occurred_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    actor_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("user_accounts.id"))
+    actor_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    action: Mapped[str] = mapped_column(String(128), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    entity_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    dataset_id: Mapped[str | None] = mapped_column(String(256), ForeignKey("datasets.id"))
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"))
+    run_id: Mapped[str | None] = mapped_column(String(64))
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    detail_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="API")
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)

@@ -41,6 +41,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from src.api.data_access_routes import router as data_access_router
 from src.api.routes import dq_router, router
 from src.config import get_settings
 from src.services.rule_store import get_engine, init_db
@@ -158,6 +159,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 app.include_router(router, prefix="/api/v1")
 app.include_router(dq_router, prefix="/api/v1")
+app.include_router(data_access_router)
 
 @app.get("/health", tags=["System"])
 async def health():

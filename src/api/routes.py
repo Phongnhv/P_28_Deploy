@@ -754,6 +754,10 @@ async def stream_graph1_run(
         raise HTTPException(status_code=404, detail="Graph 1 run not found")
     require_dataset_access(db, session, run.dataset_id)
     dataset_id = run.dataset_id
+    # A streaming response can remain open for minutes. Release the request
+    # dependency's checked-out connection before starting the SSE loop; each
+    # snapshot below deliberately uses its own short-lived session.
+    db.close()
 
     async def events():
         last_signature = ""
@@ -925,6 +929,8 @@ async def stream_analysis_run(
     if not run:
         raise HTTPException(status_code=404, detail="Analysis run not found")
     require_dataset_access(db, session, run.dataset_id)
+    # Do not pin one pool connection for the lifetime of the SSE stream.
+    db.close()
 
     async def events():
         last_signature = ""
