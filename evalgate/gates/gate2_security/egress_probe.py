@@ -19,6 +19,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from evalgate.core.context import EvalRunContext
 from evalgate.gates.gate2_security.pii_classifier import classify_column
 from evalgate.normalizers import normalizers as norm
 from evalgate.schemas.eval_result import (
@@ -88,13 +89,37 @@ def _static_signals(src_root: Path | None = None) -> dict[str, Any]:
     return signals
 
 
-def _empirical_rows(traces_dir: Path | None = None) -> dict[str, Any]:
+def _empirical_rows(
+    traces_dir: Path | None = None, *, context: EvalRunContext | None = None
+) -> dict[str, Any]:
     """Look for whole rows actually sitting in the archived traces.
 
     ``traces_dir`` is a seam for tests; it defaults to the real trace directory.
     A missing directory yields zero files scanned, which the caller must treat as
     "nothing was looked at" rather than "nothing was found".
     """
+    if context is not None:
+        findings: list[dict[str, Any]] = []
+        files_scanned = 0
+        for record in (*context.records("execution-results"), *context.records("api-transcript")):
+            files_scanned += 1
+            payload = json.loads(context.path_for(record).read_text(encoding="utf-8"))
+            entries = payload.get("test_results") or payload.get("results") or [] if isinstance(payload, dict) else []
+            for entry in entries:
+                samples = entry.get("sample_failures") if isinstance(entry, dict) else None
+                if not isinstance(samples, list) or not samples or not isinstance(samples[0], dict) or len(samples[0]) <= 1:
+                    continue
+                columns = list(samples[0])
+                pii_hits = []
+                for column in columns:
+                    classification = classify_column(column, [row.get(column) for row in samples if isinstance(row, dict)])
+                    if classification.is_pii:
+                        pii_hits.append({"column": column, "class": classification.pii_class.value,
+                                         "reason": classification.reason})
+                findings.append({"file": record.relative_path, "rule_id": entry.get("rule_id"),
+                                 "row_count": len(samples), "columns": columns,
+                                 "pii_columns": pii_hits})
+        return {"files_scanned": files_scanned, "raw_row_artifacts": findings}
     base = traces_dir if traces_dir is not None else TEST_RUNNER_TRACES
     findings: list[dict[str, Any]] = []
     files_scanned = 0
@@ -144,9 +169,10 @@ def evaluate(
     write_evidence: bool = True,
     src_root: Path | None = None,
     traces_dir: Path | None = None,
+    context: EvalRunContext | None = None,
 ) -> EvalResult:
     static = _static_signals(src_root)
-    empirical = _empirical_rows(traces_dir)
+    empirical = _empirical_rows(traces_dir, context=context)
     artifacts = empirical["raw_row_artifacts"]
 
     raw_row_violations = len(artifacts)

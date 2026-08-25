@@ -41,6 +41,9 @@ class Decision:
     EVALGATE_STALE = "EVALGATE_STALE"
     #: Too little of the system was measured for an aggregate to mean anything.
     INSUFFICIENT_COVERAGE = "INSUFFICIENT_COVERAGE"
+    #: The evaluator configuration or metric namespace is ambiguous. Publishing a
+    #: product verdict in this state would be false assurance.
+    EVALGATE_INVALID = "EVALGATE_INVALID"
 
 
 EXIT_CODES = {
@@ -50,6 +53,7 @@ EXIT_CODES = {
     Decision.RELEASE_BLOCKED: 3,
     Decision.EVALGATE_STALE: 4,
     Decision.INSUFFICIENT_COVERAGE: 5,
+    Decision.EVALGATE_INVALID: 6,
 }
 
 #: Share of the original gate weight that must actually be measured before an
@@ -98,6 +102,10 @@ class AggregateOutcome:
     override_reason: str | None = None
     #: Metric names claimed by more than one evaluator. Empty is the healthy state.
     metric_collisions: dict[str, list[str]] = field(default_factory=dict)
+    suppressed_findings: list[str] = field(default_factory=list)
+    unsuppressed_findings: list[str] = field(default_factory=list)
+    mandatory_evidence_coverage: float = 0.0
+    gate_verdicts: dict[str, str] = field(default_factory=dict)
 
     @property
     def exit_code(self) -> int:
@@ -265,13 +273,22 @@ def re_normalize_weights(
     return {g: w / total for g, w in kept.items()}
 
 
-def aggregate(results: list[EvalResult]) -> AggregateOutcome:
-    weights_policy = load_policy("weights")
-    weights: dict[str, float] = weights_policy["weights"]
-    bands = weights_policy["decision_bands"]
+def aggregate(results: list[EvalResult], *, profile: str = "local") -> AggregateOutcome:
+    central_policy = load_policy("evaluation_policy")
+    weights: dict[str, float] = central_policy["score"]["weights"]
+    bands = central_policy["score"]["decision_bands"]
+    measured_floor = float(central_policy["minimum_measured_weight"])
 
-    # 1. Hard gates first -- always, regardless of scores.
+    # 1. Namespace integrity and hard gates first -- always, regardless of scores.
+    collisions = detect_metric_collisions(results)
+    configuration_errors = [
+        str(result.metadata.get("configuration_error"))
+        for result in results
+        if result.metadata.get("configuration_error")
+    ]
     hard_gates = evaluate_hard_gates(results)
+    mandatory_hard = set(central_policy.get("mandatory_hard_gates", {}).get(profile, []))
+    missing_hard = [h for h in hard_gates if h.id in mandatory_hard and h.status == "NOT_EVALUATED"]
     blocking = [
         finding
         for result in results
@@ -279,6 +296,17 @@ def aggregate(results: list[EvalResult]) -> AggregateOutcome:
         if finding.blocks_release
     ]
     any_hard_gate_failed = any(h.status == "FAIL" for h in hard_gates)
+    mandatory_results = [r for r in results if r.metadata.get("mandatory")]
+    mandatory_ok = [r for r in mandatory_results if r.status not in EXCLUDED_FROM_AGGREGATE]
+    mandatory_coverage = (
+        len(mandatory_ok) / len(mandatory_results)
+        if mandatory_results else (1.0 if profile == "local" else 0.0)
+    )
+    mandatory_errors = [
+        r for r in mandatory_results
+        if r.status in {EvalStatus.EVALUATOR_ERROR, EvalStatus.MISSING_MANDATORY_EVIDENCE}
+    ]
+    mandatory_failures = [r for r in mandatory_results if r.status == EvalStatus.FAIL]
 
     # 2. Gate scores, collapsing multi-dataset evaluators.
     per_gate: dict[str, list[float]] = {}
@@ -307,11 +335,14 @@ def aggregate(results: list[EvalResult]) -> AggregateOutcome:
 
     # 3. Decision. Hard gates come first, then coverage, then the score band: a
     #    number computed from too little evidence should not be presented at all.
-    if any_hard_gate_failed or blocking:
+    if collisions or configuration_errors:
+        decision = Decision.EVALGATE_INVALID
+    elif (any_hard_gate_failed or blocking or missing_hard or mandatory_errors
+          or mandatory_failures or mandatory_coverage < 1.0):
         decision = Decision.RELEASE_BLOCKED
     elif total_score is None:
         decision = Decision.FAIL
-    elif measured_weight < MIN_MEASURED_WEIGHT:
+    elif measured_weight < measured_floor:
         decision = Decision.INSUFFICIENT_COVERAGE
     elif total_score >= bands["pass"]:
         decision = Decision.PASS
@@ -328,7 +359,7 @@ def aggregate(results: list[EvalResult]) -> AggregateOutcome:
     provisional_score: float | None = None
     score_withheld_reason: str | None = None
     published_score = total_score
-    if total_score is not None and measured_weight < MIN_MEASURED_WEIGHT:
+    if total_score is not None and measured_weight < measured_floor:
         provisional_score = round(total_score, 2)
         published_score = None
         thin = ", ".join(
@@ -338,9 +369,17 @@ def aggregate(results: list[EvalResult]) -> AggregateOutcome:
         )
         score_withheld_reason = (
             f"measured coverage {measured_weight:.2f} is below the "
-            f"{MIN_MEASURED_WEIGHT:.2f} floor; partially measured gates: {thin}"
+            f"{measured_floor:.2f} floor; partially measured gates: {thin}"
         )
 
+    gate_verdicts = {
+        gate: (
+            "NOT_MEASURED" if not any(r.gate == gate and r.counts_toward_aggregate() for r in results)
+            else "FAIL" if any(r.gate == gate and r.status == EvalStatus.FAIL for r in results)
+            else "PASS"
+        )
+        for gate in {r.gate for r in results if r.gate != "preflight"}
+    }
     return AggregateOutcome(
         decision=decision,
         score=round(published_score, 2) if published_score is not None else None,
@@ -353,5 +392,8 @@ def aggregate(results: list[EvalResult]) -> AggregateOutcome:
         coverage_detail=coverage_detail,
         provisional_score=provisional_score,
         score_withheld_reason=score_withheld_reason,
-        metric_collisions=detect_metric_collisions(results),
+        metric_collisions=collisions,
+        override_reason="; ".join(configuration_errors) or None,
+        mandatory_evidence_coverage=round(mandatory_coverage, 4),
+        gate_verdicts=gate_verdicts,
     )

@@ -23,6 +23,7 @@ import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from evalgate.core.context import EvalRunContext
 from evalgate.normalizers import normalizers as norm
 from evalgate.schemas.eval_result import (
     DatasetBreakdown,
@@ -185,27 +186,22 @@ def _domains_from_contract() -> list[GovernedDomain]:
     ]
 
 
-def _load_proposals() -> list[tuple[str, list[dict]]]:
+def _load_proposals(context: EvalRunContext | None = None) -> list[tuple[str, list[dict]]]:
     artifacts: list[tuple[str, list[dict]]] = []
-    for directory in PROPOSAL_DIRS:
-        if not directory.exists():
-            continue
-        for path in sorted(directory.glob("*.json")):
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
+    if context is not None:
+        for record in context.records("proposals"):
+            payload = json.loads(context.path_for(record).read_text(encoding="utf-8"))
             rules = payload.get("proposed_rules") if isinstance(payload, dict) else payload
             if isinstance(rules, list) and rules:
-                artifacts.append((str(path.relative_to(PROJECT_ROOT)), rules))
+                artifacts.append((record.relative_path, rules))
     return artifacts
 
 
-def score_proposals(domain: GovernedDomain) -> list[RuleOutcome]:
+def score_proposals(domain: GovernedDomain, context: EvalRunContext | None = None) -> list[RuleOutcome]:
     outcomes: list[RuleOutcome] = []
     allowed = set(domain.allowed)
     excluded = set(domain.excluded)
-    for artifact, rules in _load_proposals():
+    for artifact, rules in _load_proposals(context):
         for rule in rules:
             if rule.get("rule_type") != "ACCEPTED_VALUES":
                 continue
@@ -226,17 +222,14 @@ def score_proposals(domain: GovernedDomain) -> list[RuleOutcome]:
     return outcomes
 
 
-def measure_planted_recall(domain: GovernedDomain) -> tuple[int | None, list[str]]:
+def measure_planted_recall(domain: GovernedDomain, context: EvalRunContext | None = None) -> tuple[int | None, list[str]]:
     """How many of the deliberately planted invalid rows did execution actually flag?"""
-    if not REPORTS_DIR.exists():
+    if context is None:
         return None, []
     best: int | None = None
     seen: list[str] = []
-    for path in sorted(REPORTS_DIR.glob("test_run_*.json")):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
+    for record in context.records("execution-results"):
+        payload = json.loads(context.path_for(record).read_text(encoding="utf-8"))
         for entry in payload.get("test_results", []):
             rule_id = str(entry.get("rule_id", ""))
             if domain.column not in rule_id or "ACCEPTED_VALUES" not in rule_id:
@@ -244,12 +237,12 @@ def measure_planted_recall(domain: GovernedDomain) -> tuple[int | None, list[str
             flagged = int(
                 entry.get("failed_count") or entry.get("violation_count") or 0
             )
-            seen.append(f"{path.name}: {rule_id} flagged {flagged}")
+            seen.append(f"{record.name}: {rule_id} flagged {flagged}")
             best = flagged if best is None else max(best, flagged)
     return best, seen
 
 
-def count_unbacked_enums(governed_columns: set[str]) -> list[str]:
+def count_unbacked_enums(governed_columns: set[str], context: EvalRunContext | None = None) -> list[str]:
     """ACCEPTED_VALUES rules on columns no policy governs.
 
     These are tautological by construction: with no external domain to check
@@ -258,7 +251,7 @@ def count_unbacked_enums(governed_columns: set[str]) -> list[str]:
     policy yet -- but it is the clearest single signal of enum-learning behaviour.
     """
     unbacked: list[str] = []
-    for artifact, rules in _load_proposals():
+    for artifact, rules in _load_proposals(context):
         for rule in rules:
             if rule.get("rule_type") != "ACCEPTED_VALUES":
                 continue
@@ -268,7 +261,7 @@ def count_unbacked_enums(governed_columns: set[str]) -> list[str]:
     return sorted(set(unbacked))
 
 
-def evaluate(*, write_evidence: bool = True) -> EvalResult:
+def evaluate(*, write_evidence: bool = True, context: EvalRunContext | None = None) -> EvalResult:
     domains = load_governed_domains()
     if not domains:
         return EvalResult(
@@ -288,7 +281,7 @@ def evaluate(*, write_evidence: bool = True) -> EvalResult:
     recalls: list[float] = []
 
     for domain in domains:
-        outcomes = score_proposals(domain)
+        outcomes = score_proposals(domain, context)
         if not outcomes:
             breakdown.append(
                 DatasetBreakdown(
@@ -308,7 +301,7 @@ def evaluate(*, write_evidence: bool = True) -> EvalResult:
         )
         conformances.append(conformance)
 
-        flagged, flagged_detail = measure_planted_recall(domain)
+        flagged, flagged_detail = measure_planted_recall(domain, context)
         planted_recall = (
             min(1.0, flagged / domain.expected_defects)
             if domain.expected_defects and flagged is not None
@@ -378,7 +371,7 @@ def evaluate(*, write_evidence: bool = True) -> EvalResult:
                 )
             )
 
-    unbacked = count_unbacked_enums({d.column for d in domains})
+    unbacked = count_unbacked_enums({d.column for d in domains}, context)
 
     evidence: list[Evidence] = []
     if write_evidence:

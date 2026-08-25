@@ -20,7 +20,9 @@ import asyncio
 import logging
 import threading
 import time
+import uuid
 from collections import defaultdict, deque
+from datetime import UTC, datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -29,7 +31,10 @@ logger = logging.getLogger(__name__)
 _MAX_BUFFER = 500
 
 #: Keys whose values must never be streamed to a browser client.
-_SENSITIVE_KEYS = {"connection_string", "database_url", "password", "password_hash", "api_key", "secret"}
+_SENSITIVE_KEYS = {
+    "connection_string", "database_url", "password", "password_hash", "api_key", "secret",
+    "rows", "raw_rows", "raw_data", "dataframe", "sample_failures",
+}
 
 #: Maximum characters of any single previewed string/blob.
 _PREVIEW_CHARS = 2000
@@ -38,7 +43,7 @@ _PREVIEW_CHARS = 2000
 class _Subscriber:
     __slots__ = ("loop", "queue")
 
-    def __init__(self, loop: asyncio.AbstractEventLoop, queue: "asyncio.Queue[dict]") -> None:
+    def __init__(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue[dict]) -> None:
         self.loop = loop
         self.queue = queue
 
@@ -64,7 +69,7 @@ class NodeEventBroker:
                 # Subscriber's loop is already closed; it will be cleaned up on unsubscribe.
                 pass
 
-    def subscribe(self, stream_id: str) -> tuple[_Subscriber, "asyncio.Queue[dict]", list[dict]]:
+    def subscribe(self, stream_id: str) -> tuple[_Subscriber, asyncio.Queue[dict], list[dict]]:
         """Register the calling coroutine's loop and return (handle, queue, backlog)."""
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[dict] = asyncio.Queue()
@@ -126,7 +131,21 @@ async def run_graph_streamed(
     :data:`broker` under ``stream_id`` as it happens.
     """
     broker.reset(stream_id)
-    broker.publish(stream_id, {"type": "run_start", "stream_id": stream_id})
+    trace_id = uuid.uuid4().hex
+    dataset_id = str(initial_state.get("dataset_id") or "unknown")
+
+    def event(event_type: str, **extra: Any) -> dict[str, Any]:
+        return {
+            "type": event_type,
+            "event": event_type,
+            "trace_id": trace_id,
+            "workflow_run_id": stream_id,
+            "dataset_id": dataset_id,
+            "timestamp": datetime.now(UTC).isoformat(),
+            **extra,
+        }
+
+    broker.publish(stream_id, event("run_start", stream_id=stream_id))
     final_state: dict[str, Any] = dict(initial_state)
     try:
         # stream_mode="updates" yields {node_name: delta} per node; "values" yields the
@@ -134,17 +153,17 @@ async def run_graph_streamed(
         async for mode, chunk in graph.astream(initial_state, stream_mode=["updates", "values"]):
             if mode == "updates" and isinstance(chunk, dict):
                 for node_name, delta in chunk.items():
-                    broker.publish(stream_id, {
-                        "type": "node",
-                        "node": node_name,
-                        "preview": _safe_preview(delta),
-                    })
+                    broker.publish(stream_id, event(
+                        "node",
+                        node=node_name,
+                        preview=_safe_preview(delta),
+                    ))
             elif mode == "values" and isinstance(chunk, dict):
                 final_state = chunk
     except Exception as exc:  # surface the failure to the client, then re-raise
         logger.error("Streamed graph run failed for stream_id=%s: %s", stream_id, exc, exc_info=True)
-        broker.publish(stream_id, {"type": "error", "message": str(exc)})
-        broker.publish(stream_id, {"type": "done", "stream_id": stream_id})
+        broker.publish(stream_id, event("error", error_type=type(exc).__name__))
+        broker.publish(stream_id, event("done", stream_id=stream_id))
         raise
-    broker.publish(stream_id, {"type": "done", "stream_id": stream_id})
+    broker.publish(stream_id, event("done", stream_id=stream_id))
     return final_state

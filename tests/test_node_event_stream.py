@@ -6,7 +6,7 @@ import pytest
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
-from src.services.node_event_stream import NodeEventBroker, broker, run_graph_streamed, _safe_preview
+from src.services.node_event_stream import NodeEventBroker, _safe_preview, broker, run_graph_streamed
 
 
 class _State(TypedDict, total=False):
@@ -57,6 +57,10 @@ async def test_run_graph_streamed_emits_per_node_and_returns_final_state():
     types = [e["type"] for e in received]
     assert types[0] == "run_start"
     assert types[-1] == "done"
+    assert all(
+        {"trace_id", "workflow_run_id", "dataset_id", "event", "timestamp"} <= set(event)
+        for event in received
+    )
     node_events = [e for e in received if e["type"] == "node"]
     assert [e["node"] for e in node_events] == ["node_a", "node_b"]
 
@@ -82,8 +86,9 @@ async def test_late_subscriber_receives_replay_backlog():
 
 
 def test_safe_preview_truncates_and_redacts():
-    out = _safe_preview({"password": "hunter2", "big": "x" * 5000, "nested": {"api_key": "k"}})
+    out = _safe_preview({"password": "hunter2", "rows": [{"name": "private"}], "big": "x" * 5000, "nested": {"api_key": "k"}})
     assert out["password"] == "***redacted***"
+    assert out["rows"] == "***redacted***"
     assert out["nested"]["api_key"] == "***redacted***"
     assert len(out["big"]) <= 2001
 

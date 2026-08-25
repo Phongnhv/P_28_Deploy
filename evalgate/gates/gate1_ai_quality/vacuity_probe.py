@@ -38,6 +38,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from evalgate.core.context import EvalRunContext
 from evalgate.normalizers import normalizers as norm
 from evalgate.schemas.eval_result import (
     DatasetBreakdown,
@@ -94,16 +95,11 @@ class RuleVerdict:
     reason: str
 
 
-def _load_rules() -> list[dict[str, Any]]:
+def _load_rules(context: EvalRunContext | None = None) -> list[dict[str, Any]]:
     rules: list[dict[str, Any]] = []
-    for directory in PROPOSAL_DIRS:
-        if not directory.exists():
-            continue
-        for path in sorted(directory.glob("*.json")):
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
+    if context is not None:
+        for record in context.records("proposals"):
+            payload = json.loads(context.path_for(record).read_text(encoding="utf-8"))
             batch = payload.get("proposed_rules") if isinstance(payload, dict) else payload
             if isinstance(batch, list):
                 rules.extend(r for r in batch if isinstance(r, dict))
@@ -231,7 +227,7 @@ def judge_all(rules: list[dict[str, Any]], frame) -> list[RuleVerdict]:
     return [judge_rule(rule, frame) for rule in rules]
 
 
-def evaluate(*, write_evidence: bool = True) -> EvalResult:
+def evaluate(*, write_evidence: bool = True, context: EvalRunContext | None = None) -> EvalResult:
     try:
         import pandas as pd
     except ImportError:  # pragma: no cover - pandas is a hard dependency
@@ -240,27 +236,29 @@ def evaluate(*, write_evidence: bool = True) -> EvalResult:
             metadata={"reason": "pandas is unavailable"},
         )
 
-    if not DATASET_PARQUET.exists():
+    dataset_path = (context.path_for(context.require_records("input-dataset")[0])
+                    if context is not None and context.records("input-dataset") else DATASET_PARQUET)
+    if context is None or not dataset_path.exists():
         return EvalResult(
             gate=GATE, evaluator=EVALUATOR,
             status=EvalStatus.BLOCKED_BY_SYSTEM_CAPABILITY,
             metadata={
                 "reason": (
                     "the dataset the archived rules were proposed for is not present; "
-                    f"expected {DATASET_PARQUET.relative_to(PROJECT_ROOT)}"
+                    "expected an input-dataset artifact in the current manifest"
                 )
             },
         )
 
-    rules = _load_rules()
+    rules = _load_rules(context)
     if not rules:
         return EvalResult(
             gate=GATE, evaluator=EVALUATOR,
             status=EvalStatus.BLOCKED_BY_SYSTEM_CAPABILITY,
-            metadata={"reason": "no archived agent proposals under output/"},
+            metadata={"reason": "no proposals in the current manifest"},
         )
 
-    frame = pd.read_parquet(DATASET_PARQUET)
+    frame = pd.read_parquet(dataset_path) if dataset_path.suffix.lower() == ".parquet" else pd.read_csv(dataset_path)
     verdicts = judge_all(rules, frame)
 
     judged = [v for v in verdicts if v.verdict in {"VACUOUS", "DEGENERATE", "CAN_FIRE"}]
@@ -308,7 +306,7 @@ def evaluate(*, write_evidence: bool = True) -> EvalResult:
             json.dumps(
                 {
                     "mode": "structural",
-                    "dataset": str(DATASET_PARQUET.relative_to(PROJECT_ROOT)),
+                    "dataset": str(dataset_path),
                     "rows": int(len(frame)),
                     "rules_loaded": len(rules),
                     "judged": len(judged),

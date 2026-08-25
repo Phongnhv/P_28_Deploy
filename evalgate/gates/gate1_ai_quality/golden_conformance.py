@@ -23,6 +23,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from evalgate.core.context import EvalRunContext
 from evalgate.golden.schema import Assertion, GoldenCase, load_all_suites
 from evalgate.normalizers import normalizers as norm
 from evalgate.schemas.eval_result import (
@@ -78,36 +79,27 @@ class CaseOutcome:
 # Loading the agent's output
 # ---------------------------------------------------------------------------
 
-def load_proposals() -> list[dict[str, Any]]:
+def load_proposals(context: EvalRunContext | None = None) -> list[dict[str, Any]]:
     """Every archived proposed rule, flattened, with its artefact recorded."""
     rules: list[dict[str, Any]] = []
-    for directory in PROPOSAL_DIRS:
-        if not directory.exists():
-            continue
-        for path in sorted(directory.glob("*.json")):
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
+    if context is not None:
+        for record in context.records("proposals"):
+            payload = json.loads(context.path_for(record).read_text(encoding="utf-8"))
             batch = payload.get("proposed_rules") if isinstance(payload, dict) else payload
-            if not isinstance(batch, list):
-                continue
-            for rule in batch:
-                if isinstance(rule, dict):
-                    rules.append({**rule, "__artifact__": str(path.relative_to(PROJECT_ROOT))})
+            if isinstance(batch, list):
+                rules.extend({**rule, "__artifact__": record.relative_path}
+                             for rule in batch if isinstance(rule, dict))
+        return rules
     return rules
 
 
-def load_results() -> list[dict[str, Any]]:
+def load_results(context: EvalRunContext | None = None) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
-    if not REPORTS_DIR.exists():
+    if context is not None:
+        for record in context.records("execution-results"):
+            payload = json.loads(context.path_for(record).read_text(encoding="utf-8"))
+            results.extend(payload.get("test_results", payload.get("results", [])))
         return results
-    for path in sorted(REPORTS_DIR.glob("test_run_*.json")):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        results.extend(payload.get("test_results", []))
     return results
 
 
@@ -300,7 +292,7 @@ def run_case(
     )
 
 
-def evaluate(*, write_evidence: bool = True) -> EvalResult:
+def evaluate(*, write_evidence: bool = True, context: EvalRunContext | None = None) -> EvalResult:
     try:
         suites = load_all_suites()
     except Exception as exc:  # noqa: BLE001 - a malformed suite is itself the finding
@@ -317,16 +309,15 @@ def evaluate(*, write_evidence: bool = True) -> EvalResult:
             metadata={"reason": "no golden cases are defined"},
         )
 
-    rules = load_proposals()
-    results = load_results()
+    rules = load_proposals(context)
+    results = load_results(context)
     if not rules:
         return EvalResult(
             gate=GATE, evaluator=EVALUATOR,
             status=EvalStatus.BLOCKED_BY_SYSTEM_CAPABILITY,
             metadata={
                 "reason": (
-                    "no archived agent proposals under output/; the live agent cannot be "
-                    "invoked because get_dataset_rule_policy raises for every dataset"
+                    "the current manifest contains no agent proposals"
                 )
             },
         )

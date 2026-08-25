@@ -105,7 +105,7 @@ def save_run(payload: dict[str, Any], *, keep: int = 30) -> Path | None:
     # Stale runs are still recorded -- the trend line is useful and hiding them would
     # make the history lie by omission -- but they are marked unusable so they can
     # never become the reference a later comparison is measured against.
-    usable = payload.get("decision") != "EVALGATE_STALE"
+    usable = payload.get("decision") in {"PASS", "WARNING"}
     entry = {
         "run_id": run_id,
         "git_ref": payload.get("git_ref"),
@@ -153,7 +153,7 @@ def resolve_baseline(baseline_run_id: str | None = None) -> dict[str, Any] | Non
 
 def current_gate_scores(results: list[EvalResult]) -> dict[str, float]:
     """Per-gate score of the run in progress, using the aggregator's own collapse."""
-    weights: dict[str, float] = load_policy("weights")["weights"]
+    weights: dict[str, float] = load_policy("evaluation_policy")["score"]["weights"]
     per_gate: dict[str, list[float]] = {}
     for result in results:
         score = collapse_result_scores(result)
@@ -239,6 +239,27 @@ def evaluate(
         )
 
     baseline_id = baseline.get("run_id")
+    current_versions = {
+        "evaluation_schema_version": (
+            results[0].evaluation_schema_version if results else None
+        ),
+        "policy_version": results[0].policy_version if results else None,
+        "corpus_version": results[0].corpus_version if results else None,
+        "normalizer_version": results[0].normalizer_version if results else None,
+    }
+    baseline_versions = {key: baseline.get(key) for key in current_versions}
+    if baseline_versions != current_versions:
+        return EvalResult(
+            gate=GATE,
+            evaluator=EVALUATOR,
+            status=EvalStatus.NOT_MEASURED,
+            baseline_run_id=baseline_id,
+            metadata={
+                "reason": "baseline evaluation contract is incompatible",
+                "baseline_versions": baseline_versions,
+                "current_versions": current_versions,
+            },
+        )
     baseline_scores: dict[str, Any] = baseline.get("gate_scores") or {}
     baseline_hard = {h["id"]: h for h in baseline.get("hard_gates", [])}
     current_scores = current_gate_scores(results)
@@ -298,6 +319,22 @@ def evaluate(
             blocks_release=True,
         )
         for drop in drops
+    ]
+
+    removed_evaluators = composition_changed["removed"]
+    findings += [
+        Finding(
+            id="REG-EVALUATOR-REMOVED",
+            severity=Severity.CRITICAL,
+            title=f"Evaluator disappeared since {baseline_id}: {name}",
+            detail=(
+                "Removing a measured evaluator reduces coverage and can hide a "
+                "regression; restore it or approve a new policy version explicitly."
+            ),
+            evidence_ref="evalgate/evidence/governance/regression.json",
+            blocks_release=True,
+        )
+        for name in removed_evaluators
     ]
 
     # Hard-gate status is read from the aggregator's own evaluation of this run, not

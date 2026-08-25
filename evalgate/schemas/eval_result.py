@@ -32,6 +32,9 @@ class EvalStatus(StrEnum):
     BLOCKED_MISSING_CREDENTIAL = "BLOCKED_MISSING_CREDENTIAL"
     BLOCKED_MISSING_GROUND_TRUTH = "BLOCKED_MISSING_GROUND_TRUTH"
     BLOCKED_BY_SYSTEM_CAPABILITY = "BLOCKED_BY_SYSTEM_CAPABILITY"
+    STALE_EVIDENCE = "STALE_EVIDENCE"
+    EVALUATOR_ERROR = "EVALUATOR_ERROR"
+    MISSING_MANDATORY_EVIDENCE = "MISSING_MANDATORY_EVIDENCE"
 
 
 #: Statuses that are dropped from the aggregate, forcing a weight re-normalisation.
@@ -44,6 +47,9 @@ EXCLUDED_FROM_AGGREGATE: frozenset[EvalStatus] = frozenset(
         EvalStatus.BLOCKED_MISSING_CREDENTIAL,
         EvalStatus.BLOCKED_MISSING_GROUND_TRUTH,
         EvalStatus.BLOCKED_BY_SYSTEM_CAPABILITY,
+        EvalStatus.STALE_EVIDENCE,
+        EvalStatus.EVALUATOR_ERROR,
+        EvalStatus.MISSING_MANDATORY_EVIDENCE,
     }
 )
 
@@ -145,6 +151,11 @@ class EvalResult(BaseModel):
     sdih_seed: int | None = None
     timestamp: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    evaluation_schema_version: str = "2.0"
+    policy_version: str = "1.0"
+    corpus_version: str = "1.0"
+    normalizer_version: str = "1.0"
 
     def counts_toward_aggregate(self) -> bool:
         return self.status not in EXCLUDED_FROM_AGGREGATE

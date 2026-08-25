@@ -1,5 +1,9 @@
 # Dependencies are declared here, deliberately apart from the product's
 # requirements.txt, so installing EvalGate can never change what the product ships.
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "evalgate"
 version = "0.1.0"
@@ -25,6 +29,13 @@ tracing = ["langfuse>=2.0", "opentelemetry-sdk>=1.20",
            "opentelemetry-exporter-otlp>=1.20"]  # Gate 3
 drift   = ["evidently>=0.4"]               # Gate 4C
 corpus  = ["faker>=25.0"]                  # optional; generator falls back to numpy
+live    = ["deepeval>=2.0", "langfuse>=2.0", "opentelemetry-sdk>=1.20",
+           "opentelemetry-exporter-otlp>=1.20"]
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["evalgate*"]
+exclude = ["evalgate.tests*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

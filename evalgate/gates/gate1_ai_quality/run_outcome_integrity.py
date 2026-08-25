@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from evalgate.core.context import EvalRunContext
 from evalgate.normalizers import normalizers as norm
 from evalgate.schemas.eval_result import (
     DatasetBreakdown,
@@ -193,6 +194,26 @@ def collect_runs(output_dir: Path | None = None) -> list[RunOutcome]:
     return sorted(runs.values(), key=lambda r: r.started_at, reverse=True)
 
 
+def collect_context_runs(context: EvalRunContext) -> list[RunOutcome]:
+    document = context.read_json("run-outcome")
+    raw_runs = document.get("runs", []) if isinstance(document, dict) else []
+    runs = [
+        RunOutcome(
+            run_id=str(item.get("run_id") or context.run_id),
+            workflow=item.get("workflow"),
+            started_at=str(item.get("started_at") or ""),
+            stages=set(item.get("stages") or []),
+            reached_terminal=bool(item.get("reached_terminal")),
+            output_count=item.get("output_count"),
+            schema_rejections=int(item.get("schema_rejections") or 0),
+            schema_accepted=int(item.get("schema_accepted") or 0),
+            errors=[str(value)[:400] for value in item.get("errors", [])],
+        )
+        for item in raw_runs if isinstance(item, dict)
+    ]
+    return sorted(runs, key=lambda run: run.started_at, reverse=True)
+
+
 def _attribute(stages: set[str]) -> str | None:
     """Name the workflow a run belongs to, or None when its stages match neither.
 
@@ -252,8 +273,11 @@ def schema_violation_rate(runs: list[RunOutcome]) -> float | None:
     return rejected / offered
 
 
-def evaluate(*, write_evidence: bool = True, output_dir: Path | None = None) -> EvalResult:
-    runs = collect_runs(output_dir)
+def evaluate(*, write_evidence: bool = True, output_dir: Path | None = None,
+             context: EvalRunContext | None = None) -> EvalResult:
+    # ``output_dir`` remains an explicit unit-test/diagnostic seam.  The registry
+    # always supplies context, so release evaluation can never enter discovery.
+    runs = collect_context_runs(context) if context is not None else collect_runs(output_dir)
     attributed = [r for r in runs if r.workflow]
 
     if not attributed:
@@ -263,11 +287,10 @@ def evaluate(*, write_evidence: bool = True, output_dir: Path | None = None) -> 
             status=EvalStatus.NOT_MEASURED,
             metadata={
                 "reason": (
-                    "no correlated run artefacts under output/; the directory is "
-                    "git-ignored, so a clean checkout has nothing to read. Run the "
-                    "product once to populate it."
+                    "the current manifest contains no attributed run-outcome evidence"
+                    if context is not None else "no correlated product runs found under output/"
                 ),
-                "artefact_root": "output",
+                "artefact_root": str(context.artifact_root) if context else None,
             },
         )
 

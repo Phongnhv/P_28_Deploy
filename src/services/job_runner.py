@@ -63,7 +63,7 @@ def _supabase_source_url() -> str | None:
 
 def _uploaded_dataset_path(dataset_id: str) -> Path | None:
     for suffix in (".parquet", ".csv"):
-        candidate = Path("data/uploads") / f"{dataset_id}{suffix}"
+        candidate = Path(get_settings().upload_dir) / f"{dataset_id}{suffix}"
         if candidate.exists():
             return candidate
     return None

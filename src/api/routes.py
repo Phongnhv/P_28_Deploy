@@ -569,15 +569,16 @@ async def import_dataset(
     if len(payload) > 100 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="The upload exceeds the 100 MB limit.")
     dataset_id = f"dataset-import-{uuid.uuid4().hex[:20]}"
-    upload_dir = Path("data/uploads")
+    upload_dir = Path(get_settings().upload_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
     upload_path = upload_dir / f"{dataset_id}{suffix}"
     upload_path.write_bytes(payload)
-    try:
-        from src.services.dbt_artifact_store import get_dbt_artifact_store
-        get_dbt_artifact_store().upload_dataset_file(dataset_id, file.filename or f"imported{suffix}", payload)
-    except Exception as exc:
-        logger.warning("Failed to upload dataset to MinIO: %s", exc)
+    if get_settings().object_storage_enabled:
+        try:
+            from src.services.dbt_artifact_store import get_dbt_artifact_store
+            get_dbt_artifact_store().upload_dataset_file(dataset_id, file.filename or f"imported{suffix}", payload)
+        except Exception as exc:
+            logger.warning("Failed to upload dataset to MinIO: %s", exc)
     display_name = Path(file.filename or "Imported dataset").stem.replace("_", " ").strip() or "Imported dataset"
     dataset = DatasetModel(
         id=dataset_id,
@@ -709,7 +710,7 @@ def delete_dataset(
     )
 
     for suffix in (".csv", ".parquet"):
-        p = Path("data/uploads") / f"{id}{suffix}"
+        p = Path(get_settings().upload_dir) / f"{id}{suffix}"
         if p.exists():
             try:
                 p.unlink()
@@ -1033,8 +1034,34 @@ def review_workflow_artifact(
     if not run:
         raise HTTPException(status_code=404, detail="Workflow run not found")
     require_dataset_access(db, session, run.dataset_id, manage=True)
-    if body.action != "approve" or artifact.artifact_type != "RULE_SET":
-        raise HTTPException(status_code=422, detail="Only the current rule set can be confirmed here")
+    if body.action != "approve" or artifact.artifact_type not in {"SEMANTIC_CONTRACT", "RULE_SET"}:
+        raise HTTPException(status_code=422, detail="Only the current semantic contract or rule set can be confirmed here")
+    if artifact.artifact_type == "SEMANTIC_CONTRACT":
+        if run.current_step != "UNDERSTAND_DATA" or artifact.stale:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "WORKFLOW_STATE", "message": "The semantic contract is not current."},
+            )
+        artifact.status = "APPROVED"
+        try:
+            navigate_forward(run)
+            add_audit_event(
+                db,
+                session_id=session.id,
+                actor_role=session.role,
+                action_code="SEMANTIC_CONTRACT_APPROVED",
+                entity_type="workflow_artifact",
+                entity_id=artifact.id,
+                detail={"workflow_run_id": run.id},
+            )
+            db.commit()
+        except WorkflowError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "WORKFLOW_STATE", "message": str(exc)},
+            )
+        return serialize_artifact(artifact)
     try:
         reviewed = complete_rule_review(db, run)
         db.commit()
@@ -1210,7 +1237,7 @@ def query_dataset_rows(
 
     uploaded_path = None
     for suffix in (".parquet", ".csv"):
-        candidate = Path("data/uploads") / f"{id}{suffix}"
+        candidate = Path(get_settings().upload_dir) / f"{id}{suffix}"
         if candidate.exists():
             uploaded_path = candidate
             break

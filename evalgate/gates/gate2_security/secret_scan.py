@@ -36,23 +36,34 @@ PATTERNS: dict[str, re.Pattern[str]] = {
     "google_api_key": re.compile(r"AIza[0-9A-Za-z_\-]{35}"),
     "langfuse_secret": re.compile(r"sk-lf-[0-9a-f\-]{20,}"),
     "private_key_block": re.compile(r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-    "postgres_url_with_password": re.compile(r"postgres(ql)?://[^:\s]+:[^@\s]{6,}@"),
+    "postgres_url_with_password": re.compile(
+        r"postgres(?:ql)?://[^:\s]+:(?P<password>[^@\s]{6,})@"
+    ),
 }
 
 SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".pdf", ".parquet", ".db", ".ico"}
-#: Documentation and examples legitimately show placeholder shapes.
-PLACEHOLDER_HINTS = ("example", "placeholder", "your-", "xxx", "dummy", "<", "changeme")
-
-#: Files whose whole purpose is to demonstrate configuration shape.
-DOC_PATH_HINTS = (".example", "docs/", "docs\\", "readme", "template")
-
 #: Credential values that are self-evidently illustrative. Matching a real secret
 #: against this list is impossible in practice, and the alternative -- flagging every
 #: tutorial connection string -- makes HG-S6 fire constantly and stop being read.
-PLACEHOLDER_SECRETS = (
-    "password", "passwd", "pass@", "agentpass", "secret", "localpassword",
-    "mypassword", "test_password", "miniopassword", "postgres:postgres",
+PLACEHOLDER_PASSWORDS = frozenset(
+    {
+        "password",
+        "passwd",
+        "agentpass",
+        "localpassword",
+        "mypassword",
+        "test_password",
+        "miniopassword",
+        "postgres",
+        "your_runner_password_here",
+    }
 )
+
+
+def _is_exact_placeholder(pattern_name: str, match: re.Match[str]) -> bool:
+    if pattern_name != "postgres_url_with_password":
+        return False
+    return match.group("password").lower() in PLACEHOLDER_PASSWORDS
 
 
 def tracked_files() -> list[Path]:
@@ -83,17 +94,11 @@ def evaluate(*, write_evidence: bool = True) -> EvalResult:
             continue
         scanned += 1
         for number, line in enumerate(text.splitlines(), start=1):
-            lowered = line.lower()
             for name, pattern in PATTERNS.items():
                 match = pattern.search(line)
                 if not match:
                     continue
-                if any(hint in lowered for hint in PLACEHOLDER_HINTS):
-                    continue
-                relative = str(path.relative_to(PROJECT_ROOT)).lower()
-                if any(hint in relative for hint in DOC_PATH_HINTS):
-                    continue
-                if any(token in match.group(0).lower() for token in PLACEHOLDER_SECRETS):
+                if _is_exact_placeholder(name, match):
                     continue
                 hits.append(
                     {

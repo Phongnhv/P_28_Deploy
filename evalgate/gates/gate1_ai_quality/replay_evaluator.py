@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from evalgate.core.context import EvalRunContext
 from evalgate.normalizers import normalizers as norm
 from evalgate.schemas.eval_result import (
     DatasetBreakdown,
@@ -46,6 +47,7 @@ class RuleOutcome:
     status: str
     violation_count: int
     total_rows: int
+    sample_ids: set[str]
 
 
 def _parse_rule_id(rule_id: str) -> tuple[str | None, str]:
@@ -71,18 +73,27 @@ def _display_path(path: Path) -> str:
         return str(path)
 
 
-def load_archived_runs(reports_dir: Path = REPORTS_DIR) -> list[dict[str, Any]]:
+def load_archived_runs(
+    reports_dir: Path = REPORTS_DIR, *, context: EvalRunContext | None = None
+) -> list[dict[str, Any]]:
     runs: list[dict[str, Any]] = []
-    for path in sorted(reports_dir.glob("test_run_*.json")):
+    if context is not None:
+        for record in context.records("execution-results"):
+            payload = json.loads(context.path_for(record).read_text(encoding="utf-8"))
+            results = payload.get("test_results") or payload.get("results") or []
+            if results:
+                runs.append({**payload, "__path__": record.relative_path})
+        return runs
+    # Explicit diagnostic/test helper only. Production orchestration always passes
+    # EvalRunContext and therefore never performs this directory scan.
+    for path in reports_dir.glob("*.json"):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             continue
-        results = payload.get("test_results") or payload.get("results") or []
-        if not results:
-            continue
-        payload["__path__"] = _display_path(path)
-        runs.append(payload)
+        results = payload.get("test_results") if isinstance(payload, dict) else None
+        if results:
+            runs.append({**payload, "__path__": _display_path(path)})
     return runs
 
 
@@ -99,6 +110,11 @@ def _outcomes(run: dict[str, Any]) -> list[RuleOutcome]:
                 status=entry.get("status", ""),
                 violation_count=int(entry.get("violation_count") or 0),
                 total_rows=int(entry.get("total_rows") or 0),
+                sample_ids={
+                    str(value.get("source_row_id") if isinstance(value, dict) else value)
+                    for value in (entry.get("sample_refs") or entry.get("sample_failures") or [])
+                    if value is not None
+                },
             )
         )
     return outcomes
@@ -106,41 +122,47 @@ def _outcomes(run: dict[str, Any]) -> list[RuleOutcome]:
 
 def score_run(
     run: dict[str, Any],
-    truth_by_class: dict[str, dict[str, int]],
+    truth_by_class: dict[str, dict[str, list[str] | set[str]]],
 ) -> dict[str, Any]:
     """Score one archived run.
 
-    ``truth_by_class`` maps a defect class to ``{column: count_of_true_defects}``.
-    A class is credited as detected when a rule of an expected type, on the right
-    column, reported at least as many violations as there are true defects.
+    ``truth_by_class`` maps a defect class to labelled row IDs by column. A
+    prediction only receives credit when its row ID intersects that ground truth;
+    matching a violation count is never treated as a true positive.
     """
     outcomes = _outcomes(run)
-    total_flagged = sum(o.violation_count for o in outcomes)
-
     recall_by_class: dict[str, float] = {}
-    detected_true = 0
+    detected_true_ids: set[tuple[str, str, str]] = set()
+    all_predicted_ids = {
+        (outcome.rule_id, row_id)
+        for outcome in outcomes
+        for row_id in outcome.sample_ids
+    }
     total_true = 0
     per_class_detail: dict[str, Any] = {}
 
     for defect_name, columns in truth_by_class.items():
         defect = DefectClass(defect_name)
         expected_types = EXPECTED_RULE_TYPES[defect]
-        class_true = sum(columns.values())
+        class_true = sum(len(set(row_ids)) for row_ids in columns.values())
         total_true += class_true
         caught = 0
         matched_rules: list[str] = []
-        for column, count in columns.items():
+        for column, labelled_rows in columns.items():
+            truth_ids = {str(value) for value in labelled_rows}
             hit = [
                 o
                 for o in outcomes
                 if o.column == column
                 and o.rule_type in expected_types
-                and o.violation_count > 0
+                and o.sample_ids
             ]
             if hit:
-                caught += min(count, max(o.violation_count for o in hit))
+                predicted = set().union(*(o.sample_ids for o in hit))
+                overlap = predicted & truth_ids
+                caught += len(overlap)
+                detected_true_ids.update((defect_name, column, row_id) for row_id in overlap)
                 matched_rules.extend(o.rule_id for o in hit)
-        detected_true += caught
         recall_by_class[defect_name] = (caught / class_true) if class_true else 0.0
         per_class_detail[defect_name] = {
             "true_defects": class_true,
@@ -151,6 +173,8 @@ def score_run(
             "columns": columns,
         }
 
+    detected_true = len(detected_true_ids)
+    total_flagged = len(all_predicted_ids)
     precision = (detected_true / total_flagged) if total_flagged else 0.0
     recall = (detected_true / total_true) if total_true else 0.0
     f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
@@ -163,6 +187,9 @@ def score_run(
         "dataset_id": run.get("dataset_id"),
         "rule_count": len(outcomes),
         "total_flagged_rows": total_flagged,
+        "count_only_violations": sum(
+            outcome.violation_count for outcome in outcomes if outcome.violation_count and not outcome.sample_ids
+        ),
         "true_defects": total_true,
         "credited_detections": detected_true,
         "precision": round(precision, 6),
@@ -177,22 +204,36 @@ def score_run(
 
 
 def evaluate(
-    truth_by_class: dict[str, dict[str, int]],
+    truth_by_class: dict[str, dict[str, list[str] | set[str]]],
     *,
     reports_dir: Path = REPORTS_DIR,
     write_evidence: bool = True,
+    context: EvalRunContext | None = None,
 ) -> EvalResult:
-    runs = load_archived_runs(reports_dir)
+    runs = load_archived_runs(reports_dir, context=context)
     if not runs:
         return EvalResult(
             gate=GATE,
             evaluator=EVALUATOR,
             status=EvalStatus.BLOCKED_MISSING_GROUND_TRUTH,
             metrics={},
-            metadata={"reason": "no archived run artefacts found"},
+            metadata={"reason": "no execution-results artifact in the current manifest"},
         )
 
     scored = [score_run(run, truth_by_class) for run in runs]
+    if (not any(s["total_flagged_rows"] for s in scored)
+            and any(s["count_only_violations"] for s in scored)):
+        return EvalResult(
+            gate=GATE,
+            evaluator=EVALUATOR,
+            status=EvalStatus.NOT_MEASURED,
+            metadata={
+                "reason": (
+                    "archived results do not contain failed row IDs; count-only "
+                    "artifacts cannot support row-level precision or recall"
+                )
+            },
+        )
     # The richest run is the one that exercised the most rules.
     scored.sort(key=lambda s: s["rule_count"], reverse=True)
     primary = scored[0]
@@ -257,7 +298,13 @@ def evaluate(
     return EvalResult(
         gate=GATE,
         evaluator=EVALUATOR,
-        status=EvalStatus.FAIL,
+        status=(
+            EvalStatus.PASS
+            if primary["f1"] >= 0.60 and not zero_recall
+            else EvalStatus.WARN
+            if primary["f1"] >= 0.40 and not zero_recall
+            else EvalStatus.FAIL
+        ),
         score=norm.ratio(primary["f1"]),
         metrics={
             "detection_precision": MetricValue(

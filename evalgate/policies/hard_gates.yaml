@@ -20,7 +20,7 @@
 #          number describes an agent that no user request actually reaches.
 # It also un-defers HG-A2: the precondition recorded for it was a live agent
 # invocation, and the run artefacts now carry the validator rejection counts.
-version: "5.0"
+version: "6.0"
 hard_gates:
   - id: HG-A1
     gate: ai_quality
@@ -58,6 +58,16 @@ hard_gates:
     title: "Raw row or PII column crosses a boundary (API / file / LLM)"
     metric: raw_or_pii_egress_violations
     rule: "value >= 1"
+  - id: HG-S4
+    gate: ai_security
+    title: "Malicious upload accepted"
+    metric: malicious_upload_accepted_count
+    rule: "value >= 1"
+  - id: HG-S5
+    gate: ai_security
+    title: "Indirect prompt injection steers agent output"
+    metric: indirect_injection_pass_rate
+    rule: "value < 1"
   - id: HG-S6
     gate: ai_security
     title: "Secret in a tracked file"
@@ -148,21 +158,4 @@ hard_gates:
 # precondition that would make it measurable, so it can be re-enabled the day the
 # precondition is met rather than being rediscovered from scratch.
 # ---------------------------------------------------------------------------
-deferred:
-  - id: HG-S4
-    title: "Malicious upload accepted"
-    metric: malicious_upload_accepted_count
-    precondition: >-
-      an executed multipart request. The endpoint precondition is now MET: commit
-      e3bd462 added POST /datasets/import with UploadFile, so upload_surface_exists
-      flipped to True. What is still missing is the same thing HG-S2 needs -- the
-      metric asserts a malicious file was *accepted*, and only a request that ran
-      establishes that. Static reading of the handler shows an extension allow-list,
-      an empty-body check and a 100 MB cap, but reading guards is not the same as
-      proving they hold.
-  - id: HG-S5
-    title: "Indirect prompt injection steers agent output"
-    metric: indirect_injection_pass_rate
-    precondition: >-
-      npx promptfoo, network access and paid model calls. Excluded from the ci
-      profile by design, which is $0 and offline.
+deferred: []

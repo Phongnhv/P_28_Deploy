@@ -1,5 +1,10 @@
 # EVALGATE — BÁO CÁO TRIỂN KHAI, KIẾN TRÚC & TỰ ĐÁNH GIÁ
 
+> **LƯU Ý LỊCH SỬ:** Các điểm số/run trong tài liệu này thuộc các revision trước
+> Phase Production-grade. Kiến trúc hiện hành dùng policy `1.0`, provenance manifest,
+> registry fail-closed và ratchet CI. Xem `evalgate/IMPLEMENTATION_CHANGE_REPORT.md`
+> để biết chính xác file đã thêm/sửa/xóa và kết quả xác minh hiện tại.
+
 > **Dự án:** RidePulse DQ · **Nhánh:** `chien` @ `31e065a` · **Ngày:** 2026-08-22
 > **Đối tượng đọc:** người review độc lập — bạn phải tự đánh giá được EvalGate mà không cần hỏi tác giả
 > **Nguyên tắc của tài liệu:** nói cả những gì EvalGate **chưa** làm được, và những defect của **chính nó**
@@ -24,6 +29,7 @@
 | 12 | [**Vá điểm mù — phát hiện từ lần chạy thật**](#12-vá-điểm-mù--phát-hiện-từ-lần-chạy-thật-22082026) |
 | 13 | [**Kiểm tra lại sau khi pull main**](#13-kiểm-tra-lại-sau-khi-pull-main-31e065a--e3bd462)                           |
 | 14 | [**Sửa hai khuyết tật cấu trúc**](#14-sửa-hai-khuyết-tật-cấu-trúc)                                            |
+| 19 | [**Chạy EvalGate và đọc chỉ số trong terminal**](#19-chạy-evalgate-và-đọc-chỉ-số-trong-terminal)                 |
 
 ---
 
@@ -2342,6 +2348,127 @@ không làm hệ thống an toàn hơn.
 Giá trị thật của mục 18 nằm ở chỗ nó **dùng chung hạ tầng với việc chấm-theo-run** ở
 §17.8 — thứ đã được xác định là hạn chế nghiêm trọng nhất của EvalGate. Làm mục 18 tức
 là làm luôn §17.8 mục 1, không phải gánh thêm một việc nữa.
+
+---
+
+## 19. CHẠY EVALGATE VÀ ĐỌC CHỈ SỐ TRONG TERMINAL
+
+### 19.1 Điều kiện kích hoạt
+
+Chạy riêng Graph 3 (`ANALYZE_REPORT`) từ frontend/backend chỉ tạo anomaly report;
+nó **không tự động kích hoạt EvalGate**. Đây là chủ ý kiến trúc: một upload production
+bình thường không tự chạy release gate.
+
+Để đánh giá, phải chạy `evalgate.product_run`. Harness này tự đi hết served path:
+
+```text
+Upload → Profile → Graph 1 → Graph 2 → HITL
+→ Publish ruleset → Run checks → Graph 3
+→ Finalize manifest → EvalGate
+```
+
+Không cần khởi động backend hoặc frontend riêng. Product benchmark khởi tạo FastAPI
+qua ASGI trong process nhưng vẫn đi qua auth, public API, workflow, LangGraph, schema
+và các bước Steward review.
+
+### 19.2 Tạo artifact bundle từ product path
+
+Chạy tại thư mục gốc của repository bằng PowerShell:
+
+```powershell
+$manifest = (
+  & .\venv\Scripts\python.exe -m evalgate.product_run `
+    --profile local `
+    --suite frozen-v1 `
+    --out output/evalgate-runs |
+  Select-Object -Last 1
+).Trim()
+
+$manifest
+```
+
+Biến `$manifest` phải chứa đúng đường dẫn tới `manifest.json` vừa được finalize. Không
+được tự tìm file "latest", tái sử dụng manifest cũ hoặc trỏ EvalGate vào global
+`output/`.
+
+### 19.3 Chấm đúng product run vừa tạo
+
+```powershell
+& .\venv\Scripts\python.exe -m evalgate.run `
+  --mode local `
+  --manifest $manifest `
+  --out evalgate/reports `
+  --allow-dirty
+```
+
+`--allow-dirty` chỉ dành cho chẩn đoán local. Nó không biến một working tree bẩn thành
+release authority và không được dùng trong `ci`, `nightly` hoặc `pre_release`.
+
+Terminal in tóm tắt theo dạng:
+
+```text
+decision: RELEASE_BLOCKED   score: 82.5
+hard gates failed (2): ...
+report  -> evalgate/reports/report.md
+result  -> evalgate/reports/result.json
+```
+
+`RELEASE_BLOCKED` không nhất thiết có nghĩa harness bị lỗi. Nó có thể chứng minh
+EvalGate đã chạy đúng và đã phát hiện sản phẩm chưa đạt điều kiện release.
+
+### 19.4 Đọc báo cáo đầy đủ
+
+```powershell
+Get-Content evalgate/reports/report.md
+```
+
+Báo cáo gồm quality score, release decision, mandatory evidence coverage, điểm từng
+gate, trạng thái từng evaluator, hard gate thất bại, critical findings, toàn bộ metric
+đo được và lý do của những evaluator chưa đo được.
+
+### 19.5 Truy vấn nhanh từ `result.json`
+
+```powershell
+$result = Get-Content evalgate/reports/result.json -Raw | ConvertFrom-Json
+
+$result |
+  Select-Object quality_score, release_decision, mandatory_evidence_coverage |
+  Format-List
+
+$result.gate_scores | Format-List
+```
+
+Chỉ hiển thị evaluator chưa đạt:
+
+```powershell
+$result.results |
+  Where-Object { $_.status -ne "PASS" } |
+  Select-Object evaluator, gate, status, score,
+    @{Name="reason"; Expression={$_.metadata.reason}} |
+  Format-Table -AutoSize -Wrap
+```
+
+Hiển thị hard gate:
+
+```powershell
+$result.hard_gates |
+  Format-Table id, gate, status, observed, reason -AutoSize -Wrap
+```
+
+### 19.6 Thứ tự sử dụng kết quả để cải thiện
+
+Ưu tiên xử lý theo thứ tự:
+
+1. `EVALUATOR_ERROR` — evaluator crash hoặc contract bị vi phạm.
+2. `MISSING_MANDATORY_EVIDENCE` — product run chưa sinh đủ evidence bắt buộc.
+3. Hard gate có trạng thái `FAIL` — chặn release bất kể quality score.
+4. Evaluator có score thấp hoặc critical finding chưa xử lý.
+5. Evaluator advisory/`NOT_*` không bắt buộc ở profile hiện tại.
+
+`quality_score` trả lời hệ thống tốt đến đâu. `release_decision` trả lời revision hiện
+tại có đủ điều kiện release hay không. Điểm cao không được override một hard gate về
+security, reliability, observability hoặc provenance.
+
 ---
 
 ## PHỤ LỤC — TRẠNG THÁI

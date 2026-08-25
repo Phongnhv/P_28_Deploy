@@ -205,6 +205,10 @@ def _baseline(*results: EvalResult, run_id: str = "baseline-1") -> dict:
     """A stored run payload shaped the way ``render_json`` writes one."""
     return {
         "run_id": run_id,
+        "evaluation_schema_version": "2.0",
+        "policy_version": "1.0",
+        "corpus_version": "1.0",
+        "normalizer_version": "1.0",
         "gate_scores": {},
         "hard_gates": [],
         "results": [r.model_dump(mode="json", by_alias=True) for r in results],
@@ -252,12 +256,15 @@ def test_adding_an_evaluator_to_a_gate_is_not_a_regression(monkeypatch):
     assert result.metadata["composition_changed"]["added"] == ["brand_new_probe"]
 
 
-def test_removing_an_evaluator_is_not_reported_as_a_drop(monkeypatch):
+def test_removing_an_evaluator_blocks_as_coverage_regression(monkeypatch):
     kept = _scored("governance", 40.0)
     baseline = _baseline(kept, _scored("ai_quality", 95.0))
     monkeypatch.setattr(regression_engine, "resolve_baseline", lambda _=None: baseline)
     result = regression_engine.evaluate([kept], write_evidence=False)
-    assert result.critical_findings == []
+    assert any(
+        finding.id == "REG-EVALUATOR-REMOVED" and finding.blocks_release
+        for finding in result.critical_findings
+    )
     assert result.metadata["composition_changed"]["removed"] == ["ai_quality_probe"]
 
 

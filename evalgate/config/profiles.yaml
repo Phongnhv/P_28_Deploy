@@ -16,46 +16,16 @@ profiles:
       policy, config. Measured at ~5s versus ~6.5s for ci, so the saving is small --
       most of the cost is importing pandas and reading files across git refs, which
       both profiles pay. Kept because it needs no database and no archived artefacts.
-    evaluators:
-      - workspace_integrity_v1
-      - capability_regression_v1
-      - contract_conformance_v1
-      - vacuity_probe_v1
-      - authz_probe_v1
-      - secret_scan_v1
-      - default_credential_probe_v1
-      - policy_resolution_v1
-      - config_static_check_v1
-      - served_path_fidelity_v1
+    membership_source: evalgate/core/evaluator_registry.py
 
   ci:
     description: "Every zero-cost evaluator. This is the merge gate."
-    evaluators:
-      - workspace_integrity_v1
-      - capability_regression_v1
-      - contract_conformance_v1
-      - hitl_integrity_v1
-      - governed_enum_conformance_v1
-      - golden_conformance_v1
-      - vacuity_probe_v1
-      - ingest_fidelity_v1
-      - replay_detection_v1
-      - authz_probe_v1
-      - egress_probe_v1
-      - secret_scan_v1
-      - default_credential_probe_v1
-      - asgi_behaviour_probe_v1
-      - policy_resolution_v1
-      - config_static_check_v1
-      - multi_dataset_readiness_v1
-      - run_outcome_integrity_v1
-      - served_path_fidelity_v1
+    membership_source: evalgate/core/evaluator_registry.py
+
+  nightly:
+    description: "CI plus paid/live AI and observability adapters."
+    membership_source: evalgate/core/evaluator_registry.py
 
   pre_release:
-    description: "Everything, including evaluators that need a paid model or a target."
-    inherits: ci
-    evaluators:
-      - promptfoo_injection_v1
-      - geval_domain_v1
-      - live_sdih_detection_v1
-      - k6_load_v1
+    description: "Nightly suite plus load testing against an explicitly approved target."
+    membership_source: evalgate/core/evaluator_registry.py

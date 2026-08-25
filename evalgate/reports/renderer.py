@@ -19,6 +19,8 @@ def render_json(
 ) -> dict[str, Any]:
     return {
         "decision": outcome.decision,
+        "release_decision": outcome.decision,
+        "quality_score": outcome.score,
         "score": outcome.score,
         "exit_code": outcome.exit_code,
         "mode": mode,
@@ -30,9 +32,21 @@ def render_json(
         "excluded_gates": outcome.excluded_gates,
         "measured_weight": outcome.measured_weight,
         "coverage_detail": {g: list(v) for g, v in outcome.coverage_detail.items()},
+        "mandatory_evidence_coverage": outcome.mandatory_evidence_coverage,
+        "gate_verdicts": outcome.gate_verdicts,
         "provisional_score": outcome.provisional_score,
         "score_withheld_reason": outcome.score_withheld_reason,
         "override_reason": outcome.override_reason,
+        "evaluation_schema_version": (
+            results[0].evaluation_schema_version if results else "2.0"
+        ),
+        "policy_version": results[0].policy_version if results else "1.0",
+        "corpus_version": results[0].corpus_version if results else "1.0",
+        "normalizer_version": results[0].normalizer_version if results else "1.0",
+        "provenance": results[0].provenance if results else {},
+        "suppressed_findings": outcome.suppressed_findings,
+        "unsuppressed_findings": outcome.unsuppressed_findings,
+        "metric_collisions": outcome.metric_collisions,
         "baseline_run_id": next(
             (r.baseline_run_id for r in results if r.baseline_run_id), None
         ),
@@ -63,7 +77,7 @@ def render_markdown(
         "",
         f"- **Decision:** `{outcome.decision}` (exit code {outcome.exit_code})",
         (
-            f"- **Score:** {outcome.score}"
+            f"- **Quality score:** {outcome.score} (does not authorize release)"
             if outcome.score is not None
             else f"- **Score:** WITHHELD — {outcome.score_withheld_reason}"
             if outcome.score_withheld_reason
@@ -73,12 +87,14 @@ def render_markdown(
         f"- **Run:** `{head.run_id if head else '-'}`",
         f"- **Git ref:** `{head.git_ref if head else '-'}`",
         f"- **Timestamp:** {head.timestamp if head else '-'}",
+        f"- **Policy:** `{head.policy_version if head else '1.0'}`",
         f"- **Measured coverage:** {outcome.measured_weight * 100:.1f}% "
         f"(counted per evaluator, not per gate)",
         "- **Coverage by gate:** "
         + " · ".join(
             f"{g} {ran}/{dec}" for g, (ran, dec) in sorted(outcome.coverage_detail.items())
         ),
+        f"- **Mandatory evidence coverage:** {outcome.mandatory_evidence_coverage * 100:.1f}%",
     ]
     baseline = next((r.baseline_run_id for r in results if r.baseline_run_id), None)
     parts.append(f"- **Baseline:** `{baseline or 'none stored yet'}`")
@@ -86,6 +102,19 @@ def render_markdown(
         parts += [
             "",
             f"> **This verdict is qualified.** {outcome.override_reason}",
+        ]
+    if outcome.metric_collisions:
+        parts += [
+            "",
+            "> **Invalid metric namespace.** " + str(outcome.metric_collisions),
+        ]
+    if outcome.suppressed_findings or outcome.unsuppressed_findings:
+        parts += [
+            "",
+            "## Ratchet",
+            "",
+            "- **Suppressed:** " + (", ".join(outcome.suppressed_findings) or "none"),
+            "- **Unsuppressed:** " + (", ".join(outcome.unsuppressed_findings) or "none"),
         ]
     parts += [
         "",
