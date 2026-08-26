@@ -106,7 +106,14 @@ def create_user_session(request: Request, username: str, password: str, db: Sess
 
     _login_attempts.pop(attempt_key, None)
 
-    db.query(SessionModel).filter(SessionModel.username == normalized_username).delete()
+    # A user may have the workspace open in multiple tabs/devices.  Creating
+    # a new session must not revoke those still-valid sessions, otherwise a
+    # login in one tab makes another tab briefly render and then bounce back
+    # to the login screen on its next authenticated request.  Expired rows are
+    # safe to prune here and keep the session table bounded during sign-in.
+    db.query(SessionModel).filter(
+        SessionModel.expires_at < utc_now(),
+    ).delete(synchronize_session=False)
     session = SessionModel(
         id=str(uuid.uuid4()),
         username=normalized_username,
