@@ -22,6 +22,7 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import or_, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.config import get_settings
@@ -82,6 +83,7 @@ from src.models.schemas import (
     TestResultsListResponse,
     TestRunStatusResponse,
 )
+from src.services.job_dispatch import create_persisted_job, dispatch_or_mark_failed, job_checksum
 from src.services.job_runner import (
     _supabase_source_url,
     add_audit_event,
@@ -119,6 +121,7 @@ from src.services.versioned_dataset import (
     DatasetContractError,
     SourceIntegrityError,
     canonical_schema_manifest,
+    delete_source_artifact,
     inspect_upload,
     schema_hash,
     store_source_artifact,
@@ -445,6 +448,9 @@ class AnalysisRunSchema(BaseModel):
     test_run_id: str | None = None
     anomaly_run_id: str | None = None
     report_available: bool
+    job_id: str | None = None
+    report_artifact_status: str = "NOT_AVAILABLE"
+    report_artifact_locator: str | None = None
     error: str | None = None
     created_by: str
     created_at: str
@@ -653,7 +659,11 @@ async def import_dataset(
     session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
-    """Persist a CSV/Parquet artifact and immediately queue its aggregate profile."""
+    """Legacy dashboard import; canonical arbitrary imports use the workspace route below.
+
+    This compatibility endpoint retains the historical local dashboard profile
+    contract. It is deliberately not used by versioned Graph 1/2/3 flows.
+    """
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in {".csv", ".parquet"}:
         raise HTTPException(status_code=415, detail="Only CSV and Parquet files are supported.")
@@ -707,7 +717,6 @@ async def import_dataset(
 @router.post("/workspaces/{workspace_id}/datasets/import", status_code=202)
 async def import_versioned_dataset(
     workspace_id: str,
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     dataset_id: str | None = Form(None),
     dataset_name: str | None = Form(None),
@@ -716,7 +725,13 @@ async def import_versioned_dataset(
     session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
-    """Canonical arbitrary CSV/Parquet import with immutable version lineage."""
+    """Canonical arbitrary CSV/Parquet import with immutable version lineage.
+
+    The job row is reserved before object storage is touched.  That reservation
+    is the concurrency gate for the canonical idempotency key and lets a second
+    request replay the same version without creating an object, audit event or
+    artifact of its own.
+    """
     account = db.query(UserAccountModel).filter_by(username=session.username).first()
     membership = db.query(WorkspaceMembershipModel).filter_by(
         workspace_id=workspace_id,
@@ -735,6 +750,63 @@ async def import_versioned_dataset(
     if client_sha256 and client_sha256.lower() != inspected.checksum:
         raise HTTPException(status_code=422, detail={"code": "CHECKSUM_MISMATCH", "message": "Uploaded checksum does not match content"})
 
+    idempotency_key = idempotency_key.strip()
+    if not idempotency_key:
+        raise HTTPException(status_code=422, detail={"code": "IDEMPOTENCY_KEY_REQUIRED", "message": "Idempotency-Key must not be empty"})
+    # The database keeps one globally unique idempotency key.  Include the
+    # workspace so the same client key can safely be reused in another
+    # workspace without colliding with this import reservation.
+    canonical_key = f"versioned-import-{workspace_id}-{idempotency_key}"
+
+    def replay_response(version: DatasetVersionModel | None, job: JobModel | None, *, replay: bool = True) -> dict[str, Any]:
+        if version:
+            replay_dataset_id = version.dataset_id
+            replay_name = (db.get(DatasetModel, replay_dataset_id) or DatasetModel(id=replay_dataset_id, name=replay_dataset_id)).name
+            return {
+                "dataset": {"id": replay_dataset_id, "name": replay_name, "status": (db.get(DatasetModel, replay_dataset_id).status if db.get(DatasetModel, replay_dataset_id) else "REGISTERED")},
+                "version": {"id": version.id, "version_number": version.version_number, "status": version.status, "checksum": version.checksum, "schema_hash": version.schema_hash, "row_count": version.row_count},
+                "profile_run_id": f"profile-{version.id}",
+                "job": {"job_id": job.id if job else None, "status": job.status if job else "COMPLETED"},
+                "idempotent_replay": replay,
+            }
+        reservation = {}
+        if job:
+            try:
+                reservation = json.loads(job.message or "{}")
+            except (TypeError, ValueError):
+                reservation = {}
+        return {
+            "dataset": {"id": reservation.get("dataset_id", dataset_id or ""), "name": reservation.get("dataset_name") or dataset_name or "Imported dataset", "status": "REGISTERED"},
+            "version": {"id": reservation.get("version_id"), "version_number": reservation.get("version_number", 1), "status": "PENDING", "checksum": reservation.get("checksum", inspected.checksum), "schema_hash": reservation.get("schema_hash"), "row_count": reservation.get("row_count", inspected.row_count)},
+            "profile_run_id": f"profile-{reservation.get('version_id')}" if reservation.get("version_id") else None,
+            "job": {"job_id": job.id if job else None, "status": job.status if job else "PENDING"},
+            "idempotent_replay": replay,
+        }
+
+    # Canonical key lookup happens before dataset creation, object storage, or
+    # audit/artifact writes.  A reused key is allowed only for the same bytes.
+    existing_job = db.query(JobModel).filter(JobModel.idempotency_key == canonical_key).first()
+    if existing_job:
+        existing_version = db.get(DatasetVersionModel, existing_job.linked_entity) if existing_job.linked_entity else None
+        known_checksum = existing_version.checksum if existing_version else job_checksum(existing_job)
+        if known_checksum and known_checksum != inspected.checksum:
+            raise HTTPException(status_code=409, detail={"code": "IDEMPOTENCY_KEY_REUSED", "message": "Idempotency-Key is already bound to a different payload"})
+        return replay_response(existing_version, existing_job)
+
+    # For a request that does not supply a dataset id, checksum identity is
+    # workspace-scoped.  This is what makes two UI retries with different
+    # generated names converge on one immutable version.
+    checksum_query = db.query(DatasetVersionModel).filter(
+        DatasetVersionModel.workspace_id == workspace_id,
+        DatasetVersionModel.checksum == inspected.checksum,
+    )
+    if dataset_id:
+        checksum_query = checksum_query.filter(DatasetVersionModel.dataset_id == dataset_id)
+    checksum_version = checksum_query.order_by(DatasetVersionModel.created_at.asc()).first()
+    if checksum_version:
+        checksum_job = db.query(JobModel).filter(JobModel.linked_entity == checksum_version.id).order_by(JobModel.created_at.desc()).first()
+        return replay_response(checksum_version, checksum_job)
+
     logical_id = dataset_id or f"dataset-import-{uuid.uuid4().hex[:20]}"
     existing_dataset = db.get(DatasetModel, logical_id)
     if existing_dataset:
@@ -744,30 +816,58 @@ async def import_versioned_dataset(
     else:
         governance = None
 
-    # Idempotency is stored in sanitized version metadata so this remains
-    # additive and works without a second idempotency table.
-    for candidate in db.query(DatasetVersionModel).filter_by(workspace_id=workspace_id, dataset_id=logical_id).all():
-        try:
-            metadata = json.loads(candidate.source_metadata_json or "{}")
-        except ValueError:
-            metadata = {}
-        if metadata.get("idempotency_key") == idempotency_key or candidate.checksum == inspected.checksum:
-            job = db.query(JobModel).filter(JobModel.linked_entity == candidate.id).order_by(JobModel.created_at.desc()).first()
-            return {
-                "dataset": {"id": logical_id, "name": existing_dataset.name if existing_dataset else logical_id},
-                "version": {"id": candidate.id, "version_number": candidate.version_number, "status": candidate.status, "checksum": candidate.checksum, "schema_hash": candidate.schema_hash, "row_count": candidate.row_count},
-                "profile_run_id": f"profile-{candidate.id}",
-                "job": {"job_id": job.id if job else None, "status": job.status if job else "COMPLETED"},
-                "idempotent_replay": True,
-            }
-
     version_number = (db.query(DatasetVersionModel.version_number).filter_by(workspace_id=workspace_id, dataset_id=logical_id).order_by(DatasetVersionModel.version_number.desc()).first() or (0,))[0] + 1
     parent = db.query(DatasetVersionModel).filter_by(workspace_id=workspace_id, dataset_id=logical_id).order_by(DatasetVersionModel.version_number.desc()).first()
     version_id = f"dv-{uuid.uuid4().hex[:24]}"
+    reservation_message = json.dumps({
+        "kind": "VERSIONED_IMPORT_RESERVATION",
+        "checksum": inspected.checksum,
+        "schema_hash": schema_hash(inspected.schema),
+        "dataset_id": logical_id,
+        "dataset_name": dataset_name or Path(inspected.filename).stem or logical_id,
+        "version_id": version_id,
+        "version_number": version_number,
+        "row_count": inspected.row_count,
+    }, ensure_ascii=False, sort_keys=True)
+    try:
+        job, created = create_persisted_job(
+            db,
+            job_type="INGEST_PROFILE",
+            linked_entity=version_id,
+            idempotency_key=canonical_key,
+            message=reservation_message,
+        )
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail={"code": "IDEMPOTENCY_RESERVATION_CONFLICT", "message": "The import reservation could not be claimed safely"}) from exc
+    if not created:
+        existing_version = db.get(DatasetVersionModel, job.linked_entity) if job.linked_entity else None
+        known_checksum = existing_version.checksum if existing_version else job_checksum(job)
+        if known_checksum and known_checksum != inspected.checksum:
+            raise HTTPException(status_code=409, detail={"code": "IDEMPOTENCY_KEY_REUSED", "message": "Idempotency-Key is already bound to a different payload"})
+        return replay_response(existing_version, job)
+
+    artifact_ref = None
     try:
         artifact_ref = store_source_artifact(payload, inspected, workspace_id=workspace_id, dataset_id=logical_id, dataset_version_id=version_id)
     except SourceIntegrityError as exc:
         db.rollback()
+        try:
+            db.query(JobModel).filter(JobModel.id == job.id).delete(synchronize_session=False)
+            db.commit()
+        except Exception:
+            # If the cleanup transaction is itself unavailable, leave an
+            # explicit retryable reservation rather than a misleading PENDING
+            # job that can never be diagnosed or retried safely.
+            db.rollback()
+            try:
+                reserved = db.get(JobModel, job.id)
+                if reserved:
+                    reserved.status = "FAILED_RETRYABLE"
+                    reserved.error = "Source storage failed and reservation cleanup could not be completed"
+                    reserved.message = "Import reservation requires retry"
+                    db.commit()
+            except Exception:
+                db.rollback()
         raise HTTPException(status_code=502, detail={"code": "SOURCE_STORAGE_FAILED", "message": str(exc)}) from exc
     artifact_id = f"artifact-{uuid.uuid4().hex}"
     metadata = {
@@ -781,6 +881,7 @@ async def import_versioned_dataset(
         "source_artifact_id": artifact_id,
         "bucket": artifact_ref.bucket,
         "object_key": artifact_ref.object_key,
+        "version_id": artifact_ref.version_id,
         "idempotency_key": idempotency_key,
     }
     if not existing_dataset:
@@ -815,12 +916,7 @@ async def import_versioned_dataset(
         source_metadata_json=json.dumps(metadata, ensure_ascii=False, sort_keys=True),
         created_by=account.id,
     )
-    job_id = f"job-{uuid.uuid4().hex[:24]}"
-    job = JobModel(
-        id=job_id, type="INGEST_PROFILE", status="PENDING", progress=0.0,
-        message="Queued for immutable version profiling", idempotency_key=f"versioned-import-{idempotency_key}",
-        linked_entity=version_id, correlation_id=str(uuid.uuid4()), attempt_count=1,
-    )
+    job.message = "Queued for immutable version profiling"
     db.add_all([version, GovernedArtifactModel(
         id=artifact_id, workspace_id=workspace_id, dataset_id=logical_id, dataset_version_id=version_id,
         artifact_type="SOURCE_DATASET", storage_locator=artifact_ref.storage_locator,
@@ -835,7 +931,7 @@ async def import_versioned_dataset(
         "actor_role": membership.role,
         "dataset_id": logical_id,
         "dataset_version_id": version_id,
-        "run_id": job_id,
+        "run_id": job.id,
         "correlation_id": job.correlation_id,
         "request_metadata_json": json.dumps({"filename": inspected.filename, "content_type": file.content_type}, ensure_ascii=False),
         "source": "API",
@@ -861,13 +957,35 @@ async def import_versioned_dataset(
             **audit_common,
         ),
     ])
-    db.commit()
-    background_tasks.add_task(run_ingest_profile, job_id, logical_id, session.id, session.role, version_id)
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        try:
+            delete_source_artifact(artifact_ref)
+        except Exception:
+            logger.exception("Failed to compensate source artifact for import %s", version_id)
+        # The reservation is ours; remove it so a subsequent retry can safely
+        # claim the canonical key.  This is deliberately best effort because a
+        # database outage is the original failure being reported.
+        try:
+            db.query(JobModel).filter(JobModel.id == job.id).delete(synchronize_session=False)
+            db.commit()
+        except Exception:
+            db.rollback()
+        if isinstance(exc, IntegrityError):
+            raise HTTPException(status_code=409, detail={"code": "IDEMPOTENCY_COMMIT_CONFLICT", "message": "The import collided with another committed request"}) from exc
+        raise HTTPException(status_code=503, detail={"code": "IMPORT_COMMIT_FAILED", "message": "Dataset import could not be committed; no source object was retained"}) from exc
+
+    dispatch_or_mark_failed(db, job)
+    db.refresh(job)
+    db.refresh(version)
     return {
         "dataset": {"id": logical_id, "name": existing_dataset.name, "status": existing_dataset.status},
         "version": {"id": version.id, "version_number": version.version_number, "status": version.status, "checksum": version.checksum, "schema_hash": version.schema_hash, "row_count": version.row_count},
         "profile_run_id": f"profile-{version.id}",
         "job": {"job_id": job.id, "status": job.status},
+        "idempotent_replay": False,
     }
 
 
@@ -892,14 +1010,13 @@ def _require_graph_provider() -> None:
 @router.post("/datasets/{dataset_id}/graph1-runs", status_code=202)
 def start_graph1_run(
     dataset_id: str,
-    background_tasks: BackgroundTasks,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
     dataset_version_id: str | None = Query(None),
     profile_run_id: str | None = Query(None),
     session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
-    from src.services.graph1_workflow import create_graph1_run, execute_graph1_run, serialize_run
+    from src.services.graph1_workflow import create_graph1_run, serialize_run
 
     _require_graph_provider()
     dataset = db.get(DatasetModel, dataset_id)
@@ -923,11 +1040,56 @@ def start_graph1_run(
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail={"code": "DATASET_NOT_READY", "message": str(exc)})
+    workflow_job = db.query(JobModel).filter(
+        JobModel.linked_entity == run.id,
+        JobModel.type.in_(["GRAPH1_EXECUTION", "GRAPH1_CONTINUATION"]),
+    ).order_by(JobModel.created_at.desc()).first()
     if run.status == "PENDING":
-        background_tasks.add_task(execute_graph1_run, run.id)
+        job, job_created = create_persisted_job(
+            db,
+            job_type="GRAPH1_EXECUTION",
+            linked_entity=run.id,
+            idempotency_key=f"graph1-execution-{run.id}",
+            message="Queued Graph 1 execution",
+        )
+        if job_created or job.status == "FAILED_RETRYABLE":
+            dispatch_or_mark_failed(db, job)
+        workflow_job = db.get(JobModel, job.id)
+        db.refresh(run)
     add_audit_event(db, session.id, session.role, "GRAPH1_STARTED", "graph1_run", run.id,
                     {"message": "Canonical Graph 1 started.", "dataset_id": dataset_id, "provider": get_settings().llm_provider})
-    return serialize_run(run)
+    response_payload = serialize_run(run)
+    response_payload["job_id"] = workflow_job.id if workflow_job else None
+    return response_payload
+
+
+@router.get("/datasets/{dataset_id}/graph1-runs/latest")
+def get_latest_graph1_run(
+    dataset_id: str,
+    dataset_version_id: str | None = Query(None),
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """Recover the latest durable Graph 1 snapshot for a dataset version."""
+    dataset = db.get(DatasetModel, dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    require_dataset_access(db, session, dataset_id)
+    query = db.query(Graph1RunModel).filter(Graph1RunModel.dataset_id == dataset_id)
+    if dataset_version_id:
+        query = query.filter(Graph1RunModel.dataset_version_id == dataset_version_id)
+    run = query.order_by(Graph1RunModel.updated_at.desc(), Graph1RunModel.created_at.desc()).first()
+    if not run:
+        return None
+    from src.services.graph1_workflow import serialize_run
+
+    response_payload = serialize_run(run)
+    latest_job = db.query(JobModel).filter(
+        JobModel.linked_entity == run.id,
+        JobModel.type.in_(["GRAPH1_EXECUTION", "GRAPH1_CONTINUATION"]),
+    ).order_by(JobModel.created_at.desc()).first()
+    response_payload["job_id"] = latest_job.id if latest_job else None
+    return response_payload
 
 
 @router.get("/graph1-runs/{run_id}")
@@ -1005,11 +1167,10 @@ async def stream_graph1_run(
 def review_graph1_semantics(
     run_id: str,
     body: Graph1SemanticReviewInput,
-    background_tasks: BackgroundTasks,
     session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
-    from src.services.graph1_workflow import confirm_semantic_review, execute_graph1_run, serialize_run
+    from src.services.graph1_workflow import confirm_semantic_review, serialize_run
     run = db.get(Graph1RunModel, run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Graph 1 run not found")
@@ -1018,10 +1179,21 @@ def review_graph1_semantics(
         confirm_semantic_review(db, run, body.contract)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail={"code": "GRAPH1_STATE", "message": str(exc)})
-    background_tasks.add_task(execute_graph1_run, run.id)
+    job, job_created = create_persisted_job(
+        db,
+        job_type="GRAPH1_CONTINUATION",
+        linked_entity=run.id,
+        idempotency_key=f"graph1-continuation-{run.id}-semantic",
+        message="Queued Graph 1 continuation after semantic review",
+    )
+    if job_created or job.status == "FAILED_RETRYABLE":
+        dispatch_or_mark_failed(db, job)
+    db.refresh(run)
     add_audit_event(db, session.id, session.role, "GRAPH1_SEMANTIC_APPROVED", "graph1_run", run.id,
                     {"message": "Semantic Contract approved; Graph 1 resumed."})
-    return serialize_run(run)
+    response_payload = serialize_run(run)
+    response_payload["job_id"] = job.id
+    return response_payload
 
 
 @router.post("/graph1-runs/{run_id}/rule-review")
@@ -1052,7 +1224,6 @@ def review_graph1_rules(
 )
 def start_analysis_run(
     run_id: str,
-    background_tasks: BackgroundTasks,
     response: Response,
     rerun: bool = Query(False),
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
@@ -1061,7 +1232,6 @@ def start_analysis_run(
 ):
     from src.services.analysis_workflow import (
         create_analysis_run,
-        execute_analysis_run,
         serialize_analysis_run,
     )
 
@@ -1080,7 +1250,15 @@ def start_analysis_run(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail={"code": "ANALYSIS_NOT_READY", "message": str(exc)})
     if created:
-        background_tasks.add_task(execute_analysis_run, analysis_run.id)
+        job, _ = create_persisted_job(
+            db,
+            job_type="ANALYSIS_GRAPH2_GRAPH3",
+            linked_entity=analysis_run.id,
+            idempotency_key=f"analysis-graph2-graph3-{analysis_run.id}",
+            message="Queued Graph 2 and Graph 3 analysis",
+        )
+        dispatch_or_mark_failed(db, job)
+        db.refresh(analysis_run)
         add_audit_event(
             db,
             session.id,
@@ -1092,7 +1270,13 @@ def start_analysis_run(
         )
     else:
         response.status_code = 200
-    return serialize_analysis_run(analysis_run)
+    analysis_job = db.query(JobModel).filter(
+        JobModel.type == "ANALYSIS_GRAPH2_GRAPH3",
+        JobModel.linked_entity == analysis_run.id,
+    ).order_by(JobModel.created_at.desc()).first()
+    payload = serialize_analysis_run(analysis_run)
+    payload["job_id"] = analysis_job.id if analysis_job else None
+    return payload
 
 
 @router.get("/analysis-runs/{analysis_run_id}", response_model=AnalysisRunSchema)
@@ -1138,6 +1322,36 @@ def get_analysis_result(
         raise HTTPException(status_code=404, detail="Analysis run not found")
     require_dataset_access(db, session, run.dataset_id)
     return build_analysis_result(db, run)
+
+
+@router.get("/analysis-runs/{analysis_run_id}/report")
+def get_analysis_report(
+    analysis_run_id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """Return the report only after the same dataset authorization check."""
+    run = db.get(AnalysisRunModel, analysis_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Analysis run not found")
+    require_dataset_access(db, session, run.dataset_id)
+    artifact = db.query(GovernedArtifactModel).filter_by(
+        run_id=run.id,
+        artifact_type="STEWARD_REPORT_MARKDOWN",
+    ).first()
+    return {
+        "analysis_run_id": run.id,
+        "dataset_id": run.dataset_id,
+        "dataset_version_id": run.dataset_version_id,
+        "artifact": {
+            "id": artifact.id,
+            "artifact_type": artifact.artifact_type,
+            "storage_locator": artifact.storage_locator,
+            "checksum": artifact.checksum,
+        } if artifact else None,
+        "markdown": run.report_markdown or "",
+        "status": "REGISTERED" if artifact else "NOT_AVAILABLE",
+    }
 
 
 @router.get("/analysis-runs/{analysis_run_id}/stream")
@@ -1320,8 +1534,10 @@ def start_ingestion(
     session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
-    """
-    POST /api/v1/datasets/{id}/ingestions - Starts background ingestion and profiling job.
+    """Legacy taxi/dashboard ingestion endpoint.
+
+    Versioned arbitrary datasets use the durable ``INGEST_PROFILE`` reservation
+    created by ``/workspaces/{workspace_id}/datasets/import`` instead.
     """
     dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
     if not dataset:
@@ -2974,8 +3190,10 @@ def compatibility_trigger_job(
     session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
-    """
-    POST /api/v1/jobs - Smoke test compatibility job dispatcher.
+    """Legacy compatibility dispatcher for taxi/dashboard smoke tests.
+
+    Canonical versioned workflows are dispatched by their typed workflow
+    routes and ``src.services.job_dispatch``.
     """
     if request.type not in {"INGEST_PROFILE", "PROPOSE_RULES"}:
         raise HTTPException(

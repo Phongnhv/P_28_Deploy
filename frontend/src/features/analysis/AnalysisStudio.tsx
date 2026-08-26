@@ -216,8 +216,11 @@ export function AnalysisStudio({
     await navigator.clipboard.writeText(report.markdown);
     setStatusMessage("Đã sao chép báo cáo Markdown.");
   };
+  const reportDownloadable = Boolean(
+    report?.available && (!run?.dataset_version_id || report.artifact_status === "REGISTERED"),
+  );
   const downloadReport = () => {
-    if (!report?.markdown) return;
+    if (!report?.markdown || !reportDownloadable) return;
     const url = URL.createObjectURL(new Blob([report.markdown], { type: "text/markdown;charset=utf-8" }));
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -269,7 +272,7 @@ export function AnalysisStudio({
       <aside className="analysis-report-panel">
         <header className="analysis-panel-header"><div><FileText aria-hidden="true" /><div><span>PANEL 1</span><h2>Data Steward report</h2></div></div>{report?.available && <span className={`analysis-source ${report.source?.toLowerCase()}`}>{report.source === "LLM" ? "LLM GENERATED" : "DETERMINISTIC FALLBACK"}</span>}</header>
         {report?.available ? <>
-          <div className="analysis-report-actions"><button type="button" onClick={() => void copyReport()}><Copy aria-hidden="true" /> Sao chép</button><button type="button" onClick={downloadReport}><Download aria-hidden="true" /> Tải Markdown</button></div>
+          <div className="analysis-report-actions"><button type="button" onClick={() => void copyReport()}><Copy aria-hidden="true" /> Sao chép</button>{reportDownloadable ? <button type="button" onClick={downloadReport}><Download aria-hidden="true" /> Tải Markdown</button> : <span role="status">Artifact chưa được publish; không thể tải xuống.</span>}</div>
           {toc.length > 0 && <nav className="analysis-toc" aria-label="Mục lục báo cáo"><strong>Mục lục</strong>{toc.map((item) => <a key={item.id} href={`#${item.id}`}>{item.title}</a>)}</nav>}
           <article className="analysis-markdown">
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={{

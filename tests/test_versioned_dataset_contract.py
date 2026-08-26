@@ -87,6 +87,39 @@ def test_freshness_parse_failure_is_execution_error_not_data_failure():
     assert aggregate_graph2_status([result]) == "FAILED"
 
 
+@pytest.mark.parametrize(
+    ("frame", "operator", "expected_status", "expected_kind"),
+    [
+        (pd.DataFrame({"total": ["10.0", "4.0"], "monthly": [10.0, 5.0]}), ">=", "FAIL", "numeric"),
+        (pd.DataFrame({"total": [2, 3], "monthly": [2.0, 2.5]}), ">=", "PASS", "numeric"),
+        (pd.DataFrame({"start": ["2025-01-01T00:00:00Z"], "end": ["2025-01-01T01:00:00+00:00"]}), "<=", "PASS", "datetime"),
+        (pd.DataFrame({"left": ["same", "other"], "right": ["same", "value"]}), "=", "FAIL", "string"),
+    ],
+)
+def test_cross_field_comparison_normalizes_schema_types(frame, operator, expected_status, expected_kind):
+    left, right = list(frame.columns)
+    result = execute_rules_frame(frame, [{
+        "rule_id": "cross",
+        "type": "CROSS_FIELD_COMPARISON",
+        "column": left,
+        "parameters": {"target_column": right, "operator": operator},
+    }])[0]
+    assert result["status"] == expected_status
+    assert result["comparison_kind"] == expected_kind
+    assert "TypeError" not in str(result.get("error"))
+
+
+def test_cross_field_parse_failure_is_a_degraded_violation_not_runner_error():
+    result = execute_rules_frame(
+        pd.DataFrame({"total": ["not-a-number", None, "4"], "monthly": [2.0, 2.0, 5.0]}),
+        [{"rule_id": "cross", "type": "CROSS_FIELD_COMPARISON", "column": "total", "parameters": {"target_column": "monthly", "operator": ">="}}],
+    )[0]
+    assert result["status"] == "FAIL"
+    assert result["parse_failure_count"] == 1
+    assert result["null_pair_count"] == 1
+    assert result["execution_health"] == "DEGRADED"
+
+
 @pytest.mark.asyncio
 async def test_versioned_import_creates_two_immutable_versions(client, monkeypatch, tmp_path):
     from unittest.mock import AsyncMock

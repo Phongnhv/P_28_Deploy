@@ -14,7 +14,9 @@ from src.models.database import (
     AnomalyHypothesisModel,
     AnomalyRunModel,
     AnomalySignalModel,
+    DatasetVersionModel,
     DqResultModel,
+    GovernedArtifactModel,
     Graph1NodeExecutionModel,
     Graph1RunModel,
     RuleProposalModel,
@@ -70,6 +72,53 @@ def _normalise_status(value: Any) -> str:
         "PASSED": "PASS",
         "FAILED": "FAIL",
     }.get(raw, raw)
+
+
+def _publish_governed_report(
+    db: Session,
+    run: AnalysisRunModel,
+    markdown: str,
+) -> tuple[str | None, str | None, Any | None]:
+    """Publish one immutable Markdown report for a versioned analysis run."""
+    if not run.dataset_version_id or not run.workspace_id:
+        return None, None, None
+    from src.services.dbt_artifact_store import artifact_sha256, get_dbt_artifact_store
+
+    checksum = artifact_sha256(markdown.encode("utf-8"))
+    existing = db.query(GovernedArtifactModel).filter_by(
+        run_id=run.id,
+        dataset_version_id=run.dataset_version_id,
+        artifact_type="STEWARD_REPORT_MARKDOWN",
+    ).first()
+    if existing:
+        if existing.checksum != checksum:
+            return None, "REPORT_ARTIFACT_CHECKSUM_CONFLICT", None
+        return existing.storage_locator, None, None
+    try:
+        ref = get_dbt_artifact_store().upload_report_markdown(
+            run.id,
+            markdown.encode("utf-8"),
+            dataset_id=run.dataset_id,
+            dataset_version_id=run.dataset_version_id,
+        )
+        if ref.sha256 != checksum or ref.size_bytes != len(markdown.encode("utf-8")):
+            raise ValueError("Object-storage report metadata does not match the report content")
+    except Exception as exc:
+        logger.error("Governed report upload failed for %s: %s", run.id, exc)
+        return None, f"REPORT_ARTIFACT_UPLOAD_FAILED: {str(exc)[:500]}", None
+    version = db.get(DatasetVersionModel, run.dataset_version_id)
+    db.add(GovernedArtifactModel(
+        id=f"artifact-report-{run.id}",
+        workspace_id=run.workspace_id,
+        dataset_id=run.dataset_id,
+        dataset_version_id=run.dataset_version_id,
+        run_id=run.id,
+        artifact_type="STEWARD_REPORT_MARKDOWN",
+        storage_locator=f"object://{ref.bucket}/{ref.object_key}",
+        checksum=ref.sha256,
+        created_by=version.created_by if version else run.created_by,
+    ))
+    return f"object://{ref.bucket}/{ref.object_key}", None, ref
 
 
 def _spec_parameters(spec: dict[str, Any], legacy: ProposedRuleModel) -> dict[str, Any]:
@@ -266,6 +315,9 @@ def create_analysis_run(
 
 
 def serialize_analysis_run(run: AnalysisRunModel) -> dict[str, Any]:
+    report_artifact_status = "REGISTERED" if str(run.report_path or "").startswith("object://") else (
+        "UPLOAD_FAILED" if "REPORT_ARTIFACT_UPLOAD_FAILED" in str(run.error or "") else "NOT_AVAILABLE"
+    )
     return {
         "id": run.id,
         "graph1_run_id": run.graph1_run_id,
@@ -278,6 +330,8 @@ def serialize_analysis_run(run: AnalysisRunModel) -> dict[str, Any]:
         "current_node": run.current_node,
         "test_run_id": run.test_run_id,
         "anomaly_run_id": run.anomaly_run_id,
+        "report_artifact_status": report_artifact_status,
+        "report_artifact_locator": run.report_path if report_artifact_status == "REGISTERED" else None,
         "report_available": bool(run.report_markdown),
         "error": run.error,
         "created_by": run.created_by,
@@ -569,10 +623,11 @@ async def execute_analysis_run(run_id: str) -> None:
         if not report_markdown:
             report_markdown = render_steward_report_vi(test_run_id, dataset_id, graph3_state)
             report_source = "FALLBACK"
-            try:
-                report_path = _write_report_file(test_run_id, report_markdown)
-            except Exception:
-                report_path = ""
+            if not dataset_version_id:
+                try:
+                    report_path = _write_report_file(test_run_id, report_markdown)
+                except Exception:
+                    report_path = ""
 
         persisted_anomaly_id = str(
             graph3_state.get("anomaly_run_id")
@@ -582,20 +637,38 @@ async def execute_analysis_run(run_id: str) -> None:
         with Session(get_engine()) as db:
             run = db.get(AnalysisRunModel, run_id)
             if run:
+                report_locator, report_error, uploaded_report_ref = _publish_governed_report(
+                    db, run, report_markdown
+                )
                 run.anomaly_run_id = persisted_anomaly_id
                 run.report_markdown = report_markdown
                 run.report_source = report_source or "FALLBACK"
-                run.report_path = report_path or None
+                if dataset_version_id:
+                    run.report_path = report_locator
+                else:
+                    run.report_path = report_path or None
                 run.status = "PARTIAL" if graph3_failed or graph2_partial else "COMPLETED"
                 run.phase = "REPORT"
                 run.current_node = "report_writer"
-                run.error = (
+                execution_error = (
                     str(graph3_state.get("error"))[:2000]
                     if graph3_failed
                     else ("Graph 2 completed partially; some rule evidence is unavailable." if graph2_partial else None)
                 )
+                run.error = "; ".join(item for item in (execution_error, report_error) if item) or None
                 run.completed_at = utc_now()
-                db.commit()
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    if uploaded_report_ref is not None:
+                        try:
+                            from src.services.dbt_artifact_store import get_dbt_artifact_store
+
+                            get_dbt_artifact_store().delete_artifact(uploaded_report_ref)
+                        except Exception:
+                            logger.exception("Failed to compensate report artifact for %s", run_id)
+                    raise
     except Exception as exc:
         logger.exception("Analysis run %s failed", run_id)
         _skip_nodes(run_id, {node_key for _, node_key in ANALYSIS_NODES}, "Analysis stopped after an unrecoverable error.")
@@ -729,6 +802,10 @@ def build_analysis_result(db: Session, run: AnalysisRunModel) -> dict[str, Any]:
         "fallback_used": hypothesis.fallback_used,
     } for hypothesis in sorted(hypotheses, key=lambda item: item.confidence, reverse=True)]
 
+    report_artifact = db.query(GovernedArtifactModel).filter_by(
+        run_id=run.id,
+        artifact_type="STEWARD_REPORT_MARKDOWN",
+    ).first()
     return {
         "run": serialize_analysis_run(run),
         "nodes": node_rows,
@@ -773,6 +850,16 @@ def build_analysis_result(db: Session, run: AnalysisRunModel) -> dict[str, Any]:
             "markdown": run.report_markdown or "",
             "source": run.report_source,
             "file_name": _basename(run.report_path),
+            "artifact_status": "REGISTERED" if report_artifact else (
+                "UPLOAD_FAILED" if "REPORT_ARTIFACT_UPLOAD_FAILED" in str(run.error or "") else "NOT_AVAILABLE"
+            ),
+            "artifact": {
+                "id": report_artifact.id,
+                "artifact_type": report_artifact.artifact_type,
+                "storage_locator": report_artifact.storage_locator,
+                "checksum": report_artifact.checksum,
+                "dataset_version_id": report_artifact.dataset_version_id,
+            } if report_artifact else None,
             "generated_at": run.completed_at.isoformat() if run.completed_at else None,
         },
     }

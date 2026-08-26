@@ -683,6 +683,7 @@ export const mockApi: ApiClient = {
   },
   async createGraph1Run(_datasetId: string, _datasetVersionId?: string, _profileRunId?: string) { throw new Error("Profiler requires the real backend. Set VITE_USE_MOCK_API=false."); },
   async getGraph1Run() { throw new Error("Profiler requires the real backend."); },
+  async getLatestGraph1Run() { throw new Error("Profiler requires the real backend."); },
   async listGraph1Nodes() { throw new Error("Profiler requires the real backend."); },
   async confirmGraph1Semantic() { throw new Error("Profiler requires the real backend."); },
   async reviewGraph1Rules() { throw new Error("Profiler requires the real backend."); },

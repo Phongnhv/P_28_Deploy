@@ -67,7 +67,7 @@ def ensure_default_users(db: Session) -> None:
                     created_by="system-seed",
                 )
             )
-        elif account.created_by == "system-seed" and configured_password:
+        elif not production and account.created_by == "system-seed" and configured_password:
             # A local process may point at the shared production database. If
             # its demo password env vars are absent, never replace an existing
             # production hash with the development username fallback.

@@ -105,6 +105,11 @@ function isVersionedDataset(dataset?: Dataset) {
   return Boolean(dataset?.dataset_version_id || dataset?.manifest_version === "versioned-v1");
 }
 
+function matchesDatasetSnapshot(run: Graph1Run | null | undefined, dataset: Dataset | null | undefined) {
+  if (!run || !dataset || run.dataset_id !== dataset.id) return false;
+  return (run.dataset_version_id ?? null) === (dataset.dataset_version_id ?? null);
+}
+
 function StatusPill({
   label,
   tone = "neutral",
@@ -1379,10 +1384,9 @@ function App() {
   const canAdmin = role === "ADMIN";
   const profileReady = Boolean(dataset && (profile || dataset.status === "PROFILE_READY"));
   const graph1Complete = Boolean(
-    graph1Run &&
-    graph1Run.dataset_id === dataset?.id &&
+    matchesDatasetSnapshot(graph1Run, dataset) &&
     sessionStorage.getItem("ridepulse.graph1.run") &&
-    graph1Run.status === "COMPLETED",
+    graph1Run?.status === "COMPLETED",
   );
   const analysisReady = analysisStatus === "COMPLETED" || analysisStatus === "PARTIAL" || analysisResult?.run.status === "COMPLETED" || analysisResult?.run.status === "PARTIAL";
   const isWizardStepUnlocked = (step: number) =>
@@ -1426,6 +1430,30 @@ function App() {
       setSelectedDatasetId(nextDataset?.id ?? null);
       if (nextDataset)
         sessionStorage.setItem("ridepulse.dataset", nextDataset.id);
+      if (nextDataset) {
+        try {
+          const recoveredGraph1 = await api.getLatestGraph1Run(nextDataset.id, nextDataset.dataset_version_id);
+          if (refreshId !== workspaceRefreshSequence.current) return;
+          if (recoveredGraph1 && matchesDatasetSnapshot(recoveredGraph1, nextDataset)) {
+            setGraph1Dataset(nextDataset);
+            setGraph1Run(recoveredGraph1);
+            sessionStorage.setItem("ridepulse.graph1.run", recoveredGraph1.id);
+            sessionStorage.setItem("ridepulse.graph1.dataset", nextDataset.id);
+            if (recoveredGraph1.dataset_version_id) sessionStorage.setItem("ridepulse.graph1.version", recoveredGraph1.dataset_version_id);
+            else sessionStorage.removeItem("ridepulse.graph1.version");
+            const recoveredNodes = await api.listGraph1Nodes(recoveredGraph1.id);
+            if (refreshId !== workspaceRefreshSequence.current) return;
+            setGraph1Nodes(recoveredNodes);
+          } else if (sessionStorage.getItem("ridepulse.graph1.dataset") === nextDataset.id) {
+            sessionStorage.removeItem("ridepulse.graph1.run");
+            sessionStorage.removeItem("ridepulse.graph1.version");
+            setGraph1Run(null);
+            setGraph1Nodes([]);
+          }
+        } catch {
+          // Keep the durable pointer and let the regular run refresh retry.
+        }
+      }
       if (nextDataset?.status === "PROFILE_READY") {
         const [nextProposals, nextConfigurations, latestRun, nextTrends] =
           await Promise.all([
@@ -1532,6 +1560,7 @@ function App() {
       sessionStorage.removeItem("ridepulse.graph1.open");
       sessionStorage.removeItem("ridepulse.graph1.run");
       sessionStorage.removeItem("ridepulse.graph1.dataset");
+      sessionStorage.removeItem("ridepulse.graph1.version");
       sessionStorage.removeItem("ridepulse.analysis.open");
       sessionStorage.removeItem("ridepulse.analysis.run");
     }
@@ -1656,10 +1685,11 @@ function App() {
   async function retryAnalysisFromStep3() {
     const storedRunId = sessionStorage.getItem("ridepulse.graph1.run") ?? "";
     const storedDatasetId = sessionStorage.getItem("ridepulse.graph1.dataset") ?? "";
+    const storedVersionId = sessionStorage.getItem("ridepulse.graph1.version") ?? "";
     const currentDatasetId = dataset?.id ?? selectedDatasetId ?? "";
-    const graph1RunId = graph1Run?.dataset_id === currentDatasetId
-      ? graph1Run.id
-      : storedDatasetId === currentDatasetId
+    const graph1RunId = matchesDatasetSnapshot(graph1Run, dataset)
+      ? graph1Run?.id ?? ""
+      : storedDatasetId === currentDatasetId && storedVersionId === (dataset?.dataset_version_id ?? "")
         ? storedRunId
         : "";
     if (!graph1RunId) {
@@ -1670,12 +1700,13 @@ function App() {
   }
 
   async function rerunAnalysisFromStep3() {
-    const currentDatasetId = dataset?.id ?? selectedDatasetId ?? "";
     const storedRunId = sessionStorage.getItem("ridepulse.graph1.run") ?? "";
     const storedDatasetId = sessionStorage.getItem("ridepulse.graph1.dataset") ?? "";
-    const graph1RunId = graph1Run?.dataset_id === currentDatasetId
-      ? graph1Run.id
-      : storedDatasetId === currentDatasetId
+    const storedVersionId = sessionStorage.getItem("ridepulse.graph1.version") ?? "";
+    const currentDatasetId = dataset?.id ?? selectedDatasetId ?? "";
+    const graph1RunId = matchesDatasetSnapshot(graph1Run, dataset)
+      ? graph1Run?.id ?? ""
+      : storedDatasetId === currentDatasetId && storedVersionId === (dataset?.dataset_version_id ?? "")
         ? storedRunId
         : "";
     if (!graph1RunId || !graph1Complete) {
@@ -1748,14 +1779,20 @@ function App() {
     setGraph1Starting(true);
     try {
       if (datasetId !== selectedDatasetId) await selectDataset(datasetId);
+      const targetDataset = datasets.find((item) => item.id === datasetId);
       const storedRun = sessionStorage.getItem("ridepulse.graph1.run");
       const storedDataset = sessionStorage.getItem("ridepulse.graph1.dataset");
-      const nextRun = storedRun && storedDataset === datasetId
+      const storedVersion = sessionStorage.getItem("ridepulse.graph1.version") ?? "";
+      const targetVersion = targetDataset?.dataset_version_id ?? "";
+      const nextRun = storedRun && storedDataset === datasetId && storedVersion === targetVersion
         ? await api.getGraph1Run(storedRun)
-        : await api.createGraph1Run(datasetId);
+        : await api.createGraph1Run(datasetId, targetDataset?.dataset_version_id, targetDataset?.profile_run_id);
       sessionStorage.setItem("ridepulse.graph1.run", nextRun.id);
       sessionStorage.setItem("ridepulse.graph1.dataset", datasetId);
+      if (nextRun.dataset_version_id) sessionStorage.setItem("ridepulse.graph1.version", nextRun.dataset_version_id);
+      else sessionStorage.removeItem("ridepulse.graph1.version");
       setGraph1Run(nextRun);
+      setGraph1Dataset(targetDataset ?? null);
       setGraph1Nodes(await api.listGraph1Nodes(nextRun.id));
       setToast("Agent Workflow is running in the background.");
     } catch (err) {
@@ -1769,7 +1806,8 @@ function App() {
     if (!dataset) return;
     const storedRun = sessionStorage.getItem("ridepulse.graph1.run");
     const storedDataset = sessionStorage.getItem("ridepulse.graph1.dataset");
-    if (!storedRun || storedDataset !== dataset.id) {
+    const storedVersion = sessionStorage.getItem("ridepulse.graph1.version") ?? "";
+    if (!storedRun || storedDataset !== dataset.id || storedVersion !== (dataset.dataset_version_id ?? "")) {
       setGraph1Run(null);
       setGraph1Nodes([]);
       return;
@@ -1777,10 +1815,11 @@ function App() {
     void refreshGraph1(storedRun).catch(() => {
       sessionStorage.removeItem("ridepulse.graph1.run");
       sessionStorage.removeItem("ridepulse.graph1.dataset");
+      sessionStorage.removeItem("ridepulse.graph1.version");
       setGraph1Run(null);
       setGraph1Nodes([]);
     });
-  }, [dataset?.id, refreshGraph1]);
+  }, [dataset?.id, dataset?.dataset_version_id, refreshGraph1]);
 
   useEffect(() => {
     if (!graph1Run || ["COMPLETED", "FAILED", "AWAITING_SEMANTIC_REVIEW", "AWAITING_RULE_REVIEW"].includes(graph1Run.status)) return;
@@ -1830,9 +1869,17 @@ function App() {
     sessionStorage.removeItem("ridepulse.role");
     sessionStorage.removeItem("ridepulse.username");
     sessionStorage.removeItem("ridepulse.dataset");
+    sessionStorage.removeItem("ridepulse.graph1.open");
+    sessionStorage.removeItem("ridepulse.graph1.run");
+    sessionStorage.removeItem("ridepulse.graph1.dataset");
+    sessionStorage.removeItem("ridepulse.graph1.version");
     sessionStorage.removeItem("ridepulse.analysis.open");
     sessionStorage.removeItem("ridepulse.analysis.run");
     setShowAnalysisStudio(false);
+    setShowGraph1Studio(false);
+    setGraph1Run(null);
+    setGraph1Nodes([]);
+    setGraph1Dataset(null);
     setAnalysisRunId("");
     setAuthenticated(false);
   }
@@ -1908,7 +1955,10 @@ function App() {
       const imported = await api.importDataset(file);
       sessionStorage.setItem("ridepulse.dataset", imported.dataset.id);
       setSelectedDatasetId(imported.dataset.id);
-      setDatasets((current) => [imported.dataset, ...current]);
+      setDatasets((current) => [
+        imported.dataset,
+        ...current.filter((item) => item.id !== imported.dataset.id),
+      ]);
       setView("datasets");
       await pollJob(imported.job, async () => {
         await refreshWorkspace();

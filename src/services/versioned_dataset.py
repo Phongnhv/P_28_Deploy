@@ -55,6 +55,8 @@ class SourceArtifactRef:
     format: str
     filename: str
     storage_locator: str
+    created_by_request: bool = True
+    version_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -65,6 +67,8 @@ class SourceArtifactRef:
             "format": self.format,
             "filename": self.filename,
             "storage_locator": self.storage_locator,
+            "created_by_request": self.created_by_request,
+            "version_id": self.version_id,
         }
 
 
@@ -359,6 +363,68 @@ def _comparison(left: Any, right: Any, operator: str) -> Any:
     raise DatasetContractError("Unsupported comparison operator")
 
 
+def _parse_boolean(value: Any) -> bool | None:
+    """Parse the small, explicit boolean vocabulary used by source files."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "t", "yes", "y", "1"}:
+        return True
+    if normalized in {"false", "f", "no", "n", "0"}:
+        return False
+    return None
+
+
+def _normalise_comparison_operands(left: Any, right: Any, schema: list[dict[str, Any]], params: dict[str, Any], operator: str) -> tuple[Any, Any, Any, Any, str]:
+    """Return comparable operands plus masks for nulls and parse failures.
+
+    The schema is the authority for numeric/timestamp columns.  When a source
+    contains object/string columns, convertibility is used only to prevent
+    accidental lexical ordering of numeric values.  Parse failures remain
+    data violations with explicit execution-health metadata instead of
+    escaping as a Python ``TypeError``.
+    """
+    import pandas as pd
+
+    left_name, right_name = str(params.get("columns", [""])[0]), str(params.get("columns", ["", ""])[1])
+    by_name = {str(item.get("name")): item for item in schema}
+    left_type = str(by_name.get(left_name, {}).get("logical_type") or "string")
+    right_type = str(by_name.get(right_name, {}).get("logical_type") or "string")
+    requested_type = str(params.get("comparison_type") or params.get("value_type") or "").lower()
+
+    datetime_string_hint = (
+        left_type == right_type == "string"
+        and (left.astype("string").str.match(r"^\s*\d{4}-\d{2}-\d{2}").any() or right.astype("string").str.match(r"^\s*\d{4}-\d{2}-\d{2}").any())
+    )
+    numeric_hint = requested_type in {"number", "numeric", "integer", "decimal"} or left_type in {"number", "integer"} or right_type in {"number", "integer"}
+    datetime_hint = requested_type in {"date", "datetime", "timestamp", "timestamptz"} or left_type == "timestamp" or right_type == "timestamp" or datetime_string_hint
+
+    if datetime_hint:
+        left_values = pd.to_datetime(left, errors="coerce", utc=True)
+        right_values = pd.to_datetime(right, errors="coerce", utc=True)
+        comparison_kind = "datetime"
+    elif numeric_hint or (operator not in {"=", "==", "!=", "<>"} and left_type == right_type == "string"):
+        left_values = pd.to_numeric(left, errors="coerce")
+        right_values = pd.to_numeric(right, errors="coerce")
+        comparison_kind = "numeric"
+    elif left_type == right_type == "boolean" or requested_type in {"bool", "boolean"}:
+        left_values = left.map(_parse_boolean)
+        right_values = right.map(_parse_boolean)
+        comparison_kind = "boolean"
+    else:
+        # Equality is intentionally string-normalised so CSV/object values
+        # compare consistently without introducing ordering semantics.
+        left_values = left.map(lambda value: str(value).strip() if value is not None else value)
+        right_values = right.map(lambda value: str(value).strip() if value is not None else value)
+        comparison_kind = "string"
+
+    null_mask = left.isna() | right.isna()
+    parse_failure_mask = (~null_mask) & (left_values.isna() | right_values.isna())
+    return left_values, right_values, null_mask, parse_failure_mask, comparison_kind
+
+
 def execute_rule_frame(frame: Any, rule: dict[str, Any], *, failure_limit: int = FAILURE_SAMPLE_LIMIT) -> dict[str, Any]:
     """Execute one validated rule without SQL or shared transaction state."""
     import pandas as pd
@@ -375,6 +441,7 @@ def execute_rule_frame(frame: Any, rule: dict[str, Any], *, failure_limit: int =
                 "checked_count": 0, "failed_count": 0, "sample_failures": [], "error": "Source version has zero rows."}
     failed_mask = pd.Series(False, index=frame.index)
     error: str | None = None
+    comparison_metadata: dict[str, Any] = {}
     column = normalized.get("column")
     if rule_type == "NOT_NULL":
         failed_mask = frame[column].isna()
@@ -412,10 +479,27 @@ def execute_rule_frame(frame: Any, rule: dict[str, Any], *, failure_limit: int =
     elif rule_type == "CROSS_FIELD_COMPARISON":
         cols = normalized.get("columns") or params.get("columns") or [column, params.get("target_column")]
         left, right = frame[cols[0]], frame[cols[1]]
-        comparable = left.notna() & right.notna()
-        compared = pd.Series(False, index=frame.index)
-        compared.loc[comparable] = [not _comparison(a, b, params.get("operator", "=")) for a, b in zip(left[comparable], right[comparable])]
-        failed_mask = compared
+        params = {**params, "columns": cols}
+        operator = params.get("operator", "=")
+        left_values, right_values, null_mask, parse_failure_mask, comparison_kind = _normalise_comparison_operands(
+            left, right, schema, params, operator
+        )
+        comparable = ~(null_mask | parse_failure_mask)
+        compared = pd.Series(False, index=frame.index, dtype=object)
+        compared.loc[comparable] = [not _comparison(a, b, operator) for a, b in zip(left_values[comparable], right_values[comparable])]
+        # An unparseable non-null value is an invalid comparison value, but it
+        # is reported separately from ordinary rule violations and execution
+        # errors so operators can distinguish source quality from runner health.
+        failed_mask = compared | parse_failure_mask
+        comparison_parse_failure_count = int(parse_failure_mask.sum())
+        comparison_parse_failure_refs = [ids[index] for index, value in enumerate(parse_failure_mask.tolist()) if bool(value)][:failure_limit]
+        comparison_metadata = {
+            "comparison_kind": comparison_kind,
+            "null_pair_count": int(null_mask.sum()),
+            "parse_failure_count": comparison_parse_failure_count,
+            "parse_failure_refs": comparison_parse_failure_refs,
+            "execution_health": "DEGRADED" if comparison_parse_failure_count else "HEALTHY",
+        }
     elif rule_type == "DUPLICATE_FINGERPRINT":
         cols = normalized.get("fingerprint_columns") or params.get("fingerprint_columns")
         failed_mask = frame.duplicated(subset=cols, keep="first")
@@ -446,6 +530,7 @@ def execute_rule_frame(frame: Any, rule: dict[str, Any], *, failure_limit: int =
         "duration_ms": round((datetime.now(UTC) - started).total_seconds() * 1000, 2),
         "error": error,
         "evidence_refs": normalized.get("evidence_refs", []),
+        **(comparison_metadata if rule_type == "CROSS_FIELD_COMPARISON" else {}),
     }
 
 
@@ -479,18 +564,45 @@ def store_source_artifact(content: bytes, inspected: InspectedUpload, *, workspa
     settings = get_settings()
     if settings.app_env in {"local", "development", "test"}:
         path = _local_storage_root() / key
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            verify_file(path, checksum, inspected.size_bytes)
-        else:
-            path.write_bytes(content)
-            verify_file(path, checksum, inspected.size_bytes)
-        return SourceArtifactRef(None, key, checksum, inspected.size_bytes, inspected.format, inspected.filename, f"local:{path}")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists():
+                verify_file(path, checksum, inspected.size_bytes)
+                created_by_request = False
+            else:
+                path.write_bytes(content)
+                verify_file(path, checksum, inspected.size_bytes)
+                created_by_request = True
+        except Exception as exc:
+            raise SourceIntegrityError("Local source artifact could not be stored or verified") from exc
+        return SourceArtifactRef(None, key, checksum, inspected.size_bytes, inspected.format, inspected.filename, f"local:{path}", created_by_request)
     try:
         ref = get_dbt_artifact_store().upload_source_file(key, content, checksum=checksum)
-        return SourceArtifactRef(ref.bucket, ref.object_key, checksum, inspected.size_bytes, inspected.format, inspected.filename, f"object://{ref.bucket}/{ref.object_key}")
+        if ref.sha256 != checksum or ref.size_bytes != inspected.size_bytes:
+            raise SourceIntegrityError("Object-storage source metadata does not match the uploaded content")
+        return SourceArtifactRef(ref.bucket, ref.object_key, checksum, inspected.size_bytes, inspected.format, inspected.filename, f"object://{ref.bucket}/{ref.object_key}", True, ref.version_id)
     except Exception as exc:
         raise SourceIntegrityError("Object-storage upload failed; version was not made executable") from exc
+
+
+def delete_source_artifact(ref: SourceArtifactRef) -> None:
+    """Compensate only an object created by the current import request."""
+    if not ref.created_by_request:
+        return
+    if ref.storage_locator.startswith("local:"):
+        path = Path(ref.storage_locator.removeprefix("local:"))
+        path.unlink(missing_ok=True)
+        return
+    if ref.storage_locator.startswith("object://"):
+        from src.services.dbt_artifact_store import DbtArtifactRef, get_dbt_artifact_store
+
+        get_dbt_artifact_store().delete_artifact(DbtArtifactRef(
+            bucket=ref.bucket or "",
+            object_key=ref.object_key,
+            sha256=ref.checksum,
+            size_bytes=ref.size_bytes,
+            version_id=ref.version_id,
+        ))
 
 
 def materialize_source_artifact(ref: SourceArtifactRef | dict[str, Any]) -> Path:
@@ -506,6 +618,7 @@ def materialize_source_artifact(ref: SourceArtifactRef | dict[str, Any]) -> Path
         content = get_dbt_artifact_store().download_source_file({
             "bucket": value.bucket, "object_key": value.object_key,
             "sha256": value.checksum, "size_bytes": value.size_bytes,
+            "version_id": value.version_id,
         })
         handle = tempfile.NamedTemporaryFile(prefix="ridepulse-source-", suffix=f".{value.format}", delete=False)
         handle.write(content)

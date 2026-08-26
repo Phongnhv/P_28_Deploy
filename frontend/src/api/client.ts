@@ -348,6 +348,10 @@ export const realApiClient: ApiClient = {
       headers: { "Idempotency-Key": crypto.randomUUID() },
     });
   },
+  getLatestGraph1Run(datasetId: string, datasetVersionId?: string) {
+    const query = datasetVersionId ? `?dataset_version_id=${encodeURIComponent(datasetVersionId)}` : "";
+    return request<Graph1Run | null>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/graph1-runs/latest${query}`);
+  },
   getGraph1Run(runId: string) {
     return request<Graph1Run>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}`);
   },

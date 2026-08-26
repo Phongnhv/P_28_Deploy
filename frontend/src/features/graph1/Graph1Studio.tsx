@@ -47,7 +47,8 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, onRerun, on
     if (!dataset || isMockMode || run || autoStartRef.current) return;
     const storedRun = sessionStorage.getItem("ridepulse.graph1.run");
     const storedDataset = sessionStorage.getItem("ridepulse.graph1.dataset");
-    if (!storedRun || storedDataset !== dataset.id) return;
+    const storedVersion = sessionStorage.getItem("ridepulse.graph1.version") ?? "";
+    if (!storedRun || storedDataset !== dataset.id || storedVersion !== (dataset.dataset_version_id ?? "")) return;
     autoStartRef.current = true;
     setBusy(true);
     setMessage("Loading the saved profiler run…");
@@ -57,6 +58,7 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, onRerun, on
         if (sessionStorage.getItem("ridepulse.graph1.run") === storedRun) {
           sessionStorage.removeItem("ridepulse.graph1.run");
           sessionStorage.removeItem("ridepulse.graph1.dataset");
+          sessionStorage.removeItem("ridepulse.graph1.version");
         }
         setMessage("");
       })
@@ -70,18 +72,21 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, onRerun, on
     autoStartRef.current = true;
     const storedRun = forceNew ? null : sessionStorage.getItem("ridepulse.graph1.run");
     const storedDataset = forceNew ? null : sessionStorage.getItem("ridepulse.graph1.dataset");
+    const storedVersion = forceNew ? "" : sessionStorage.getItem("ridepulse.graph1.version") ?? "";
       setBusy(true); setError(""); setMessage("Đang khởi tạo profiler…");
       try {
-        if (storedRun && storedDataset === dataset.id) await refresh(storedRun);
+        if (storedRun && storedDataset === dataset.id && storedVersion === (dataset.dataset_version_id ?? "")) await refresh(storedRun);
         else {
           const created = await api.createGraph1Run(dataset.id, dataset.dataset_version_id, dataset.profile_run_id);
           sessionStorage.setItem("ridepulse.graph1.run", created.id);
           sessionStorage.setItem("ridepulse.graph1.dataset", dataset.id);
+          if (created.dataset_version_id) sessionStorage.setItem("ridepulse.graph1.version", created.dataset_version_id);
+          else sessionStorage.removeItem("ridepulse.graph1.version");
           setRun(created); await refresh(created.id);
         }
         setMessage("");
       } catch (reason) {
-        sessionStorage.removeItem("ridepulse.graph1.run"); sessionStorage.removeItem("ridepulse.graph1.dataset");
+        sessionStorage.removeItem("ridepulse.graph1.run"); sessionStorage.removeItem("ridepulse.graph1.dataset"); sessionStorage.removeItem("ridepulse.graph1.version");
         setError(reason instanceof Error ? reason.message : "Không thể bắt đầu profiler."); setMessage("");
       } finally { setBusy(false); autoStartRef.current = false; }
   };
@@ -138,9 +143,9 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, onRerun, on
     try {
       setMessage("Đang upload dataset…"); const imported = await api.importDataset(file); setDataset(imported.dataset); onDatasetImported?.();
       let job: Job = await api.getJob(imported.job.job_id); setMessage("Đang profile dữ liệu thật…");
-      while (!["SUCCEEDED", "FAILED"].includes(job.status)) { await wait(700); job = await api.getJob(imported.job.job_id); setMessage(job.message || `Profiling ${Math.round(job.progress)}%`); }
-      if (job.status === "FAILED") throw new Error(job.error || "Dataset profiling thất bại.");
-      setMessage("Đang khởi tạo profiler…"); const created = await api.createGraph1Run(imported.dataset.id, imported.dataset.dataset_version_id, imported.dataset.profile_run_id); sessionStorage.setItem("ridepulse.graph1.run", created.id); sessionStorage.setItem("ridepulse.graph1.dataset", imported.dataset.id); setRun(created); await refresh(created.id); setMessage("");
+      while (!["SUCCEEDED", "FAILED", "FAILED_RETRYABLE"].includes(job.status)) { await wait(700); job = await api.getJob(imported.job.job_id); setMessage(job.message || `Profiling ${Math.round(job.progress)}%`); }
+      if (job.status !== "SUCCEEDED") throw new Error(job.error || "Dataset profiling thất bại; job được đánh dấu để retry.");
+      setMessage("Đang khởi tạo profiler…"); const created = await api.createGraph1Run(imported.dataset.id, imported.dataset.dataset_version_id, imported.dataset.profile_run_id); sessionStorage.setItem("ridepulse.graph1.run", created.id); sessionStorage.setItem("ridepulse.graph1.dataset", imported.dataset.id); if (created.dataset_version_id) sessionStorage.setItem("ridepulse.graph1.version", created.dataset_version_id); else sessionStorage.removeItem("ridepulse.graph1.version"); setRun(created); await refresh(created.id); setMessage("");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Không thể bắt đầu profiler."); setMessage(""); } finally { setBusy(false); }
   };
   const confirmSemantic = async () => { if (!run) return; setBusy(true); setError(""); try { const next = await api.confirmGraph1Semantic(run.id, JSON.parse(semanticText)); sessionStorage.removeItem(`ridepulse.graph1.semantic.${run.id}`); sessionStorage.setItem(`ridepulse.graph1.stage.${run.id}`, "rule_candidate_builder"); setRun(next); setSelectedKey("rule_candidate_builder"); await refresh(run.id); } catch (reason) { setError(reason instanceof Error ? reason.message : "Semantic Contract không hợp lệ."); } finally { setBusy(false); } };
@@ -169,7 +174,26 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, onRerun, on
       const next = await api.reviewGraph1Rules(run.id, payload); setRun(next); await refresh(run.id);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Không thể lưu quyết định rule."); } finally { setBusy(false); }
   };
-  const reset = () => { if (run) { sessionStorage.removeItem(`ridepulse.graph1.review.${run.id}`); sessionStorage.removeItem(`ridepulse.graph1.stage.${run.id}`); sessionStorage.removeItem(`ridepulse.graph1.semantic.${run.id}`); } sessionStorage.removeItem("ridepulse.graph1.run"); sessionStorage.removeItem("ridepulse.graph1.dataset"); setRun(null); setNodes([]); setDataset(null); setError(""); setSemanticText(""); setDecisions({}); setRuleEdits({}); setReviewValidation(""); reviewRunRef.current = ""; onExit(); };
+  const reset = () => {
+    if (run) {
+      sessionStorage.removeItem(`ridepulse.graph1.review.${run.id}`);
+      sessionStorage.removeItem(`ridepulse.graph1.stage.${run.id}`);
+      sessionStorage.removeItem(`ridepulse.graph1.semantic.${run.id}`);
+    }
+    sessionStorage.removeItem("ridepulse.graph1.run");
+    sessionStorage.removeItem("ridepulse.graph1.dataset");
+    sessionStorage.removeItem("ridepulse.graph1.version");
+    setRun(null);
+    setNodes([]);
+    setDataset(null);
+    setError("");
+    setSemanticText("");
+    setDecisions({});
+    setRuleEdits({});
+    setReviewValidation("");
+    reviewRunRef.current = "";
+    onExit();
+  };
   const analyze = async () => {
     if (!run || isMockMode) return;
     setAnalysisBusy(true); setError("");

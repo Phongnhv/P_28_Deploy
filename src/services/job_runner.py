@@ -354,6 +354,7 @@ def _versioned_profile_run(
         "format": metadata.get("format") or "csv",
         "filename": metadata.get("filename") or "dataset.csv",
         "storage_locator": artifact.storage_locator,
+        "version_id": metadata.get("version_id"),
     }
     path = None
     temporary = source_ref["storage_locator"].startswith("object://")

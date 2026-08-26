@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import sys
@@ -267,7 +268,7 @@ async def main():
     init_db()
 
     engine = get_engine()
-    linked_entity = "yellow_tripdata"
+    linked_entity = None
     with Session(engine) as session:
         # Fetch the job
         job = session.query(JobModel).filter_by(id=job_id).first()
@@ -280,8 +281,25 @@ async def main():
                 version = session.get(DatasetVersionModel, linked_entity)
                 if version:
                     linked_entity = version.dataset_id
+        elif job_type in {"PROPOSE_RULES", "RUN_DQ"}:
+            # Explicitly legacy-only default. Canonical versioned jobs must
+            # always carry an immutable linked entity and are rejected below.
+            linked_entity = "yellow_tripdata"
 
-    # Try to claim the job
+    # Canonical workflows share one durable dispatch/lease contract.  The
+    # helper claims the job and reloads the linked entity itself, so the API
+    # never has to serialize workflow state into a process invocation.
+    from src.services.job_dispatch import SUPPORTED_JOB_TYPES, _run_persisted_job
+    if job_type in SUPPORTED_JOB_TYPES:
+        # ``main`` itself runs under asyncio because legacy proposal jobs use
+        # an async graph.  The durable canonical runner owns its own event
+        # loop, so execute it in a worker thread instead of nesting
+        # ``asyncio.run`` inside the current loop.
+        if not await asyncio.to_thread(_run_persisted_job, job_id, job_type):
+            sys.exit(1)
+        return
+
+    # Legacy compatibility jobs retain the older handlers below.
     if not claim_job(job_id):
         logger.info(f"Job {job_id} could not be claimed (already running or completed). Exit.")
         sys.exit(0)
@@ -289,6 +307,8 @@ async def main():
     # Run the corresponding job logic
     start_time = time.time()
     try:
+        if not linked_entity:
+            raise ValueError("Legacy job is missing its linked dataset entity")
         if job_type == "INGEST_PROFILE":
             # Run ingestion and profiling synchronously
             run_ingest_profile(job_id, linked_entity)
@@ -321,5 +341,4 @@ async def main():
         sys.exit(1)
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())

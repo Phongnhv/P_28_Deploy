@@ -223,7 +223,7 @@ async def main():
     # Thiết lập workflow state giả lập
     state = {
         "metadata": {
-            "connection_string": "postgresql+psycopg2://postgres:admin@localhost:5433/taxidb",  # Hardcode để thử nghiệm
+            "connection_string": get_settings().database_url,
             "sampling_rate": 1,  # Tỷ lệ lấy mẫu 5% để chạy nhanh. Bạn có thể đổi thành 1.0 (100%). Đã set về 1.0 để test chuẩn nhất
         }
     }

@@ -93,6 +93,23 @@ Hệ thống yêu cầu các biến môi trường sau. Tạo file `.env` bằng
 | `FRONTEND_ORIGIN` | ✅ | Danh sách domain cho phép CORS (phân tách bằng dấu phẩy) | `http://localhost:3000,http://localhost:5173` |
 | `LOCAL_WORKER_URL` | ⚪ | URL của Local Worker API (thay thế Cloud Run khi phát triển) | `http://localhost:8001/run` |
 
+### Demo account secrets
+
+`DEMO_USER_PASSWORD`, `DEMO_STEWARD_PASSWORD` và `DEMO_ADMIN_PASSWORD` là ba
+secret độc lập, không dùng chung và không ghi vào log. Production fail-fast nếu
+một secret bị thiếu; startup production không đổi password đã tồn tại. Local/
+development chỉ dùng fallback theo username khi khởi tạo database mới.
+
+### Canonical workflow dispatch và report
+
+Bốn workflow canonical (`INGEST_PROFILE`, `GRAPH1_EXECUTION`,
+`GRAPH1_CONTINUATION`, `ANALYSIS_GRAPH2_GRAPH3`) tạo job durable trong bảng
+`jobs`, có lease/attempt và được gửi tới local worker hoặc Cloud Run Job. API
+chỉ authorize, persist và dispatch; worker reload entity bằng id. Markdown của
+analysis versioned được lưu trong `governed_artifacts` với
+`artifact_type=STEWARD_REPORT_MARKDOWN`, key bất biến theo `analysis_run_id` và
+checksum; `analysis_runs.report_markdown` chỉ là bản hiển thị UI.
+
 ### Observability & Logging
 
 | Variable | Required | Description | Example / Placeholder |
