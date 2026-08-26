@@ -7,13 +7,13 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from src.time_utils import utc_now
 
 
-class TriggerTypeEnum(str, enum.Enum):
+class TriggerTypeEnum(enum.StrEnum):
     MANUAL = "MANUAL"
     PUBLISH_AND_RUN = "PUBLISH_AND_RUN"
     SCHEDULED = "SCHEDULED"
 
 
-class ExecutionRunStatusEnum(str, enum.Enum):
+class ExecutionRunStatusEnum(enum.StrEnum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
     DONE = "DONE"
@@ -21,7 +21,7 @@ class ExecutionRunStatusEnum(str, enum.Enum):
     FAILED_TO_START = "FAILED_TO_START"
 
 
-class DqResultStatusEnum(str, enum.Enum):
+class DqResultStatusEnum(enum.StrEnum):
     PASS = "PASS"
     FAIL = "FAIL"
     ERROR = "ERROR"
@@ -29,7 +29,7 @@ class DqResultStatusEnum(str, enum.Enum):
     RESULT_MISMATCH = "RESULT_MISMATCH"
 
 
-class AnomalyFeedbackEnum(str, enum.Enum):
+class AnomalyFeedbackEnum(enum.StrEnum):
     TRUE_ANOMALY = "TRUE_ANOMALY"
     FALSE_POSITIVE = "FALSE_POSITIVE"
     EXPECTED_CHANGE = "EXPECTED_CHANGE"

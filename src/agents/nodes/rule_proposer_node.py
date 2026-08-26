@@ -24,8 +24,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from langchain_core.messages import SystemMessage
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from src.agents.nodes.templates import (
     _RULE_PROPOSER_FEW_SHOT,

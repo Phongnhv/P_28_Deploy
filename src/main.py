@@ -1,7 +1,22 @@
-
+import logging
 import os
 import sys
+import uuid
+from contextlib import asynccontextmanager
+from urllib.parse import urlsplit, urlunsplit
+
 from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from src.api.routes import dq_router, require_role, router
+from src.config import get_settings
+from src.services.rule_store import get_engine, init_db
 
 load_dotenv()
 
@@ -24,26 +39,6 @@ if "pytest" not in sys.modules and not os.getenv("DISABLE_TRACING") and (os.gete
         LangChainInstrumentor().instrument()
     except Exception:
         pass
-
-
-
-import logging
-import os
-import uuid
-from contextlib import asynccontextmanager
-from urllib.parse import urlsplit, urlunsplit
-
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from sqlalchemy import text
-from sqlalchemy.orm import Session
-from starlette.exceptions import HTTPException as StarletteHTTPException
-
-from src.api.routes import dq_router, require_role, router
-from src.config import get_settings
-from src.services.rule_store import get_engine, init_db
 
 logger = logging.getLogger(__name__)
 

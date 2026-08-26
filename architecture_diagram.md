@@ -6,28 +6,28 @@
 
 ### 0.1. Stack và ranh giới hệ thống
 
-| Lớp | Implementation thực tế |
-|---|---|
-| Frontend | React + Vite + TypeScript, custom CSS, Recharts, React Markdown |
-| API | FastAPI; session cookie, CSRF, RBAC và dataset access |
-| Workflow | LangGraph với Graph 1, Graph 2 và Graph 3 |
-| Persistence | SQLAlchemy; SQLite ở local, tương thích database URL cấu hình |
-| Test execution | dbt YAML deterministic + `dbt parse`; dbt CLI khi khả dụng; deterministic SQL metrics fallback ở local/dev/test |
-| Anomaly | Robust median/MAD z-score, cold-start static thresholds, business invariants, volume/freshness/execution detectors |
-| Report | Markdown tiếng Việt; LLM structured generation hoặc deterministic fallback |
-| Artifact | MinIO khi cấu hình hoặc local trace/report output |
+| Lớp           | Implementation thực tế                                                                                            |
+| -------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Frontend       | React + Vite + TypeScript, custom CSS, Recharts, React Markdown                                                     |
+| API            | FastAPI; session cookie, CSRF, RBAC và dataset access                                                              |
+| Workflow       | LangGraph với Graph 1, Graph 2 và Graph 3                                                                         |
+| Persistence    | SQLAlchemy; SQLite ở local, tương thích database URL cấu hình                                                 |
+| Test execution | dbt YAML deterministic +`dbt parse`; dbt CLI khi khả dụng; deterministic SQL metrics fallback ở local/dev/test |
+| Anomaly        | Robust median/MAD z-score, cold-start static thresholds, business invariants, volume/freshness/execution detectors  |
+| Report         | Markdown tiếng Việt; LLM structured generation hoặc deterministic fallback                                       |
+| Artifact       | MinIO khi cấu hình hoặc local trace/report output                                                                |
 
 ### 0.2. Trạng thái capability
 
-| Capability từng xuất hiện trong tài liệu cũ | Trạng thái trong source hiện tại |
-|---|---|
-| Isolation Forest | **NOT FOUND** |
-| ChromaDB/RAG retrieval cho hypothesis | **NOT FOUND** — retrieval hiện là stub trả danh sách rỗng |
-| Dagster orchestration | **NOT FOUND** |
-| Slack/Email notification | **NOT FOUND** |
-| Great Expectations execution | **NOT FOUND** trong pipeline Analysis Studio |
-| LLM tự do sinh/sửa SQL Graph 2 | **NOT FOUND** — Graph 2 dùng compiler/template deterministic |
-| React/Next.js + Ant Design | **NOT FOUND** — frontend là React/Vite/custom CSS |
+| Capability từng xuất hiện trong tài liệu cũ | Trạng thái trong source hiện tại                                  |
+| ------------------------------------------------- | --------------------------------------------------------------------- |
+| Isolation Forest                                  | **NOT FOUND**                                                   |
+| ChromaDB/RAG retrieval cho hypothesis             | **NOT FOUND** — retrieval hiện là stub trả danh sách rỗng |
+| Dagster orchestration                             | **NOT FOUND**                                                   |
+| Slack/Email notification                          | **NOT FOUND**                                                   |
+| Great Expectations execution                      | **NOT FOUND** trong pipeline Analysis Studio                    |
+| LLM tự do sinh/sửa SQL Graph 2                  | **NOT FOUND** — Graph 2 dùng compiler/template deterministic  |
+| React/Next.js + Ant Design                        | **NOT FOUND** — frontend là React/Vite/custom CSS             |
 
 ### 0.3. Luồng sản phẩm sau Graph 1
 
@@ -83,13 +83,13 @@ flowchart LR
 
 ### 0.6. Analysis API và persistence
 
-| Endpoint | Mục đích |
-|---|---|
+| Endpoint                                            | Mục đích                                                             |
+| --------------------------------------------------- | ----------------------------------------------------------------------- |
 | `POST /api/v1/graph1-runs/{run_id}/analysis-runs` | Tạo/reuse run idempotent; chỉ STEWARD/ADMIN có quyền manage dataset |
-| `GET /api/v1/analysis-runs/{id}` | Trạng thái tổng, phase, current node và IDs |
-| `GET /api/v1/analysis-runs/{id}/nodes` | Timeline 10 bước có status, duration và safe output summary |
-| `GET /api/v1/analysis-runs/{id}/result` | Combined/partial Graph 2, Graph 3 và report |
-| `GET /api/v1/analysis-runs/{id}/stream` | SSE snapshots để UI theo dõi và resume |
+| `GET /api/v1/analysis-runs/{id}`                  | Trạng thái tổng, phase, current node và IDs                         |
+| `GET /api/v1/analysis-runs/{id}/nodes`            | Timeline 10 bước có status, duration và safe output summary         |
+| `GET /api/v1/analysis-runs/{id}/result`           | Combined/partial Graph 2, Graph 3 và report                            |
+| `GET /api/v1/analysis-runs/{id}/stream`           | SSE snapshots để UI theo dõi và resume                              |
 
 `analysis_runs.graph1_run_id` là unique. `analysis_node_executions` lưu từng bước với `PENDING/RUNNING/SUCCEEDED/FAILED/SKIPPED`, timestamps, sequence, error và output summary đã loại SQL/YAML/raw path nhạy cảm.
 
@@ -268,40 +268,41 @@ flowchart TD
 ```mermaid
 flowchart TD
     START([🚀 Bắt đầu: Chọn Dataset]) --> ProfilerNode[1. Profiler Agent]
-    
+  
     %% 1. Profiler
     ProfilerNode -->|Đọc Metadata & Quét SQL| ProfileStats[Bảng thống kê Dữ liệu & Metadata JSON]
-    
+  
     %% 2. Rule Proposer (LLM Reasoning)
     ProfileStats --> RuleProposerNode[2. LLM Rule Proposer]
     RuleProposerNode -->|LLM Reasoning & Suggest Rules| ProposedRules[Đề xuất bộ Rule Chất lượng]
-    
+  
     %% 3. HITL (Human-In-The-Loop)
     ProposedRules --> HITLNode["⏸️ Human-In-The-Loop (HITL)"]
     subgraph HITL_Section ["Vai trò Data Steward"]
         HITLNode -->|Duyệt / Từ chối / Chỉnh sửa| ApprovedRules[Bộ Rule đã phê duyệt]
     end
-    
+  
     %% 4. Test Generator
     ApprovedRules --> TestGenNode[3. Test Generator Agent]
     TestGenNode -->|Sinh mã kiểm thử dbt / GX| TestScripts[Bài test sinh tự động]
-    
+  
     %% 5. Test Runner & Anomaly Detector
     TestScripts --> TestRunnerNode[4. Thực thi kiểm thử]
     TestRunnerNode -->|Chạy test trên Database| TestResults[Kết quả kiểm thử]
     TestResults --> AnomalyCheckNode{5. Phát hiện Bất thường Anomaly?}
-    
+  
     %% 6. Diagnostic & Report
     AnomalyCheckNode -->|Có lỗi / Bất thường| DiagnoseAnomaly[Chẩn đoán nguyên nhân & Phân tích]
     AnomalyCheckNode -->|Bình thường| DashboardNode[6. Dashboard & Báo cáo]
     DiagnoseAnomaly --> DashboardNode
-    
+  
     DashboardNode --> END([🏁 Kết thúc: Gửi thông báo tới Data Steward])
 ```
 
 ## 2.3. Agent Flow Diagram (v3) - Three-Run LangGraph Architectures (New)
 
 ### 2.3.1. Run 1: Proposal Graph (Luồng đề xuất Rules)
+
 Graph này chịu trách nhiệm khảo sát cấu trúc bảng, xây dựng Data Dictionary, lấy ý kiến xác nhận Semantic Contract của Data Steward, sau đó cho LLM đề xuất các rules chất lượng phù hợp với bảng dữ liệu.
 
 ```mermaid
@@ -314,18 +315,18 @@ flowchart TD
 
     START([🚀 Start: run_proposal_graph])
     RouteEntry{"Route Entry (Semantic Status)"}
-    
+  
     RawProfiler["raw_profiler_node<br/>(Run Profiler on Dataset)"]
     ProfilerDigest["profiler_digest_node<br/>(Analyze profile stats)"]
     DataDictGen["data_dictionary_generator_node<br/>(Generate Data Dictionary)"]
     DatasetUnder["dataset_understanding_node<br/>(Analyze semantic meaning)"]
     HITLSemantic["⏸️ hitl_semantic_gate_node<br/>(HITL Semantic Contract Review)"]
-    
+  
     RuleCandBuilder["rule_candidate_builder_node<br/>(Build candidate rule list)"]
     PromptCust["prompt_customizer_node<br/>(Customize system prompt for LLM)"]
     RuleProposer["rule_proposer_node<br/>(LLM generates rule suggestions)"]
     HITLGate["hitl_gate_node<br/>(Persist Proposed Rules)"]
-    
+  
     END([🏁 END])
 
     class START,END startEnd;
@@ -372,6 +373,7 @@ flowchart TD
 ```
 
 ### 2.3.2. Run 2: Execution Graph (Luồng thực thi kiểm thử)
+
 Graph này thực hiện sinh mã kiểm thử dbt, biên dịch/validate cú pháp, chạy bộ kiểm thử trên cơ sở dữ liệu đích, và lưu trữ kết quả chạy test.
 
 ```mermaid
@@ -383,15 +385,15 @@ flowchart TD
     classDef routeNode fill:#e0f2f1,stroke:#009688,stroke-width:2px,color:#333;
 
     START([🚀 Start: run_execution_graph])
-    
+  
     TestGen["test_generator_node<br/>(Render dbt Core tests)"]
     ValidateDbt["validate_dbt_project_node<br/>(Validate project compile)"]
     RouteValidation{"Validate Success?"}
-    
+  
     DbtFailed["dbt_validation_failed<br/>(Fail run & persist error)"]
     TestRunner["test_runner_node<br/>(Run dbt test suite)"]
     PersistReport["persist_report_node<br/>(Persist results & report)"]
-    
+  
     END([🏁 END])
 
     class START,END startEnd;
@@ -403,16 +405,17 @@ flowchart TD
     START --> TestGen
     TestGen --> ValidateDbt
     ValidateDbt --> RouteValidation
-    
+  
     RouteValidation -->|Yes: run| TestRunner
     RouteValidation -->|No: fail| DbtFailed
-    
+  
     DbtFailed --> END
     TestRunner --> PersistReport
     PersistReport --> END
 ```
 
 ### 2.3.3. Run 3: Anomaly Graph (Luồng phát hiện & Chẩn đoán bất thường)
+
 Graph này chạy sau khi hoàn tất kiểm thử, phát hiện các tín hiệu bất thường bằng mô hình học máy (Isolation Forest, Z-Score), suy luận tìm nguyên nhân lỗi nhờ RAG, đề xuất giả thuyết và viết báo cáo chi tiết cho Steward.
 
 ```mermaid
@@ -422,12 +425,12 @@ flowchart TD
     classDef stateNode fill:#e8eaf6,stroke:#3f51b5,stroke-width:2px,color:#333;
 
     START([🚀 Start: run_anomaly_graph])
-    
+  
     AnomalyDetect["anomaly_detector_node<br/>(Isolation Forest & ML baseline)"]
     HypothesisAgent["hypothesis_agent<br/>(steward_insights_node / RAG reasoning)"]
     PersistAnalysis["persist_analysis_node<br/>(Save signals & hypotheses)"]
     ReportWriter["report_writer_node<br/>(Write markdown report)"]
-    
+  
     END([🏁 END])
 
     class START,END startEnd;
@@ -442,6 +445,7 @@ flowchart TD
 ```
 
 ### 2.3.4. Quy trình tuần tự tương tác (Sequential Workflow)
+
 Sơ đồ mô tả sự phối hợp tuần tự giữa Data Steward, Giao diện Web, ba Agent StateGraph (Run 1, 2, 3) và Cơ sở dữ liệu ứng dụng.
 
 ```mermaid
@@ -460,19 +464,19 @@ sequenceDiagram
     activate Run1
     Run1->>Run1: Chạy raw_profiler_node & profiler_digest_node
     Run1->>Run1: Chạy dataset_understanding_node
-    
+  
     alt Chưa có Semantic Contract
         Run1->>DB: Lưu draft Semantic Contract & trạng thái AWAITING_SEMANTIC_REVIEW
         Run1-->>UI: Yêu cầu phê duyệt Semantic Contract
         Steward->>UI: Duyệt Semantic Contract
         UI->>Run1: Chạy lại với trạng thái confirmed
     end
-    
+  
     Run1->>Run1: Chạy rule_candidate_builder_node & prompt_customizer_node
     Run1->>Run1: LLM đề xuất rules (rule_proposer_node)
     Run1->>DB: Lưu các rules nháp (status: PENDING) qua hitl_gate_node
     deactivate Run1
-    
+  
     %% HITL Rules Review
     Steward->>UI: Xem proposed rules, Duyệt / Sửa / Từ chối
     UI->>DB: Cập nhật status rules (APPROVED / REJECTED)
@@ -486,7 +490,7 @@ sequenceDiagram
     Run2->>DB: Lấy active_rules từ DB
     Run2->>Run2: Sinh code dbt (test_generator_node)
     Run2->>Run2: Biên dịch và Validate dbt project
-    
+  
     alt Compile Validation Hợp lệ
         Run2->>Run2: Chạy dbt test suite trên target DB (test_runner_node)
         Run2->>DB: Lưu kết quả test (persist_report_node)
@@ -509,13 +513,13 @@ sequenceDiagram
 
 ## 3. Component Details
 
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| Frontend | React / Next.js + Ant Design 5.0 | User interface for Data Steward (HITL) and Viewer |
-| Backend | FastAPI | REST API Server, RBAC, Gateway & Agent integration |
-| Agent Engine | LangGraph | AI Agent Orchestration (Profiler, Proposer, Generator, Anomaly Detector) |
-| Scheduler / Runner | Dagster | Automated pipeline execution, scheduled test execution |
-| Application DB | PostgreSQL | Primary storage for metadata, rules status, test logs, user roles |
-| Vector Store | ChromaDB | Embeddings, rule history & diagnosis RAG context |
-| Target Data | Snowflake / BigQuery / Postgres | Operational databases (`dich_vu_xe_trips`, etc.) |
-| LLM Service | OpenAI / Gemini | Reasoning engine for rule generation & root cause diagnosis |
+| Component          | Technology                       | Purpose                                                                  |
+| ------------------ | -------------------------------- | ------------------------------------------------------------------------ |
+| Frontend           | React / Next.js + Ant Design 5.0 | User interface for Data Steward (HITL) and Viewer                        |
+| Backend            | FastAPI                          | REST API Server, RBAC, Gateway & Agent integration                       |
+| Agent Engine       | LangGraph                        | AI Agent Orchestration (Profiler, Proposer, Generator, Anomaly Detector) |
+| Scheduler / Runner | Dagster                          | Automated pipeline execution, scheduled test execution                   |
+| Application DB     | PostgreSQL                       | Primary storage for metadata, rules status, test logs, user roles        |
+| Vector Store       | ChromaDB                         | Embeddings, rule history & diagnosis RAG context                         |
+| Target Data        | Snowflake / BigQuery / Postgres  | Operational databases (`dich_vu_xe_trips`, etc.)                       |
+| LLM Service        | OpenAI / Gemini                  | Reasoning engine for rule generation & root cause diagnosis              |

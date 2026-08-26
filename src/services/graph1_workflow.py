@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -16,7 +15,6 @@ from src.models.database import (
     ProfileModel,
     RuleProposalModel,
     RuleVersionModel,
-    SemanticContractModel,
 )
 from src.services.rule_store import ProposedRuleModel, create_run, get_engine, save_semantic_contract
 from src.time_utils import utc_now

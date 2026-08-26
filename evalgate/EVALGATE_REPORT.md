@@ -29,7 +29,7 @@
 | 12 | [**Vá điểm mù — phát hiện từ lần chạy thật**](#12-vá-điểm-mù--phát-hiện-từ-lần-chạy-thật-22082026) |
 | 13 | [**Kiểm tra lại sau khi pull main**](#13-kiểm-tra-lại-sau-khi-pull-main-31e065a--e3bd462)                           |
 | 14 | [**Sửa hai khuyết tật cấu trúc**](#14-sửa-hai-khuyết-tật-cấu-trúc)                                            |
-| 19 | [**Chạy EvalGate và đọc chỉ số trong terminal**](#19-chạy-evalgate-và-đọc-chỉ-số-trong-terminal)                 |
+| 19 | [**Chạy EvalGate và đọc chỉ số trong terminal**](#19-chạy-evalgate-và-đọc-chỉ-số-trong-terminal)            |
 
 ---
 
@@ -1591,11 +1591,11 @@ src/resources/nyc_yellow_demo.csv   8.200 bytes
 
 Hệ quả đo được:
 
-| | Trước | Sau |
-|---|---|---|
-| `GET /datasets/{id}/rows` | **500** | **200** |
-| `required_asset_presence` | 33.33 | **100.0** |
-| Test `test_dataset_loader.py` | 4 fail | **4 pass** |
+|                                | Trước       | Sau              |
+| ------------------------------ | ------------- | ---------------- |
+| `GET /datasets/{id}/rows`    | **500** | **200**    |
+| `required_asset_presence`    | 33.33         | **100.0**  |
+| Test`test_dataset_loader.py` | 4 fail        | **4 pass** |
 
 Riêng `rule_policies.json` có **7 call site**. Phải lấy từ `origin/main` chứ không phải
 `badc345`: bản cũ dùng field `governed_code_sets` với giá trị số `"1".."6"`, trong khi
@@ -1624,10 +1624,10 @@ tài khoản**.
 gán `dq_score`, nên mặc định luôn được dùng. Cùng một lần chạy cho ba câu trả lời mâu
 thuẫn:
 
-| Nguồn | Nói gì |
-|---|---|
-| API trả về | `dq_score = 100.0` — hoàn hảo |
-| File báo cáo | `dq_score = None` |
+| Nguồn            | Nói gì                                                             |
+| ----------------- | -------------------------------------------------------------------- |
+| API trả về      | `dq_score = 100.0` — hoàn hảo                                   |
+| File báo cáo    | `dq_score = None`                                                  |
 | Báo cáo Steward | *"chất lượng gặp vấn đề nghiêm trọng, 8 rule thất bại"* |
 
 Trên tập dữ liệu vừa trượt 8/31 rule với 7.672 dòng thiếu `passenger_count`.
@@ -1675,11 +1675,11 @@ File **hỏng** thì vẫn báo lỗi: cấu hình sai khác với cấu hình k
 
 **Kiểm chứng** — ẩn hoàn toàn file policy, mô phỏng một dataset vừa upload:
 
-| Endpoint | Trước | Sau |
-|---|---:|---:|
-| `/datasets/{id}/rows?limit=5` | 500 | **200** |
-| `/datasets/{id}/profile` | 500 | **200** |
-| `/datasets` | 500 | **200** |
+| Endpoint                        | Trước |           Sau |
+| ------------------------------- | ------: | ------------: |
+| `/datasets/{id}/rows?limit=5` |     500 | **200** |
+| `/datasets/{id}/profile`      |     500 | **200** |
+| `/datasets`                   |     500 | **200** |
 
 Ba file trong `src/resources/` vẫn được giữ, nhưng giờ chúng là **tuỳ chọn**:
 `rule_policies.json` là ghi đè hợp lệ cho dataset NYC (EvalGate dùng
@@ -1749,12 +1749,12 @@ source   : src/resources/rule_policies.json + SUPABASE_DATASET_CONTRACT.md
 Việc bắt buộc xác thực làm 18 test vỡ — chúng gọi `dq_router` mà không có session. Đó
 là hệ quả **đúng**: endpoint giờ yêu cầu đăng nhập nên test phải đăng nhập.
 
-| File | Sửa gì |
-|---|---|
-| `tests/test_api/test_hitl_routes.py` | Fixture `client` đăng nhập + gắn `X-CSRF-Token`; fixture `_patch_engine` gọi `ensure_default_users` vì `create_all()` không seed tài khoản |
-| `tests/test_agents/test_execution_nodes.py` | Đăng nhập trong `test_api_execute_tests_endpoint` |
-| `tests/test_services/test_rule_store.py` | Đăng nhập trong `test_publish_api_endpoints` |
-| `tests/unit/test_pr12_evaluation_assets.py` | Trỏ về `docs/EVAL_EVIDENCES_E1_E5.md` sau khi thư mục `eval/` bị gỡ |
+| File                                          | Sửa gì                                                                                                                                                     |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tests/test_api/test_hitl_routes.py`        | Fixture`client` đăng nhập + gắn `X-CSRF-Token`; fixture `_patch_engine` gọi `ensure_default_users` vì `create_all()` không seed tài khoản |
+| `tests/test_agents/test_execution_nodes.py` | Đăng nhập trong`test_api_execute_tests_endpoint`                                                                                                        |
+| `tests/test_services/test_rule_store.py`    | Đăng nhập trong`test_publish_api_endpoints`                                                                                                             |
+| `tests/unit/test_pr12_evaluation_assets.py` | Trỏ về`docs/EVAL_EVIDENCES_E1_E5.md` sau khi thư mục `eval/` bị gỡ                                                                                 |
 
 **Fixture chung trong `tests/conftest.py` KHÔNG được sửa** — `test_session.py` dùng nó
 và cố ý khẳng định 401 cho request ẩn danh. Tự động đăng nhập ở đó sẽ phá chính các
@@ -1786,16 +1786,16 @@ python -m evalgate.run --mode ci
 
 ### 15.6 Kết quả
 
-| | Trước đợt sửa | Sau |
-|---|---:|---:|
-| Hard gate FAIL | 15 | **13** |
-| Điểm (nếu công bố) | 30.35 | **43.55** |
-| `unauthenticated_mutating_endpoints` | 8 | **0** |
-| `unauthenticated_read_endpoints` | 6 | **0** |
-| `required_asset_presence` | 33.33 | **100.0** |
-| `default_credentials_active` | True | **False** |
-| Test EvalGate | 128 | **127 pass, 1 skip** |
-| Độ phủ | 0.54 | 0.54 (không đổi) |
+|                                        | Trước đợt sửa |                        Sau |
+| -------------------------------------- | -----------------: | -------------------------: |
+| Hard gate FAIL                         |                 15 |               **13** |
+| Điểm (nếu công bố)                |              30.35 |            **43.55** |
+| `unauthenticated_mutating_endpoints` |                  8 |                **0** |
+| `unauthenticated_read_endpoints`     |                  6 |                **0** |
+| `required_asset_presence`            |              33.33 |            **100.0** |
+| `default_credentials_active`         |               True |            **False** |
+| Test EvalGate                          |                128 | **127 pass, 1 skip** |
+| Độ phủ                              |               0.54 |        0.54 (không đổi) |
 
 Bốn gate chuyển PASS: **`HG-S1`** (xác thực), **`HG-S7`** (credential mặc định), và
 `required_asset_presence` trong **`HG-G1`** lên 100% dù gate vẫn FAIL vì
@@ -1803,14 +1803,14 @@ Bốn gate chuyển PASS: **`HG-S1`** (xác thực), **`HG-S7`** (credential m�
 
 ### 15.7 Còn lại sau deploy
 
-| Gate | Vấn đề | Vì sao chưa sửa |
-|---|---|---|
-| `HG-S3` | 27 rò rỉ raw row / PII | Cần sửa nhiều node, không kịp một tối |
-| `HG-A7` `HG-A2` | Run 1 ra 0 rule do `timeout=25s` | Đường web chạy `agent_mode: mock` nên demo không dùng tới |
-| `HG-G5` | `agent_mode` mặc định `mock` | Bật lên sẽ lộ ngay lỗi timeout ở trên |
-| `HG-D2` | 8 giá trị bị nuốt thành null | `worker.py`, cần thiết kế lại cơ chế báo lỗi |
-| `HG-G4` | `reviewer=body.reviewer` | Phải lấy từ session, ~10 dòng nhưng đụng audit |
-| — | `POST /datasets/import` trả 500 | Dùng script nạp data thay thế |
+| Gate                | Vấn đề                           | Vì sao chưa sửa                                                 |
+| ------------------- | ----------------------------------- | ------------------------------------------------------------------ |
+| `HG-S3`           | 27 rò rỉ raw row / PII            | Cần sửa nhiều node, không kịp một tối                       |
+| `HG-A7` `HG-A2` | Run 1 ra 0 rule do`timeout=25s`   | Đường web chạy`agent_mode: mock` nên demo không dùng tới |
+| `HG-G5`           | `agent_mode` mặc định `mock` | Bật lên sẽ lộ ngay lỗi timeout ở trên                       |
+| `HG-D2`           | 8 giá trị bị nuốt thành null   | `worker.py`, cần thiết kế lại cơ chế báo lỗi             |
+| `HG-G4`           | `reviewer=body.reviewer`          | Phải lấy từ session, ~10 dòng nhưng đụng audit              |
+| —                  | `POST /datasets/import` trả 500  | Dùng script nạp data thay thế                                   |
 
 **Độ phủ vẫn 0.54, dưới ngưỡng 0.60, nên điểm vẫn không được công bố.** Đợt sửa này
 không đụng tới nguyên nhân: gate `ai_quality` đọc `output/` vốn bị gitignore.
@@ -1853,11 +1853,11 @@ chiều cho lọt thứ nó sinh ra để chặn.
 Thêm **31 test** trong `evalgate/tests/test_security_probes.py`. Ba khẳng định quan
 trọng nhất:
 
-| Test | Khoá điều gì |
-|---|---|
-| `test_no_archived_runs_blocks_rather_than_scoring_zero` | Không dữ liệu ⇒ `BLOCKED_MISSING_GROUND_TRUTH`. Trả 0 sẽ chặn release vĩnh viễn vì lý do sai; trả 1.0 thì không bao giờ chặn |
-| `test_a_router_guarded_at_mount_protects_all_of_its_endpoints` | Khoá lại đúng false positive ngày 22/08 |
-| `test_more_than_one_router_is_scanned` | 4/8 vi phạm thật nằm ở router thứ hai; probe chỉ theo `router` sẽ báo đúng một nửa và được tin |
+| Test                                                             | Khoá điều gì                                                                                                                              |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `test_no_archived_runs_blocks_rather_than_scoring_zero`        | Không dữ liệu ⇒`BLOCKED_MISSING_GROUND_TRUTH`. Trả 0 sẽ chặn release vĩnh viễn vì lý do sai; trả 1.0 thì không bao giờ chặn |
+| `test_a_router_guarded_at_mount_protects_all_of_its_endpoints` | Khoá lại đúng false positive ngày 22/08                                                                                                  |
+| `test_more_than_one_router_is_scanned`                         | 4/8 vi phạm thật nằm ở router thứ hai; probe chỉ theo`router` sẽ báo đúng một nửa và được tin                               |
 
 **Thêm seam cho `egress_probe`** — `_static_signals(src_root)`, `_empirical_rows(traces_dir)`,
 `evaluate(src_root=, traces_dir=)`. Giá trị mặc định giữ nguyên 19/8/27.
@@ -1886,14 +1886,14 @@ phẩm có thật.
 
 Đo trước khi viết, để không thêm quy tắc vô nghĩa:
 
-| Mục ngoài phạm vi | Thực tế |
-|---|---|
-| Arbitrary upload | ⚠️ **có** — `UploadFile` |
-| Arbitrary SQL từ client | ✅ không |
-| Streaming | ✅ không |
-| Scheduler | ✅ không |
-| ML anomaly model | ✅ không — `anomaly_service` chỉ dùng SQLAlchemy |
-| RAG | ✅ không |
+| Mục ngoài phạm vi     | Thực tế                                             |
+| ------------------------ | ----------------------------------------------------- |
+| Arbitrary upload         | ⚠️**có** — `UploadFile`                   |
+| Arbitrary SQL từ client | ✅ không                                             |
+| Streaming                | ✅ không                                             |
+| Scheduler                | ✅ không                                             |
+| ML anomaly model         | ✅ không —`anomaly_service` chỉ dùng SQLAlchemy |
+| RAG                      | ✅ không                                             |
 
 #### Quyết định thiết kế: lệch hợp đồng, không phải vi phạm
 
@@ -1941,11 +1941,11 @@ timeout_ok = bool(llm_timeout) and timed_out == 0
 
 Ba trạng thái, đúng kỷ luật `NOT_*`:
 
-| Tình huống | Báo cáo |
-|---|---|
-| Có timeout, các lần chạy đều xong | ✅ tính là control |
-| Có timeout, có lần chạy chết vì nó | ❌ **không tính** |
-| Có timeout, chưa quan sát lần chạy nào | ⚠️ *"adequacy unverified"* — không ngụ ý là ổn |
+| Tình huống                                 | Báo cáo                                               |
+| -------------------------------------------- | ------------------------------------------------------- |
+| Có timeout, các lần chạy đều xong      | ✅ tính là control                                    |
+| Có timeout, có lần chạy chết vì nó    | ❌**không tính**                                |
+| Có timeout, chưa quan sát lần chạy nào | ⚠️*"adequacy unverified"* — không ngụ ý là ổn |
 
 Kết quả: gate `reliability` **57.14 → 42.86**. Điểm giảm là **đúng** — phần thưởng 14
 điểm trước đó là sai và đã bị thu hồi.
@@ -2011,17 +2011,17 @@ xếp import và `typing` cũ). `ruff check evalgate/` giờ **sạch hoàn toà
 
 ### 16.5 Kết quả
 
-| | Trước | Sau |
-|---|---:|---:|
-| Test EvalGate | 128 | **162 pass, 1 skip** |
-| Evaluator có test | 13/19 | **17/19** |
-| Check hợp đồng | 9 | **15** |
-| Metric | 76 | **77** |
-| `ruff check evalgate/` | 5 lỗi | **sạch** |
-| Gate `reliability` | 57.14 | **42.86** |
-| Gate `governance` | 37.04 | **38.89** |
-| Điểm (nếu công bố) | 43.55 | **42.21** |
-| Hard gate FAIL | 13 | 13 |
+|                          | Trước |                        Sau |
+| ------------------------ | ------: | -------------------------: |
+| Test EvalGate            |     128 | **162 pass, 1 skip** |
+| Evaluator có test       |   13/19 |            **17/19** |
+| Check hợp đồng        |       9 |               **15** |
+| Metric                   |      76 |               **77** |
+| `ruff check evalgate/` |  5 lỗi |            **sạch** |
+| Gate`reliability`      |   57.14 |            **42.86** |
+| Gate`governance`       |   37.04 |            **38.89** |
+| Điểm (nếu công bố)  |   43.55 |            **42.21** |
+| Hard gate FAIL           |      13 |                         13 |
 
 Hard gate **không đổi** — đúng như thiết kế. Đây là test và kiểm chứng cho code đang
 chạy đúng, không phải bản sửa sản phẩm.
@@ -2030,14 +2030,14 @@ chạy đúng, không phải bản sửa sản phẩm.
 
 ### 16.6 Còn lại
 
-| | Vấn đề |
-|---|---|
-| `multi_dataset_readiness_v1` | Chưa có test (2/19 còn lại) |
-| `workspace_integrity_v1` | Chưa có test |
-| `R-7` đầy đủ | Cần một job CI chạy sản phẩm rồi publish `output/`; hiện chỉ có bước tải tuỳ chọn |
-| `R-11` | Commit một regression vẫn rửa nó thành `KNOWN_GAP` |
-| `R-14` | `policy_resolution` vẫn phạt dataset không có policy viết tay |
-| `observability` · `business` | 0.15 trọng số chưa từng đo — **phải xây, không được xoá** |
+|                                   | Vấn đề                                                                                        |
+| --------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `multi_dataset_readiness_v1`    | Chưa có test (2/19 còn lại)                                                                  |
+| `workspace_integrity_v1`        | Chưa có test                                                                                   |
+| `R-7` đầy đủ                | Cần một job CI chạy sản phẩm rồi publish`output/`; hiện chỉ có bước tải tuỳ chọn |
+| `R-11`                          | Commit một regression vẫn rửa nó thành`KNOWN_GAP`                                         |
+| `R-14`                          | `policy_resolution` vẫn phạt dataset không có policy viết tay                             |
+| `observability` · `business` | 0.15 trọng số chưa từng đo —**phải xây, không được xoá**                      |
 
 ---
 
@@ -2068,12 +2068,12 @@ trên đĩa. Một cổng công bố điểm cho code không phải code sẽ đ
 
 ### 17.2 Điểm theo gate
 
-| Gate | Điểm | Trọng số | Độ phủ evaluator |
-|---|---:|---:|---:|
-| `ai_quality` | **20.19** | 36% | 5/8 |
-| `ai_security` | 78.64 | 29% | 5/7 |
-| `input_data` | 37.50 | 20% | 2/4 |
-| `governance` | 38.89 | 15% | 6/6 |
+| Gate            |          Điểm | Trọng số | Độ phủ evaluator |
+| --------------- | --------------: | ---------: | ------------------: |
+| `ai_quality`  | **20.19** |        36% |                 5/8 |
+| `ai_security` |           78.64 |        29% |                 5/7 |
+| `input_data`  |           37.50 |        20% |                 2/4 |
+| `governance`  |           38.89 |        15% |                 6/6 |
 
 Gate nặng nhất chấm thấp nhất. Đó không phải trục trặc — `ai_quality` đo đúng thứ sản
 phẩm đang hỏng: `run_outcome_integrity_v1` = **0.00**, vì lần chạy agent gần nhất sinh
@@ -2081,15 +2081,15 @@ ra **0 rule**.
 
 ### 17.3 Hard gate: 13 trượt / 20 được đánh giá
 
-| Nhóm | ID | Ai phải sửa |
-|---|---|---|
-| Agent không ra được output | `HG-A7` `HG-A2` `HG-A1` | sản phẩm |
-| Rule sai ngữ nghĩa | `HG-A3` `HG-A5` `HG-A6` | sản phẩm |
-| Uỷ quyền | `HG-S2` (8 vi phạm) `HG-S8` | sản phẩm |
-| Rò dữ liệu thô / PII | `HG-S3` (27) | sản phẩm |
-| Nhật ký & HITL | `HG-G2` `HG-G4` | sản phẩm |
-| Đường phục vụ giả lập | `HG-G5` | sản phẩm |
-| Ingest nuốt lỗi thành null | `HG-D2` (8) | sản phẩm |
+| Nhóm                          | ID                               | Ai phải sửa |
+| ------------------------------ | -------------------------------- | ------------- |
+| Agent không ra được output | `HG-A7` `HG-A2` `HG-A1`    | sản phẩm    |
+| Rule sai ngữ nghĩa           | `HG-A3` `HG-A5` `HG-A6`    | sản phẩm    |
+| Uỷ quyền                     | `HG-S2` (8 vi phạm) `HG-S8` | sản phẩm    |
+| Rò dữ liệu thô / PII       | `HG-S3` (27)                   | sản phẩm    |
+| Nhật ký & HITL               | `HG-G2` `HG-G4`              | sản phẩm    |
+| Đường phục vụ giả lập   | `HG-G5`                        | sản phẩm    |
+| Ingest nuốt lỗi thành null  | `HG-D2` (8)                    | sản phẩm    |
 
 **Không finding nào trong số này thuộc về EvalGate.** Toàn bộ 13 cái là khuyết tật sản
 phẩm mà cổng phát hiện được.
@@ -2113,29 +2113,29 @@ thay được việc chạy thật.**
 
 ### 17.5 So với §16
 
-| | §16 (23/08 sáng) | Nay |
-|---|---:|---:|
-| Self-test EvalGate | 162 pass, 1 skip | **189 pass, 1 skip** |
-| Evaluator | 19 | **30** |
-| Metric | 77 | **84** |
-| Critical finding | — | **22** (15 chặn release) |
-| Điểm | 42.21 | 43.41 |
-| Hard gate FAIL | 13 | 13 |
-| `ruff check evalgate/` | sạch | **sạch** |
+|                          | §16 (23/08 sáng) |                             Nay |
+| ------------------------ | -----------------: | ------------------------------: |
+| Self-test EvalGate       |   162 pass, 1 skip |      **189 pass, 1 skip** |
+| Evaluator                |                 19 |                    **30** |
+| Metric                   |                 77 |                    **84** |
+| Critical finding         |                 — | **22** (15 chặn release) |
+| Điểm                   |              42.21 |                           43.41 |
+| Hard gate FAIL           |                 13 |                              13 |
+| `ruff check evalgate/` |              sạch |                 **sạch** |
 
 ### 17.6 EvalGate đã đạt MVP chưa?
 
 **Tầng ra quyết định: rồi.** Bốn thứ một cổng chất lượng bắt buộc phải có, đều có và
 đều có test khoá lại:
 
-| | Bằng chứng |
-|---|---|
-| Chạy đầu-cuối, ra phán quyết máy đọc được | `exit 4`, `result.json` 84 metric |
-| Hard gate chặn bất kể điểm | `test_hard_gate_failure_blocks_release_despite_a_perfect_score` |
-| Không đo thì không bịa | 10/30 evaluator ở `NOT_*` / `BLOCKED_*`, tái chuẩn hoá trọng số |
-| Sàn độ phủ | dưới 0.60 ⇒ **giữ lại điểm**, không công bố |
-| Ở trong CI | job `evalgate`, self-test chạy **trước** khi tin verdict |
-| Tìm ra lỗi thật | 8 lỗ cross-tenant, đã xác minh độc lập bằng `curl` |
+|                                                       | Bằng chứng                                                             |
+| ----------------------------------------------------- | ------------------------------------------------------------------------ |
+| Chạy đầu-cuối, ra phán quyết máy đọc được | `exit 4`, `result.json` 84 metric                                    |
+| Hard gate chặn bất kể điểm                       | `test_hard_gate_failure_blocks_release_despite_a_perfect_score`        |
+| Không đo thì không bịa                           | 10/30 evaluator ở`NOT_*` / `BLOCKED_*`, tái chuẩn hoá trọng số |
+| Sàn độ phủ                                        | dưới 0.60 ⇒**giữ lại điểm**, không công bố               |
+| Ở trong CI                                           | job`evalgate`, self-test chạy **trước** khi tin verdict       |
+| Tìm ra lỗi thật                                    | 8 lỗ cross-tenant, đã xác minh độc lập bằng`curl`              |
 
 **Tầng đo lường: chưa.** Ba hạn chế, xếp theo mức nghiêm trọng:
 
@@ -2163,13 +2163,13 @@ baseline bám theo lần chạy gần nhất chứ chưa ghim vào một revisio
 
 ### 17.8 Việc còn lại
 
-| | Việc | Ghi chú |
-|---|---|---|
-| 1 | Chấm theo run (`run_ledger`, `EvalScope`, `--run-id`, watcher) | ~4 ngày; đóng hạn chế 1 và 2 |
-| 2 | `R-11` ghim baseline vào revision đã biết tốt | nhỏ |
-| 3 | Test cho `multi_dataset_readiness_v1`, `workspace_integrity_v1` | 2/19 còn lại |
-| 4 | Gỡ `continue-on-error` trong CI | khi các finding chặn được đóng |
-| 5 | Xây `trace_coverage` cho `observability` | **xây, không xoá** — xem §16.0 |
+|   | Việc                                                                 | Ghi chú                                  |
+| - | --------------------------------------------------------------------- | ----------------------------------------- |
+| 1 | Chấm theo run (`run_ledger`, `EvalScope`, `--run-id`, watcher) | ~4 ngày; đóng hạn chế 1 và 2        |
+| 2 | `R-11` ghim baseline vào revision đã biết tốt                  | nhỏ                                      |
+| 3 | Test cho`multi_dataset_readiness_v1`, `workspace_integrity_v1`    | 2/19 còn lại                            |
+| 4 | Gỡ`continue-on-error` trong CI                                     | khi các finding chặn được đóng     |
+| 5 | Xây`trace_coverage` cho `observability`                          | **xây, không xoá** — xem §16.0 |
 
 ---
 
@@ -2204,15 +2204,15 @@ Nguyên tắc: **đo và chấm là hai việc khác nhau, không được nằm
 
 Phần lớn luồng này **đã có**. Ba mắt xích là lối tắt:
 
-| Mắt xích | Hiện tại | |
-|---|---|---|
-| `schemas/` | `EvalResult`, `extra="forbid"` | ✅ đúng thiết kế |
-| `aggregator.py` | P25, loại `NOT_*`, tái chuẩn hoá | ✅ |
-| `policies/` | 3 file YAML, có version | ✅ |
-| `reports/` | `report.md` + `result.json` | ✅ |
-| **`evidence/`** | **ghi một chiều** | ❌ **không dòng code nào đọc lại** |
-| **`normalizers/`** | **20/20 evaluator tự gọi, tự đặt `score=`** | ❌ chuẩn hoá nằm trong evaluator |
-| **Adapter ngoài** | **không có** | ❌ DeepEval · Langfuse · GX · Evidently đều là stub |
+| Mắt xích                 | Hiện tại                                               |                                                           |
+| -------------------------- | -------------------------------------------------------- | --------------------------------------------------------- |
+| `schemas/`               | `EvalResult`, `extra="forbid"`                       | ✅ đúng thiết kế                                      |
+| `aggregator.py`          | P25, loại`NOT_*`, tái chuẩn hoá                    | ✅                                                        |
+| `policies/`              | 3 file YAML, có version                                 | ✅                                                        |
+| `reports/`               | `report.md` + `result.json`                          | ✅                                                        |
+| **`evidence/`**    | **ghi một chiều**                                | ❌**không dòng code nào đọc lại**             |
+| **`normalizers/`** | **20/20 evaluator tự gọi, tự đặt `score=`** | ❌ chuẩn hoá nằm trong evaluator                       |
+| **Adapter ngoài**   | **không có**                                     | ❌ DeepEval · Langfuse · GX · Evidently đều là stub |
 
 Kiểm chứng bằng chính mã nguồn:
 
@@ -2287,12 +2287,12 @@ schema_violations:  zero_tolerance   # khác 0 là 0 điểm, không nội suy
 Một adapter chỉ có đúng một việc: gọi công cụ, ghi một file evidence. Nó **không** biết
 trọng số, **không** biết hard gate, **không** biết điểm.
 
-| Adapter | Nguồn | Gate | Trạng thái |
-|---|---|---|---|
-| `deepeval_geval_v1` | DeepEval | `ai_quality` | stub `NOT_EXECUTED` |
-| `langfuse_trace_v1` | Langfuse | `observability` | chưa có — **sẽ mở khoá gate đang 0 độ phủ** |
-| `gx_corpus_v1` | Great Expectations | `input_data` | stub `NOT_IMPLEMENTED` |
-| `evidently_drift_v1` | Evidently | `input_data` | stub `NOT_IMPLEMENTED` |
+| Adapter                | Nguồn             | Gate              | Trạng thái                                               |
+| ---------------------- | ------------------ | ----------------- | ---------------------------------------------------------- |
+| `deepeval_geval_v1`  | DeepEval           | `ai_quality`    | stub`NOT_EXECUTED`                                       |
+| `langfuse_trace_v1`  | Langfuse           | `observability` | chưa có —**sẽ mở khoá gate đang 0 độ phủ** |
+| `gx_corpus_v1`       | Great Expectations | `input_data`    | stub`NOT_IMPLEMENTED`                                    |
+| `evidently_drift_v1` | Evidently          | `input_data`    | stub`NOT_IMPLEMENTED`                                    |
 
 `langfuse_trace_v1` đáng chú ý riêng. `observability` bị tuyên ngoài phạm vi ở
 `weights.yaml` v3 **vì chưa từng đo được gì** — và §16.0 đã từ chối xoá nó để làm đẹp
@@ -2301,25 +2301,25 @@ lại với trọng số thật, không phải bằng cách hạ ngưỡng.
 
 ### 18.6 Điều này mở khoá cái gì
 
-| | |
-|---|---|
-| **Tái chấm không cần đo lại** | Đổi ngưỡng → chạy lại từ `evidence/` trong vài giây, $0. Trả lời được *"siết `drift` xuống 0.15 thì bao nhiêu revision trượt?"* |
-| **Công cụ ngoài cắm vào không đụng `aggregator`** | Thêm evaluator = thêm một file evidence, không sửa lõi |
-| **Chấm theo run** (§17.8 mục 1) | Lần chạy thật ghi evidence → EvalGate chấm chính lần chạy đó, không chấm artefact cũ. **Cùng một hạ tầng** |
-| **`R-11`** | Baseline ghim vào một *tập evidence* thay vì lần chạy gần nhất, nên commit một regression không rửa được nó |
-| **Xu hướng theo thời gian** | Evidence sống lâu hơn lần chạy ⇒ vẽ được đồ thị; hôm nay chỉ có ảnh chụp |
-| **Kiểm toán** | Người review đọc được số liệu thô, không phải tin rằng evaluator đã chấm đúng |
+|                                                                   |                                                                                                                                                           |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Tái chấm không cần đo lại**                         | Đổi ngưỡng → chạy lại từ`evidence/` trong vài giây, $0. Trả lời được *"siết `drift` xuống 0.15 thì bao nhiêu revision trượt?"* |
+| **Công cụ ngoài cắm vào không đụng `aggregator`** | Thêm evaluator = thêm một file evidence, không sửa lõi                                                                                              |
+| **Chấm theo run** (§17.8 mục 1)                          | Lần chạy thật ghi evidence → EvalGate chấm chính lần chạy đó, không chấm artefact cũ.**Cùng một hạ tầng**                          |
+| **`R-11`**                                                | Baseline ghim vào một*tập evidence* thay vì lần chạy gần nhất, nên commit một regression không rửa được nó                              |
+| **Xu hướng theo thời gian**                              | Evidence sống lâu hơn lần chạy ⇒ vẽ được đồ thị; hôm nay chỉ có ảnh chụp                                                                |
+| **Kiểm toán**                                             | Người review đọc được số liệu thô, không phải tin rằng evaluator đã chấm đúng                                                           |
 
 ### 18.7 Lộ trình
 
-| | Bước | Rủi ro |
-|---|---|---|
-| 1 | Chốt `EvidenceRecord` trong `schemas/`, `extra="forbid"` | thấp |
-| 2 | `policies/normalizer_map.yaml` — bảng ánh xạ dạng dữ liệu | thấp |
-| 3 | Tầng đọc: `evidence/` → `EvalResult`, thay vì evaluator tự dựng | trung bình |
-| 4 | Chuyển 20 evaluator sang chỉ-ghi-evidence | **cao — xem 18.8** |
-| 5 | `--from-evidence` để tái chấm không đo lại | thấp |
-| 6 | `langfuse_trace_v1` — adapter thật đầu tiên | trung bình |
+|   | Bước                                                                    | Rủi ro                   |
+| - | ------------------------------------------------------------------------- | ------------------------- |
+| 1 | Chốt`EvidenceRecord` trong `schemas/`, `extra="forbid"`            | thấp                     |
+| 2 | `policies/normalizer_map.yaml` — bảng ánh xạ dạng dữ liệu        | thấp                     |
+| 3 | Tầng đọc:`evidence/` → `EvalResult`, thay vì evaluator tự dựng | trung bình               |
+| 4 | Chuyển 20 evaluator sang chỉ-ghi-evidence                               | **cao — xem 18.8** |
+| 5 | `--from-evidence` để tái chấm không đo lại                       | thấp                     |
+| 6 | `langfuse_trace_v1` — adapter thật đầu tiên                        | trung bình               |
 
 ### 18.8 Điều kiện bắt buộc trước bước 4
 

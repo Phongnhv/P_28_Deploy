@@ -15,8 +15,6 @@ import logging
 import math
 import threading
 import uuid
-
-logger = logging.getLogger(__name__)
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -352,7 +350,7 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
 
     if not profile or not columns or dataset.status != "PROFILE_READY":
         try:
-            from src.services.job_runner import _uploaded_dataset_path, _profile_uploaded_dataset
+            from src.services.job_runner import _profile_uploaded_dataset, _uploaded_dataset_path
             uploaded_path = _uploaded_dataset_path(dataset_id)
             if uploaded_path:
                 _profile_uploaded_dataset(db, dataset_id, uploaded_path)
@@ -525,7 +523,7 @@ def _normalise_graph_rules(raw_rules: list[dict[str, Any]], evidence: ProposalEv
     candidates = _build_dashboard_rule_candidates(evidence)
     accepted: list[tuple[DashboardProposal, DashboardRuleCandidate]] = []
     candidate_ids: set[str] = set()
-    rule_types: set[str] = set()
+
 
     for raw in raw_rules:
         matched_candidate = _match_dashboard_candidate(raw, candidates, evidence)
@@ -908,12 +906,7 @@ def _policy_severity(candidate: DashboardRuleCandidate) -> str:
 def _mock_proposals(evidence: ProposalEvidence) -> list[DashboardProposal]:
     """Explicit offline mode for deterministic UI and automated tests."""
     available = {column.name for column in evidence.columns}
-    mock_ids = {
-        "not_null": "proposal-not-null",
-        "numeric_range": "proposal-range",
-        "accepted_values": "proposal-accepted-values",
-        "cross_field_comparison": "proposal-cross-field",
-    }
+
     result = [
         DashboardProposal(
             id=f"proposal-{uuid.uuid4().hex}",

@@ -30,7 +30,6 @@ from src.services.rule_store import (
 )
 from src.time_utils import utc_now
 
-
 RULE = {
     "rule_id": "source_rows.fare_amount.range",
     "rule_name": "Fare amount is in range",

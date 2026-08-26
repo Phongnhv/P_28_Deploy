@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict
 
 
 @dataclass
 class DetectorConfig:
     version: str = "anomaly-v1"
-    family_weights: Dict[str, float] = field(
+    family_weights: dict[str, float] = field(
         default_factory=lambda: {
             "BUSINESS_RULE": 1.0,
             "EXECUTION": 1.0,
@@ -29,7 +28,7 @@ class DetectorConfig:
     aggregation_min_independent_families: int = 2
 
 
-DETECTOR_CONFIGS: Dict[str, DetectorConfig] = {
+DETECTOR_CONFIGS: dict[str, DetectorConfig] = {
     "anomaly-v1": DetectorConfig()
 }
 

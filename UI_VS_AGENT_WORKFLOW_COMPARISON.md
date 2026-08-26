@@ -6,12 +6,12 @@
 
 ### 0.1. Ma trận UI và agent workflow
 
-| Workflow | Source thực thi từ UI hiện tại | Mức tích hợp |
-|---|---|---:|
-| Graph 1 | `Graph1Studio` → protected Graph 1 routes → `build_proposal_graph()`; đủ 9 canonical backend nodes và 2 HITL gates | 100% |
-| Graph 2 | Nút `Analyze Graph 2 & 3` → `analysis_workflow.execute_analysis_run()` → `build_execution_graph()` | 100% |
-| Graph 3 | Cùng analysis run, chỉ chạy sau Graph 2 success → `build_anomaly_graph()` | 100% |
-| Steward report | `report_writer_node` trả Markdown + source và được persist trong `analysis_runs` | 100% |
+| Workflow       | Source thực thi từ UI hiện tại                                                                                          | Mức tích hợp |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------: |
+| Graph 1        | `Graph1Studio` → protected Graph 1 routes → `build_proposal_graph()`; đủ 9 canonical backend nodes và 2 HITL gates |            100% |
+| Graph 2        | Nút`Analyze Graph 2 & 3` → `analysis_workflow.execute_analysis_run()` → `build_execution_graph()`                  |            100% |
+| Graph 3        | Cùng analysis run, chỉ chạy sau Graph 2 success →`build_anomaly_graph()`                                              |            100% |
+| Steward report | `report_writer_node` trả Markdown + source và được persist trong `analysis_runs`                                   |            100% |
 
 Luồng dashboard cũ `POST /api/v1/dq-runs` vẫn tồn tại cho màn hình legacy. Analysis Studio không sử dụng endpoint cũ `/api/v1/dq/execution-runs` và không gọi wrapper `run_execution_graph()`; service điều phối gọi trực tiếp hai graph builders để thu telemetry từng node.
 
@@ -88,8 +88,8 @@ Các capability sau vẫn là **NOT FOUND** trong source: Isolation Forest, func
 
 ## Phụ lục — báo cáo trước tích hợp (đã bị thay thế)
 
-> **Ngày lập báo cáo:** 23/08/2026  
-> **Dự án:** RidePulse DQ (AI Data Quality Agent)  
+> **Ngày lập báo cáo:** 23/08/2026
+> **Dự án:** RidePulse DQ (AI Data Quality Agent)
 > **Trạng thái đối chiếu:** Xác thực 100% dựa trên mã nguồn thực tế tại kho lưu trữ.
 
 ---
@@ -101,6 +101,7 @@ Nhận định của bạn là **HOÀN TOÀN CHÍNH XÁC 100%**:
 R> **Toàn bộ flow trên giao diện Web UI KHÔNG sử dụng trọn vẹn 3 Graph LangGraph như được định nghĩa trong `src/agents/graph.py`.**
 
 Hệ thống hiện tại đang tồn tại **2 chế độ vận hành (2 Execution Modes)** song song:
+
 1. **Luồng CLI / Pipeline Runner (`python src/main.py` / `pytest`)**: Chạy trọn vẹn 3 Graph LangGraph phức tạp từ đầu đến cuối.
 2. **Luồng Web UI / Dashboard (`http://127.0.0.1:5173`)**: Chạy theo mô hình **Hybrid (Lai)**, chỉ tận dụng một phần nhỏ của Graph 1, **bỏ hoàn toàn Graph 2**, và **chạy trọn vẹn Graph 3**.
 
@@ -108,11 +109,11 @@ Hệ thống hiện tại đang tồn tại **2 chế độ vận hành (2 Execu
 
 ## 2. BẢNG SO SÁNH TỔNG HỢP (COMPARISON MATRIX)
 
-| Tiêu chí | Luồng CLI / E2E Test (`src/agents/graph.py`) | Luồng Web UI (`Frontend + FastAPI Routes`) | Mức độ trùng khớp |
-| :--- | :--- | :--- | :---: |
-| **Graph 1: Proposal Graph** | Chạy **9 nodes** LangGraph liên hoàn (`raw_profiler` ➔ `profiler_digest` ➔ `data_dict` ➔ `understanding` ➔ `semantic_gate` ➔ `candidates` ➔ `prompt_customizer` ➔ `rule_proposer` ➔ `hitl_gate`) | Tách nhỏ. Chỉ chạy duy nhất **1 node `rule_proposer`** qua `build_dashboard_proposal_graph()`. Các bước khác gọi hàm Python độc lập. | **~25%** *(Chỉ dùng chung node LLM Proposer)* |
-| **Graph 2: Execution Graph** | Chạy StateGraph (`test_generator` ➔ `validate_dbt` ➔ `test_runner` ➔ `persist_report`). LLM tự do sinh mã dbt/SQL và tự sửa lỗi. | **KHÔNG DÙNG GRAPH 2**. Sử dụng **Deterministic SQL Compiler** (`compile_rule_to_sql`) để sinh câu truy vấn SELECT an toàn cố định. | **0%** *(Thay thế hoàn toàn)* |
-| **Graph 3: Anomaly Graph** | Chạy StateGraph (`anomaly_detector` ➔ `hypothesis_agent` ➔ `persist_analysis` ➔ `report_writer`). | **CHẠY ĐẦY ĐỦ 100%** qua `run_anomaly_graph` chạy ngầm sau khi kiểm thử xong hoặc ở bước `ANALYZE_REPORT`. | **100%** *(Trùng khớp hoàn toàn)* |
+| Tiêu chí                         | Luồng CLI / E2E Test (`src/agents/graph.py`)                                                                                                                                                                                    | Luồng Web UI (`Frontend + FastAPI Routes`)                                                                                                                 |                 Mức độ trùng khớp                 |
+| :--------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------ | :-----------------------------------------------------: |
+| **Graph 1: Proposal Graph**  | Chạy**9 nodes** LangGraph liên hoàn (`raw_profiler` ➔ `profiler_digest` ➔ `data_dict` ➔ `understanding` ➔ `semantic_gate` ➔ `candidates` ➔ `prompt_customizer` ➔ `rule_proposer` ➔ `hitl_gate`) | Tách nhỏ. Chỉ chạy duy nhất**1 node `rule_proposer`** qua `build_dashboard_proposal_graph()`. Các bước khác gọi hàm Python độc lập.   | **~25%** *(Chỉ dùng chung node LLM Proposer)* |
+| **Graph 2: Execution Graph** | Chạy StateGraph (`test_generator` ➔ `validate_dbt` ➔ `test_runner` ➔ `persist_report`). LLM tự do sinh mã dbt/SQL và tự sửa lỗi.                                                                                 | **KHÔNG DÙNG GRAPH 2**. Sử dụng **Deterministic SQL Compiler** (`compile_rule_to_sql`) để sinh câu truy vấn SELECT an toàn cố định. |        **0%** *(Thay thế hoàn toàn)*        |
+| **Graph 3: Anomaly Graph**   | Chạy StateGraph (`anomaly_detector` ➔ `hypothesis_agent` ➔ `persist_analysis` ➔ `report_writer`).                                                                                                                      | **CHẠY ĐẦY ĐỦ 100%** qua `run_anomaly_graph` chạy ngầm sau khi kiểm thử xong hoặc ở bước `ANALYZE_REPORT`.                             |      **100%** *(Trùng khớp hoàn toàn)*      |
 
 ---
 
@@ -121,6 +122,7 @@ Hệ thống hiện tại đang tồn tại **2 chế độ vận hành (2 Execu
 ### 3.1. Graph 1: Proposal Graph (Phân tích & Đề xuất Rules)
 
 #### A. Trong `src/agents/graph.py` (Bản gốc)
+
 * Hàm đại diện: `build_proposal_graph()` & `run_proposal_graph()`
 * Luồng gồm 9 Node:
   ```mermaid
@@ -137,6 +139,7 @@ Hệ thống hiện tại đang tồn tại **2 chế độ vận hành (2 Execu
 * Toàn bộ quá trình từ đọc dữ liệu thô, sinh Từ điển dữ liệu, suy luận Semantic Contract, tùy biến Prompt riêng cho từng bảng cho đến sinh Rules đều chạy khép kín trong 1 phiên LangGraph.
 
 #### B. Thực tế trên Web UI
+
 * **Khi bấm "Propose Rules" trên giao diện:**
   * Endpoint được gọi: `POST /api/v1/datasets/{id}/rule-proposals`
   * Backend thực thi: `run_propose_rules()` trong [`src/services/job_runner.py`](file:///d:/ai_thuc_chien/P-028/src/services/job_runner.py#L588-L605).
@@ -152,6 +155,7 @@ Hệ thống hiện tại đang tồn tại **2 chế độ vận hành (2 Execu
 ### 3.2. Graph 2: Execution Graph (Sinh mã kiểm thử & Thực thi)
 
 #### A. Trong `src/agents/graph.py` (Bản gốc)
+
 * Hàm đại diện: `build_execution_graph()` & `run_execution_graph()`
 * Luồng gồm 4 Node:
   ```mermaid
@@ -164,6 +168,7 @@ Hệ thống hiện tại đang tồn tại **2 chế độ vận hành (2 Execu
 * Sử dụng LLM để tự do sinh các file dbt YAML hoặc câu SQL kiểm thử động, sau đó validate và thực thi.
 
 #### B. Thực tế trên Web UI
+
 * **Khi bấm "Run Checks" / "Start Run" trên giao diện:**
   * Endpoint được gọi: `POST /api/v1/dq-runs`
   * Backend thực thi: `run_dq_checks()` trong [`src/services/job_runner.py`](file:///d:/ai_thuc_chien/P-028/src/services/job_runner.py#L821-L932).
@@ -171,6 +176,7 @@ Hệ thống hiện tại đang tồn tại **2 chế độ vận hành (2 Execu
 * **Bằng chứng mã nguồn từ chính docstring của hệ thống:**
   *(Trích đoạn từ `src/services/job_runner.py` dòng 833-835)*
   > *"Approved dashboard rule versions are the only input. The SQL comes from fixed `compile_rule_to_sql` templates; the legacy execution graph and its LLM repair loop are intentionally not a source of executable SQL in this product flow."*
+  >
 * **Lý do kiến trúc:**
   * Việc để LLM tự do sinh mã SQL chạy thẳng vào cơ sở dữ liệu thật trên Web UI tiềm ẩn rủi ro rất lớn về **SQL Injection**, lỗi hiệu năng (Full Table Scan), hoặc làm hỏng dữ liệu.
   * Vì vậy, Web UI sử dụng bộ compiler khuôn mẫu xác định (`compile_rule_to_sql`) để sinh các câu `SELECT ... WHERE ...` an toàn tuyệt đối.
@@ -180,6 +186,7 @@ Hệ thống hiện tại đang tồn tại **2 chế độ vận hành (2 Execu
 ### 3.3. Graph 3: Anomaly Graph (Phát hiện dị thường & Viết báo cáo)
 
 #### A. Trong `src/agents/graph.py` (Bản gốc)
+
 * Hàm đại diện: `build_anomaly_graph()` & `run_anomaly_graph()`
 * Luồng gồm 4 Node:
   ```mermaid
@@ -190,6 +197,7 @@ Hệ thống hiện tại đang tồn tại **2 chế độ vận hành (2 Execu
   ```
 
 #### B. Thực tế trên Web UI
+
 * **ĐÂY LÀ GRAPH DUY NHẤT ĐƯỢC WEB UI SỬ DỤNG TRỌN VẸN 100%.**
 * **Vị trí kích hoạt:**
   1. Trong [`src/services/job_runner.py`](file:///d:/ai_thuc_chien/P-028/src/services/job_runner.py#L980-L994): Ngay sau khi `run_dq_checks` chạy xong, hệ thống tạo một background thread gọi:
@@ -207,6 +215,7 @@ Hệ thống hiện tại đang tồn tại **2 chế độ vận hành (2 Execu
 ## 4. BIỂU ĐỒ SO SÁNH LUỒNG DỮ LIỆU THỰC TẾ
 
 ### Luồng 1: CLI / E2E Testing (Pure LangGraph Pipeline)
+
 ```mermaid
 flowchart TD
     CLI[CLI Runner: src/main.py] --> G1[Graph 1: Proposal Graph<br/>9 Nodes LangGraph]
@@ -216,6 +225,7 @@ flowchart TD
 ```
 
 ### Luồng 2: Web UI Dashboard (Hybrid Production Pipeline)
+
 ```mermaid
 flowchart TD
     subgraph UI_Interaction["Thao tác Web UI"]

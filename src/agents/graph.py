@@ -1,8 +1,12 @@
 import logging
 import os
 import sys
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
+
 from dotenv import load_dotenv
+from langgraph.graph import END, StateGraph
+
+from src.agents.state import AgentState
 
 load_dotenv()
 
@@ -25,11 +29,6 @@ if "pytest" not in sys.modules and not os.getenv("DISABLE_TRACING") and (os.gete
         LangChainInstrumentor().instrument()
     except Exception:
         pass
-
-
-from langgraph.graph import END, StateGraph
-
-from src.agents.state import AgentState
 
 
 # ---------------------------------------------------------------------------
