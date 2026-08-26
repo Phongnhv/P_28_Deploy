@@ -1,7 +1,8 @@
 import logging
 import os
 import sys
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
+
 from dotenv import load_dotenv
 
 load_dotenv()

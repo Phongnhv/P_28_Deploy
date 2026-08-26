@@ -27,7 +27,6 @@ from src.agents.nodes.dbt_validation import get_state_dbt_yaml, materialize_dbt_
 from src.agents.nodes.test_generator_node import _build_row_predicate
 from src.agents.state import AgentState
 from src.config import get_settings
-from src.models.rule_schemas import RuleType
 from src.models.database import (
     DatasetVersionModel,
     GovernedArtifactModel,
@@ -35,17 +34,18 @@ from src.models.database import (
     RuleReviewSnapshotModel,
     RuleVersionModel,
 )
+from src.models.rule_schemas import RuleType
 from src.services.rule_store import get_engine
+from src.services.supabase_dataset import (
+    CANONICAL_COLUMNS,
+    create_supabase_engine,
+    is_postgres_database_url,
+)
 from src.services.versioned_dataset import (
     SOURCE_ADAPTER_VERSION,
     execute_rules_frame,
     materialize_source_artifact,
     read_verified_frame,
-)
-from src.services.supabase_dataset import (
-    CANONICAL_COLUMNS,
-    create_supabase_engine,
-    is_postgres_database_url,
 )
 from src.time_utils import utc_now
 

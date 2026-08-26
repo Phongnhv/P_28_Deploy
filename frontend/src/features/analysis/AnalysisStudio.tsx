@@ -75,6 +75,13 @@ function formatDuration(value?: number | null) {
   return `${(value / 1000).toFixed(2)} s`;
 }
 
+function displayAnalysisArea(value?: string | null) {
+  const normalized = (value ?? "").replaceAll("_", " ").toUpperCase();
+  if (normalized.includes("GRAPH 2") || normalized === "GRAPH2" || normalized === "GRAPH 2") return "RULE PROPOSAL";
+  if (normalized.includes("GRAPH 3") || normalized === "GRAPH3" || normalized === "GRAPH 3") return "ANOMALY DETECTION";
+  return value ?? "—";
+}
+
 function slugify(value: string) {
   return value
     .toLocaleLowerCase("vi")
@@ -100,10 +107,14 @@ export function AnalysisStudio({
   analysisRunId,
   onExit,
   onBackToGraph1,
+  onRerun,
+  rerunBusy = false,
 }: {
   analysisRunId: string;
   onExit: () => void;
   onBackToGraph1: () => void;
+  onRerun?: () => void;
+  rerunBusy?: boolean;
 }) {
   const [run, setRun] = useState<AnalysisRun | null>(null);
   const [nodes, setNodes] = useState<AnalysisNodeExecution[]>([]);
@@ -224,16 +235,19 @@ export function AnalysisStudio({
       <div>
         <nav className="analysis-breadcrumb" aria-label="Breadcrumb">
           <button type="button" onClick={onExit}>Workspace</button><span>›</span>
-          <button type="button" onClick={onBackToGraph1}>Graph 1</button><span>›</span>
+          <button type="button" onClick={onBackToGraph1}>Profiler</button><span>›</span>
           <span>Analysis</span>
         </nav>
         <div className="analysis-title-row"><div className="analysis-title-icon"><Activity aria-hidden="true" /></div><div>
-          <span className="eyebrow">GRAPH 2 + GRAPH 3</span>
+          <span className="eyebrow">RULE PROPOSAL + ANOMALY DETECTION</span>
           <h1>Data quality analysis studio</h1>
           <p>Thực thi dbt tests, phân tích tín hiệu bất thường và tổng hợp báo cáo Data Steward.</p>
         </div></div>
       </div>
-      <button type="button" className="button secondary analysis-back" onClick={onBackToGraph1}><ArrowLeft aria-hidden="true" /> Graph 1</button>
+      <div className="analysis-hero-actions">
+        {run && TERMINAL.has(run.status) && onRerun && <button type="button" className="button secondary" disabled={rerunBusy} onClick={onRerun}>{rerunBusy ? "Đang rerun…" : "Rerun Rule Proposal & Anomaly Detection"}</button>}
+        <button type="button" className="button secondary analysis-back" onClick={onBackToGraph1}><ArrowLeft aria-hidden="true" /> Profiler</button>
+      </div>
     </header>
 
     {error && <div className="analysis-alert danger" role="alert"><XCircle aria-hidden="true" /><div><strong>Không thể tải Analysis Studio</strong><span>{error}</span></div><button type="button" onClick={() => void refresh()}>Thử lại</button></div>}
@@ -241,13 +255,13 @@ export function AnalysisStudio({
 
     <section className="analysis-runbar" aria-label="Analysis run status">
       <div className="analysis-run-id"><span className={`analysis-live-dot ${run?.status?.toLowerCase() ?? "pending"}`} /><div><strong>{run?.id ?? analysisRunId}</strong><span>{run?.dataset_id ?? "Đang tải dataset"}</span></div></div>
-      <div className="analysis-run-meta"><span><small>STATUS</small><strong>{run?.status ?? "LOADING"}</strong></span><span><small>PHASE</small><strong>{run?.phase ?? "PREPARING"}</strong></span><span><small>CURRENT</small><strong>{run?.current_node ?? "QUEUED"}</strong></span><span><small>NODES</small><strong>{completedNodes}/{nodes.length || 10}</strong></span></div>
+      <div className="analysis-run-meta"><span><small>STATUS</small><strong>{run?.status ?? "LOADING"}</strong></span><span><small>PHASE</small><strong>{displayAnalysisArea(run?.phase ?? "PREPARING")}</strong></span><span><small>CURRENT</small><strong>{run?.current_node ?? "QUEUED"}</strong></span><span><small>NODES</small><strong>{completedNodes}/{nodes.length || 10}</strong></span></div>
       <div className="analysis-progress"><span style={{ width: `${progress}%` }} /></div>
     </section>
 
-    <section className="analysis-timeline" aria-label="Graph 2 and Graph 3 execution path">
+    <section className="analysis-timeline" aria-label="Rule proposal and anomaly detection execution path">
       {nodes.map((node) => <div key={node.node_key} className={`analysis-node ${node.status.toLowerCase()}`}>
-        <span className="analysis-node-icon">{statusIcon(node.status)}</span><div><small>{node.graph_name}</small><strong>{NODE_LABELS[node.node_key] ?? node.node_key}</strong><span>{node.status} · {formatDuration(node.duration_ms)}</span></div>
+        <span className="analysis-node-icon">{statusIcon(node.status)}</span><div><small>{displayAnalysisArea(node.graph_name)}</small><strong>{NODE_LABELS[node.node_key] ?? node.node_key}</strong><span>{node.status} · {formatDuration(node.duration_ms)}</span></div>
       </div>)}
     </section>
 
@@ -262,12 +276,12 @@ export function AnalysisStudio({
               h2: ({ children }) => <h2 id={slugify(String(children))}>{children}</h2>,
             }}>{report.markdown}</ReactMarkdown>
           </article>
-        </> : <div className="analysis-report-empty" role="status"><span className="analysis-spinner" /><strong>Đang chuẩn bị báo cáo</strong><p>Report Writer chạy sau khi Graph 2 và Graph 3 hoàn tất. Kết quả kiểm thử bên phải sẽ xuất hiện trước.</p></div>}
+        </> : <div className="analysis-report-empty" role="status"><span className="analysis-spinner" /><strong>Đang chuẩn bị báo cáo</strong><p>Report Writer chạy sau khi Rule Proposal và Anomaly Detection hoàn tất. Kết quả kiểm thử bên phải sẽ xuất hiện trước.</p></div>}
       </aside>
 
       <div className="analysis-results-column">
         <section className="analysis-panel analysis-graph2">
-          <header className="analysis-panel-header"><div><Database aria-hidden="true" /><div><span>PANEL 2.1 · GRAPH 2</span><h2>dbt test execution</h2><p>Kết quả thật từ Test Generator, validator, runner và persistence.</p></div></div><span className={`analysis-chip ${graph2?.available ? "success" : "pending"}`}>{graph2?.available ? "DATA AVAILABLE" : "WAITING"}</span></header>
+          <header className="analysis-panel-header"><div><Database aria-hidden="true" /><div><span>PANEL 2.1 · RULE PROPOSAL</span><h2>dbt test execution</h2><p>Kết quả thật từ Test Generator, validator, runner và persistence.</p></div></div><span className={`analysis-chip ${graph2?.available ? "success" : "pending"}`}>{graph2?.available ? "DATA AVAILABLE" : "WAITING"}</span></header>
           <div className="analysis-panel-body">
             <div className="analysis-kpi-grid">
               <Metric label="TOTAL RULES" value={summary?.total ?? 0} />
@@ -291,18 +305,18 @@ export function AnalysisStudio({
 
             <div className="analysis-table-toolbar"><label className="analysis-search"><Search aria-hidden="true" /><span className="analysis-sr-only">Tìm rule</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Tìm rule, table hoặc column" /></label><label><span>Status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="ALL">Tất cả</option>{["PASS", "FAIL", "ERROR", "SKIPPED", "RESULT_MISMATCH"].map((value) => <option key={value}>{value}</option>)}</select></label><label><span>Severity</span><select value={severityFilter} onChange={(event) => setSeverityFilter(event.target.value)}><option value="ALL">Tất cả</option>{severities.map((value) => <option key={value}>{value}</option>)}</select></label><label><span>Dimension</span><select value={dimensionFilter} onChange={(event) => setDimensionFilter(event.target.value)}><option value="ALL">Tất cả</option>{dimensions.map((value) => <option key={value}>{value}</option>)}</select></label><label><span>Sắp xếp</span><select value={sortBy} onChange={(event) => setSortBy(event.target.value as "violation" | "failed")}><option value="violation">Violation rate</option><option value="failed">Failed rows</option></select></label><label className="analysis-checkbox"><input type="checkbox" checked={anomalyOnly} onChange={(event) => setAnomalyOnly(event.target.checked)} /><span>Chỉ anomaly</span></label></div>
 
-            <div className="analysis-table-wrap"><table className="analysis-table"><caption>Chi tiết kết quả Graph 2 theo từng rule, table và column</caption><thead><tr><th>Status</th><th>Rule / target</th><th>Risk</th><th>Checked</th><th>Failed</th><th>Violation</th><th>Runtime</th><th>Anomaly</th><th><span className="analysis-sr-only">Chi tiết</span></th></tr></thead><tbody>{filteredRows.map((row) => <ResultRow key={row.rule_id} row={row} expanded={expandedRule === row.rule_id} onToggle={() => setExpandedRule((current) => current === row.rule_id ? "" : row.rule_id)} />)}{!filteredRows.length && <tr><td colSpan={9} className="analysis-empty-row">Không có kết quả phù hợp bộ lọc.</td></tr>}</tbody></table></div>
+            <div className="analysis-table-wrap"><table className="analysis-table"><caption>Chi tiết kết quả Rule Proposal theo từng rule, table và column</caption><thead><tr><th>Status</th><th>Rule / target</th><th>Risk</th><th>Checked</th><th>Failed</th><th>Violation</th><th>Runtime</th><th>Anomaly</th><th><span className="analysis-sr-only">Chi tiết</span></th></tr></thead><tbody>{filteredRows.map((row) => <ResultRow key={row.rule_id} row={row} expanded={expandedRule === row.rule_id} onToggle={() => setExpandedRule((current) => current === row.rule_id ? "" : row.rule_id)} />)}{!filteredRows.length && <tr><td colSpan={9} className="analysis-empty-row">Không có kết quả phù hợp bộ lọc.</td></tr>}</tbody></table></div>
           </div>
         </section>
 
         <section className="analysis-panel analysis-graph3">
-          <header className="analysis-panel-header"><div><ShieldAlert aria-hidden="true" /><div><span>PANEL 2.2 · GRAPH 3</span><h2>Anomaly diagnosis</h2><p>Robust statistical signals, hypotheses và evidence đã persist.</p></div></div><span className={`analysis-chip ${graph3?.available ? "success" : "pending"}`}>{graph3?.available ? "ANALYZED" : "WAITING"}</span></header>
+          <header className="analysis-panel-header"><div><ShieldAlert aria-hidden="true" /><div><span>PANEL 2.2 · ANOMALY DETECTION</span><h2>Anomaly diagnosis</h2><p>Robust statistical signals, hypotheses và evidence đã persist.</p></div></div><span className={`analysis-chip ${graph3?.available ? "success" : "pending"}`}>{graph3?.available ? "ANALYZED" : "WAITING"}</span></header>
           <div className="analysis-panel-body">
-            {graph3?.decision ? <div className={`analysis-decision ${graph3.decision.severity.toLowerCase()}`}><div><span>ANOMALY DECISION</span><strong>{graph3.decision.decision}</strong><p>{graph3.decision.override_reason || `Dominant signal family: ${graph3.decision.dominant_family ?? "N/A"}`}</p></div><div className="analysis-decision-score"><strong>{Math.round(graph3.decision.score * 100)}</strong><span>/100 score</span></div><div><small>CONFIDENCE</small><strong>{Math.round(graph3.decision.confidence * 100)}%</strong><small>SEVERITY</small><strong>{graph3.decision.severity}</strong></div></div> : <div className="analysis-pending-block"><span className="analysis-spinner" /><div><strong>Graph 3 đang chờ kết quả Graph 2</strong><p>Signals và hypotheses sẽ xuất hiện sau bước anomaly detector.</p></div></div>}
+            {graph3?.decision ? <div className={`analysis-decision ${graph3.decision.severity.toLowerCase()}`}><div><span>ANOMALY DECISION</span><strong>{graph3.decision.decision}</strong><p>{graph3.decision.override_reason || `Dominant signal family: ${graph3.decision.dominant_family ?? "N/A"}`}</p></div><div className="analysis-decision-score"><strong>{Math.round(graph3.decision.score * 100)}</strong><span>/100 score</span></div><div><small>CONFIDENCE</small><strong>{Math.round(graph3.decision.confidence * 100)}%</strong><small>SEVERITY</small><strong>{graph3.decision.severity}</strong></div></div> : <div className="analysis-pending-block"><span className="analysis-spinner" /><div><strong>Anomaly Detection đang chờ kết quả Rule Proposal</strong><p>Signals và hypotheses sẽ xuất hiện sau bước anomaly detector.</p></div></div>}
 
             <div className="analysis-chart-card analysis-signal-chart"><figcaption><strong>Tín hiệu bất thường xếp hạng</strong><span>Score và target từ anomaly_detector_node</span></figcaption><div className="analysis-chart tall" role="img" aria-label="Biểu đồ điểm số các tín hiệu bất thường cao nhất">{signalData.length ? <ResponsiveContainer width="100%" height="100%"><BarChart data={signalData} layout="vertical" margin={{ left: 12, right: 18 }}><CartesianGrid strokeDasharray="3 3" horizontal={false} /><XAxis type="number" unit="%" domain={[0, 100]} tick={{ fontSize: 10 }} /><YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 9 }} /><Tooltip formatter={(value) => `${value}%`} /><Bar dataKey="score" fill="#ef4444" radius={[0, 5, 5, 0]} /></BarChart></ResponsiveContainer> : <span className="analysis-chart-empty">Chưa có tín hiệu</span>}</div></div>
 
-            <div className="analysis-table-wrap"><table className="analysis-table signal"><caption>Chi tiết tín hiệu Graph 3</caption><thead><tr><th>Family / detector</th><th>Target</th><th>Score</th><th>Reliability</th><th>Observed / baseline</th><th>Explanation</th></tr></thead><tbody>{(graph3?.signals ?? []).map((signal) => <tr key={signal.signal_id}><td><strong>{signal.family}</strong><small>{signal.detector_name} · v{signal.detector_version}</small></td><td><code>{signal.target_id}</code><small>{signal.target_type} · {signal.sufficient_history ? "Historical" : "Cold start"}</small></td><td><strong className={signal.score >= .7 ? "danger-text" : ""}>{Math.round(signal.score * 100)}%</strong></td><td>{Math.round(signal.reliability * 100)}%</td><td><code>{signal.observed_value ?? "—"}</code><small>{JSON.stringify(signal.baseline)}</small></td><td>{signal.explanation}<small>{signal.evidence_refs.join(" · ") || "Không có evidence ref"}</small></td></tr>)}{!graph3?.signals.length && <tr><td colSpan={6} className="analysis-empty-row">Chưa có anomaly signal.</td></tr>}</tbody></table></div>
+            <div className="analysis-table-wrap"><table className="analysis-table signal"><caption>Chi tiết tín hiệu Anomaly Detection</caption><thead><tr><th>Family / detector</th><th>Target</th><th>Score</th><th>Reliability</th><th>Observed / baseline</th><th>Explanation</th></tr></thead><tbody>{(graph3?.signals ?? []).map((signal) => <tr key={signal.signal_id}><td><strong>{signal.family}</strong><small>{signal.detector_name} · v{signal.detector_version}</small></td><td><code>{signal.target_id}</code><small>{signal.target_type} · {signal.sufficient_history ? "Historical" : "Cold start"}</small></td><td><strong className={signal.score >= .7 ? "danger-text" : ""}>{Math.round(signal.score * 100)}%</strong></td><td>{Math.round(signal.reliability * 100)}%</td><td><code>{signal.observed_value ?? "—"}</code><small>{JSON.stringify(signal.baseline)}</small></td><td>{signal.explanation}<small>{signal.evidence_refs.join(" · ") || "Không có evidence ref"}</small></td></tr>)}{!graph3?.signals.length && <tr><td colSpan={6} className="analysis-empty-row">Chưa có anomaly signal.</td></tr>}</tbody></table></div>
 
             <section className="analysis-hypotheses"><div className="analysis-section-title"><div><Activity aria-hidden="true" /><div><span>ROOT CAUSE REASONING</span><h3>Giả thuyết nguyên nhân</h3></div></div><strong>{graph3?.hypotheses.length ?? 0} hypotheses</strong></div>{(graph3?.hypotheses ?? []).map((hypothesis, index) => <article key={hypothesis.id}><header><span>HYPOTHESIS {index + 1} · {hypothesis.hypothesis_type}</span><strong>{Math.round(hypothesis.confidence * 100)}% confidence</strong></header><h4>{hypothesis.summary}</h4><div className="analysis-hypothesis-grid"><div><small>SUPPORTING SIGNALS</small><p>{hypothesis.supporting_signal_ids.join(" · ") || "Không có"}</p></div><div><small>EVIDENCE</small><p>{hypothesis.evidence_refs.join(" · ") || "Không có"}</p></div></div>{hypothesis.recommended_checks.length > 0 && <div className="analysis-checks"><strong>Recommended checks</strong><ol>{hypothesis.recommended_checks.map((check) => <li key={check}>{check}</li>)}</ol></div>}<footer><span>{hypothesis.model_name} · prompt {hypothesis.prompt_version} · {formatDuration(hypothesis.latency_ms)}</span>{hypothesis.fallback_used && <span className="analysis-source fallback">FALLBACK</span>}</footer></article>)}{!graph3?.hypotheses.length && <div className="analysis-empty-card">Chưa có giả thuyết hoặc decision hiện tại không yêu cầu phân tích nguyên nhân.</div>}</section>
           </div>

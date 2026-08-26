@@ -681,12 +681,12 @@ export const mockApi: ApiClient = {
     addAudit("WORKFLOW_REWOUND", "workflow", id, `Returned to ${targetStep}; downstream sessions were kept temporarily.`);
     return structuredClone(workflow);
   },
-  async createGraph1Run(_datasetId: string, _datasetVersionId?: string, _profileRunId?: string) { throw new Error("Graph 1 requires the real backend. Set VITE_USE_MOCK_API=false."); },
-  async getGraph1Run() { throw new Error("Graph 1 requires the real backend."); },
-  async listGraph1Nodes() { throw new Error("Graph 1 requires the real backend."); },
-  async confirmGraph1Semantic() { throw new Error("Graph 1 requires the real backend."); },
-  async reviewGraph1Rules() { throw new Error("Graph 1 requires the real backend."); },
-  async createAnalysisRun() { throw new Error("Graph 2 and Graph 3 analysis requires the real backend."); },
+  async createGraph1Run(_datasetId: string, _datasetVersionId?: string, _profileRunId?: string) { throw new Error("Profiler requires the real backend. Set VITE_USE_MOCK_API=false."); },
+  async getGraph1Run() { throw new Error("Profiler requires the real backend."); },
+  async listGraph1Nodes() { throw new Error("Profiler requires the real backend."); },
+  async confirmGraph1Semantic() { throw new Error("Profiler requires the real backend."); },
+  async reviewGraph1Rules() { throw new Error("Profiler requires the real backend."); },
+  async createAnalysisRun() { throw new Error("Rule Proposal and Anomaly Detection require the real backend."); },
   async getAnalysisRun() { throw new Error("Analysis requires the real backend."); },
   async listAnalysisNodes() { throw new Error("Analysis requires the real backend."); },
   async getAnalysisResult() { throw new Error("Analysis requires the real backend."); },

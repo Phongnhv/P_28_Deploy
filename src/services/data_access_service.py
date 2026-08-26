@@ -31,8 +31,8 @@ from src.models.database import (
     RuleReviewSnapshotModel,
     WorkspaceMembershipModel,
 )
-from src.time_utils import utc_now
 from src.services.versioned_dataset import materialize_source_artifact, read_verified_frame
+from src.time_utils import utc_now
 
 PERMISSIONS = {
     "DISCOVER",
@@ -449,7 +449,6 @@ def get_overview_metrics(db: Session, ctx: AccessContext) -> dict[str, Any]:
 def list_accessible_datasets(db: Session, ctx: AccessContext) -> list[dict[str, Any]]:
     _active_membership(db, ctx)
     rows: list[dict[str, Any]] = []
-    total_rows = version.row_count
     for governance, dataset in (
         db.query(DatasetGovernanceModel, DatasetModel)
         .join(DatasetModel, DatasetModel.id == DatasetGovernanceModel.dataset_id)
@@ -541,6 +540,7 @@ def get_data_explorer(
         version_metadata = {}
     version_schema = version_metadata.get("schema") if isinstance(version_metadata.get("schema"), list) else []
     rows: list[dict[str, Any]] = []
+    total_rows = version.row_count
     rows_authorized = "VIEW_ROWS" in permissions
     if include_rows:
         require_permission(db, ctx, dataset_id, "VIEW_ROWS", dataset_version_id)

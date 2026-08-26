@@ -13,7 +13,7 @@ const human = (value: string) => value.replaceAll("_", " ");
 
 const asRecord = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 
-export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, initialDataset }: { onExit: () => void; onDatasetImported?: () => void; onAnalyze: (graph1RunId: string) => Promise<void>; initialDataset?: Dataset | null }) {
+export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, onRerun, onRunChange, initialDataset }: { onExit: () => void; onDatasetImported?: () => void; onAnalyze: (graph1RunId: string) => Promise<void>; onRerun?: () => void; onRunChange?: (run: Graph1Run | null) => void; initialDataset?: Dataset | null }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [dataset, setDataset] = useState<Dataset | null>(initialDataset ?? null);
   const [run, setRun] = useState<Graph1Run | null>(null);
@@ -42,6 +42,7 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, initialData
   }, []);
 
   useEffect(() => { if (initialDataset) setDataset(initialDataset); }, [initialDataset]);
+  useEffect(() => { onRunChange?.(run); }, [onRunChange, run]);
   useEffect(() => {
     if (!dataset || isMockMode || run || autoStartRef.current) return;
     const storedRun = sessionStorage.getItem("ridepulse.graph1.run");
@@ -49,7 +50,7 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, initialData
     if (!storedRun || storedDataset !== dataset.id) return;
     autoStartRef.current = true;
     setBusy(true);
-    setMessage("Loading the saved Graph 1 run…");
+    setMessage("Loading the saved profiler run…");
     void refresh(storedRun)
       .then(() => setMessage(""))
       .catch(() => {
@@ -64,12 +65,12 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, initialData
         autoStartRef.current = false;
       });
   }, [dataset, refresh, run]);
-  const start = async () => {
+  const start = async (forceNew = false) => {
     if (!dataset || isMockMode || autoStartRef.current) return;
     autoStartRef.current = true;
-    const storedRun = sessionStorage.getItem("ridepulse.graph1.run");
-    const storedDataset = sessionStorage.getItem("ridepulse.graph1.dataset");
-      setBusy(true); setError(""); setMessage("Đang khởi tạo canonical Graph 1…");
+    const storedRun = forceNew ? null : sessionStorage.getItem("ridepulse.graph1.run");
+    const storedDataset = forceNew ? null : sessionStorage.getItem("ridepulse.graph1.dataset");
+      setBusy(true); setError(""); setMessage("Đang khởi tạo profiler…");
       try {
         if (storedRun && storedDataset === dataset.id) await refresh(storedRun);
         else {
@@ -81,7 +82,7 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, initialData
         setMessage("");
       } catch (reason) {
         sessionStorage.removeItem("ridepulse.graph1.run"); sessionStorage.removeItem("ridepulse.graph1.dataset");
-        setError(reason instanceof Error ? reason.message : "Không thể bắt đầu Graph 1."); setMessage("");
+        setError(reason instanceof Error ? reason.message : "Không thể bắt đầu profiler."); setMessage("");
       } finally { setBusy(false); autoStartRef.current = false; }
   };
   useEffect(() => {
@@ -132,15 +133,15 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, initialData
     setError("");
     if (!/\.(csv|parquet)$/i.test(file.name)) return setError("Chỉ chấp nhận CSV hoặc Parquet.");
     if (file.size > 100 * 1024 * 1024) return setError("File vượt quá 100 MB.");
-    if (isMockMode) return setError("Graph 1 cần backend thật. Đặt VITE_USE_MOCK_API=false.");
+    if (isMockMode) return setError("Profiler cần backend thật. Đặt VITE_USE_MOCK_API=false.");
     setBusy(true);
     try {
       setMessage("Đang upload dataset…"); const imported = await api.importDataset(file); setDataset(imported.dataset); onDatasetImported?.();
       let job: Job = await api.getJob(imported.job.job_id); setMessage("Đang profile dữ liệu thật…");
       while (!["SUCCEEDED", "FAILED"].includes(job.status)) { await wait(700); job = await api.getJob(imported.job.job_id); setMessage(job.message || `Profiling ${Math.round(job.progress)}%`); }
       if (job.status === "FAILED") throw new Error(job.error || "Dataset profiling thất bại.");
-      setMessage("Đang khởi tạo canonical Graph 1…"); const created = await api.createGraph1Run(imported.dataset.id, imported.dataset.dataset_version_id, imported.dataset.profile_run_id); sessionStorage.setItem("ridepulse.graph1.run", created.id); sessionStorage.setItem("ridepulse.graph1.dataset", imported.dataset.id); setRun(created); await refresh(created.id); setMessage("");
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Không thể bắt đầu Graph 1."); setMessage(""); } finally { setBusy(false); }
+      setMessage("Đang khởi tạo profiler…"); const created = await api.createGraph1Run(imported.dataset.id, imported.dataset.dataset_version_id, imported.dataset.profile_run_id); sessionStorage.setItem("ridepulse.graph1.run", created.id); sessionStorage.setItem("ridepulse.graph1.dataset", imported.dataset.id); setRun(created); await refresh(created.id); setMessage("");
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Không thể bắt đầu profiler."); setMessage(""); } finally { setBusy(false); }
   };
   const confirmSemantic = async () => { if (!run) return; setBusy(true); setError(""); try { const next = await api.confirmGraph1Semantic(run.id, JSON.parse(semanticText)); sessionStorage.removeItem(`ridepulse.graph1.semantic.${run.id}`); sessionStorage.setItem(`ridepulse.graph1.stage.${run.id}`, "rule_candidate_builder"); setRun(next); setSelectedKey("rule_candidate_builder"); await refresh(run.id); } catch (reason) { setError(reason instanceof Error ? reason.message : "Semantic Contract không hợp lệ."); } finally { setBusy(false); } };
   const confirmRules = async () => {
@@ -152,7 +153,7 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, initialData
       return;
     }
     if (!Object.values(decisions).some((value) => value === "approve" || value === "edit")) {
-      setReviewValidation("Cần approve hoặc edit & approve ít nhất một rule để hoàn tất Graph 1.");
+      setReviewValidation("Cần approve hoặc edit & approve ít nhất một rule để hoàn tất profiler.");
       return;
     }
     setBusy(true); setError(""); setReviewValidation("");
@@ -173,7 +174,7 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, initialData
     if (!run || isMockMode) return;
     setAnalysisBusy(true); setError("");
     try { await onAnalyze(run.id); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to start Graph 2 and Graph 3."); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to start Rule Proposal and Anomaly Detection."); }
     finally { setAnalysisBusy(false); }
   };
   const stages = useMemo(() => buildDisplayStages(nodes), [nodes]);
@@ -208,13 +209,13 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, initialData
   const onDrop = (event: DragEvent<HTMLDivElement>) => { event.preventDefault(); setDragging(false); const file = event.dataTransfer.files[0]; if (file) void upload(file); };
 
   return <main className="g1-studio" id="main-content">
-    <header className="g1-hero"><div><div className="g1-breadcrumb"><button type="button" onClick={onExit}>Workspace</button><span>›</span><span>Graph 1</span></div><div className="g1-title-row"><div className="g1-title-icon">G1</div><div><span className="eyebrow">CANONICAL AGENT WORKFLOW</span><h1>Agent execution studio</h1><p>Upload dữ liệu và theo dõi output thật của từng node.</p></div></div></div><span className={`g1-backend-badge ${isMockMode ? "offline" : "online"}`}><span/>{isMockMode ? "MOCK DISABLED" : "REAL BACKEND"}</span></header>
-    {!run && !initialDataset && <section className="g1-upload-shell"><div className={`g1-dropzone ${dragging ? "dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={onDrop}><input ref={fileInput} type="file" accept=".csv,.parquet" hidden onChange={onFile}/><div className="g1-upload-icon">↑</div><span className="eyebrow">DATASET INPUT</span><h2>Upload dataset để chạy Graph 1</h2><p>FastAPI sẽ profile file và chạy đủ canonical nodes.</p><button type="button" className="button primary" disabled={busy || isMockMode} onClick={() => fileInput.current?.click()}>{busy ? "Đang xử lý…" : "Chọn CSV hoặc Parquet"}</button><small>Tối đa 100 MB · raw rows không gửi tới LLM</small></div>{message && <div className="g1-operation" role="status"><span className="spinner"/><div><strong>{message}</strong><span>{dataset?.source_label ?? "Đang chuẩn bị"}</span></div></div>}</section>}
-    {!run && dataset && <section className="g1-upload-shell"><div className="g1-operation g1-operation-centered"><div><strong>Ready to run Graph 1</strong><span>{dataset.source_label}</span></div><button type="button" className="button primary" disabled={busy || isMockMode} onClick={() => void start()}>{busy ? "Starting Agent…" : "Run Agent Workflow →"}</button></div></section>}
-    {error && <div className="g1-error" role="alert"><strong>Graph 1 không thể tiếp tục</strong><span>{error}</span><button type="button" onClick={() => setError("")}>×</button></div>}
+    <header className="g1-hero"><div><div className="g1-breadcrumb"><button type="button" onClick={onExit}>Workspace</button><span>›</span><span>Profiler</span></div><div className="g1-title-row"><div className="g1-title-icon">P</div><div><span className="eyebrow">DATA PROFILER</span><h1>Profiler execution studio</h1><p>Upload dữ liệu và theo dõi output thật của từng node.</p></div></div></div><span className={`g1-backend-badge ${isMockMode ? "offline" : "online"}`}><span/>{isMockMode ? "MOCK DISABLED" : "REAL BACKEND"}</span></header>
+    {!run && !initialDataset && <section className="g1-upload-shell"><div className={`g1-dropzone ${dragging ? "dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={onDrop}><input ref={fileInput} type="file" accept=".csv,.parquet" hidden onChange={onFile}/><div className="g1-upload-icon">↑</div><span className="eyebrow">DATASET INPUT</span><h2>Upload dataset để chạy profiler</h2><p>FastAPI sẽ profile file và chạy đủ canonical nodes.</p><button type="button" className="button primary" disabled={busy || isMockMode} onClick={() => fileInput.current?.click()}>{busy ? "Đang xử lý…" : "Chọn CSV hoặc Parquet"}</button><small>Tối đa 100 MB · raw rows không gửi tới LLM</small></div>{message && <div className="g1-operation" role="status"><span className="spinner"/><div><strong>{message}</strong><span>{dataset?.source_label ?? "Đang chuẩn bị"}</span></div></div>}</section>}
+    {!run && dataset && <section className="g1-upload-shell"><div className="g1-operation g1-operation-centered"><div><strong>Ready to run profiler</strong><span>{dataset.source_label}</span></div><button type="button" className="button primary" disabled={busy || isMockMode} onClick={() => void start()}>{busy ? "Starting profiler…" : "Run Profiler →"}</button></div></section>}
+    {error && <div className="g1-error" role="alert"><strong>Profiler không thể tiếp tục</strong><span>{error}</span><button type="button" onClick={() => setError("")}>×</button></div>}
     {run && <><section className="g1-runbar"><div><span className="g1-live-dot"/><div><strong>{run.id}</strong><span>{dataset?.source_label ?? run.dataset_id}</span></div></div><div className="g1-run-meta"><span><small>STATUS</small><strong>{human(run.status)}</strong></span><span><small>NODES</small><strong>{done} / 9</strong></span><span><small>CURRENT</small><strong>{run.current_node ?? "QUEUED"}</strong></span><span><small>OWNER</small><strong>{run.created_by}</strong></span></div><div className="g1-progress"><span style={{ width: `${done / 9 * 100}%` }}/></div></section>
       <div className="g1-workspace">
-        <aside className="g1-node-rail" aria-label="Graph 1 display stages"><div className="g1-rail-heading"><div><span>EXECUTION PATH</span><strong>7 display stages · 9 backend nodes</strong></div></div><ol>{stages.map((stage) => <li key={stage.key} className={stage.status.toLowerCase()}><button type="button" className={selectedKey === stage.key ? "active" : ""} onClick={() => setSelectedKey(stage.key)}><span className="g1-node-state">{stage.status === "SUCCEEDED" ? "✓" : stage.canonicalLabel}</span><span className="g1-node-copy"><span>{stage.canonicalLabel} · {stage.key}</span><strong>{stage.title}</strong><small>{human(stage.status)}</small></span><span className="g1-node-chevron">›</span></button></li>)}</ol></aside>
+        <aside className="g1-node-rail" aria-label="Profiler display stages"><div className="g1-rail-heading"><div><span>EXECUTION PATH</span><strong>7 display stages · 9 backend nodes</strong></div></div><ol>{stages.map((stage) => <li key={stage.key} className={stage.status.toLowerCase()}><button type="button" className={selectedKey === stage.key ? "active" : ""} onClick={() => setSelectedKey(stage.key)}><span className="g1-node-state">{stage.status === "SUCCEEDED" ? "✓" : stage.canonicalLabel}</span><span className="g1-node-copy"><span>{stage.canonicalLabel} · {stage.key}</span><strong>{stage.title}</strong><small>{human(stage.status)}</small></span><span className="g1-node-chevron">›</span></button></li>)}</ol></aside>
         <section className="g1-output" aria-live="polite">{selected ? <>
           <header className="g1-output-header"><div className="g1-output-title"><div className="g1-icon-tile">{selected.canonicalLabel}</div><div><span>STAGE {selected.canonicalLabel} OUTPUT</span><h2>{selected.title}</h2><p>{selected.description}</p></div></div><div className="g1-output-status"><span className={`g1-chip ${selected.status === "SUCCEEDED" ? "success" : selected.status === "FAILED" ? "danger" : "warning"}`}>{human(selected.status)}</span><small>{stageDuration(selected)}</small></div></header>
           <nav className="g1-output-tabs" aria-label="Node output views"><button type="button" className={activeTab === "output" ? "active" : ""} onClick={() => setActiveTab("output")}>Output</button><button type="button" className={activeTab === "evidence" ? "active" : ""} onClick={() => setActiveTab("evidence")}>Evidence <span>{selectedEvidence.length}</span></button><button type="button" className={activeTab === "activity" ? "active" : ""} onClick={() => setActiveTab("activity")}>Activity</button></nav>
@@ -243,7 +244,8 @@ export function Graph1Studio({ onExit, onDatasetImported, onAnalyze, initialData
         })}</div>
         <div className="g1-review-actions"><div><strong>{pendingCount ? `${pendingCount} rule đang chờ quyết định` : "Tất cả rule đã có quyết định"}</strong><span>Cần ít nhất một rule Approve hoặc Edit & approve.</span></div><button type="button" className="button primary" disabled={busy || !rules.length} onClick={() => void confirmRules()}>{busy ? "Đang lưu…" : "Lưu quyết định và hoàn tất"}</button></div>
       </section>}
-      {run.status === "FAILED" && <div className="g1-terminal failed"><strong>Graph 1 failed</strong><p>{run.error}</p><button type="button" className="button secondary" onClick={reset}>Upload dataset khác</button></div>}{run.status === "COMPLETED" && <div className="g1-terminal completed"><div><strong>Graph 1 đã hoàn thành</strong><p>{finalApprovedCount} rule đã được duyệt và sẵn sàng cho Graph 2.</p></div><div className="g1-terminal-actions"><button type="button" className="button primary" disabled={analysisBusy || isMockMode || finalApprovedCount < 1} onClick={() => void analyze()}>{analysisBusy ? "Đang khởi tạo phân tích…" : "Analyze Graph 2 & 3"}</button><button type="button" className="button secondary" disabled={analysisBusy} onClick={reset}>Chạy dataset khác</button></div>{isMockMode && <small>Analysis Studio yêu cầu real backend.</small>}</div>}
+      {run.status === "FAILED" && <div className="g1-terminal failed"><strong>Profiler failed</strong><p>{run.error}</p><button type="button" className="button secondary" onClick={reset}>Upload dataset khác</button></div>}{run.status === "COMPLETED" && <div className="g1-terminal completed"><div><strong>Profiler đã hoàn thành</strong><p>{finalApprovedCount} rule đã được duyệt và sẵn sàng cho Rule Proposal.</p></div><div className="g1-terminal-actions"><button type="button" className="button primary" disabled={analysisBusy || isMockMode || finalApprovedCount < 1} onClick={() => void analyze()}>{analysisBusy ? "Đang khởi tạo phân tích…" : "Run Rule Proposal & Anomaly Detection"}</button><button type="button" className="button secondary" disabled={analysisBusy} onClick={reset}>Chạy dataset khác</button></div>{isMockMode && <small>Analysis Studio yêu cầu real backend.</small>}</div>}
+      {run && (run.status === "COMPLETED" || run.status === "FAILED") && <div className="g1-rerun-strip"><span>Giữ phiên profiler hiện tại trong lịch sử và tạo một phiên mới.</span><button type="button" className="button secondary" disabled={busy || analysisBusy || isMockMode} onClick={() => { onRerun?.(); void start(true); }}>Rerun Profiler</button></div>}
     </>}
   </main>;
 }

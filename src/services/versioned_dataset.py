@@ -13,11 +13,12 @@ import json
 import math
 import re
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from src.config import get_settings
 
@@ -230,7 +231,6 @@ def read_verified_frame(path: Path, *, checksum: str, size_bytes: int, schema: l
 
 
 def _row_ids(frame: Any) -> list[str]:
-    import pandas as pd
 
     for name in ("source_row_id", "id", "row_id"):
         if name in frame.columns:
@@ -344,12 +344,18 @@ def validate_rule_spec(rule: dict[str, Any], allowed_columns: Iterable[str]) -> 
 
 
 def _comparison(left: Any, right: Any, operator: str) -> Any:
-    if operator == "<": return left < right
-    if operator == "<=": return left <= right
-    if operator == ">": return left > right
-    if operator == ">=": return left >= right
-    if operator in {"=", "=="}: return left == right
-    if operator in {"!=", "<>"}: return left != right
+    if operator == "<":
+        return left < right
+    if operator == "<=":
+        return left <= right
+    if operator == ">":
+        return left > right
+    if operator == ">=":
+        return left >= right
+    if operator in {"=", "=="}:
+        return left == right
+    if operator in {"!=", "<>"}:
+        return left != right
     raise DatasetContractError("Unsupported comparison operator")
 
 
@@ -384,8 +390,10 @@ def execute_rule_frame(frame: Any, rule: dict[str, Any], *, failure_limit: int =
         failed_mask = numeric.isna()
         minimum = params.get("min_value", params.get("min"))
         maximum = params.get("max_value", params.get("max"))
-        if minimum is not None: failed_mask = failed_mask | (numeric < float(minimum))
-        if maximum is not None: failed_mask = failed_mask | (numeric > float(maximum))
+        if minimum is not None:
+            failed_mask = failed_mask | (numeric < float(minimum))
+        if maximum is not None:
+            failed_mask = failed_mask | (numeric > float(maximum))
     elif rule_type == "ACCEPTED_VALUES":
         values = normalized.get("allowed_values") or params.get("allowed_values") or params.get("accepted_values")
         failed_mask = frame[column].notna() & ~frame[column].astype(str).isin([str(value) for value in values])

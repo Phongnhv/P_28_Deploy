@@ -306,7 +306,7 @@ class AnalysisRunModel(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     graph1_run_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("graph1_runs.id"), nullable=False, unique=True, index=True
+        String(64), ForeignKey("graph1_runs.id"), nullable=False, index=True
     )
     dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
     workspace_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=True, index=True)

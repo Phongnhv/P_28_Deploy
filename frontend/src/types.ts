@@ -542,7 +542,7 @@ export interface ApiClient {
   listGraph1Nodes(runId: string): Promise<Graph1NodeExecution[]>;
   confirmGraph1Semantic(runId: string, contract: Record<string, unknown>): Promise<Graph1Run>;
   reviewGraph1Rules(runId: string, decisions: Graph1RuleDecision[]): Promise<Graph1Run>;
-  createAnalysisRun(graph1RunId: string): Promise<AnalysisRun>;
+  createAnalysisRun(graph1RunId: string, rerun?: boolean): Promise<AnalysisRun>;
   getAnalysisRun(analysisRunId: string): Promise<AnalysisRun>;
   listAnalysisNodes(analysisRunId: string): Promise<AnalysisNodeExecution[]>;
   getAnalysisResult(analysisRunId: string): Promise<AnalysisResult>;

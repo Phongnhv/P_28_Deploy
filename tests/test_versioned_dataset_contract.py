@@ -4,17 +4,9 @@ import pandas as pd
 import pytest
 from sqlalchemy.orm import Session
 
-from src.agents.nodes.persist_report_node import aggregate_graph2_status
 from src.agents.nodes.dbt_validation import validate_dbt_yaml_structure
+from src.agents.nodes.persist_report_node import aggregate_graph2_status
 from src.agents.nodes.test_generator_node import build_versioned_generated_tests, generate_versioned_dbt_test_yaml
-from src.services.dashboard_agent_workflow import get_dataset_rule_policy
-from src.services.versioned_dataset import (
-    DatasetContractError,
-    canonical_schema_manifest,
-    execute_rules_frame,
-    safe_source_object_key,
-    schema_hash,
-)
 from src.models.database import (
     DatasetAccessModel,
     DatasetModel,
@@ -24,7 +16,15 @@ from src.models.database import (
     WorkspaceMembershipModel,
     WorkspaceModel,
 )
+from src.services.dashboard_agent_workflow import get_dataset_rule_policy
 from src.services.rule_store import get_engine
+from src.services.versioned_dataset import (
+    DatasetContractError,
+    canonical_schema_manifest,
+    execute_rules_frame,
+    safe_source_object_key,
+    schema_hash,
+)
 
 
 def test_schema_hash_is_stable_and_object_key_is_versioned():
@@ -89,9 +89,10 @@ def test_freshness_parse_failure_is_execution_error_not_data_failure():
 
 @pytest.mark.asyncio
 async def test_versioned_import_creates_two_immutable_versions(client, monkeypatch, tmp_path):
-    from src.config import get_settings
-    import src.services.versioned_dataset as versioned_dataset
     from unittest.mock import AsyncMock
+
+    import src.services.versioned_dataset as versioned_dataset
+    from src.config import get_settings
 
     monkeypatch.setattr(get_settings(), "app_env", "test")
     monkeypatch.setattr(versioned_dataset, "_local_storage_root", lambda: tmp_path / "source-artifacts")

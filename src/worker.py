@@ -51,8 +51,8 @@ def run_ingest_profile(job_id: str, dataset_id: str):
     delegate to the canonical versioned source runner, which requires an
     explicit immutable dataset version and cannot affect another dataset.
     """
-    from src.services.job_runner import run_ingest_profile as run_canonical_ingest_profile
     from src.models.database import DatasetVersionModel
+    from src.services.job_runner import run_ingest_profile as run_canonical_ingest_profile
 
     engine = get_engine()
     with Session(engine) as session:

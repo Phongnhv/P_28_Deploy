@@ -364,12 +364,13 @@ export const realApiClient: ApiClient = {
       method: "POST", body: JSON.stringify({ decisions }),
     });
   },
-  createAnalysisRun(graph1RunId: string) {
+  createAnalysisRun(graph1RunId: string, rerun = false) {
     // The analysis launch is idempotent by Graph 1 run. Retry a dropped
     // connection so a committed run can still be recovered by its key.
-    return requestWithTransientRetry<AnalysisRun>(`/api/v1/graph1-runs/${encodeURIComponent(graph1RunId)}/analysis-runs`, {
+    const query = rerun ? "?rerun=true" : "";
+    return requestWithTransientRetry<AnalysisRun>(`/api/v1/graph1-runs/${encodeURIComponent(graph1RunId)}/analysis-runs${query}`, {
       method: "POST",
-      headers: { "Idempotency-Key": `analysis-${graph1RunId}` },
+      headers: { "Idempotency-Key": rerun ? `analysis-rerun-${graph1RunId}-${crypto.randomUUID()}` : `analysis-${graph1RunId}` },
     });
   },
   getAnalysisRun(analysisRunId: string) {

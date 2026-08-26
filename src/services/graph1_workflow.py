@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -11,19 +10,18 @@ from sqlalchemy.orm import Session
 from src.models.database import (
     ColumnProfileModel,
     DatasetModel,
+    DatasetVersionModel,
     Graph1NodeExecutionModel,
     Graph1RunModel,
-    DatasetVersionModel,
-    ProfileRunSnapshotModel,
     ProfileModel,
+    ProfileRunSnapshotModel,
     RuleProposalModel,
-    RuleVersionModel,
     RuleReviewSnapshotModel,
-    SemanticContractModel,
+    RuleVersionModel,
 )
 from src.services.rule_store import ProposedRuleModel, create_run, get_engine, save_semantic_contract
-from src.time_utils import utc_now
 from src.services.versioned_dataset import validate_rule_spec
+from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 

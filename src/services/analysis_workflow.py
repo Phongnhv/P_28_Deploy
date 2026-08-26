@@ -168,6 +168,8 @@ def create_analysis_run(
     graph1_run: Graph1RunModel,
     username: str,
     idempotency_key: str,
+    *,
+    force_rerun: bool = False,
 ) -> tuple[AnalysisRunModel, bool]:
     existing = (
         db.query(AnalysisRunModel)
@@ -175,11 +177,16 @@ def create_analysis_run(
         .order_by(AnalysisRunModel.created_at.desc())
         .first()
     )
+    if force_rerun and existing and existing.status not in {"PENDING", "RUNNING"}:
+        # A rerun is a new durable analysis snapshot.  Keep the previous
+        # result for history/audit instead of resetting it in place.
+        existing = None
     # Successful/in-flight analyses remain idempotent. A failed terminal run,
-    # however, must not permanently brick the Graph 1 snapshot. The schema has
-    # one analysis per Graph 1, so reset that failed row and its observable
-    # nodes when the UI submits a fresh idempotency key.
+    # however, must not permanently brick the Graph 1 snapshot. Reset that
+    # failed row and its observable nodes when the UI submits a fresh key.
     if existing:
+        if force_rerun:
+            return existing, False
         if existing.status != "FAILED":
             return existing, False
         conflicting_key = (

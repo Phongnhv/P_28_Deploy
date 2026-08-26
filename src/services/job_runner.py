@@ -14,14 +14,14 @@ from src.models.database import (
     AuditEventModel,
     ColumnProfileModel,
     DatasetModel,
+    DatasetVersionModel,
     DqResultModel,
     DqRunModel,
-    DatasetVersionModel,
-    GovernedArtifactModel,
     GovernanceAuditEventModel,
-    ProfileRunSnapshotModel,
+    GovernedArtifactModel,
     JobModel,
     ProfileModel,
+    ProfileRunSnapshotModel,
     RuleConfigurationModel,
     RuleProposalModel,
     RuleVersionModel,
@@ -43,13 +43,13 @@ from src.services.supabase_dataset import (
 from src.services.supabase_dataset import (
     profile_dataset as profile_supabase_dataset,
 )
-from src.time_utils import utc_now
 from src.services.versioned_dataset import (
     materialize_source_artifact,
     profile_frame,
     read_verified_frame,
     schema_hash,
 )
+from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 

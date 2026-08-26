@@ -42,6 +42,8 @@ import type {
   WorkflowStepKey,
   Graph1Run,
   Graph1NodeExecution,
+  AnalysisRunStatus,
+  AnalysisResult,
 } from "./types";
 
 type View =
@@ -366,7 +368,7 @@ function DatasetsPage({
   const displayStages = useMemo(() => buildDisplayStages(graph1Nodes), [graph1Nodes]);
   const stageFor = (key: string) => displayStages.find((stage) => stage.key === key);
   const agentDisabledReason = !canOperate
-    ? "Run Agent Workflow requires a Steward or Admin session. Sign in with a steward account to start it."
+    ? "Run Profiler requires a Steward or Admin session. Sign in with a steward account to start it."
     : importing
       ? "Wait for the dataset import and profile to finish before starting the Agent Workflow."
       : busy
@@ -496,7 +498,7 @@ function DatasetsPage({
               aria-describedby={agentDisabledReason ? "agent-workflow-disabled-reason" : undefined}
               onClick={() => onStartUnderstand(dataset!.id)}
             >
-              {busy ? "Starting Agent…" : "Run Agent Workflow →"}
+              {busy ? "Starting profiler…" : "Run Profiler →"}
             </button>
             {graph1Run && (
               <button
@@ -535,7 +537,7 @@ function DatasetsPage({
             </div>
           ) : (
             <div className="workflow-artifact-empty" style={{ marginTop: "16px", padding: "20px", background: "var(--color-bg-subtle, #f8fafc)", borderRadius: "8px", textAlign: "center" }}>
-              Run Agent Workflow to generate the Data Dictionary, Semantic Contract, and Rule Proposal.
+              Run Profiler to generate the Data Dictionary, Semantic Contract, and Rule Proposal.
             </div>
           )}
           {agentDisabledReason && (
@@ -1047,8 +1049,8 @@ function WorkflowPage({
     step === "PUBLISH_RULESET"
       ? "Publish approved rules"
       : step === "RUN_CHECKS"
-        ? "Run Graph 2 checks"
-        : "Run Graph 3 analysis";
+        ? "Run Rule Proposal checks"
+        : "Run Anomaly Detection analysis";
   const currentStepIndex = currentStep
     ? visibleWorkflowSteps.findIndex((step) => step.key === currentStep.key)
     : -1;
@@ -1319,7 +1321,10 @@ function App() {
   const [analysisRunId, setAnalysisRunId] = useState(() => sessionStorage.getItem("ridepulse.analysis.run") ?? "");
   const [showAnalysisStudio, setShowAnalysisStudio] = useState<boolean>(() => sessionStorage.getItem("ridepulse.analysis.open") === "1" && Boolean(sessionStorage.getItem("ridepulse.analysis.run")));
   const [analysisStarting, setAnalysisStarting] = useState(false);
+  const [analysisRerunBusy, setAnalysisRerunBusy] = useState(false);
   const [analysisLaunchError, setAnalysisLaunchError] = useState("");
+  const [analysisStatus, setAnalysisStatus] = useState<AnalysisRunStatus | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [graph1Dataset, setGraph1Dataset] = useState<Dataset | null>(null);
   const [graph1Run, setGraph1Run] = useState<Graph1Run | null>(null);
   const [graph1Nodes, setGraph1Nodes] = useState<Graph1NodeExecution[]>([]);
@@ -1372,20 +1377,21 @@ function App() {
   );
   const canOperate = role === "STEWARD" || role === "ADMIN";
   const canAdmin = role === "ADMIN";
-  const workflowAnalysisComplete = Boolean(
-    workflow?.steps.find((step) => step.key === "ANALYZE_REPORT")?.status ===
-      "COMPLETED",
+  const profileReady = Boolean(dataset && (profile || dataset.status === "PROFILE_READY"));
+  const graph1Complete = Boolean(
+    graph1Run &&
+    graph1Run.dataset_id === dataset?.id &&
+    sessionStorage.getItem("ridepulse.graph1.run") &&
+    graph1Run.status === "COMPLETED",
   );
-  const maxWizardStep = !dataset || !profile
-    ? 1
-    : workflowAnalysisComplete
-      ? 4
-      : 3;
+  const analysisReady = analysisStatus === "COMPLETED" || analysisStatus === "PARTIAL" || analysisResult?.run.status === "COMPLETED" || analysisResult?.run.status === "PARTIAL";
+  const isWizardStepUnlocked = (step: number) =>
+    step === 1 || (step === 2 && profileReady) || (step === 3 && profileReady && graph1Complete) || (step === 4 && profileReady && graph1Complete && analysisReady);
   const wizardNextDisabled =
     wizardStep === 4 ||
-    (wizardStep === 1 && (!dataset || !profile)) ||
-    (wizardStep === 2 && !profile) ||
-    (wizardStep === 3 && !workflowAnalysisComplete);
+    (wizardStep === 1 && !isWizardStepUnlocked(2)) ||
+    (wizardStep === 2 && !isWizardStepUnlocked(3)) ||
+    (wizardStep === 3 && !isWizardStepUnlocked(4));
 
   const refreshWorkspace = useCallback(async () => {
     const refreshId = ++workspaceRefreshSequence.current;
@@ -1546,27 +1552,49 @@ function App() {
     setShowGraph1Studio(true);
   }
 
-  async function openAnalysisForGraph1(graph1RunId: string) {
+  async function openAnalysisForGraph1(graph1RunId: string, rerun = false) {
     if (isMockMode) throw new Error("Analysis Studio requires the real backend.");
+    const previousAnalysisRunId = analysisRunId || sessionStorage.getItem("ridepulse.analysis.run") || "";
+    const previousAnalysisStatus = analysisStatus;
+    const previousAnalysisResult = analysisResult;
+    const previousWizardStep = wizardStep;
     setAnalysisStarting(true);
     setAnalysisLaunchError("");
     try {
-      const analysisRun = await api.createAnalysisRun(graph1RunId);
+      const analysisRun = await api.createAnalysisRun(graph1RunId, rerun);
       sessionStorage.setItem("ridepulse.analysis.run", analysisRun.id);
       sessionStorage.setItem("ridepulse.analysis.open", "1");
       sessionStorage.removeItem("ridepulse.graph1.open");
       setAnalysisRunId(analysisRun.id);
+      setAnalysisStatus(analysisRun.status);
+      setAnalysisResult(null);
       setWizardStep(3);
+      sessionStorage.setItem("ridepulse.wizard.step", "3");
       setShowAnalysisStudio(true);
       setShowGraph1Studio(false);
     } catch (reason) {
-      setAnalysisLaunchError(getErrorMessage(reason, "Unable to start Graph 2 and Graph 3."));
-      sessionStorage.removeItem("ridepulse.analysis.open");
-      sessionStorage.removeItem("ridepulse.analysis.run");
-      sessionStorage.removeItem("ridepulse.graph1.open");
-      setAnalysisRunId("");
-      setWizardStep(3);
-      setShowAnalysisStudio(false);
+      setAnalysisLaunchError(getErrorMessage(reason, "Unable to start Rule Proposal and Anomaly Detection."));
+      if (rerun && previousAnalysisRunId) {
+        // A failed rerun must not erase the last usable report. Restore the
+        // previous durable snapshot and leave the user on the initiating screen.
+        sessionStorage.setItem("ridepulse.analysis.run", previousAnalysisRunId);
+        if (previousWizardStep === 3) sessionStorage.setItem("ridepulse.analysis.open", "1");
+        else sessionStorage.removeItem("ridepulse.analysis.open");
+        setAnalysisRunId(previousAnalysisRunId);
+        setAnalysisStatus(previousAnalysisStatus);
+        setAnalysisResult(previousAnalysisResult);
+        setWizardStep(previousWizardStep);
+        sessionStorage.setItem("ridepulse.wizard.step", String(previousWizardStep));
+        setShowAnalysisStudio(previousWizardStep === 3);
+      } else {
+        sessionStorage.removeItem("ridepulse.analysis.open");
+        sessionStorage.removeItem("ridepulse.analysis.run");
+        sessionStorage.removeItem("ridepulse.graph1.open");
+        setAnalysisRunId("");
+        setWizardStep(3);
+        sessionStorage.setItem("ridepulse.wizard.step", "3");
+        setShowAnalysisStudio(false);
+      }
       setShowGraph1Studio(false);
     } finally {
       setAnalysisStarting(false);
@@ -1580,6 +1608,7 @@ function App() {
     setAnalysisLaunchError("");
     // Keep the durable run id so Step 3 can reopen the studio in this session.
     setWizardStep(3);
+    sessionStorage.setItem("ridepulse.wizard.step", "3");
   }
 
   function backToGraph1FromAnalysis() {
@@ -1589,6 +1618,39 @@ function App() {
     setAnalysisLaunchError("");
     setShowGraph1Studio(true);
     setWizardStep(2);
+    sessionStorage.setItem("ridepulse.wizard.step", "2");
+  }
+
+  function prepareGraph1Rerun() {
+    sessionStorage.removeItem("ridepulse.analysis.open");
+    sessionStorage.removeItem("ridepulse.analysis.run");
+    setShowAnalysisStudio(false);
+    setAnalysisRunId("");
+    setAnalysisStatus(null);
+    setAnalysisResult(null);
+    setAnalysisLaunchError("");
+    setWizardStep(2);
+    sessionStorage.setItem("ridepulse.wizard.step", "2");
+  }
+
+  function navigateWizardStep(targetStep: number) {
+    if (!isWizardStepUnlocked(targetStep)) return;
+    setShowAdmin(false);
+    setShowGraph1Sidebar(false);
+    setShowGraph1Studio(false);
+    setAnalysisLaunchError("");
+    sessionStorage.removeItem("ridepulse.graph1.open");
+    const persistedAnalysisRunId = analysisRunId || sessionStorage.getItem("ridepulse.analysis.run") || "";
+    if (targetStep === 3 && persistedAnalysisRunId) {
+      setAnalysisRunId(persistedAnalysisRunId);
+      sessionStorage.setItem("ridepulse.analysis.open", "1");
+      setShowAnalysisStudio(true);
+    } else {
+      sessionStorage.removeItem("ridepulse.analysis.open");
+      setShowAnalysisStudio(false);
+    }
+    setWizardStep(targetStep);
+    sessionStorage.setItem("ridepulse.wizard.step", String(targetStep));
   }
 
   async function retryAnalysisFromStep3() {
@@ -1601,10 +1663,31 @@ function App() {
         ? storedRunId
         : "";
     if (!graph1RunId) {
-      setAnalysisLaunchError("Complete Graph 1 in Step 2 before starting Graph 2 and Graph 3.");
+      setAnalysisLaunchError("Complete the Profiler in Step 2 before starting Rule Proposal and Anomaly Detection.");
       return;
     }
     await openAnalysisForGraph1(graph1RunId);
+  }
+
+  async function rerunAnalysisFromStep3() {
+    const currentDatasetId = dataset?.id ?? selectedDatasetId ?? "";
+    const storedRunId = sessionStorage.getItem("ridepulse.graph1.run") ?? "";
+    const storedDatasetId = sessionStorage.getItem("ridepulse.graph1.dataset") ?? "";
+    const graph1RunId = graph1Run?.dataset_id === currentDatasetId
+      ? graph1Run.id
+      : storedDatasetId === currentDatasetId
+        ? storedRunId
+        : "";
+    if (!graph1RunId || !graph1Complete) {
+      setAnalysisLaunchError("Hoàn tất Profiler ở Step 2 trước khi rerun Rule Proposal và Anomaly Detection.");
+      return;
+    }
+    setAnalysisRerunBusy(true);
+    try {
+      await openAnalysisForGraph1(graph1RunId, true);
+    } finally {
+      setAnalysisRerunBusy(false);
+    }
   }
 
   async function toggleGraph1Sidebar(datasetId: string) {
@@ -1630,6 +1713,34 @@ function App() {
     setGraph1Nodes(nextNodes);
     return nextRun;
   }, []);
+
+  useEffect(() => {
+    if (!analysisRunId) {
+      setAnalysisStatus(null);
+      setAnalysisResult(null);
+      return;
+    }
+    let cancelled = false;
+    const refreshAnalysisSnapshot = async () => {
+      try {
+        const nextRun = await api.getAnalysisRun(analysisRunId);
+        if (cancelled) return;
+        setAnalysisStatus(nextRun.status);
+        const nextResult = await api.getAnalysisResult(analysisRunId);
+        if (!cancelled) setAnalysisResult(nextResult);
+      } catch {
+        // Analysis Studio owns its own error surface.  Keep the wizard state
+        // intact so a transient refresh failure never unlocks a later step.
+      }
+    };
+    void refreshAnalysisSnapshot();
+    const terminal = analysisStatus === "COMPLETED" || analysisStatus === "PARTIAL" || analysisStatus === "FAILED";
+    const timer = terminal ? undefined : window.setInterval(() => void refreshAnalysisSnapshot(), 2500);
+    return () => {
+      cancelled = true;
+      if (timer) window.clearInterval(timer);
+    };
+  }, [analysisRunId, analysisStatus]);
 
   async function startGraph1InBackground(datasetId: string) {
     if (!canOperate || graph1Starting) return;
@@ -2316,36 +2427,14 @@ function App() {
                   )}
                   <button
                     type="button"
-                    disabled={
-                      step.id > maxWizardStep ||
-                      Boolean(activeJob) ||
-                      workflowActionBusy
-                    }
+                    disabled={!isWizardStepUnlocked(step.id) || workflowActionBusy}
                     className={`wizard-step-node ${wizardStep === step.id
                       ? "active"
                       : wizardStep > step.id
                         ? "completed"
                         : ""
                       }`}
-                    onClick={() => {
-                      if (step.id > maxWizardStep) return;
-                      setShowAdmin(false);
-                      setAnalysisLaunchError("");
-                      setShowGraph1Sidebar(false);
-                      sessionStorage.removeItem("ridepulse.graph1.open");
-                      setShowGraph1Studio(false);
-                      const persistedAnalysisRunId = sessionStorage.getItem("ridepulse.analysis.run") ?? "";
-                      if (step.id === 3 && persistedAnalysisRunId) {
-                        setAnalysisRunId(persistedAnalysisRunId);
-                        sessionStorage.setItem("ridepulse.analysis.open", "1");
-                        setShowAnalysisStudio(true);
-                      } else {
-                        if (step.id === 3) setAnalysisRunId("");
-                        sessionStorage.removeItem("ridepulse.analysis.open");
-                        setShowAnalysisStudio(false);
-                      }
-                      setWizardStep(step.id);
-                    }}
+                    onClick={() => navigateWizardStep(step.id)}
                   >
                     <div className="wizard-step-badge">
                       {wizardStep > step.id ? "✓" : step.id}
@@ -2432,9 +2521,11 @@ function App() {
               analysisRunId={analysisRunId}
               onExit={closeAnalysisStudio}
               onBackToGraph1={backToGraph1FromAnalysis}
+              onRerun={() => void rerunAnalysisFromStep3()}
+              rerunBusy={analysisRerunBusy}
             />
           ) : showGraph1Studio ? (
-            <Graph1Studio
+              <Graph1Studio
               onExit={() => {
                 sessionStorage.removeItem("ridepulse.graph1.open");
                 setShowGraph1Studio(false);
@@ -2444,8 +2535,10 @@ function App() {
                 if (runId) void refreshGraph1(runId);
               }}
               onDatasetImported={() => void refreshWorkspace()}
-              onAnalyze={openAnalysisForGraph1}
-              initialDataset={graph1Dataset ?? dataset}
+                onAnalyze={openAnalysisForGraph1}
+                onRerun={prepareGraph1Rerun}
+                onRunChange={setGraph1Run}
+                initialDataset={graph1Dataset ?? dataset}
             />
           ) : showAdmin && canAdmin ? (
             <AdminPage
@@ -2498,13 +2591,15 @@ function App() {
                 </div>
               ) : null}
 
-              {/* STEP 2: Graph 1 execution studio */}
+              {/* STEP 2: Profiler execution studio */}
               {wizardStep === 2 && (
                 <div>
                   <Graph1Studio
                     onExit={() => setWizardStep(1)}
                     onDatasetImported={() => void refreshWorkspace()}
                     onAnalyze={openAnalysisForGraph1}
+                    onRerun={prepareGraph1Rerun}
+                    onRunChange={setGraph1Run}
                     initialDataset={dataset}
                   />
                 </div>
@@ -2689,7 +2784,7 @@ function App() {
                     />
                   ) : (
                     <section className="panel" style={{ marginTop: "16px", padding: "28px", textAlign: "center" }}>
-                      <span className="eyebrow">STEP 3 · GRAPH 2 + GRAPH 3</span>
+                      <span className="eyebrow">STEP 3 · RULE PROPOSAL + ANOMALY DETECTION</span>
                       <h2 style={{ margin: "8px 0" }}>Agent execution studio</h2>
                       <p
                         className="muted"
@@ -2698,7 +2793,7 @@ function App() {
                       >
                         {analysisLaunchError || (analysisRunId
                           ? "The Agent execution studio is ready to resume this analysis run."
-                          : "Complete Graph 1 in Step 2, then start the Graph 2 and Graph 3 analysis.")}
+                          : "Complete the Profiler in Step 2, then start Rule Proposal and Anomaly Detection.")}
                       </p>
                       <div style={{ display: "flex", justifyContent: "center", gap: "10px", flexWrap: "wrap" }}>
                         {analysisRunId ? (
@@ -2719,11 +2814,11 @@ function App() {
                             disabled={analysisStarting}
                             onClick={() => void retryAnalysisFromStep3()}
                           >
-                            {analysisStarting ? "Starting analysis…" : "Analyze Graph 2 & 3 →"}
+                            {analysisStarting ? "Starting analysis…" : "Run Rule Proposal & Anomaly Detection →"}
                           </button>
                         )}
                         <button type="button" className="button secondary" onClick={() => { setWizardStep(2); setShowAnalysisStudio(false); }}>
-                          Back to Graph 1
+                          Back to Profiler
                         </button>
                       </div>
                     </section>
@@ -2815,8 +2910,13 @@ function App() {
                   results={dqResults}
                   anomalies={dqAnomalies}
                   trends={qualityTrends}
-                  onBack={() => setWizardStep(3)}
-                  onStartNewRun={() => setWizardStep(1)}
+                  analysis={analysisResult}
+                  analysisStatus={analysisStatus}
+                  analysisRunId={analysisRunId}
+                  onBack={() => navigateWizardStep(3)}
+                  onStartNewRun={() => navigateWizardStep(1)}
+                  onRerunAnalysis={() => void rerunAnalysisFromStep3()}
+                  rerunBusy={analysisRerunBusy}
                 />
               )}
 
@@ -2827,7 +2927,7 @@ function App() {
                   className="button secondary"
                   disabled={wizardStep === 1}
                   title={wizardStep === 1 ? (t("wizard.firstStepTooltip") || "Đây là bước đầu tiên") : ""}
-                  onClick={() => setWizardStep((prev) => Math.max(1, prev - 1))}
+                  onClick={() => navigateWizardStep(Math.max(1, wizardStep - 1))}
                 >
                   {t("wizard.back")}
                 </button>
@@ -2854,7 +2954,7 @@ function App() {
                       void openGraph1ForDataset(dataset.id);
                       return;
                     }
-                    setWizardStep((prev) => Math.min(4, prev + 1));
+                    navigateWizardStep(Math.min(4, wizardStep + 1));
                   }}
                 >
                   {wizardStep === 1 && dataset && profile ? "Generate Rules →" : t("wizard.next")}

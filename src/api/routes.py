@@ -4,7 +4,7 @@ import json
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import (
     APIRouter,
@@ -21,17 +21,25 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
 from src.config import get_settings
+from src.models.api_schemas import (
+    AnomalyFeedbackRequest,
+    AnomalySignalDTO,
+    CombinedRunStatusResponse,
+    ExecutionRequest,
+    PublishRulesetRequest,
+    PublishRulesetResponse,
+)
 from src.models.database import (
+    AnalysisNodeExecutionModel,
+    AnalysisRunModel,
     AnomalyFeedbackModel,
     AnomalyHypothesisModel,
     AnomalyRunModel,
     AnomalySignalModel,
-    AnalysisNodeExecutionModel,
-    AnalysisRunModel,
     AuditEventModel,
     ColumnProfileModel,
     DatasetAccessModel,
@@ -40,8 +48,10 @@ from src.models.database import (
     DatasetVersionModel,
     DqResultModel,
     DqRunModel,
-    GovernedArtifactModel,
     GovernanceAuditEventModel,
+    GovernedArtifactModel,
+    Graph1NodeExecutionModel,
+    Graph1RunModel,
     JobModel,
     ProfileModel,
     ProfileRunSnapshotModel,
@@ -54,17 +64,7 @@ from src.models.database import (
     UserAccountModel,
     WorkflowArtifactModel,
     WorkflowRunModel,
-    Graph1RunModel,
-    Graph1NodeExecutionModel,
     WorkspaceMembershipModel,
-)
-from src.models.api_schemas import (
-    AnomalyFeedbackRequest,
-    AnomalySignalDTO,
-    CombinedRunStatusResponse,
-    ExecutionRequest,
-    PublishRulesetRequest,
-    PublishRulesetResponse,
 )
 from src.models.schemas import (
     ActiveRuleResponse,
@@ -115,7 +115,6 @@ from src.services.session_service import (
 )
 from src.services.supabase_dataset import create_supabase_engine
 from src.services.supabase_dataset import query_dataset_rows as query_supabase_dataset_rows
-from src.time_utils import utc_now
 from src.services.versioned_dataset import (
     DatasetContractError,
     SourceIntegrityError,
@@ -124,6 +123,7 @@ from src.services.versioned_dataset import (
     schema_hash,
     store_source_artifact,
 )
+from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1054,6 +1054,7 @@ def start_analysis_run(
     run_id: str,
     background_tasks: BackgroundTasks,
     response: Response,
+    rerun: bool = Query(False),
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
     session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
@@ -1069,7 +1070,13 @@ def start_analysis_run(
         raise HTTPException(status_code=404, detail="Graph 1 run not found")
     require_dataset_access(db, session, graph1_run.dataset_id, manage=True)
     try:
-        analysis_run, created = create_analysis_run(db, graph1_run, session.username, idempotency_key)
+        analysis_run, created = create_analysis_run(
+            db,
+            graph1_run,
+            session.username,
+            idempotency_key,
+            force_rerun=rerun,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail={"code": "ANALYSIS_NOT_READY", "message": str(exc)})
     if created:
@@ -1196,24 +1203,24 @@ def delete_dataset(
     require_dataset_access(db, session, id, manage=True)
 
     from src.models.database import (
-        ColumnProfileModel,
-        ProfileModel,
-        SourceRowModel,
-        DatasetAccessModel,
-        JobModel,
-        SemanticContractModel,
-        RuleProposalModel,
-        RuleVersionModel,
-        RuleConfigurationModel,
-        RulesetVersionModel,
-        WorkflowRunModel,
-        WorkflowArtifactModel,
-        DqRunModel,
-        DqResultModel,
+        AnomalyFeedbackModel,
+        AnomalyHypothesisModel,
         AnomalyRunModel,
         AnomalySignalModel,
-        AnomalyHypothesisModel,
-        AnomalyFeedbackModel,
+        ColumnProfileModel,
+        DatasetAccessModel,
+        DqResultModel,
+        DqRunModel,
+        JobModel,
+        ProfileModel,
+        RuleConfigurationModel,
+        RuleProposalModel,
+        RulesetVersionModel,
+        RuleVersionModel,
+        SemanticContractModel,
+        SourceRowModel,
+        WorkflowArtifactModel,
+        WorkflowRunModel,
     )
 
     try:
@@ -1278,7 +1285,7 @@ def delete_dataset(
         # 8. Delete dataset
         db.delete(dataset)
         db.commit()
-    except Exception as exc:
+    except Exception:
         db.rollback()
         # Fallback raw query if needed
         db.execute(text("DELETE FROM datasets WHERE id = :id"), {"id": id})
@@ -2071,7 +2078,7 @@ def start_rule_proposals(
     dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
     if dataset.status != "PROFILE_READY":
         try:
-            from src.services.job_runner import _uploaded_dataset_path, _profile_uploaded_dataset
+            from src.services.job_runner import _profile_uploaded_dataset, _uploaded_dataset_path
             path = _uploaded_dataset_path(id)
             if path:
                 _profile_uploaded_dataset(db, id, path)
@@ -3439,11 +3446,11 @@ async def get_execution_run_results_endpoint(
 
 @dq_router.get(
     "/anomaly-runs/{id}/signals",
-    response_model=List[AnomalySignalDTO],
+    response_model=list[AnomalySignalDTO],
 )
 async def get_anomaly_signals_endpoint(
     id: str,
-) -> List[AnomalySignalDTO]:
+) -> list[AnomalySignalDTO]:
     """Fetches specialized signals for an anomaly run."""
     with Session(get_engine()) as session:
         signals = session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == id).all()
@@ -3476,11 +3483,11 @@ async def get_anomaly_signals_endpoint(
 
 @dq_router.get(
     "/anomaly-runs/{id}/hypotheses",
-    response_model=List[Dict[str, Any]],
+    response_model=list[dict[str, Any]],
 )
 async def get_anomaly_hypotheses_endpoint(
     id: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Fetches detailed hypotheses for an anomaly run."""
     with Session(get_engine()) as session:
         hyps = session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == id).all()
@@ -3513,7 +3520,7 @@ async def get_anomaly_hypotheses_endpoint(
 async def submit_anomaly_feedback_endpoint(
     id: str,
     body: AnomalyFeedbackRequest,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Submits steward feedback for an anomaly run."""
     with Session(get_engine()) as session:
         anom_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.id == id).first()

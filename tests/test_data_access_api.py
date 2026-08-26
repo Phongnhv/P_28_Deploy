@@ -10,7 +10,7 @@ from src.models.database import (
     WorkspaceMembershipModel,
     WorkspaceModel,
 )
-from src.services.data_access_service import AccessContext, grant_dataset_permissions
+from src.services.data_access_service import AccessContext, grant_dataset_permissions, list_accessible_datasets
 
 DATASET_ID = "dataset-nyc-yellow-taxi-50k"
 
@@ -111,3 +111,10 @@ async def test_explorer_v2_does_not_fallback_for_unknown_profile_run(client, gov
 
     assert response.status_code == 404
     assert response.json()["code"] == "RESOURCE_NOT_FOUND"
+
+
+def test_accessible_dataset_listing_uses_governance_without_version_scope(test_db, governed_local_dataset):
+    with Session(test_db) as db:
+        datasets = list_accessible_datasets(db, AccessContext("user-user", "ws-local"))
+
+    assert [dataset["dataset_id"] for dataset in datasets] == [DATASET_ID]
