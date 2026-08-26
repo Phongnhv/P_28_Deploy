@@ -26,6 +26,7 @@ Ví dụ thực tế: một endpoint `/api/v1/chat` nhận message và trả v�
 import pytest
 from unittest.mock import AsyncMock, patch
 
+
 # --- Unit Test: test một hàm đơn lẻ ---
 def test_parse_message_valid_input():
     """Unit test: test hàm parse_message với input hợp lệ."""
@@ -246,9 +247,7 @@ async def test_chat_long_message(client):
 async def test_chat_llm_error(client, sample_chat_request):
     """Test POST /api/v1/chat khi LLM bị lỗi."""
     with patch("app.agent.graph.agent") as mock_agent:
-        mock_agent.arun = AsyncMock(
-            side_effect=Exception("LLM API timeout")
-        )
+        mock_agent.arun = AsyncMock(side_effect=Exception("LLM API timeout"))
 
         response = await client.post(
             "/api/v1/chat",
@@ -364,22 +363,14 @@ async def test_graph_simple_query_flow():
 
     # Mock tất cả LLM calls
     with patch("app.agent.nodes.llm") as mock_llm:
-        mock_llm.ainvoke = AsyncMock(
-            return_value=MagicMock(
-                content='{"intent": "simple_query", "entity": "vàng"}'
-            )
-        )
+        mock_llm.ainvoke = AsyncMock(return_value=MagicMock(content='{"intent": "simple_query", "entity": "vàng"}'))
 
         # Mock retrieve
         with patch("app.agent.nodes.vector_store") as mock_vs:
-            mock_vs.similarity_search = AsyncMock(
-                return_value=[{"content": "Gold price data", "score": 0.9}]
-            )
+            mock_vs.similarity_search = AsyncMock(return_value=[{"content": "Gold price data", "score": 0.9}])
 
             # Chạy graph
-            result = await graph.ainvoke(
-                {"messages": [{"role": "user", "content": "Giá vàng?"}]}
-            )
+            result = await graph.ainvoke({"messages": [{"role": "user", "content": "Giá vàng?"}]})
 
     assert "response" in result
     assert len(result.get("messages", [])) > 1
@@ -406,9 +397,7 @@ async def test_graph_handles_empty_input():
 
     graph = build_graph()
 
-    result = await graph.ainvoke(
-        {"messages": [{"role": "user", "content": ""}]}
-    )
+    result = await graph.ainvoke({"messages": [{"role": "user", "content": ""}]})
 
     # Graph nên trả về response thay vì crash
     assert result is not None
@@ -425,26 +414,18 @@ async def test_graph_preserves_thread_history():
 
     # Message 1
     with patch("app.agent.nodes.llm") as mock_llm:
-        mock_llm.ainvoke = AsyncMock(
-            return_value=MagicMock(content="Việt Nam ở Đông Nam Á.")
-        )
+        mock_llm.ainvoke = AsyncMock(return_value=MagicMock(content="Việt Nam ở Đông Nam Á."))
 
         result1 = await graph.ainvoke(
             {
-                "messages": [
-                    {"role": "user", "content": "Việt Nam ở đâu?"}
-                ],
+                "messages": [{"role": "user", "content": "Việt Nam ở đâu?"}],
                 "thread_id": thread_id,
             }
         )
 
     # Message 2 — nên nhớ context từ message 1
     with patch("app.agent.nodes.llm") as mock_llm:
-        mock_llm.ainvoke = AsyncMock(
-            return_value=MagicMock(
-                content="Thủ đô của Việt Nam là Hà Nội."
-            )
-        )
+        mock_llm.ainvoke = AsyncMock(return_value=MagicMock(content="Thủ đô của Việt Nam là Hà Nội."))
 
         result2 = await graph.ainvoke(
             {
@@ -701,6 +682,7 @@ pip install ragas
 RAGAS evaluation test.
 Chạy riêng: pytest tests/test_ragas_eval.py -v --timeout=300
 """
+
 import pytest
 from ragas import evaluate
 from ragas.metrics import (
@@ -763,12 +745,8 @@ async def test_ragas_metrics():
     results = evaluate(dataset, metrics=metrics)
 
     # Assert minimum thresholds
-    assert results["faithfulness"] >= 0.7, (
-        f"Faithfulness {results['faithfulness']:.2f} < 0.7"
-    )
-    assert results["answer_relevancy"] >= 0.7, (
-        f"Answer Relevancy {results['answer_relevancy']:.2f} < 0.7"
-    )
+    assert results["faithfulness"] >= 0.7, f"Faithfulness {results['faithfulness']:.2f} < 0.7"
+    assert results["answer_relevancy"] >= 0.7, f"Answer Relevancy {results['answer_relevancy']:.2f} < 0.7"
 
     # Print results để đưa vào báo cáo
     print("\n=== RAGAS Evaluation Results ===")
@@ -808,6 +786,7 @@ Test dataset là yếu tố quyết định chất lượng RAGAS evaluation. D�
 Script tạo evaluation dataset từ dữ liệu thực.
 Chạy: python scripts/create_eval_dataset.py
 """
+
 import json
 
 

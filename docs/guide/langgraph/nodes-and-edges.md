@@ -52,6 +52,7 @@ def route_after_analyze(state: AgentState) -> str:
         return "search"
     return "respond"
 
+
 graph.add_conditional_edges("analyze", route_after_analyze)
 ```
 
@@ -59,6 +60,7 @@ graph.add_conditional_edges("analyze", route_after_analyze)
 
 ```python
 from langgraph.graph import END, StateGraph
+
 
 def build_graph() -> StateGraph:
     graph = StateGraph(AgentState)
@@ -77,6 +79,7 @@ def build_graph() -> StateGraph:
     graph.add_edge("respond", END)
 
     return graph.compile()
+
 
 agent = build_graph()
 ```

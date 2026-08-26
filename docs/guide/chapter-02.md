@@ -307,9 +307,9 @@ Phân tích từng phần quan trọng:
 # Sử dụng ở bất kỳ đâu trong project
 from src.core.config import settings
 
-print(settings.openai_model)     # "gpt-4o-mini"
-print(settings.api_port)         # 8000
-print(settings.app_env)          # "development"
+print(settings.openai_model)  # "gpt-4o-mini"
+print(settings.api_port)  # 8000
+print(settings.app_env)  # "development"
 ```
 
 > 💡 **MẸO:** Khi thêm biến môi trường mới, luôn nhớ: (1) thêm vào `.env.example` với giá trị placeholder, (2) thêm field vào `Settings` class với type hint và default value, (3) thêm validation nếu cần. Đừng bao giờ thêm biến trực tiếp vào code mà không thông qua Settings.

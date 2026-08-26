@@ -55,9 +55,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 
 # 1. Khởi tạo Tracer Provider hướng tới Phoenix
 tracer_provider = TracerProvider()
-tracer_provider.add_span_processor(
-    SimpleSpanProcessor(OTLPSpanExporter(endpoint="http://localhost:6006/v1/traces"))
-)
+tracer_provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter(endpoint="http://localhost:6006/v1/traces")))
 trace.set_tracer_provider(tracer_provider)
 
 # 2. Kích hoạt LangChain/LangGraph Instrumentation

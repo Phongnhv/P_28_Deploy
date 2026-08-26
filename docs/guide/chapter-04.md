@@ -70,8 +70,10 @@ Trong LangGraph, state được định nghĩa bằng `TypedDict` của Python. 
 from typing import TypedDict, Annotated, Sequence
 from langchain_core.messages import BaseMessage
 
+
 class AgentState(TypedDict):
     """State cho agent nghiên cứu."""
+
     messages: Annotated[Sequence[BaseMessage], "add_messages"]
     query: str  # Câu hỏi gốc của người dùng
     search_results: list[str]  # Kết quả tìm kiếm
@@ -88,8 +90,10 @@ Khi định nghĩa state, bạn sẽ thường thấy `total=False` được s�
 ```python
 from typing import TypedDict
 
+
 class AgentState(TypedDict, total=False):
     """total=False cho phép các trường có thể không tồn tại."""
+
     messages: list  # Có thể không có lúc ban đầu
     query: str
     search_results: list[str]
@@ -118,6 +122,7 @@ class SimpleState(TypedDict):
     query: str  # Giá trị mới sẽ ghi đè hoàn toàn giá trị cũ
     result: str
 
+
 # Node trả về {"query": "câu hỏi mới"} sẽ thay thế hoàn toàn query cũ
 ```
 
@@ -127,9 +132,11 @@ class SimpleState(TypedDict):
 from typing import Annotated
 from langgraph.graph.message import add_messages
 
+
 class ChatState(TypedDict):
     messages: Annotated[list, add_messages]  # Thêm vào danh sách thay vì ghi đè
     context: str
+
 
 # add_messages reducer sẽ thêm message mới vào danh sách messages hiện có
 # thay vì thay thế toàn bộ danh sách
@@ -144,13 +151,16 @@ LangGraph cung cấp sẵn `MessagesState` cho trường hợp phổ biến nh�
 ```python
 from langgraph.graph import MessagesState
 
+
 # MessagesState tương đương với:
 class MessagesState(TypedDict):
     messages: Annotated[list, add_messages]
 
+
 # Sử dụng trực tiếp:
 class MyAgentState(MessagesState):
     """Mở rộng MessagesState với các trường tùy chỉnh."""
+
     user_id: str
     conversation_id: str
 ```
@@ -178,11 +188,13 @@ Node trong LangGraph nên được thiết kế gần giống hàm thuần (pure
 ```python
 from typing import TypedDict
 
+
 class AgentState(TypedDict, total=False):
     query: str
     search_results: list[str]
     answer: str
     error: str
+
 
 # ✅ Node đúng: chỉ trả về trường cần thay đổi
 def analyze_query(state: AgentState) -> dict:
@@ -190,6 +202,7 @@ def analyze_query(state: AgentState) -> dict:
     query = state.get("query", "")
     # Xử lý...
     return {"query": query.lower().strip()}
+
 
 # ❌ Node sai: mutate state trực tiếp
 def bad_node(state: AgentState) -> dict:
@@ -205,6 +218,7 @@ Khi node cần gọi API hoặc thực hiện I/O, hãy dùng async:
 import asyncio
 from langchain_openai import ChatOpenAI
 
+
 async def generate_answer(state: AgentState) -> dict:
     """Tạo câu trả lời sử dụng LLM (async)."""
     llm = ChatOpenAI(model="gpt-4o-mini")
@@ -213,10 +227,10 @@ async def generate_answer(state: AgentState) -> dict:
     search_results = state.get("search_results", [])
 
     prompt = f"""Dựa trên kết quả tìm kiếm sau, trả lời câu hỏi.
-    
+
     Câu hỏi: {query}
     Kết quả tìm kiếm: {search_results}
-    
+
     Trả lời bằng tiếng Việt:"""
 
     response = await llm.ainvoke(prompt)
@@ -234,22 +248,16 @@ Node nên xử lý lỗi graceful (không crash toàn bộ graph):
 async def search_web(state: AgentState) -> dict:
     """Tìm kiếm trên web với error handling."""
     query = state.get("query", "")
-    
+
     try:
         # Giả sử gọi search API
         results = await search_api(query)
         return {"search_results": results}
     except ConnectionError:
         # Trả về lỗi trong state thay vì crash
-        return {
-            "search_results": [],
-            "error": "Không thể kết nối đến API tìm kiếm. Vui lòng thử lại."
-        }
+        return {"search_results": [], "error": "Không thể kết nối đến API tìm kiếm. Vui lòng thử lại."}
     except Exception as e:
-        return {
-            "search_results": [],
-            "error": f"Lỗi không xác định: {str(e)}"
-        }
+        return {"search_results": [], "error": f"Lỗi không xác định: {str(e)}"}
 ```
 
 > 🔑 **ĐIỂM CHÍNH:** Mỗi node chỉ nên trả về những trường cần thay đổi. Nếu node xử lý tìm kiếm, chỉ trả về `{"search_results": [...]}`. Node khác sẽ đọc `search_results` từ state và xử lý tiếp. Điều này giúp code dễ debug, dễ test, và dễ hiểu.
@@ -277,10 +285,10 @@ graph.add_node("search", search_web)
 graph.add_node("answer", generate_answer)
 
 # Direct edges — luồng cố định
-graph.add_edge(START, "analyze")      # Bắt đầu → analyze
-graph.add_edge("analyze", "search")   # analyze → search
-graph.add_edge("search", "answer")    # search → answer
-graph.add_edge("answer", END)         # answer → Kết thúc
+graph.add_edge(START, "analyze")  # Bắt đầu → analyze
+graph.add_edge("analyze", "search")  # analyze → search
+graph.add_edge("search", "answer")  # search → answer
+graph.add_edge("answer", END)  # answer → Kết thúc
 ```
 
 `START` và `END` là sentinel (đánh dấu đặc biệt) của LangGraph: `START` là điểm bắt đầu graph, `END` là điểm kết thúc. Graph luôn bắt đầu từ `START` và kết thúc tại `END`.
@@ -293,23 +301,24 @@ Conditional edge cho phép agent **ra quyết định** — chọn node tiếp t
 def route_after_analysis(state: AgentState) -> str:
     """Quyết định node tiếp theo dựa trên phân tích."""
     query = state.get("query", "")
-    
+
     if "tính" in query.lower() or "bao nhiêu" in query.lower():
         return "calculate"  # Cần tính toán
     elif "tìm" in query.lower() or "search" in query.lower():
-        return "search"     # Cần tìm kiếm
+        return "search"  # Cần tìm kiếm
     else:
-        return "answer"     # Trả lời trực tiếp
+        return "answer"  # Trả lời trực tiếp
+
 
 # Thêm conditional edge
 graph.add_conditional_edges(
-    "analyze",                  # Node nguồn
-    route_after_analysis,       # Hàm routing
-    {                           # Map kết quả → node đích
+    "analyze",  # Node nguồn
+    route_after_analysis,  # Hàm routing
+    {  # Map kết quả → node đích
         "calculate": "calculate",
         "search": "search",
         "answer": "answer",
-    }
+    },
 )
 ```
 
@@ -321,20 +330,17 @@ Routing function (hàm định tuyến) là trái tim của conditional edge. N�
 def should_continue(state: AgentState) -> str:
     """Kiểm tra xem agent có cần tiếp tục lặp không."""
     messages = state.get("messages", [])
-    
+
     # Kiểm tra message cuối cùng có gọi tool không
     last_message = messages[-1] if messages else None
-    
+
     if hasattr(last_message, "tool_calls") and last_message.tool_calls:
         return "tools"  # Chuyển đến node xử lý tools
-    
+
     return END  # Không còn tool calls → kết thúc
 
-graph.add_conditional_edges(
-    "agent",
-    should_continue,
-    {"tools": "tools", END: END}
-)
+
+graph.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
 ```
 
 Pattern này đặc biệt quan trọng cho ReAct agent (sẽ nói ở section 4.6) — agent cần quyết định có tiếp tục gọi tool hay đã có đủ thông tin để trả lời.
@@ -356,10 +362,12 @@ LangGraph (thông qua LangChain) cung cấp decorator `@tool` để định ngh�
 ```python
 from langchain_core.tools import tool
 
+
 @tool
 def multiply(a: int, b: int) -> int:
     """Nhân hai số với nhau."""
     return a * b
+
 
 @tool
 def search_web(query: str) -> str:
@@ -377,15 +385,16 @@ Docstring của tool không chỉ là documentation — nó là **prompt** mà L
 @tool
 def search_papers(query: str, max_results: int = 5) -> str:
     """Tìm kiếm bài báo khoa học theo từ khóa.
-    
+
     Args:
         query: Từ khóa tìm kiếm (ví dụ: "transformer attention mechanism")
         max_results: Số kết quả tối đa (mặc định: 5, tối đa: 20)
-    
+
     Returns:
         Danh sách bài báo với tiêu đề, tác giả, và tóm tắt.
     """
     # Implementation...
+
 
 # ❌ Docstring tồi — LLM không biết khi nào dùng
 @tool
@@ -401,14 +410,13 @@ Type hints giúp LLM biết chính xác kiểu dữ liệu mỗi tham số. Đi�
 ```python
 from typing import Literal, Optional
 
+
 @tool
 def get_weather(
-    city: str,
-    unit: Literal["celsius", "fahrenheit"] = "celsius",
-    forecast_days: Optional[int] = None
+    city: str, unit: Literal["celsius", "fahrenheit"] = "celsius", forecast_days: Optional[int] = None
 ) -> str:
     """Lấy thông tin thời tiết cho một thành phố.
-    
+
     Args:
         city: Tên thành phố (ví dụ: "Hà Nội", "TP.HCM")
         unit: Đơn vị nhiệt độ
@@ -426,10 +434,11 @@ Tools nên xử lý lỗi graceful và trả về thông báo hữu ích:
 ```python
 import httpx
 
+
 @tool
 def fetch_api_data(url: str) -> str:
     """Gọi HTTP GET đến URL và trả về response.
-    
+
     Args:
         url: URL cần gọi (phải là URL hợp lệ)
     """
@@ -500,28 +509,29 @@ _SAFE_FUNCTIONS = {
     "round": round,
 }
 
+
 def _safe_eval(node: ast.AST) -> float:
     """Đệ quy đánh giá AST node — không dùng eval()."""
     if isinstance(node, ast.Constant):  # Số literal (3.14, 42, "hello")
         return node.value
-    elif isinstance(node, ast.Name):    # Biến (pi, e)
+    elif isinstance(node, ast.Name):  # Biến (pi, e)
         if node.id in _SAFE_FUNCTIONS:
             return _SAFE_FUNCTIONS[node.id]
         raise ValueError(f"Tên không hợp lệ: {node.id}")
-    elif isinstance(node, ast.Call):    # Hàm (sqrt(144), sin(0))
+    elif isinstance(node, ast.Call):  # Hàm (sqrt(144), sin(0))
         func_name = node.func.id if isinstance(node.func, ast.Name) else ""
         if func_name not in _SAFE_FUNCTIONS:
             raise ValueError(f"Hàm không hợp lệ: {func_name}")
         args = [_safe_eval(arg) for arg in node.args]
         return _SAFE_FUNCTIONS[func_name](*args)
-    elif isinstance(node, ast.BinOp):   # Phép tính nhị phân (2 + 3)
+    elif isinstance(node, ast.BinOp):  # Phép tính nhị phân (2 + 3)
         left = _safe_eval(node.left)
         right = _safe_eval(node.right)
         op_type = type(node.op)
         if op_type in _SAFE_OPERATORS:
             return _SAFE_OPERATORS[op_type](left, right)
         raise ValueError(f"Phép toán không hỗ trợ: {op_type.__name__}")
-    elif isinstance(node, ast.UnaryOp): # Phép toán một ngôi (-5)
+    elif isinstance(node, ast.UnaryOp):  # Phép toán một ngôi (-5)
         operand = _safe_eval(node.operand)
         op_type = type(node.op)
         if op_type in _SAFE_OPERATORS:
@@ -530,11 +540,12 @@ def _safe_eval(node: ast.AST) -> float:
     else:
         raise ValueError(f"Biểu thức không hỗ trợ: {type(node).__name__}")
 
+
 @tool
 def calculate(expression: str) -> str:
     """Tính toán biểu thức toán học an toàn.
 
-    Hỗ trợ các phép tính cơ bản (+, -, *, /, **), 
+    Hỗ trợ các phép tính cơ bản (+, -, *, /, **),
     và hàm toán học (sqrt, sin, cos, log, abs, round).
     Không sử dụng eval() — phân tích AST an toàn.
 
@@ -613,9 +624,16 @@ tools = [web_search, calculate, fetch_api_data]
 agent = create_react_agent(llm, tools)
 
 # Chạy agent
-result = agent.invoke({
-    "messages": [{"role": "user", "content": "GDP của Việt Nam năm 2024 là bao nhiêu? Tính GDP per capita nếu dân số là 100 triệu."}]
-})
+result = agent.invoke(
+    {
+        "messages": [
+            {
+                "role": "user",
+                "content": "GDP của Việt Nam năm 2024 là bao nhiêu? Tính GDP per capita nếu dân số là 100 triệu.",
+            }
+        ]
+    }
+)
 
 print(result["messages"][-1].content)
 ```
@@ -635,25 +653,30 @@ from langchain_core.messages import HumanMessage, SystemMessage
 llm = ChatOpenAI(model="gpt-4o-mini")
 llm_with_tools = llm.bind_tools([web_search, calculate])
 
+
 # Node 1: Agent suy nghĩ và quyết định
 async def agent_node(state: MessagesState) -> dict:
     """Agent phân tích và quyết định hành động tiếp theo."""
-    system = SystemMessage(content="""Bạn là trợ lý AI thông minh.
+    system = SystemMessage(
+        content="""Bạn là trợ lý AI thông minh.
     Khi cần thông tin, hãy dùng tools. Khi đã đủ thông tin, hãy trả lời trực tiếp.
-    Trả lời bằng tiếng Việt.""")
-    
+    Trả lời bằng tiếng Việt."""
+    )
+
     messages = [system] + state["messages"]
     response = await llm_with_tools.ainvoke(messages)
     return {"messages": [response]}
+
 
 # Node 2: Thực thi tools
 async def tools_node(state: MessagesState) -> dict:
     """Thực thi tool calls từ message cuối cùng."""
     from langchain_core.messages import ToolMessage
     from langgraph.prebuilt import ToolNode
-    
+
     tool_node = ToolNode([web_search, calculate])
     return await tool_node.ainvoke(state)
+
 
 # Routing: Kiểm tra có tool calls không
 def should_use_tools(state: MessagesState) -> str:
@@ -662,6 +685,7 @@ def should_use_tools(state: MessagesState) -> str:
     if hasattr(last_message, "tool_calls") and last_message.tool_calls:
         return "tools"
     return END
+
 
 # Xây dựng graph
 graph = StateGraph(MessagesState)
@@ -713,190 +737,209 @@ from langchain_core.tools import tool
 
 # ==================== STATE ====================
 
+
 class ResearchState(TypedDict, total=False):
     """State cho Planning Agent."""
+
     messages: Annotated[list[BaseMessage], add_messages]
-    query: str                    # Câu hỏi gốc
-    query_type: str               # Loại câu hỏi (factual, analytical, creative)
-    research_plan: list[str]      # Kế hoạch nghiên cứu
-    search_results: list[str]     # Kết quả tìm kiếm
-    draft: str                    # Bản nháp câu trả lời
-    quality_score: float          # Điểm chất lượng (0-1)
-    iteration: int                # Số lần lặp
-    error: str                    # Thông báo lỗi (nếu có)
+    query: str  # Câu hỏi gốc
+    query_type: str  # Loại câu hỏi (factual, analytical, creative)
+    research_plan: list[str]  # Kế hoạch nghiên cứu
+    search_results: list[str]  # Kết quả tìm kiếm
+    draft: str  # Bản nháp câu trả lời
+    quality_score: float  # Điểm chất lượng (0-1)
+    iteration: int  # Số lần lặp
+    error: str  # Thông báo lỗi (nếu có)
+
 
 # ==================== TOOLS ====================
+
 
 @tool
 def web_search(query: str) -> str:
     """Tìm kiếm thông tin trên web.
-    
+
     Args:
         query: Từ khóa tìm kiếm cụ thể
     """
     # Placeholder — thay bằng API thực tế (Tavily, SerpAPI, v.v.)
     return f"[Kết quả tìm kiếm cho '{query}']: Thông tin mẫu..."
 
+
 # ==================== NODES ====================
+
 
 async def analyze_node(state: ResearchState) -> dict:
     """Phân tích câu hỏi của người dùng."""
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-    
+
     query = state.get("query", "")
     if not query and state.get("messages"):
         last_msg = state["messages"][-1]
         query = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
-    
+
     prompt = f"""Phân tích câu hỏi sau và xác định loại.
-    
+
     Câu hỏi: {query}
-    
+
     Trả về JSON:
     {{
         "query_type": "factual|analytical|creative",
         "needs_research": true/false
     }}
-    
+
     Chỉ trả về JSON, không thêm gì khác."""
-    
+
     response = await llm.ainvoke([HumanMessage(content=prompt)])
-    
+
     import json
+
     try:
         analysis = json.loads(response.content)
     except json.JSONDecodeError:
         analysis = {"query_type": "factual", "needs_research": True}
-    
+
     return {
         "query": query,
         "query_type": analysis.get("query_type", "factual"),
         "iteration": 0,
     }
 
+
 async def plan_node(state: ResearchState) -> dict:
     """Lập kế hoạch nghiên cứu."""
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-    
+
     query = state.get("query", "")
     query_type = state.get("query_type", "factual")
-    
+
     prompt = f"""Lập kế hoạch nghiên cứu cho câu hỏi sau.
-    
+
     Câu hỏi: {query}
     Loại: {query_type}
-    
+
     Liệt kê 3-5 bước tìm kiếm cần thực hiện, mỗi bước là một câu truy vấn tìm kiếm.
     Trả về danh sách JSON array các string. Chỉ trả về JSON array."""
-    
+
     response = await llm.ainvoke([HumanMessage(content=prompt)])
-    
+
     import json
+
     try:
         plan = json.loads(response.content)
         if not isinstance(plan, list):
             plan = [query]
     except json.JSONDecodeError:
         plan = [query]
-    
+
     return {"research_plan": plan}
+
 
 async def research_node(state: ResearchState) -> dict:
     """Thực hiện tìm kiếm theo kế hoạch."""
     plan = state.get("research_plan", [])
     results = []
-    
+
     for search_query in plan:
         try:
             result = web_search.invoke({"query": search_query})
             results.append(f"Query: {search_query}\nResult: {result}")
         except Exception as e:
             results.append(f"Query: {search_query}\nError: {str(e)}")
-    
+
     iteration = state.get("iteration", 0) + 1
-    
+
     return {
         "search_results": results,
         "iteration": iteration,
     }
 
+
 async def synthesize_node(state: ResearchState) -> dict:
     """Tổng hợp kết quả thành câu trả lời."""
     llm = ChatOpenAI(model="gpt-4o-mini")
-    
+
     query = state.get("query", "")
     search_results = state.get("search_results", [])
-    
+
     prompt = f"""Dựa trên kết quả nghiên cứu, viết câu trả lời chi tiết cho câu hỏi.
-    
+
     Câu hỏi: {query}
-    
+
     Kết quả nghiên cứu:
     {chr(10).join(search_results)}
-    
+
     Yêu cầu:
     - Trả lời đầy đủ, có cấu trúc rõ ràng
     - Trích dẫn nguồn khi có thể
     - Nếu thông tin không đủ, ghi chú điều cần bổ sung
     - Viết bằng tiếng Việt"""
-    
+
     response = await llm.ainvoke([HumanMessage(content=prompt)])
-    
+
     return {"draft": response.content}
+
 
 async def review_node(state: ResearchState) -> dict:
     """Đánh giá chất lượng câu trả lời."""
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-    
+
     query = state.get("query", "")
     draft = state.get("draft", "")
-    
+
     prompt = f"""Đánh giá chất lượng câu trả lời sau trên thang 0-1.
-    
+
     Câu hỏi: {query}
     Câu trả lời: {draft}
-    
+
     Tiêu chí:
     - Độ đầy đủ: Có trả lời đủ câu hỏi không?
     - Độ chính xác: Thông tin có đáng tin không?
     - Độ rõ ràng: Có dễ hiểu không?
-    
+
     Trả về JSON: {{"score": 0.0-1.0, "needs_more": true/false, "feedback": "..."}}
     Chỉ trả về JSON."""
-    
+
     response = await llm.ainvoke([HumanMessage(content=prompt)])
-    
+
     import json
+
     try:
         review = json.loads(response.content)
         score = float(review.get("score", 0.5))
     except (json.JSONDecodeError, ValueError):
         score = 0.5
         review = {"needs_more": True, "feedback": "Không thể parse review"}
-    
+
     return {"quality_score": score}
 
+
 # ==================== ROUTING ====================
+
 
 def should_continue_research(state: ResearchState) -> str:
     """Quyết định có cần nghiên cứu thêm không."""
     score = state.get("quality_score", 0.0)
     iteration = state.get("iteration", 0)
-    
+
     # Nếu chất lượng đủ tốt hoặc đã lặp quá nhiều lần → kết thúc
     if score >= 0.7 or iteration >= 3:
         return "finalize"
-    
+
     # Ngược lại → nghiên cứu thêm
     return "research"
 
+
 # ==================== BUILD GRAPH ====================
+
 
 async def finalize_node(state: ResearchState) -> dict:
     """Chuẩn bị câu trả lời cuối cùng."""
     from langchain_core.messages import AIMessage
+
     draft = state.get("draft", "Không thể tạo câu trả lời.")
     return {"messages": [AIMessage(content=draft)]}
+
 
 graph = StateGraph(ResearchState)
 
@@ -920,9 +963,9 @@ graph.add_conditional_edges(
     "review",
     should_continue_research,
     {
-        "research": "research",    # Lặp lại nghiên cứu
-        "finalize": "finalize",    # Hoàn thành
-    }
+        "research": "research",  # Lặp lại nghiên cứu
+        "finalize": "finalize",  # Hoàn thành
+    },
 )
 
 graph.add_edge("finalize", END)
@@ -932,18 +975,22 @@ app = graph.compile()
 
 # ==================== CHẠY ====================
 
+
 async def main():
-    result = await app.ainvoke({
-        "messages": [HumanMessage(content="AI agents đang thay đổi ngành phần mềm như thế nào?")],
-        "query": "AI agents đang thay đổi ngành phần mềm như thế nào?"
-    })
-    
+    result = await app.ainvoke(
+        {
+            "messages": [HumanMessage(content="AI agents đang thay đổi ngành phần mềm như thế nào?")],
+            "query": "AI agents đang thay đổi ngành phần mềm như thế nào?",
+        }
+    )
+
     print("=" * 60)
     print("CÂU TRẢ LỜI:")
     print("=" * 60)
     print(result.get("draft", "Không có kết quả"))
     print(f"\nSố lần lặp: {result.get('iteration', 0)}")
     print(f"Điểm chất lượng: {result.get('quality_score', 0):.2f}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -988,11 +1035,7 @@ text_splitter = RecursiveCharacterTextSplitter(
 )
 chunks = text_splitter.create_documents(documents)
 
-vectorstore = Chroma.from_documents(
-    documents=chunks,
-    embedding=embeddings,
-    collection_name="ai20k_docs"
-)
+vectorstore = Chroma.from_documents(documents=chunks, embedding=embeddings, collection_name="ai20k_docs")
 
 # Tìm kiếm
 results = vectorstore.similarity_search("LangGraph state là gì?", k=3)
@@ -1006,10 +1049,11 @@ for doc in results:
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
 
+
 async def retrieve_node(state: ResearchState) -> dict:
     """Tìm kiếm tài liệu liên quan từ vector store."""
     query = state.get("query", "")
-    
+
     try:
         # Tạo retriever từ vector store
         embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
@@ -1017,51 +1061,51 @@ async def retrieve_node(state: ResearchState) -> dict:
             collection_name="ai20k_docs",
             embedding_function=embeddings,
         )
-        
+
         retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
         docs = await retriever.ainvoke(query)
-        
+
         # Format kết quả
-        context = "\n\n".join([
-            f"[Tài liệu {i+1}]: {doc.page_content}"
-            for i, doc in enumerate(docs)
-        ])
-        
+        context = "\n\n".join([f"[Tài liệu {i + 1}]: {doc.page_content}" for i, doc in enumerate(docs)])
+
         return {"search_results": [context]}
     except Exception as e:
         return {"error": f"Lỗi retrieval: {str(e)}"}
 
+
 async def rag_generate_node(state: ResearchState) -> dict:
     """Sinh câu trả lời dựa trên tài liệu đã truy xuất."""
     llm = ChatOpenAI(model="gpt-4o-mini")
-    
+
     query = state.get("query", "")
     search_results = state.get("search_results", [])
     context = "\n".join(search_results)
-    
+
     prompt = f"""Dựa trên tài liệu sau, trả lời câu hỏi. 
     Nếu thông tin không có trong tài liệu, hãy nói rõ.
-    
+
     Tài liệu:
     {context}
-    
+
     Câu hỏi: {query}
-    
+
     Trả lời bằng tiếng Việt:"""
-    
+
     response = await llm.ainvoke([HumanMessage(content=prompt)])
     return {"draft": response.content}
+
 
 # Thêm vào graph
 graph.add_node("retrieve", retrieve_node)
 graph.add_node("rag_generate", rag_generate_node)
+
 
 # Có thể chọn giữa web search và RAG tùy loại câu hỏi
 def route_search(state: ResearchState) -> str:
     query_type = state.get("query_type", "")
     if query_type == "factual":
         return "retrieve"  # Dùng RAG cho câu hỏi kiến thức
-    return "research"      # Dùng web search cho câu hỏi thời sự
+    return "research"  # Dùng web search cho câu hỏi thời sự
 ```
 
 > ⚠️ **LƯU Ý:** Chất lượng RAG phụ thuộc rất nhiều vào chất lượng chunks và embedding. Chunk size quá lớn → mất thông tin chi tiết. Chunk size quá nhỏ → mất ngữ cảnh. Hãy thử nghiệm với chunk_size 300-1000 và chunk_overlap 50-200.
@@ -1082,19 +1126,16 @@ Mỗi node nên xử lý lỗi riêng, không để lỗi lan truyền:
 async def search_node(state: ResearchState) -> dict:
     """Node tìm kiếm với error handling đầy đủ."""
     query = state.get("query", "")
-    
+
     if not query:
         return {"error": "Query rỗng, không thể tìm kiếm."}
-    
+
     try:
         results = await search_api(query)
         return {"search_results": results}
     except ConnectionError:
         # Lỗi kết nối — có thể retry
-        return {
-            "search_results": [],
-            "error": "Mất kết nối. Sẽ thử lại ở vòng tiếp theo."
-        }
+        return {"search_results": [], "error": "Mất kết nối. Sẽ thử lại ở vòng tiếp theo."}
     except RateLimitError:
         # Lỗi rate limit — chờ rồi thử
         await asyncio.sleep(2)
@@ -1102,18 +1143,13 @@ async def search_node(state: ResearchState) -> dict:
             results = await search_api(query)
             return {"search_results": results}
         except Exception:
-            return {
-                "search_results": [],
-                "error": "Rate limit. Vui lòng thử lại sau."
-            }
+            return {"search_results": [], "error": "Rate limit. Vui lòng thử lại sau."}
     except Exception as e:
         # Lỗi không xác định — ghi log và tiếp tục
         import logging
+
         logging.error(f"Unexpected error in search_node: {e}")
-        return {
-            "search_results": [],
-            "error": f"Lỗi không xác định: {type(e).__name__}"
-        }
+        return {"search_results": [], "error": f"Lỗi không xác định: {type(e).__name__}"}
 ```
 
 ### Tầng 2: Graph Level — Retry Policy
@@ -1125,10 +1161,10 @@ from langgraph.types import RetryPolicy
 
 # Định nghĩa retry policy
 retry_policy = RetryPolicy(
-    max_attempts=3,           # Thử tối đa 3 lần
-    initial_interval=1.0,     # Đợi 1 giây lần đầu
-    backoff_factor=2.0,       # Nhân đôi mỗi lần: 1s, 2s, 4s
-    max_interval=10.0,        # Đợi tối đa 10 giây
+    max_attempts=3,  # Thử tối đa 3 lần
+    initial_interval=1.0,  # Đợi 1 giây lần đầu
+    backoff_factor=2.0,  # Nhân đôi mỗi lần: 1s, 2s, 4s
+    max_interval=10.0,  # Đợi tối đa 10 giây
     retry_on=[ConnectionError, TimeoutError],  # Chỉ retry các lỗi này
 )
 
@@ -1136,10 +1172,7 @@ retry_policy = RetryPolicy(
 graph.add_node("search", search_node, retry=retry_policy)
 
 # Hoặc cấu hình khi invoke
-result = await app.ainvoke(
-    {"query": "test"},
-    config={"retry": retry_policy}
-)
+result = await app.ainvoke({"query": "test"}, config={"retry": retry_policy})
 ```
 
 ### Tầng 3: Tool Level — handle_tool_errors
@@ -1155,6 +1188,7 @@ tool_node = ToolNode(
     handle_tool_errors=True,  # Tự động catch lỗi và trả về error message
 )
 
+
 # Cách 2: Custom error handler
 def custom_error_handler(error: Exception, tool_call: dict) -> str:
     """Xử lý lỗi tool và trả về message cho agent."""
@@ -1164,6 +1198,7 @@ def custom_error_handler(error: Exception, tool_call: dict) -> str:
         return "Tool timeout. Hãy thử lại hoặc dùng cách khác."
     else:
         return f"Tool error: {str(error)}. Hãy thử cách tiếp cận khác."
+
 
 tool_node = ToolNode(
     tools=[web_search, calculate],
@@ -1185,6 +1220,7 @@ def robust_search(query: str) -> str:
     except Exception as e:
         return f"Lỗi tìm kiếm: {str(e)}"  # Tool tự xử lý lỗi
 
+
 # 2. Node level: xử lý lỗi trong node
 async def safe_search_node(state: ResearchState) -> dict:
     """Node với fallback."""
@@ -1193,15 +1229,14 @@ async def safe_search_node(state: ResearchState) -> dict:
         return {"search_results": [results]}
     except Exception as e:
         # Fallback: dùng kết quả cũ hoặc trả về empty
-        return {
-            "search_results": state.get("search_results", []),
-            "error": f"Search failed: {str(e)}"
-        }
+        return {"search_results": state.get("search_results", []), "error": f"Search failed: {str(e)}"}
+
 
 # 3. Graph level: retry policy
 app = graph.compile(
     retry=RetryPolicy(max_attempts=2),
 )
+
 
 # Thêm error vào routing
 def route_after_search(state: ResearchState) -> str:
@@ -1226,6 +1261,7 @@ Test mỗi node độc lập bằng cách truyền state giả (mock state):
 import pytest
 from unittest.mock import AsyncMock, patch
 
+
 @pytest.mark.asyncio
 async def test_analyze_node():
     """Test node analyze với mock LLM."""
@@ -1234,18 +1270,17 @@ async def test_analyze_node():
         "query": "GDP Việt Nam 2024?",
         "messages": [],
     }
-    
+
     # Act: gọi node
     with patch("langchain_openai.ChatOpenAI.ainvoke") as mock_llm:
-        mock_llm.return_value = AsyncMock(
-            content='{"query_type": "factual", "needs_research": true}'
-        )
+        mock_llm.return_value = AsyncMock(content='{"query_type": "factual", "needs_research": true}')
         result = await analyze_node(mock_state)
-    
+
     # Assert
     assert "query_type" in result
     assert result["query_type"] in ["factual", "analytical", "creative"]
     assert result["iteration"] == 0
+
 
 @pytest.mark.asyncio
 async def test_research_node():
@@ -1254,11 +1289,11 @@ async def test_research_node():
         "research_plan": ["GDP Vietnam 2024", "Vietnam economy statistics"],
         "iteration": 0,
     }
-    
+
     with patch("__main__.web_search") as mock_search:
         mock_search.invoke.return_value = "GDP Việt Nam 2024: 430 tỷ USD"
         result = await research_node(mock_state)
-    
+
     assert "search_results" in result
     assert len(result["search_results"]) == 2
     assert result["iteration"] == 1
@@ -1276,30 +1311,35 @@ async def test_full_graph():
         # Mock các response theo thứ tự
         mock_llm.side_effect = [
             AsyncMock(content='{"query_type": "factual", "needs_research": true}'),  # analyze
-            AsyncMock(content='["search query 1", "search query 2"]'),                # plan
-            AsyncMock(content="Câu trả lời mẫu về GDP..."),                            # synthesize
-            AsyncMock(content='{"score": 0.9, "needs_more": false}'),                 # review
-            AsyncMock(content="Câu trả lời cuối cùng."),                               # finalize
+            AsyncMock(content='["search query 1", "search query 2"]'),  # plan
+            AsyncMock(content="Câu trả lời mẫu về GDP..."),  # synthesize
+            AsyncMock(content='{"score": 0.9, "needs_more": false}'),  # review
+            AsyncMock(content="Câu trả lời cuối cùng."),  # finalize
         ]
-        
-        result = await app.ainvoke({
-            "query": "GDP Việt Nam 2024?",
-            "messages": [],
-        })
-    
+
+        result = await app.ainvoke(
+            {
+                "query": "GDP Việt Nam 2024?",
+                "messages": [],
+            }
+        )
+
     # Assert
     assert "draft" in result
     assert len(result["draft"]) > 0
     assert result.get("quality_score", 0) >= 0.7
 
+
 @pytest.mark.asyncio
 async def test_graph_handles_empty_query():
     """Test graph xử lý query rỗng."""
-    result = await app.ainvoke({
-        "query": "",
-        "messages": [],
-    })
-    
+    result = await app.ainvoke(
+        {
+            "query": "",
+            "messages": [],
+        }
+    )
+
     # Graph không crash
     assert result is not None
 ```
@@ -1311,23 +1351,25 @@ Pattern quan trọng: mock LLM response thay vì gọi API thật trong test:
 ```python
 from unittest.mock import AsyncMock, MagicMock
 
+
 def create_mock_llm(responses: list[str]):
     """Tạo mock LLM trả về responses theo thứ tự."""
     mock = MagicMock()
     mock.ainvoke = AsyncMock()
-    mock.ainvoke.side_effect = [
-        AsyncMock(content=response) for response in responses
-    ]
+    mock.ainvoke.side_effect = [AsyncMock(content=response) for response in responses]
     return mock
+
 
 # Sử dụng
 def test_with_mock():
-    llm = create_mock_llm([
-        "Response 1 from analyze",
-        "Response 2 from plan",
-        "Response 3 from generate",
-    ])
-    
+    llm = create_mock_llm(
+        [
+            "Response 1 from analyze",
+            "Response 2 from plan",
+            "Response 3 from generate",
+        ]
+    )
+
     # Test code sử dụng llm...
 ```
 

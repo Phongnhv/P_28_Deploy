@@ -47,9 +47,7 @@ async def hitl_gate_node(state: AgentState) -> dict:
         }
 
     # 1. Persist vào DB — lỗi ở bước này PHẢI raise để mark run FAILED
-    n_saved = await asyncio.to_thread(
-        save_proposed_rules, run_id, dataset_id, proposed_rules
-    )
+    n_saved = await asyncio.to_thread(save_proposed_rules, run_id, dataset_id, proposed_rules)
     logger.info(
         "hitl_gate_node: đã persist %d rules | run_id=%s | dataset_id=%s",
         n_saved,
@@ -63,7 +61,11 @@ async def hitl_gate_node(state: AgentState) -> dict:
     try:
         out_dir = getattr(settings, "output_dir", None)
         res_dir = getattr(settings, "results_dir", None)
-        base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+        base_dir = (
+            out_dir
+            if isinstance(out_dir, (str, Path))
+            else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+        )
         hitl_dir = Path(base_dir) / "hitl"
         hitl_dir.mkdir(parents=True, exist_ok=True)
         out_path = hitl_dir / f"proposed_rules_{timestamp}_{run_id}.json"
@@ -96,6 +98,7 @@ async def hitl_gate_node(state: AgentState) -> dict:
 # ---------------------------------------------------------------------------
 # Standalone Test Harness
 # ---------------------------------------------------------------------------
+
 
 async def main():
     """Hàm chạy test độc lập cho hitl_gate_node: Đọc file rule_proposer và lưu vào DB.
@@ -161,5 +164,5 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(main())
 
+    asyncio.run(main())

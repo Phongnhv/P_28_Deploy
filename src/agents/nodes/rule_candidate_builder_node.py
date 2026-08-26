@@ -5,6 +5,7 @@ from src.agents.tools.profile_digest import split_digest_by_table
 
 logger = logging.getLogger(__name__)
 
+
 def rule_candidate_builder_node(state: AgentState) -> dict:
     """Deterministic Rule Candidate Builder.
 
@@ -40,23 +41,27 @@ def rule_candidate_builder_node(state: AgentState) -> dict:
 
             # --- NOT_NULL ---
             if not nullable_expected or sem_type == "identifier":
-                candidates.append({
-                    "table": table_name,
-                    "column": col_name,
-                    "rule_type": "NOT_NULL",
-                    "parameters": {},
-                    "evidence": ["schema:semantic_contract:nullable_expected_false"],
-                })
+                candidates.append(
+                    {
+                        "table": table_name,
+                        "column": col_name,
+                        "rule_type": "NOT_NULL",
+                        "parameters": {},
+                        "evidence": ["schema:semantic_contract:nullable_expected_false"],
+                    }
+                )
 
             # --- UNIQUE ---
             if sem_type == "identifier":
-                candidates.append({
-                    "table": table_name,
-                    "column": col_name,
-                    "rule_type": "UNIQUE",
-                    "parameters": {},
-                    "evidence": ["schema:semantic_contract:identifier_type"],
-                })
+                candidates.append(
+                    {
+                        "table": table_name,
+                        "column": col_name,
+                        "rule_type": "UNIQUE",
+                        "parameters": {},
+                        "evidence": ["schema:semantic_contract:identifier_type"],
+                    }
+                )
 
             # --- RANGE ---
             if sem_type in ("currency", "numeric"):
@@ -80,31 +85,35 @@ def rule_candidate_builder_node(state: AgentState) -> dict:
                     if isinstance(suggested_max, float):
                         suggested_max = round(suggested_max, 2)
 
-                    candidates.append({
-                        "table": table_name,
-                        "column": col_name,
-                        "rule_type": "RANGE",
-                        "parameters": {
-                            "min": suggested_min,
-                            "max": suggested_max,
-                        },
-                        "evidence": ["profile:typical_range"],
-                    })
+                    candidates.append(
+                        {
+                            "table": table_name,
+                            "column": col_name,
+                            "rule_type": "RANGE",
+                            "parameters": {
+                                "min": suggested_min,
+                                "max": suggested_max,
+                            },
+                            "evidence": ["profile:typical_range"],
+                        }
+                    )
 
             # --- ACCEPTED_VALUES ---
             if sem_type == "category":
                 # Lấy values quan sát được
                 observed_values = [v for v in col_digest.get("values", []) if v is not None]
                 if observed_values:
-                    candidates.append({
-                        "table": table_name,
-                        "column": col_name,
-                        "rule_type": "ACCEPTED_VALUES",
-                        "parameters": {
-                            "accepted_values": observed_values,
-                        },
-                        "evidence": ["profile:observed_categories"],
-                    })
+                    candidates.append(
+                        {
+                            "table": table_name,
+                            "column": col_name,
+                            "rule_type": "ACCEPTED_VALUES",
+                            "parameters": {
+                                "accepted_values": observed_values,
+                            },
+                            "evidence": ["profile:observed_categories"],
+                        }
+                    )
 
             # --- REGEX_FORMAT ---
             if sem_type == "PII" or col_name.lower() in ("email", "phone", "zipcode"):
@@ -115,40 +124,48 @@ def rule_candidate_builder_node(state: AgentState) -> dict:
                 elif "phone" in col_name.lower():
                     regex_pattern = "^\\+?[0-9\\s\\-\\.]{7,15}$"
 
-                candidates.append({
-                    "table": table_name,
-                    "column": col_name,
-                    "rule_type": "REGEX_FORMAT",
-                    "parameters": {
-                        "regex": regex_pattern,
-                    },
-                    "evidence": ["schema:semantic_type_pii"],
-                })
+                candidates.append(
+                    {
+                        "table": table_name,
+                        "column": col_name,
+                        "rule_type": "REGEX_FORMAT",
+                        "parameters": {
+                            "regex": regex_pattern,
+                        },
+                        "evidence": ["schema:semantic_type_pii"],
+                    }
+                )
 
             # --- FRESHNESS ---
-            if sem_type == "timestamp" and any(k in col_name.lower() for k in ("update", "create", "modified", "time", "date")):
-                candidates.append({
-                    "table": table_name,
-                    "column": col_name,
-                    "rule_type": "FRESHNESS",
-                    "parameters": {
-                        "max_age_hours": 24.0,
-                    },
-                    "evidence": ["schema:timestamp_column"],
-                })
+            if sem_type == "timestamp" and any(
+                k in col_name.lower() for k in ("update", "create", "modified", "time", "date")
+            ):
+                candidates.append(
+                    {
+                        "table": table_name,
+                        "column": col_name,
+                        "rule_type": "FRESHNESS",
+                        "parameters": {
+                            "max_age_hours": 24.0,
+                        },
+                        "evidence": ["schema:timestamp_column"],
+                    }
+                )
 
             # --- NULL_RATE ---
             null_pct = col_digest.get("null_pct", 0.0) or 0.0
             if null_pct > 5.0:
-                candidates.append({
-                    "table": table_name,
-                    "column": col_name,
-                    "rule_type": "NULL_RATE",
-                    "parameters": {
-                        "max_null_pct": min(100.0, null_pct + 10.0),
-                    },
-                    "evidence": ["profile:observed_null_rate"],
-                })
+                candidates.append(
+                    {
+                        "table": table_name,
+                        "column": col_name,
+                        "rule_type": "NULL_RATE",
+                        "parameters": {
+                            "max_null_pct": min(100.0, null_pct + 10.0),
+                        },
+                        "evidence": ["profile:observed_null_rate"],
+                    }
+                )
 
         # 2. CROSS_FIELD_COMPARISON từ relationships contract
         for rel in table_contract.get("relationships", []):
@@ -156,29 +173,33 @@ def rule_candidate_builder_node(state: AgentState) -> dict:
             right_col = rel.get("right_column")
             operator = rel.get("operator")
             if left_col in available_columns and right_col in available_columns:
-                candidates.append({
-                    "table": table_name,
-                    "column": left_col,
-                    "rule_type": "CROSS_FIELD_COMPARISON",
-                    "parameters": {
-                        "target_column": right_col,
-                        "operator": operator,
-                    },
-                    "evidence": ["schema:semantic_relationship"],
-                })
+                candidates.append(
+                    {
+                        "table": table_name,
+                        "column": left_col,
+                        "rule_type": "CROSS_FIELD_COMPARISON",
+                        "parameters": {
+                            "target_column": right_col,
+                            "operator": operator,
+                        },
+                        "evidence": ["schema:semantic_relationship"],
+                    }
+                )
 
         # 3. ROW_COUNT (cấp bảng)
         rows_count = table_digest.get("rows", 0)
         if rows_count > 0:
-            candidates.append({
-                "table": table_name,
-                "column": None,
-                "rule_type": "ROW_COUNT",
-                "parameters": {
-                    "min_row_count": int(rows_count * 0.8),
-                },
-                "evidence": ["profile:observed_row_count"],
-            })
+            candidates.append(
+                {
+                    "table": table_name,
+                    "column": None,
+                    "rule_type": "ROW_COUNT",
+                    "parameters": {
+                        "min_row_count": int(rows_count * 0.8),
+                    },
+                    "evidence": ["profile:observed_row_count"],
+                }
+            )
 
     # Đính kèm evidence_items (enrich evidence references)
     from src.agents.nodes.rule_proposer_node import _attach_evidence_items
@@ -208,7 +229,11 @@ def rule_candidate_builder_node(state: AgentState) -> dict:
         settings = get_settings()
         out_dir = getattr(settings, "output_dir", None)
         res_dir = getattr(settings, "results_dir", None)
-        base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+        base_dir = (
+            out_dir
+            if isinstance(out_dir, (str, Path))
+            else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+        )
         candidates_dir = Path(base_dir) / "candidates"
         candidates_dir.mkdir(parents=True, exist_ok=True)
         dump_file = candidates_dir / f"debug_rule_candidates_{timestamp}_{run_id}.json"

@@ -20,22 +20,18 @@ tests/
 ```python
 import pytest
 
+
 @pytest.mark.asyncio
 async def test_chat_endpoint(client):
-    response = await client.post(
-        "/api/v1/chat",
-        json={"message": "Hello"}
-    )
+    response = await client.post("/api/v1/chat", json={"message": "Hello"})
     assert response.status_code == 200
     data = response.json()
     assert "response" in data
 
+
 @pytest.mark.asyncio
 async def test_empty_message_rejected(client):
-    response = await client.post(
-        "/api/v1/chat",
-        json={"message": ""}
-    )
+    response = await client.post("/api/v1/chat", json={"message": ""})
     assert response.status_code == 422
 ```
 
@@ -47,6 +43,7 @@ async def test_agent_returns_response():
     result = await agent.ainvoke({"query": "test query"})
     assert "response" in result
     assert len(result["response"]) > 0
+
 
 @pytest.mark.asyncio
 async def test_agent_handles_empty_query():
@@ -61,13 +58,11 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from src.main import app
 
+
 @pytest.fixture
 async def client():
     transport = ASGITransport(app=app)
-    async with AsyncClient(
-        transport=transport,
-        base_url="http://test"
-    ) as ac:
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 ```
 

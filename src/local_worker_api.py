@@ -6,6 +6,7 @@ from fastapi import BackgroundTasks, FastAPI
 
 app = FastAPI()
 
+
 def run_job(job_id: str, job_type: str):
     """
     Mocks a Cloud Run Job execution by spawning a subprocess of the worker module.
@@ -21,6 +22,7 @@ def run_job(job_id: str, job_type: str):
         print(f"[LocalWorker] Job {job_id} finished.")
     except Exception as e:
         print(f"[LocalWorker] Error executing Job {job_id}: {e}")
+
 
 @app.post("/run")
 def trigger_job(job_id: str, job_type: str, background_tasks: BackgroundTasks):

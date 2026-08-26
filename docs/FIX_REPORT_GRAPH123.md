@@ -372,28 +372,27 @@ Tôi chọn ngưỡng **thất bại toàn bộ** (có lỗi và không có rule
 #### Sau
 
 ```python
-    result: dict = {
-        "proposed_rules": flat_rules,
-        "rule_proposal_errors": errors,
-        "rule_run_id": run_id,
-    }
+result: dict = {
+    "proposed_rules": flat_rules,
+    "rule_proposal_errors": errors,
+    "rule_run_id": run_id,
+}
 
-    # Thất bại toàn bộ (ví dụ LLM hết quota / mất mạng) trước đây chỉ được ghi vào
-    # `rule_proposal_errors` rồi graph vẫn chạy tiếp và runner báo DONE với 0 rules —
-    # không phân biệt được với trường hợp hợp lệ "dataset sạch, không cần rule nào".
-    if errors and not flat_rules:
-        result["error"] = (
-            f"Rule proposer thất bại trên toàn bộ {len(errors)}/{len(table_names)} bảng: "
-            + "; ".join(f"{e.get('table')}: {e.get('error')}" for e in errors[:3])
-        )
-    elif errors:
-        logger.warning(
-            "rule_proposer_node thành công một phần: %d/%d bảng thất bại",
-            len(errors),
-            len(table_names),
-        )
+# Thất bại toàn bộ (ví dụ LLM hết quota / mất mạng) trước đây chỉ được ghi vào
+# `rule_proposal_errors` rồi graph vẫn chạy tiếp và runner báo DONE với 0 rules —
+# không phân biệt được với trường hợp hợp lệ "dataset sạch, không cần rule nào".
+if errors and not flat_rules:
+    result["error"] = f"Rule proposer thất bại trên toàn bộ {len(errors)}/{len(table_names)} bảng: " + "; ".join(
+        f"{e.get('table')}: {e.get('error')}" for e in errors[:3]
+    )
+elif errors:
+    logger.warning(
+        "rule_proposer_node thành công một phần: %d/%d bảng thất bại",
+        len(errors),
+        len(table_names),
+    )
 
-    return result
+return result
 ```
 
 #### Cách kiểm chứng
@@ -423,22 +422,16 @@ Sửa bằng cách tách hẳn một trường mới `pause_reason` trong state 
 #### Trước — `hitl_semantic_gate_node.py`, cuối hàm
 
 ```python
-    # Set error đặc biệt để conditional edge dẫn tới END
-    return {
-        "error": "AWAITING_SEMANTIC_REVIEW",
-        "progress_state": "WAITING_FOR_SEMANTIC_REVIEW"
-    }
+# Set error đặc biệt để conditional edge dẫn tới END
+return {"error": "AWAITING_SEMANTIC_REVIEW", "progress_state": "WAITING_FOR_SEMANTIC_REVIEW"}
 ```
 
 #### Sau
 
 ```python
-    # Tạm dừng có chủ đích — KHÔNG phải lỗi. Dùng `pause_reason` để conditional edge dẫn
-    # tới END mà runner vẫn phân biệt được "chờ Steward duyệt" với "chạy thất bại".
-    return {
-        "pause_reason": "AWAITING_SEMANTIC_REVIEW",
-        "progress_state": "WAITING_FOR_SEMANTIC_REVIEW"
-    }
+# Tạm dừng có chủ đích — KHÔNG phải lỗi. Dùng `pause_reason` để conditional edge dẫn
+# tới END mà runner vẫn phân biệt được "chờ Steward duyệt" với "chạy thất bại".
+return {"pause_reason": "AWAITING_SEMANTIC_REVIEW", "progress_state": "WAITING_FOR_SEMANTIC_REVIEW"}
 ```
 
 #### Trước — `graph.py`, trong `build_proposal_graph()`
@@ -534,7 +527,9 @@ def _fetch_sample_failures(
         return []
 
     # Basic runtime safety guards
-    assert "--" not in predicate and ";" not in predicate, "Security violation: potential SQL injection detected in predicate"
+    assert "--" not in predicate and ";" not in predicate, (
+        "Security violation: potential SQL injection detected in predicate"
+    )
 
     quoted_table = _quote_ident(table_name, dialect_name)
     sample_sql = f"SELECT * FROM {quoted_table} WHERE {predicate} LIMIT {limit}"
@@ -648,17 +643,12 @@ def _fetch_sample_failures(
 
     identity_column = _resolve_identity_column(table_name)
     if not identity_column:
-        logger.warning(
-            "Bỏ qua lấy mẫu vi phạm cho %s: không xác định được cột định danh", table_name
-        )
+        logger.warning("Bỏ qua lấy mẫu vi phạm cho %s: không xác định được cột định danh", table_name)
         return []
 
     quoted_table = _quote_ident(table_name, dialect_name)
     quoted_id = _quote_ident(identity_column, dialect_name)
-    sample_sql = (
-        f"SELECT {quoted_id} FROM {quoted_table} WHERE {predicate} "
-        f"ORDER BY {quoted_id} LIMIT {limit}"
-    )
+    sample_sql = f"SELECT {quoted_id} FROM {quoted_table} WHERE {predicate} ORDER BY {quoted_id} LIMIT {limit}"
 
     engine = get_engine()
     try:
@@ -679,9 +669,7 @@ def _fetch_unique_samples(
     """Lấy tối đa `limit` ID của các dòng có giá trị bị trùng lặp (rule UNIQUE)."""
     identity_column = _resolve_identity_column(table_name)
     if not identity_column:
-        logger.warning(
-            "Bỏ qua lấy mẫu trùng lặp cho %s: không xác định được cột định danh", table_name
-        )
+        logger.warning("Bỏ qua lấy mẫu trùng lặp cho %s: không xác định được cột định danh", table_name)
         return []
 
     quoted_table = _quote_ident(table_name, dialect_name)
@@ -745,8 +733,10 @@ Tôi tách thành hàm riêng để tái sử dụng, và bổ sung chặn cả 
 #### Trước — nằm giữa thân `_fetch_sample_failures()`
 
 ```python
-    # Basic runtime safety guards
-    assert "--" not in predicate and ";" not in predicate, "Security violation: potential SQL injection detected in predicate"
+# Basic runtime safety guards
+assert "--" not in predicate and ";" not in predicate, (
+    "Security violation: potential SQL injection detected in predicate"
+)
 ```
 
 #### Sau — hàm riêng, dùng raise
@@ -760,9 +750,7 @@ def _assert_safe_predicate(predicate: str) -> None:
     sẽ biến mất đúng lúc cần nhất.
     """
     if "--" in predicate or ";" in predicate or "/*" in predicate or "*/" in predicate:
-        raise ValueError(
-            "Security violation: potential SQL injection detected in predicate"
-        )
+        raise ValueError("Security violation: potential SQL injection detected in predicate")
 ```
 
 #### Cách kiểm chứng
@@ -1117,35 +1105,32 @@ Tôi gộp cả ba: một truy vấn duy nhất cho mọi rule, sắp xếp mớ
 #### Trước — nằm trong vòng lặp `for res in current_results`
 
 ```python
-    # 2. Iterate through rules and run detectors
-    for res in current_results:
-        rule_id = res.rule_id
-        checked_count = res.checked_count
-        failed_count = res.failed_count
-        current_rate = failed_count / checked_count if checked_count > 0 else 0.0
+# 2. Iterate through rules and run detectors
+for res in current_results:
+    rule_id = res.rule_id
+    checked_count = res.checked_count
+    failed_count = res.failed_count
+    current_rate = failed_count / checked_count if checked_count > 0 else 0.0
 
-        # 2.1 Fetch historical results for this rule
-        # Exclude: current run, failed runs (not SUCCEEDED/DONE), and true anomalies
-        history_rows = (
-            db.query(DqResultModel)
-            .join(DqRunModel, DqRunModel.id == DqResultModel.run_id)
-            .filter(
-                DqResultModel.rule_id == rule_id,
-                DqResultModel.run_id != execution_run_id,
-                DqRunModel.dataset_id == current_run.dataset_id,
-                or_(DqRunModel.status == "SUCCEEDED", DqRunModel.status == "DONE"),
-            )
-            .all()
+    # 2.1 Fetch historical results for this rule
+    # Exclude: current run, failed runs (not SUCCEEDED/DONE), and true anomalies
+    history_rows = (
+        db.query(DqResultModel)
+        .join(DqRunModel, DqRunModel.id == DqResultModel.run_id)
+        .filter(
+            DqResultModel.rule_id == rule_id,
+            DqResultModel.run_id != execution_run_id,
+            DqRunModel.dataset_id == current_run.dataset_id,
+            or_(DqRunModel.status == "SUCCEEDED", DqRunModel.status == "DONE"),
         )
-        # Filter true anomalies in memory
-        history_rows = [r for r in history_rows if r.run_id not in excluded_run_ids]
+        .all()
+    )
+    # Filter true anomalies in memory
+    history_rows = [r for r in history_rows if r.run_id not in excluded_run_ids]
 
-        history_rates = [
-            (r.failed_count / r.checked_count if r.checked_count > 0 else 0.0)
-            for r in history_rows
-        ]
+    history_rates = [(r.failed_count / r.checked_count if r.checked_count > 0 else 0.0) for r in history_rows]
 
-        sufficient_history = len(history_rates) >= 5
+    sufficient_history = len(history_rates) >= 5
 ```
 
 #### Sau — một truy vấn trước vòng lặp, cắt cửa sổ khi duyệt
@@ -1221,32 +1206,26 @@ venv/Scripts/python.exe -m pytest \
 #### Trước
 
 ```python
-        hist_profiles = (
-            db.query(ProfileModel)
-            .filter(
-                ProfileModel.dataset_id == current_run.dataset_id,
-                ProfileModel.generated_at < profile.generated_at
-            )
-            .limit(20)
-            .all()
-        )
+hist_profiles = (
+    db.query(ProfileModel)
+    .filter(ProfileModel.dataset_id == current_run.dataset_id, ProfileModel.generated_at < profile.generated_at)
+    .limit(20)
+    .all()
+)
 ```
 
 #### Sau
 
 ```python
-        # LIMIT không kèm ORDER BY là hành vi không xác định trong SQL — DB được quyền
-        # trả về 20 dòng bất kỳ, khiến baseline thay đổi giữa các lần chạy trên cùng dữ liệu.
-        hist_profiles = (
-            db.query(ProfileModel)
-            .filter(
-                ProfileModel.dataset_id == current_run.dataset_id,
-                ProfileModel.generated_at < profile.generated_at
-            )
-            .order_by(ProfileModel.generated_at.desc())
-            .limit(_VOLUME_HISTORY_WINDOW)
-            .all()
-        )
+# LIMIT không kèm ORDER BY là hành vi không xác định trong SQL — DB được quyền
+# trả về 20 dòng bất kỳ, khiến baseline thay đổi giữa các lần chạy trên cùng dữ liệu.
+hist_profiles = (
+    db.query(ProfileModel)
+    .filter(ProfileModel.dataset_id == current_run.dataset_id, ProfileModel.generated_at < profile.generated_at)
+    .order_by(ProfileModel.generated_at.desc())
+    .limit(_VOLUME_HISTORY_WINDOW)
+    .all()
+)
 ```
 
 #### Cách kiểm chứng
@@ -1783,32 +1762,34 @@ Việc không ai phát hiện ra điều này là bằng chứng harness đã kh
 #### Sau
 
 ```python
-    state: AgentState = {
-        "dataset_id": "yellow_tripdata",
-        "test_run_id": "exec_standalone_test",
-        "generated_tests": valid_tests,
-        # Harness chạy tay bỏ qua chốt chặn dbt một cách CÓ CHỦ ĐÍCH: nó đọc thẳng file
-        # test đã sinh sẵn. Thiếu cờ này, test_runner_node ném RuntimeError ngay dòng đầu
-        # nên toàn bộ harness là code chết, không ai chạy được.
-        "dbt_validation_valid": True,
-    }
+state: AgentState = {
+    "dataset_id": "yellow_tripdata",
+    "test_run_id": "exec_standalone_test",
+    "generated_tests": valid_tests,
+    # Harness chạy tay bỏ qua chốt chặn dbt một cách CÓ CHỦ ĐÍCH: nó đọc thẳng file
+    # test đã sinh sẵn. Thiếu cờ này, test_runner_node ném RuntimeError ngay dòng đầu
+    # nên toàn bộ harness là code chết, không ai chạy được.
+    "dbt_validation_valid": True,
+}
 
-    res = await test_runner_node(state)
+res = await test_runner_node(state)
 
-    # test_runner_node trả về status ĐÃ chuẩn hoá (PASS/FAIL), không phải PASSED/FAILED.
-    results = res.get("test_results", [])
-    passed_count = sum(1 for r in results if r["status"] == "PASS")
-    failed_count = sum(1 for r in results if r["status"] == "FAIL")
-    error_count = sum(1 for r in results if r["status"] == "ERROR")
+# test_runner_node trả về status ĐÃ chuẩn hoá (PASS/FAIL), không phải PASSED/FAILED.
+results = res.get("test_results", [])
+passed_count = sum(1 for r in results if r["status"] == "PASS")
+failed_count = sum(1 for r in results if r["status"] == "FAIL")
+error_count = sum(1 for r in results if r["status"] == "ERROR")
 
-    print(f"\n📊 Kết quả thực thi ({len(results)} rules): ...")
-    for idx, r in enumerate(results[:10], 1):
-        status_icon = "PASS" if r["status"] == "PASS" else ("FAIL" if r["status"] == "FAIL" else "ERROR")
-        print(f"\n[{idx}] Rule: {r['rule_id']} -> {status_icon}")
-        print(f"    Tong dong: {r['checked_count']} | Vi pham: {r['failed_count']} | Ty le loi: {r['violation_rate']:.2%}")
-        print(f"    Thoi gian: {r['duration_ms']} ms")
-        if r.get("sample_refs"):
-            print(f"    ID dong loi mau (toi da {SAMPLE_FAILURE_LIMIT}): {json.dumps(r['sample_refs'], ensure_ascii=False, default=str)}")
+print(f"\n📊 Kết quả thực thi ({len(results)} rules): ...")
+for idx, r in enumerate(results[:10], 1):
+    status_icon = "PASS" if r["status"] == "PASS" else ("FAIL" if r["status"] == "FAIL" else "ERROR")
+    print(f"\n[{idx}] Rule: {r['rule_id']} -> {status_icon}")
+    print(f"    Tong dong: {r['checked_count']} | Vi pham: {r['failed_count']} | Ty le loi: {r['violation_rate']:.2%}")
+    print(f"    Thoi gian: {r['duration_ms']} ms")
+    if r.get("sample_refs"):
+        print(
+            f"    ID dong loi mau (toi da {SAMPLE_FAILURE_LIMIT}): {json.dumps(r['sample_refs'], ensure_ascii=False, default=str)}"
+        )
 ```
 
 #### Cách kiểm chứng
@@ -1919,31 +1900,25 @@ Tôi chọn thêm `default` thay vì đổi sang `nullable=True`: giá trị m�
 #### Trước
 
 ```python
-    last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
-    next_run_at: Mapped[datetime | None] = mapped_column(DateTime)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=utc_now, onupdate=utc_now
-    )
-    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=utc_now, onupdate=utc_now
-    )
+last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
+next_run_at: Mapped[datetime | None] = mapped_column(DateTime)
+updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 ```
 
 #### Sau — bỏ khai báo trùng, thêm default
 
 ```python
-    last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
-    next_run_at: Mapped[datetime | None] = mapped_column(DateTime)
-    # Cột NOT NULL nhưng không call site nào truyền giá trị (routes.py:1108, 1178, 1302) và
-    # RuleConfigurationSchema cũng không phơi ra — mọi lần tạo cấu hình đều ném IntegrityError.
-    # Đặt default để insert hợp lệ trên cả schema cũ (đã NOT NULL) lẫn schema mới.
-    model_name: Mapped[str] = mapped_column(String(128), nullable=False, default="unspecified")
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=utc_now, onupdate=utc_now
-    )
+last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
+next_run_at: Mapped[datetime | None] = mapped_column(DateTime)
+# Cột NOT NULL nhưng không call site nào truyền giá trị (routes.py:1108, 1178, 1302) và
+# RuleConfigurationSchema cũng không phơi ra — mọi lần tạo cấu hình đều ném IntegrityError.
+# Đặt default để insert hợp lệ trên cả schema cũ (đã NOT NULL) lẫn schema mới.
+model_name: Mapped[str] = mapped_column(String(128), nullable=False, default="unspecified")
+created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 ```
 
 #### Cách kiểm chứng
@@ -1983,22 +1958,24 @@ Test `test_small_checks_do_not_raise_unreliable_anomaly` đã fail sẵn từ tr
 #### Sau
 
 ```python
-        checked_count = res_model.checked_count
-        failed_count = res_model.failed_count
+checked_count = res_model.checked_count
+failed_count = res_model.failed_count
 
-        # Mẫu quá nhỏ thì tỷ lệ vi phạm không đủ tin cậy để báo động cho Steward.
-        # `minimum_checked_count` đã được khai báo trong chữ ký hàm từ đầu nhưng không
-        # dòng nào dùng tới — một rule chạy trên 50 dòng vẫn nổi lên như bất thường thật.
-        if checked_count < minimum_checked_count:
-            logger.debug(
-                "Bỏ qua signal %s: chỉ kiểm tra %d dòng (< %d), độ tin cậy không đủ.",
-                rule_id, checked_count, minimum_checked_count,
-            )
-            continue
+# Mẫu quá nhỏ thì tỷ lệ vi phạm không đủ tin cậy để báo động cho Steward.
+# `minimum_checked_count` đã được khai báo trong chữ ký hàm từ đầu nhưng không
+# dòng nào dùng tới — một rule chạy trên 50 dòng vẫn nổi lên như bất thường thật.
+if checked_count < minimum_checked_count:
+    logger.debug(
+        "Bỏ qua signal %s: chỉ kiểm tra %d dòng (< %d), độ tin cậy không đủ.",
+        rule_id,
+        checked_count,
+        minimum_checked_count,
+    )
+    continue
 
-        current_rate = failed_count / checked_count if checked_count > 0 else 0.0
+current_rate = failed_count / checked_count if checked_count > 0 else 0.0
 
-        baseline = sig.get("baseline", {})
+baseline = sig.get("baseline", {})
 ```
 
 #### Cách kiểm chứng

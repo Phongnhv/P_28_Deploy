@@ -1,5 +1,12 @@
 target-version = "py311"
 line-length = 120
+exclude = [
+    ".agents",
+    ".venv",
+    "output",
+    "output_pytest",
+    "scratch",
+]
 
 [lint]
 select = ["E", "F", "I", "N", "W", "UP"]

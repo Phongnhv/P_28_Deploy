@@ -22,7 +22,9 @@ def test_db():
     # Override settings
     settings = get_settings()
     original_db_url = settings.database_url
+    original_agent_mode = settings.agent_mode
     settings.database_url = db_url
+    settings.agent_mode = "mock"
 
     # Create engine with StaticPool to share connection across threads/sessions
     engine = create_engine(
@@ -41,7 +43,9 @@ def test_db():
     # Restore original settings and engine
     rule_store._engine = original_engine
     settings.database_url = original_db_url
+    settings.agent_mode = original_agent_mode
     engine.dispose()
+
 
 @pytest_asyncio.fixture
 async def client():
@@ -49,6 +53,7 @@ async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
 
 @pytest.fixture
 def mock_llm():

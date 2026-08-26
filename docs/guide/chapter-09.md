@@ -259,6 +259,7 @@ jobs:
 import pytest
 from httpx import AsyncClient
 
+
 @pytest.mark.asyncio
 async def test_health(client):
     response = await client.get("/health")
@@ -284,6 +285,7 @@ except Exception:
 
 # ĐÚNG: Bắt cụ thể + log
 import logging
+
 logger = logging.getLogger(__name__)
 
 try:

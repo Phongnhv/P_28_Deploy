@@ -9,6 +9,7 @@ weight: 3
 ```python
 from langchain_core.tools import tool
 
+
 @tool
 def search_knowledge(query: str) -> str:
     """Tìm kiếm thông tin trong knowledge base.

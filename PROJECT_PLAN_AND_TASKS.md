@@ -148,26 +148,26 @@ Mỗi module được map trực tiếp vào Tech Stack chỉ định:
 class AgentState(TypedDict, total=False):
     # Input
     dataset_id: str
-    warehouse_connection: dict       # Snowflake/BigQuery connection config
+    warehouse_connection: dict  # Snowflake/BigQuery connection config
 
     # Node 1: Profiler
-    dataset_profile: dict            # Per-column stats từ warehouse
-    data_dictionary: dict            # LLM-generated semantic metadata
+    dataset_profile: dict  # Per-column stats từ warehouse
+    data_dictionary: dict  # LLM-generated semantic metadata
 
     # Node 2: Rule Proposer
-    context_payload: dict            # Assembled context (profile + RAG + dictionary)
-    proposed_rules: list             # LLM structured output: list[ProposedRule]
-    approved_rules: list             # Sau HITL gate: chỉ rules APPROVED
+    context_payload: dict  # Assembled context (profile + RAG + dictionary)
+    proposed_rules: list  # LLM structured output: list[ProposedRule]
+    approved_rules: list  # Sau HITL gate: chỉ rules APPROVED
 
     # Node 3: Test Generator
-    ge_expectation_suite: dict       # Great Expectations JSON suite
-    dbt_test_yaml: str               # dbt schema.yml test definitions
-    test_results: list               # Kết quả thực thi từ GE/dbt
+    ge_expectation_suite: dict  # Great Expectations JSON suite
+    dbt_test_yaml: str  # dbt schema.yml test definitions
+    test_results: list  # Kết quả thực thi từ GE/dbt
 
     # Node 4: Anomaly Detector
-    anomalies: list                  # Danh sách anomaly detected
-    dq_score: float                  # Điểm chất lượng tổng thể (0–100)
-    dq_grade: str                    # Xếp hạng: A / B / C / D
+    anomalies: list  # Danh sách anomaly detected
+    dq_score: float  # Điểm chất lượng tổng thể (0–100)
+    dq_grade: str  # Xếp hạng: A / B / C / D
 
     # Metadata
     run_id: str

@@ -61,10 +61,9 @@ def detect_dashboard_anomalies(
         rule_id = sig["target_id"]
 
         # We need rule_title, checked_count, and failed_count from DqResultModel
-        res_model = db.query(DqResultModel).filter(
-            DqResultModel.run_id == run_id,
-            DqResultModel.rule_id == rule_id
-        ).first()
+        res_model = (
+            db.query(DqResultModel).filter(DqResultModel.run_id == run_id, DqResultModel.rule_id == rule_id).first()
+        )
 
         if not res_model:
             # Skip if the target is table/dataset volume/freshness which doesn't map directly to a rule row
@@ -79,7 +78,9 @@ def detect_dashboard_anomalies(
         if checked_count < minimum_checked_count:
             logger.debug(
                 "Bỏ qua signal %s: chỉ kiểm tra %d dòng (< %d), độ tin cậy không đủ.",
-                rule_id, checked_count, minimum_checked_count,
+                rule_id,
+                checked_count,
+                minimum_checked_count,
             )
             continue
 

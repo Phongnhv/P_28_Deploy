@@ -67,7 +67,6 @@ def get_engine():
                 cursor.fetchone()
                 cursor.close()
 
-
     return _engine
 
 
@@ -447,9 +446,7 @@ def _migrate_local_proposal_columns(engine) -> None:
             columns = {column["name"] for column in inspector.get_columns(table_name)}
             for name, sql_type in additions.items():
                 if name not in columns:
-                    connection.exec_driver_sql(
-                        f"ALTER TABLE {table_name} ADD COLUMN {name} {sql_type}"
-                    )
+                    connection.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {name} {sql_type}")
 
 
 def _migrate_local_workflow_columns(engine) -> None:
@@ -495,10 +492,15 @@ def _migrate_local_workflow_columns(engine) -> None:
         "rule_proposals": {"workflow_run_id": "VARCHAR(64)"},
         "ruleset_versions": {"workflow_run_id": "VARCHAR(64)", "stale": "BOOLEAN NOT NULL DEFAULT 0"},
         "dq_runs": {
-            "workflow_run_id": "VARCHAR(64)", "stale": "BOOLEAN NOT NULL DEFAULT 0",
-            "ruleset_version_id": "VARCHAR(64)", "compiler_version": "VARCHAR(64)", "artifact_hash": "VARCHAR(256)",
-            "retry_history_json": "TEXT", "error_message": "TEXT",
-            "dbt_status": "VARCHAR(32)", "metrics_status": "VARCHAR(32)",
+            "workflow_run_id": "VARCHAR(64)",
+            "stale": "BOOLEAN NOT NULL DEFAULT 0",
+            "ruleset_version_id": "VARCHAR(64)",
+            "compiler_version": "VARCHAR(64)",
+            "artifact_hash": "VARCHAR(256)",
+            "retry_history_json": "TEXT",
+            "error_message": "TEXT",
+            "dbt_status": "VARCHAR(32)",
+            "metrics_status": "VARCHAR(32)",
         },
         # Existing local databases predate the provenance field on the ORM
         # model.  Without this additive migration, approving a proposal fails
@@ -508,8 +510,11 @@ def _migrate_local_workflow_columns(engine) -> None:
             "created_at": "DATETIME",
         },
         "dq_results": {
-            "violation_rate": "FLOAT", "duration_ms": "FLOAT", "dbt_status": "VARCHAR(32)",
-            "metrics_status": "VARCHAR(32)", "error_message": "TEXT",
+            "violation_rate": "FLOAT",
+            "duration_ms": "FLOAT",
+            "dbt_status": "VARCHAR(32)",
+            "metrics_status": "VARCHAR(32)",
+            "error_message": "TEXT",
         },
     }
     with engine.begin() as connection:
@@ -588,8 +593,7 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
 
         # 1. Clean pending proposals that have not been approved/merged yet (they have no versions/configs)
         session.query(RuleProposalModel).filter(
-            RuleProposalModel.dataset_id == dataset_id,
-            RuleProposalModel.status.in_(["PROPOSED", "PENDING"])
+            RuleProposalModel.dataset_id == dataset_id, RuleProposalModel.status.in_(["PROPOSED", "PENDING"])
         ).delete(synchronize_session=False)
 
         # 2. Identify the specific rule IDs being proposed in this run
@@ -606,13 +610,13 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
                 RuleConfigurationModel.rule_proposal_id.in_(new_rule_ids)
             ).delete(synchronize_session=False)
 
-            session.query(RuleVersionModel).filter(
-                RuleVersionModel.rule_proposal_id.in_(new_rule_ids)
-            ).delete(synchronize_session=False)
+            session.query(RuleVersionModel).filter(RuleVersionModel.rule_proposal_id.in_(new_rule_ids)).delete(
+                synchronize_session=False
+            )
 
-            session.query(RuleProposalModel).filter(
-                RuleProposalModel.id.in_(new_rule_ids)
-            ).delete(synchronize_session=False)
+            session.query(RuleProposalModel).filter(RuleProposalModel.id.in_(new_rule_ids)).delete(
+                synchronize_session=False
+            )
 
         # 4. Clean proposed rules run logs for idempotency
         session.query(ProposedRuleModel).filter(ProposedRuleModel.run_id == run_id).delete(synchronize_session=False)
@@ -659,7 +663,8 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
                 proposal_basis=rule.get("proposal_basis", "DATA_PROFILE"),
                 evidence=json.dumps(rule.get("evidence", {}), ensure_ascii=False),
                 confidence_breakdown=json.dumps(
-                    rule.get("confidence") or {
+                    rule.get("confidence")
+                    or {
                         "overall": rule.get("confidence_score", 1.0),
                         "evidence_strength": rule.get("confidence_score", 1.0),
                         "business_support": rule.get("confidence_score", 1.0),
@@ -694,7 +699,8 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
                 proposal_basis=rule.get("proposal_basis", "DATA_PROFILE"),
                 evidence=json.dumps(rule.get("evidence", {}), ensure_ascii=False),
                 confidence_breakdown=json.dumps(
-                    rule.get("confidence") or {
+                    rule.get("confidence")
+                    or {
                         "overall": rule.get("confidence_score", 1.0),
                         "evidence_strength": rule.get("confidence_score", 1.0),
                         "business_support": rule.get("confidence_score", 1.0),
@@ -1250,11 +1256,7 @@ def save_semantic_contract(
     contract_id = f"sem-{uuid.uuid4().hex[:12]}"
     try:
         with Session(get_engine()) as session:
-            existing = (
-                session.query(SemanticContractModel)
-                .filter(SemanticContractModel.run_id == run_id)
-                .first()
-            )
+            existing = session.query(SemanticContractModel).filter(SemanticContractModel.run_id == run_id).first()
             if existing:
                 existing.status = status
                 existing.contract_json = json.dumps(contract, ensure_ascii=False)
@@ -1277,4 +1279,3 @@ def save_semantic_contract(
     except Exception as exc:
         logger.warning("save_semantic_contract failed: %s", exc)
         return ""
-

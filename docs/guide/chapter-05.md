@@ -69,10 +69,12 @@ app = FastAPI(
     version="1.0.0",
 )
 
+
 @app.get("/")
 async def root():
     """Health check endpoint."""
     return {"status": "ok", "message": "AI20K Agent API đang chạy"}
+
 
 @app.get("/health")
 async def health_check():
@@ -81,6 +83,7 @@ async def health_check():
         "status": "healthy",
         "version": "1.0.0",
     }
+
 
 @app.post("/api/v1/chat")
 async def chat(request: ChatRequest):
@@ -98,14 +101,16 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 
+
 class ChatRequest(BaseModel):
     """Schema cho request chat."""
+
     message: str = Field(
         ...,  # ... nghĩa là bắt buộc (required)
         min_length=1,
         max_length=5000,
         description="Tin nhắn từ người dùng",
-        examples=["GDP Việt Nam năm 2024 là bao nhiêu?"]
+        examples=["GDP Việt Nam năm 2024 là bao nhiêu?"],
     )
     conversation_id: Optional[str] = Field(
         None,
@@ -116,8 +121,10 @@ class ChatRequest(BaseModel):
         description="Có stream response không",
     )
 
+
 class ChatResponse(BaseModel):
     """Schema cho response chat."""
+
     response: str = Field(description="Câu trả lời từ agent")
     conversation_id: str = Field(description="ID cuộc hội thoại")
     sources: list[str] = Field(
@@ -128,6 +135,7 @@ class ChatResponse(BaseModel):
         default_factory=datetime.now,
         description="Thời gian phản hồi",
     )
+
 
 # Sử dụng trong route
 @app.post("/api/v1/chat", response_model=ChatResponse)
@@ -148,8 +156,10 @@ Pydantic cho phép thêm validation phức tạp với validators:
 ```python
 from pydantic import BaseModel, Field, field_validator
 
+
 class QueryRequest(BaseModel):
     """Request cho agent research."""
+
     query: str = Field(
         ...,
         min_length=3,
@@ -157,10 +167,10 @@ class QueryRequest(BaseModel):
     )
     max_iterations: int = Field(
         default=3,
-        ge=1,   # greater than or equal
+        ge=1,  # greater than or equal
         le=10,  # less than or equal
     )
-    
+
     @field_validator("query")
     @classmethod
     def validate_query(cls, v: str) -> str:
@@ -181,6 +191,7 @@ from fastapi import APIRouter
 # Tạo router cho v1
 v1_router = APIRouter(prefix="/api/v1")
 
+
 @v1_router.post("/chat", response_model=ChatResponse)
 async def chat_v1(request: ChatRequest):
     """Chat endpoint version 1."""
@@ -189,14 +200,17 @@ async def chat_v1(request: ChatRequest):
         conversation_id="id",
     )
 
+
 # Router cho v2 (khi cần thay đổi API mà không break v1)
 v2_router = APIRouter(prefix="/api/v2")
+
 
 @v2_router.post("/chat", response_model=ChatResponseV2)
 async def chat_v2(request: ChatRequestV2):
     """Chat endpoint version 2 — hỗ trợ streaming."""
     # Logic mới...
     pass
+
 
 # Đăng ký routers
 app.include_router(v1_router)
@@ -220,20 +234,26 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from enum import Enum
 
+
 class MessageRole(str, Enum):
     """Vai trò của message."""
+
     USER = "user"
     ASSISTANT = "assistant"
     SYSTEM = "system"
 
+
 class Message(BaseModel):
     """Một tin nhắn trong cuộc hội thoại."""
+
     role: MessageRole
     content: str = Field(..., min_length=1)
     timestamp: Optional[str] = None
 
+
 class ConversationContext(BaseModel):
     """Ngữ cảnh cuộc hội thoại."""
+
     conversation_id: str
     user_id: Optional[str] = None
     history: list[Message] = Field(default_factory=list)
@@ -247,22 +267,24 @@ Pydantic cung cấp nhiều constraint qua `Field`:
 from pydantic import BaseModel, Field
 from typing import Literal
 
+
 class AgentConfig(BaseModel):
     """Cấu hình cho agent."""
+
     model: Literal["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"] = Field(
         default="gpt-4o-mini",
         description="LLM model sử dụng",
     )
     temperature: float = Field(
         default=0.7,
-        ge=0.0,    # >= 0.0
-        le=2.0,    # <= 2.0
+        ge=0.0,  # >= 0.0
+        le=2.0,  # <= 2.0
         description="Nhiệt độ sinh text",
     )
     max_tokens: int = Field(
         default=2048,
-        gt=0,      # > 0
-        le=8192,   # <= 8192
+        gt=0,  # > 0
+        le=8192,  # <= 8192
     )
     tools: list[str] = Field(
         default_factory=lambda: ["web_search"],
@@ -275,18 +297,20 @@ class AgentConfig(BaseModel):
 ```python
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+
 class ResearchRequest(BaseModel):
     """Request cho agent nghiên cứu."""
+
     query: str = Field(..., min_length=3, max_length=2000)
     depth: Literal["shallow", "medium", "deep"] = "medium"
     language: str = "vi"
-    
+
     @field_validator("query")
     @classmethod
     def clean_query(cls, v: str) -> str:
         """Loại bỏ khoảng trắng thừa."""
         return " ".join(v.split())
-    
+
     @field_validator("language")
     @classmethod
     def validate_language(cls, v: str) -> str:
@@ -295,14 +319,13 @@ class ResearchRequest(BaseModel):
         if v not in ["vi", "en"]:
             raise ValueError("Chỉ hỗ trợ ngôn ngữ: vi (tiếng Việt), en (tiếng Anh)")
         return v
-    
+
     @model_validator(mode="after")
     def validate_depth_for_query(self):
         """Deep research chỉ cho query dài."""
         if self.depth == "deep" and len(self.query) < 20:
             raise ValueError(
-                "Deep research yêu cầu query ít nhất 20 ký tự. "
-                "Hãy mô tả chi tiết hơn những gì bạn cần nghiên cứu."
+                "Deep research yêu cầu query ít nhất 20 ký tự. Hãy mô tả chi tiết hơn những gì bạn cần nghiên cứu."
             )
         return self
 ```
@@ -312,20 +335,26 @@ class ResearchRequest(BaseModel):
 ```python
 from pydantic import BaseModel
 
+
 class ToolCall(BaseModel):
     """Một lần gọi tool."""
+
     tool_name: str
     arguments: dict
     result: str | None = None
 
+
 class AgentStep(BaseModel):
     """Một bước xử lý của agent."""
+
     thought: str
     action: str | None = None
     observation: str | None = None
 
+
 class ChatResponse(BaseModel):
     """Response đầy đủ từ agent."""
+
     answer: str
     conversation_id: str
     steps: list[AgentStep] = Field(default_factory=list)
@@ -349,17 +378,18 @@ FastAPI sử dụng `HTTPException` cho error responses:
 ```python
 from fastapi import HTTPException
 
+
 @app.get("/api/v1/conversations/{conversation_id}")
 async def get_conversation(conversation_id: str):
     """Lấy thông tin cuộc hội thoại."""
     conversation = await db.get_conversation(conversation_id)
-    
+
     if not conversation:
         raise HTTPException(
             status_code=404,
             detail=f"Không tìm thấy cuộc hội thoại: {conversation_id}",
         )
-    
+
     return conversation
 ```
 
@@ -374,16 +404,21 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 class AgentError(Exception):
     """Lỗi từ agent."""
+
     def __init__(self, message: str, code: str = "AGENT_ERROR"):
         self.message = message
         self.code = code
         super().__init__(message)
 
+
 class RateLimitError(Exception):
     """Lỗi rate limit."""
+
     pass
+
 
 @app.exception_handler(AgentError)
 async def agent_error_handler(request: Request, exc: AgentError):
@@ -395,8 +430,9 @@ async def agent_error_handler(request: Request, exc: AgentError):
             "error": "agent_error",
             "message": "Agent không thể xử lý yêu cầu. Vui lòng thử lại.",
             "code": exc.code,
-        }
+        },
     )
+
 
 @app.exception_handler(RateLimitError)
 async def rate_limit_handler(request: Request, exc: RateLimitError):
@@ -407,8 +443,9 @@ async def rate_limit_handler(request: Request, exc: RateLimitError):
             "error": "rate_limit",
             "message": "Quá nhiều yêu cầu. Vui lòng thử lại sau 60 giây.",
             "retry_after": 60,
-        }
+        },
     )
+
 
 @app.exception_handler(Exception)
 async def global_error_handler(request: Request, exc: Exception):
@@ -420,7 +457,7 @@ async def global_error_handler(request: Request, exc: Exception):
             "error": "internal_error",
             "message": "Lỗi hệ thống. Vui lòng thử lại sau.",
             # KHÔNG bao gồm str(exc) — có thể leak thông tin nhạy cảm
-        }
+        },
     )
 ```
 
@@ -431,13 +468,16 @@ async def global_error_handler(request: Request, exc: Exception):
 ```python
 from fastapi import HTTPException
 
+
 class ErrorCode:
     """Tập trung định nghĩa error codes."""
+
     AGENT_TIMEOUT = ("agent_timeout", 504, "Agent xử lý quá lâu")
     INVALID_QUERY = ("invalid_query", 400, "Câu hỏi không hợp lệ")
     CONVERSATION_NOT_FOUND = ("not_found", 404, "Không tìm thấy cuộc hội thoại")
     RATE_LIMIT = ("rate_limit", 429, "Quá nhiều yêu cầu")
     MODEL_ERROR = ("model_error", 502, "Lỗi từ LLM provider")
+
 
 def raise_agent_error(code: tuple, detail: str = ""):
     """Helper raise error với cấu trúc chuẩn."""
@@ -447,8 +487,9 @@ def raise_agent_error(code: tuple, detail: str = ""):
         detail={
             "error": error_code,
             "message": detail or message,
-        }
+        },
     )
+
 
 # Sử dụng
 @app.post("/api/v1/chat")
@@ -459,7 +500,7 @@ async def chat(request: ChatRequest):
         raise_agent_error(ErrorCode.AGENT_TIMEOUT)
     except ValueError as e:
         raise_agent_error(ErrorCode.INVALID_QUERY, str(e))
-    
+
     return result
 ```
 
@@ -481,13 +522,13 @@ from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",      # Next.js dev server
-        "http://localhost:3001",      # Alternative port
+        "http://localhost:3000",  # Next.js dev server
+        "http://localhost:3001",  # Alternative port
         "https://ai20k.yourdomain.com",  # Production frontend
     ],
-    allow_credentials=True,           # Cho phép gửi cookies
-    allow_methods=["*"],              # Cho phép tất cả HTTP methods
-    allow_headers=["*"],              # Cho phép tất cả headers
+    allow_credentials=True,  # Cho phép gửi cookies
+    allow_methods=["*"],  # Cho phép tất cả HTTP methods
+    allow_headers=["*"],  # Cho phép tất cả headers
 )
 
 # Cho development — cho phép tất cả origins (KHÔNG dùng trong production)
@@ -512,32 +553,27 @@ from fastapi import Request
 
 logger = logging.getLogger("api")
 
+
 @app.middleware("http")
 async def logging_middleware(request: Request, call_next):
     """Log mọi request với thời gian xử lý."""
     start_time = time.time()
-    
+
     # Log request
     logger.info(f"→ {request.method} {request.url.path}")
-    
+
     try:
         response = await call_next(request)
     except Exception as e:
         # Log lỗi
         duration = (time.time() - start_time) * 1000
-        logger.error(
-            f"✗ {request.method} {request.url.path} "
-            f"ERROR {duration:.0f}ms — {str(e)}"
-        )
+        logger.error(f"✗ {request.method} {request.url.path} ERROR {duration:.0f}ms — {str(e)}")
         raise
-    
+
     # Log response
     duration = (time.time() - start_time) * 1000
-    logger.info(
-        f"← {request.method} {request.url.path} "
-        f"{response.status_code} {duration:.0f}ms"
-    )
-    
+    logger.info(f"← {request.method} {request.url.path} {response.status_code} {duration:.0f}ms")
+
     # Thêm timing header
     response.headers["X-Process-Time"] = f"{duration:.0f}ms"
     return response
@@ -556,25 +592,20 @@ rate_limits: dict[str, list[float]] = defaultdict(list)
 RATE_LIMIT = 30  # 30 requests
 RATE_WINDOW = 60  # per 60 seconds
 
+
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     """Giới hạn số request per IP."""
     client_ip = request.client.host
-    
+
     # Clean old entries
     now = time.time()
-    rate_limits[client_ip] = [
-        t for t in rate_limits[client_ip]
-        if now - t < RATE_WINDOW
-    ]
-    
+    rate_limits[client_ip] = [t for t in rate_limits[client_ip] if now - t < RATE_WINDOW]
+
     # Check limit
     if len(rate_limits[client_ip]) >= RATE_LIMIT:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Quá nhiều yêu cầu. Thử lại sau {RATE_WINDOW} giây."
-        )
-    
+        raise HTTPException(status_code=429, detail=f"Quá nhiều yêu cầu. Thử lại sau {RATE_WINDOW} giây.")
+
     rate_limits[client_ip].append(now)
     return await call_next(request)
 ```
@@ -596,16 +627,17 @@ from fastapi.responses import StreamingResponse
 import asyncio
 import json
 
+
 @app.post("/api/v1/chat/stream")
 async def chat_stream(request: ChatRequest):
     """Stream response từ agent."""
-    
+
     async def event_generator():
         """Generator tạo SSE events."""
         try:
             # Gửi status bắt đầu
             yield f"data: {json.dumps({'type': 'start'})}\n\n"
-            
+
             # Stream từ agent
             async for chunk in agent.astream(request.message):
                 event = {
@@ -613,17 +645,17 @@ async def chat_stream(request: ChatRequest):
                     "content": chunk,
                 }
                 yield f"data: {json.dumps(event)}\n\n"
-            
+
             # Gửi status kết thúc
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
-            
+
         except Exception as e:
             error_event = {
                 "type": "error",
                 "message": "Lỗi khi xử lý. Vui lòng thử lại.",
             }
             yield f"data: {json.dumps(error_event)}\n\n"
-    
+
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
@@ -642,10 +674,11 @@ LangGraph hỗ trợ streaming qua `astream` và `astream_events`:
 ```python
 from langchain_core.messages import HumanMessage
 
+
 @app.post("/api/v1/agent/stream")
 async def agent_stream(request: ChatRequest):
     """Stream response từ LangGraph agent."""
-    
+
     async def stream_generator():
         """Stream tokens từ LangGraph agent."""
         config = {
@@ -653,33 +686,31 @@ async def agent_stream(request: ChatRequest):
                 "thread_id": request.conversation_id or "default",
             }
         }
-        
-        inputs = {
-            "messages": [HumanMessage(content=request.message)]
-        }
-        
+
+        inputs = {"messages": [HumanMessage(content=request.message)]}
+
         async for event in agent.astream_events(inputs, config, version="v2"):
             kind = event.get("event")
-            
+
             if kind == "on_chat_model_stream":
                 # Token mới từ LLM
                 token = event["data"]["chunk"].content
                 if token:
                     yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
-            
+
             elif kind == "on_tool_start":
                 # Agent bắt đầu gọi tool
                 tool_name = event.get("name", "unknown")
                 yield f"data: {json.dumps({'type': 'tool_start', 'tool': tool_name})}\n\n"
-            
+
             elif kind == "on_tool_end":
                 # Tool hoàn thành
                 tool_name = event.get("name", "unknown")
                 output = str(event["data"].get("output", ""))[:200]
                 yield f"data: {json.dumps({'type': 'tool_end', 'tool': tool_name, 'preview': output})}\n\n"
-        
+
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
-    
+
     return StreamingResponse(
         stream_generator(),
         media_type="text/event-stream",
@@ -702,12 +733,14 @@ from langgraph.graph import StateGraph
 
 app = FastAPI(title="AI20K Agent API")
 
+
 # Agent singleton — chia sẻ giữa requests
 class AgentManager:
     """Quản lý agent instance."""
+
     def __init__(self):
         self._agent = None
-    
+
     async def get_agent(self):
         """Lazy initialization."""
         if self._agent is None:
@@ -719,24 +752,24 @@ class AgentManager:
             graph.add_node("synthesize", synthesize_node)
             graph.add_node("review", review_node)
             graph.add_node("finalize", finalize_node)
-            
+
             graph.add_edge(START, "analyze")
             graph.add_edge("analyze", "plan")
             graph.add_edge("plan", "research")
             graph.add_edge("research", "synthesize")
             graph.add_edge("synthesize", "review")
             graph.add_conditional_edges(
-                "review",
-                should_continue_research,
-                {"research": "research", "finalize": "finalize"}
+                "review", should_continue_research, {"research": "research", "finalize": "finalize"}
             )
             graph.add_edge("finalize", END)
-            
+
             self._agent = graph.compile()
-        
+
         return self._agent
 
+
 agent_manager = AgentManager()
+
 
 async def get_agent():
     """Dependency injection cho agent."""
@@ -751,6 +784,7 @@ Lifespan pattern cho phép khởi tạo và dọn dẹp tài nguyên khi app sta
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Khởi tạo tài nguyên khi app start, dọn dẹp khi stop."""
@@ -759,31 +793,35 @@ async def lifespan(app: FastAPI):
     app.state.agent = await initialize_agent()
     app.state.vectorstore = await initialize_vectorstore()
     logger.info("Agent và VectorStore đã sẵn sàng")
-    
+
     yield  # App chạy ở đây
-    
+
     # Shutdown
     logger.info("Shutting down...")
     await cleanup_resources()
+
 
 app = FastAPI(
     title="AI20K Agent API",
     lifespan=lifespan,
 )
 
+
 # Truy cập tài nguyên qua request.app.state
 @app.post("/api/v1/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """Chat endpoint sử dụng agent từ lifespan."""
     from langchain_core.messages import HumanMessage
-    
+
     agent = request.app.state.agent
-    
-    result = await agent.ainvoke({
-        "messages": [HumanMessage(content=request.message)],
-        "query": request.message,
-    })
-    
+
+    result = await agent.ainvoke(
+        {
+            "messages": [HumanMessage(content=request.message)],
+            "query": request.message,
+        }
+    )
+
     return ChatResponse(
         response=result.get("draft", "Không thể tạo câu trả lời"),
         conversation_id=request.conversation_id or "new",
@@ -812,10 +850,12 @@ logger = logging.getLogger("ai20k_api")
 
 # ==================== SCHEMAS ====================
 
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=5000)
     conversation_id: Optional[str] = None
     stream: bool = False
+
 
 class ChatResponse(BaseModel):
     response: str
@@ -823,25 +863,30 @@ class ChatResponse(BaseModel):
     sources: list[str] = []
     timestamp: datetime = Field(default_factory=datetime.now)
 
+
 class HealthResponse(BaseModel):
     status: str
     version: str
     agent_ready: bool
 
+
 # ==================== LIFESPAN ====================
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Khởi tạo AI20K Agent API...")
     from agent import build_graph
+
     app.state.agent = build_graph()
     logger.info("Agent đã sẵn sàng!")
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Đóng API...")
+
 
 # ==================== APP ====================
 
@@ -862,6 +907,7 @@ app.add_middleware(
 
 # ==================== ROUTES ====================
 
+
 @app.get("/health", response_model=HealthResponse)
 async def health():
     return HealthResponse(
@@ -870,38 +916,42 @@ async def health():
         agent_ready=hasattr(app.state, "agent"),
     )
 
+
 @app.post("/api/v1/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """Chat với agent — trả về response hoàn chỉnh."""
     from langchain_core.messages import HumanMessage
-    
+
     agent = app.state.agent
-    
+
     try:
-        result = await agent.ainvoke({
-            "messages": [HumanMessage(content=request.message)],
-            "query": request.message,
-        })
+        result = await agent.ainvoke(
+            {
+                "messages": [HumanMessage(content=request.message)],
+                "query": request.message,
+            }
+        )
     except TimeoutError:
         raise HTTPException(status_code=504, detail="Agent timeout")
     except Exception as e:
         logger.error(f"Agent error: {e}", exc_info=True)
         raise HTTPException(status_code=503, detail="Agent không khả dụng")
-    
+
     return ChatResponse(
         response=result.get("draft", "Không thể tạo câu trả lời"),
         conversation_id=request.conversation_id or "conv-001",
         sources=result.get("search_results", []),
     )
 
+
 @app.post("/api/v1/chat/stream")
 async def chat_stream(request: ChatRequest):
     """Chat với agent — stream response."""
     import json
     from langchain_core.messages import HumanMessage
-    
+
     agent = app.state.agent
-    
+
     async def generate():
         try:
             async for event in agent.astream_events(
@@ -913,17 +963,19 @@ async def chat_stream(request: ChatRequest):
                     token = event["data"]["chunk"].content
                     if token:
                         yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
-            
+
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-    
+
     return StreamingResponse(generate(), media_type="text/event-stream")
+
 
 # ==================== RUN ====================
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
         "main:app",
         host="0.0.0.0",

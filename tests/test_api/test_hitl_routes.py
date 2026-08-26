@@ -20,6 +20,7 @@ from src.main import app
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(autouse=True)
 def _patch_engine(tmp_path):
     """Thay thế DB engine bằng SQLite file tạm — dùng file để cross-thread share được."""
@@ -27,9 +28,7 @@ def _patch_engine(tmp_path):
     from src.services.rule_store import Base
 
     db_file = tmp_path / "test_api.db"
-    test_engine = create_engine(
-        f"sqlite:///{db_file}", connect_args={"check_same_thread": False}
-    )
+    test_engine = create_engine(f"sqlite:///{db_file}", connect_args={"check_same_thread": False})
     Base.metadata.create_all(test_engine)
 
     # Set _engine trực tiếp — thread pool workers cũng thấy engine đúng
@@ -49,6 +48,7 @@ async def client():
 
 def _seed_run(run_id: str, dataset_id: str = "yellow_tripdata") -> None:
     from src.services.rule_store import create_run, update_run_status
+
     create_run(run_id, dataset_id)
     update_run_status(run_id, "DONE")
 
@@ -88,10 +88,10 @@ def _seed_rule(run_id: str, rule_id: str, **kwargs) -> dict[str, Any]:
     return _seed_rules(run_id, [kwargs])[0]
 
 
-
 # ---------------------------------------------------------------------------
 # GET /dq/runs/{run_id}/rules
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_list_rules_unknown_run_returns_404(client):
@@ -103,6 +103,7 @@ async def test_list_rules_unknown_run_returns_404(client):
 async def test_list_rules_returns_empty_when_running(client):
     """Run còn RUNNING → trả [] không phải 404."""
     from src.services.rule_store import create_run
+
     run_id = uuid.uuid4().hex
     create_run(run_id, "yellow_tripdata")  # status=QUEUED, không có rules
 
@@ -169,6 +170,7 @@ async def test_list_rules_filter_by_dimension(client):
 # ---------------------------------------------------------------------------
 # PATCH /dq/runs/{run_id}/rules/{rule_id}
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_patch_rule_unknown_run_returns_404(client):
@@ -255,6 +257,7 @@ async def test_patch_rule_status_persists_after_get(client):
 # POST /dq/runs/{run_id}/rules/bulk-review
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_bulk_review_unknown_run_returns_404(client):
     r = await client.post(
@@ -288,6 +291,7 @@ async def test_bulk_review_with_bad_id_returns_not_found_list(client):
 # ---------------------------------------------------------------------------
 # GET /dq/runs/{run_id}/review-summary
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_review_summary_unknown_run_returns_404(client):
@@ -325,6 +329,7 @@ async def test_review_summary_counts_match(client):
 # ---------------------------------------------------------------------------
 # GET /dq/runs/{run_id}/approved-rules
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_approved_rules_only_returns_approved(client):

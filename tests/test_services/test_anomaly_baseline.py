@@ -37,7 +37,10 @@ def test_baseline_uses_sliding_window_only(test_db):
             run_id = f"hist_{index:03d}"
             session.add(
                 DqRunModel(
-                    id=run_id, job_id="job_w", dataset_id="ds_w", rule_ids="[]",
+                    id=run_id,
+                    job_id="job_w",
+                    dataset_id="ds_w",
+                    rule_ids="[]",
                     status="SUCCEEDED",
                     # index càng lớn càng mới
                     created_at=base_time.replace(microsecond=0) + __import__("datetime").timedelta(minutes=index),
@@ -45,21 +48,35 @@ def test_baseline_uses_sliding_window_only(test_db):
             )
             session.add(
                 DqResultModel(
-                    run_id=run_id, rule_id="rule_w", rule_title="W", status="PASS",
-                    checked_count=1000, failed_count=index, failed_row_ids="[]",
+                    run_id=run_id,
+                    rule_id="rule_w",
+                    rule_title="W",
+                    status="PASS",
+                    checked_count=1000,
+                    failed_count=index,
+                    failed_row_ids="[]",
                 )
             )
 
         session.add(
             DqRunModel(
-                id="run_now", job_id="job_w", dataset_id="ds_w", rule_ids="[]",
-                status="SUCCEEDED", created_at=base_time + __import__("datetime").timedelta(hours=5),
+                id="run_now",
+                job_id="job_w",
+                dataset_id="ds_w",
+                rule_ids="[]",
+                status="SUCCEEDED",
+                created_at=base_time + __import__("datetime").timedelta(hours=5),
             )
         )
         session.add(
             DqResultModel(
-                run_id="run_now", rule_id="rule_w", rule_title="W", status="PASS",
-                checked_count=1000, failed_count=50, failed_row_ids="[]",
+                run_id="run_now",
+                rule_id="rule_w",
+                rule_title="W",
+                status="PASS",
+                checked_count=1000,
+                failed_count=50,
+                failed_row_ids="[]",
             )
         )
         session.commit()

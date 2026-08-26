@@ -1,15 +1,12 @@
 """Unit tests for Anomaly Signal Aggregator (4 scenarios)."""
 
-import pytest
 from src.detector_config import get_detector_config
 
 
 def test_aggregator_scenario_1_single_family_gate():
     """Scenario 1: Single family spike without 2nd family falls back from ANOMALY to WATCH."""
     config = get_detector_config("anomaly-v1")
-    signals = [
-        {"family": "STATISTICAL", "score": 0.90, "reliability": 1.0}
-    ]
+    signals = [{"family": "STATISTICAL", "score": 0.90, "reliability": 1.0}]
     families = {s["family"] for s in signals}
     # Gate check: require at least 2 independent families for ANOMALY decision
     is_anomaly = len(families) >= config.aggregation_min_independent_families and signals[0]["score"] >= 0.70
@@ -24,7 +21,9 @@ def test_aggregator_scenario_2_two_independent_families():
         {"family": "VOLUME", "score": 0.80, "reliability": 1.0},
     ]
     families = {s["family"] for s in signals}
-    is_anomaly = len(families) >= config.aggregation_min_independent_families and max(s["score"] for s in signals) >= 0.70
+    is_anomaly = (
+        len(families) >= config.aggregation_min_independent_families and max(s["score"] for s in signals) >= 0.70
+    )
     assert is_anomaly
 
 

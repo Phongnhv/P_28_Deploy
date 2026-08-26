@@ -2,12 +2,20 @@ import logging
 import os
 import sys
 from typing import Literal
+
 from dotenv import load_dotenv
+from langgraph.graph import END, StateGraph
+
+from src.agents.state import AgentState
 
 load_dotenv()
 
 # Only enable Phoenix OpenTelemetry tracing when explicitly requested and not in test/disabled mode
-if "pytest" not in sys.modules and not os.getenv("DISABLE_TRACING") and (os.getenv("ENABLE_PHOENIX") == "true" or os.getenv("PHOENIX_COLLECTOR_ENDPOINT")):
+if (
+    "pytest" not in sys.modules
+    and not os.getenv("DISABLE_TRACING")
+    and (os.getenv("ENABLE_PHOENIX") == "true" or os.getenv("PHOENIX_COLLECTOR_ENDPOINT"))
+):
     try:
         from openinference.instrumentation.langchain import LangChainInstrumentor
         from opentelemetry import trace
@@ -18,18 +26,11 @@ if "pytest" not in sys.modules and not os.getenv("DISABLE_TRACING") and (os.gete
         phoenix_host = "localhost" if os.name == "nt" or not os.path.exists("/.dockerenv") else "host.docker.internal"
         phoenix_endpoint = os.getenv("PHOENIX_COLLECTOR_ENDPOINT") or f"http://{phoenix_host}:6006/v1/traces"
         tracer_provider = TracerProvider()
-        tracer_provider.add_span_processor(
-            BatchSpanProcessor(OTLPSpanExporter(endpoint=phoenix_endpoint))
-        )
+        tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=phoenix_endpoint)))
         trace.set_tracer_provider(tracer_provider)
         LangChainInstrumentor().instrument()
     except Exception:
         pass
-
-
-from langgraph.graph import END, StateGraph
-
-from src.agents.state import AgentState
 
 
 # ---------------------------------------------------------------------------
@@ -78,8 +79,7 @@ def build_proposal_graph() -> StateGraph:
 
     # Entry point động
     graph.set_conditional_entry_point(
-        _route_entry,
-        {"rule_candidate_builder": "rule_candidate_builder", "raw_profiler": "raw_profiler"}
+        _route_entry, {"rule_candidate_builder": "rule_candidate_builder", "raw_profiler": "raw_profiler"}
     )
 
     # raw_profiler → profiler_digest (hoặc END nếu lỗi)
@@ -92,8 +92,16 @@ def build_proposal_graph() -> StateGraph:
     # profiler_digest → dataset_understanding (hoặc END nếu lỗi)
     graph.add_conditional_edges(
         "profiler_digest",
-        lambda state: END if state.get("error") else ("dataset_understanding" if state.get("normalized_data_dictionary") else "data_dictionary_generator"),
-        {"dataset_understanding": "dataset_understanding", "data_dictionary_generator": "data_dictionary_generator", END: END},
+        lambda state: (
+            END
+            if state.get("error")
+            else ("dataset_understanding" if state.get("normalized_data_dictionary") else "data_dictionary_generator")
+        ),
+        {
+            "dataset_understanding": "dataset_understanding",
+            "data_dictionary_generator": "data_dictionary_generator",
+            END: END,
+        },
     )
 
     graph.add_conditional_edges(
@@ -152,9 +160,11 @@ def build_dashboard_proposal_graph() -> StateGraph:
     graph.add_edge("rule_proposer", END)
     return graph.compile()
 
+
 # ---------------------------------------------------------------------------
 # Run 2: Execution Graph (Test Generator ➔ Validate ➔ Run ➔ Persist)
 # ---------------------------------------------------------------------------
+
 
 def _should_run_or_fail(state: AgentState) -> str:
     """Route the dbt artifact to execution or terminal failure."""
@@ -218,6 +228,7 @@ def build_execution_graph() -> StateGraph:
 # Run 3: Anomaly Graph (Detector ➔ Hypothesis ➔ Persist)
 # ---------------------------------------------------------------------------
 
+
 def build_anomaly_graph(investigation_mode: Literal["deepagent", "legacy"] | None = None) -> StateGraph:
     """Xây dựng graph cho Run 3 (Anomaly Analysis Graph).
 
@@ -228,19 +239,21 @@ def build_anomaly_graph(investigation_mode: Literal["deepagent", "legacy"] | Non
     Luồng:
       anomaly_detector ➔ hypothesis_agent ➔ persist_analysis ➔ report_writer ➔ END
     """
-    from src.config import get_settings
     from src.agents.nodes.anomaly_detector_node import anomaly_detector_node
     from src.agents.nodes.persist_analysis_node import persist_analysis_node
     from src.agents.nodes.report_writer_node import report_writer_node
     from src.agents.state import AnomalyGraphState
+    from src.config import get_settings
 
     mode = investigation_mode or get_settings().anomaly_investigation_mode
 
     if mode == "legacy":
         from src.agents.nodes.steward_insights_node import steward_insights_node
+
         hypothesis_agent = steward_insights_node
     else:
         from src.agents.nodes.anomaly_investigation_node import anomaly_investigation_node
+
         hypothesis_agent = anomaly_investigation_node
 
     graph = StateGraph(AnomalyGraphState)
@@ -269,6 +282,7 @@ logger = logging.getLogger("graph_runner")
 #: dưới bắt buộc truyền dataset_id — trước đây cả ba đều mặc định về dataset NYC taxi nên
 #: caller quên truyền sẽ âm thầm chạy trên dataset sai mà không có cảnh báo nào.
 DEFAULT_CLI_DATASET_ID = "dataset-nyc-yellow-taxi-50k"
+
 
 async def run_proposal_graph(
     dataset_id: str,
@@ -433,7 +447,7 @@ async def run_execution_graph(
             "results": results,
             "anomalies": anomalies,
             "dq_score": final_state.get("dq_score", 100.0),
-            "anomaly_decision": decision_data
+            "anomaly_decision": decision_data,
         }
 
     except Exception as exc:
@@ -456,10 +470,12 @@ async def run_anomaly_graph(
         investigation_mode: "deepagent" hoặc "legacy". Nếu None, lấy từ config.
     """
     import uuid
+
+    from sqlalchemy.orm import Session
+
     from src.config import get_settings
     from src.models.database import DqRunModel
     from src.services.rule_store import get_engine
-    from sqlalchemy.orm import Session
 
     settings = get_settings()
     active_mode = investigation_mode or settings.anomaly_investigation_mode
@@ -509,11 +525,9 @@ async def run_anomaly_graph(
         signals = final_state.get("signal_observations", [])
         hypotheses = final_state.get("hypotheses", [])
         # report_writer_node sets steward_report_path in state and metadata
-        steward_report_path = (
-            final_state.get("steward_report_path")
-            or final_state.get("metadata", {}).get("steward_report_path")
+        steward_report_path = final_state.get("steward_report_path") or final_state.get("metadata", {}).get(
+            "steward_report_path"
         )
-        llm_used = final_state.get("metadata", {}).get("steward_report_llm_used", False)
         trace_path = final_state.get("metadata", {}).get("investigation_trace_path", "")
 
         logger.info(
@@ -568,10 +582,14 @@ async def main():
         await run_execution_graph(dataset_id=dataset_id)
     elif mode in ("3", "anomaly", "investigate"):
         print(f"🚀 Lựa chọn: CHẠY RUN 3 (Anomaly Investigation Graph) cho dataset {dataset_id}")
-        print(f"   ⚙️ Investigation Mode: [{inv_mode.upper()}] (Sử dụng {'Deep Agent + Tools + Skills' if inv_mode == 'deepagent' else 'Legacy Single-Shot Prompt'})")
+        print(
+            f"   ⚙️ Investigation Mode: [{inv_mode.upper()}] (Sử dụng {'Deep Agent + Tools + Skills' if inv_mode == 'deepagent' else 'Legacy Single-Shot Prompt'})"
+        )
         res = await run_anomaly_graph(dataset_id=dataset_id, investigation_mode=inv_mode)
         print("\n" + "=" * 70)
-        print(f"🎉 HOÀN TẤT RUN 3 [{inv_mode.upper()}]: Quyết định = {res.get('anomaly_decision', {}).get('decision')} | Số giả thuyết = {len(res.get('hypotheses', []))}")
+        print(
+            f"🎉 HOÀN TẤT RUN 3 [{inv_mode.upper()}]: Quyết định = {res.get('anomaly_decision', {}).get('decision')} | Số giả thuyết = {len(res.get('hypotheses', []))}"
+        )
         print("=" * 70 + "\n")
     else:
         print(f"🚀 Lựa chọn mặc định: CHẠY RUN 1 ➔ DUYỆT & PUBLISH ➔ CHẠY RUN 2 cho dataset {dataset_id}")
@@ -594,4 +612,5 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(main())

@@ -31,7 +31,7 @@ Không có câu hỏi mở hóc hại. Tất cả các yêu cầu về logic li�
 2. Thêm 2 trường vào `RuleParameters`:
    ```python
    target_column: str | None = None  # Cột thứ 2 để so sánh (VD: "tpep_dropoff_datetime")
-   operator: str | None = None       # Toán tử so sánh: "<=", ">=", "<", ">", "=="
+   operator: str | None = None  # Toán tử so sánh: "<=", ">=", "<", ">", "=="
    ```
 3. Cập nhật `@model_validator(mode="after")` trong `ProposedRule`:
    - Khi `rule_type == RuleType.CROSS_FIELD_COMPARISON`, kiểm tra và yêu cầu bắt buộc `target_column` và `operator` không được `None`.

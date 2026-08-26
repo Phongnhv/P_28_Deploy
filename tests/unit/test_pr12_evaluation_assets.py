@@ -52,6 +52,3 @@ def test_pr12_video_rehearsal_script_checkpoints():
     assert "1:20 – 1:55" in content or "1:20–1:55" in content
     assert "1:55 – 2:30" in content or "1:55–2:30" in content
     assert "2:30 – 3:00" in content or "2:30–3:00" in content
-
-
-

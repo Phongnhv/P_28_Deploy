@@ -598,20 +598,11 @@ Các detector chạy độc lập và trả cùng một schema.
 ```python
 class SignalObservation(BaseModel):
     signal_id: str
-    family: Literal[
-        "BUSINESS_RULE",
-        "STATISTICAL",
-        "ML",
-        "VOLUME",
-        "FRESHNESS",
-        "SCHEMA",
-        "CORRELATION",
-        "EXECUTION"
-    ]
+    family: Literal["BUSINESS_RULE", "STATISTICAL", "ML", "VOLUME", "FRESHNESS", "SCHEMA", "CORRELATION", "EXECUTION"]
     target_type: Literal["DATASET", "TABLE", "COLUMN", "RULE"]
     target_id: str
-    score: float                 # 0..1
-    reliability: float           # 0..1
+    score: float  # 0..1
+    reliability: float  # 0..1
     direction: str | None
     observed_value: float | str | None
     baseline: dict | None

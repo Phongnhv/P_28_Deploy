@@ -11,13 +11,14 @@ State là "bộ nhớ" của agent, truyền giữa các nodes:
 ```python
 from typing import TypedDict
 
+
 class AgentState(TypedDict, total=False):
-    query: str        # Input từ user
-    context: str      # Context từ RAG
-    analysis: str     # Kết quả phân tích
-    response: str     # Response cuối cùng
-    error: str        # Error nếu có
-    metadata: dict    # Extra info
+    query: str  # Input từ user
+    context: str  # Context từ RAG
+    analysis: str  # Kết quả phân tích
+    response: str  # Response cuối cùng
+    error: str  # Error nếu có
+    metadata: dict  # Extra info
 ```
 
 ## Nguyên tắc thiết kế State
@@ -30,6 +31,7 @@ class AgentState(TypedDict, total=False):
     query: str
     response: str
 
+
 # ❌ TỆ — Không dùng Pydantic cho LangGraph state
 class AgentState(BaseModel):
     query: str  # LangGraph expects TypedDict
@@ -39,9 +41,9 @@ class AgentState(BaseModel):
 
 ```python
 class AgentState(TypedDict, total=False):
-    query: str           # Input (luôn có)
-    context: str         # Optional — chỉ có khi dùng RAG
-    error: str           # Optional — chỉ có khi lỗi
+    query: str  # Input (luôn có)
+    context: str  # Optional — chỉ có khi dùng RAG
+    error: str  # Optional — chỉ có khi lỗi
 ```
 
 ### 3. Chỉ thêm fields thực sự cần

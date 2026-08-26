@@ -115,8 +115,8 @@ NORMAL_STATE = {
 def _mock_db(run=SAMPLE_DQ_RUN, results=SAMPLE_RESULTS):
     return patch(
         "src.agents.nodes.report_writer_node.report_writer_node.__wrapped__"
-        if hasattr(report_writer_node, "__wrapped__") else
-        "src.services.report_renderer._load_execution_data",
+        if hasattr(report_writer_node, "__wrapped__")
+        else "src.services.report_renderer._load_execution_data",
         return_value=(run, results),
     )
 
@@ -124,7 +124,8 @@ def _mock_db(run=SAMPLE_DQ_RUN, results=SAMPLE_RESULTS):
 def _mock_load(run=SAMPLE_DQ_RUN, results=SAMPLE_RESULTS):
     return patch(
         "src.agents.nodes.report_writer_node._build_data_context.__globals__"
-        if False else "src.services.report_renderer._load_execution_data",
+        if False
+        else "src.services.report_renderer._load_execution_data",
         return_value=(run, results),
     )
 
@@ -132,6 +133,7 @@ def _mock_load(run=SAMPLE_DQ_RUN, results=SAMPLE_RESULTS):
 # ---------------------------------------------------------------------------
 # _strip_code_fences
 # ---------------------------------------------------------------------------
+
 
 def test_strip_code_fences_with_markdown():
     raw = "```markdown\n# Báo Cáo Data Steward\nNội dung\n```"
@@ -162,11 +164,9 @@ def test_strip_code_fences_empty_fences():
 # _build_data_context
 # ---------------------------------------------------------------------------
 
+
 def test_build_data_context_contains_key_info():
-    ctx = _build_data_context(
-        EXECUTION_RUN_ID, DATASET_ID, SAMPLE_STATE,
-        SAMPLE_DQ_RUN, SAMPLE_RESULTS
-    )
+    ctx = _build_data_context(EXECUTION_RUN_ID, DATASET_ID, SAMPLE_STATE, SAMPLE_DQ_RUN, SAMPLE_RESULTS)
     assert EXECUTION_RUN_ID in ctx
     assert "ANOMALY" in ctx
     assert "passenger_count" in ctx  # rule_id in failed results
@@ -175,16 +175,14 @@ def test_build_data_context_contains_key_info():
 
 
 def test_build_data_context_normal_decision():
-    ctx = _build_data_context(
-        EXECUTION_RUN_ID, DATASET_ID, NORMAL_STATE,
-        SAMPLE_DQ_RUN, []
-    )
+    ctx = _build_data_context(EXECUTION_RUN_ID, DATASET_ID, NORMAL_STATE, SAMPLE_DQ_RUN, [])
     assert "NORMAL" in ctx
 
 
 # ---------------------------------------------------------------------------
 # report_writer_node — LLM success path
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_report_writer_llm_success(tmp_path):
@@ -205,7 +203,10 @@ async def test_report_writer_llm_success(tmp_path):
     with (
         patch("src.services.report_renderer._load_execution_data", return_value=(SAMPLE_DQ_RUN, SAMPLE_RESULTS)),
         patch("src.agents.nodes.report_writer_node.get_llm", return_value=mock_llm),
-        patch("src.agents.nodes.report_writer_node._write_report_file", return_value=str(tmp_path / "steward_report_test.md")) as mock_write,
+        patch(
+            "src.agents.nodes.report_writer_node._write_report_file",
+            return_value=str(tmp_path / "steward_report_test.md"),
+        ) as mock_write,
     ):
         output = await report_writer_node(SAMPLE_STATE)
 
@@ -319,13 +320,14 @@ async def test_report_writer_code_fences_stripped(tmp_path):
 # render_steward_report_vi — Vietnamese fallback template
 # ---------------------------------------------------------------------------
 
+
 def test_vi_fallback_contains_vietnamese_headings():
     with patch("src.services.report_renderer._load_execution_data", return_value=(SAMPLE_DQ_RUN, SAMPLE_RESULTS)):
         md = render_steward_report_vi(EXECUTION_RUN_ID, DATASET_ID, SAMPLE_STATE)
 
     assert "# Báo Cáo Data Steward" in md
     assert "Thông Tin Phiên Chạy" in md
-    assert "Chi Tiết Rules Thất Bại" in md          # Section 3 heading
+    assert "Chi Tiết Rules Thất Bại" in md  # Section 3 heading
     assert "Kết Luận Phát Hiện Bất Thường" in md
     assert "Giả Thuyết Nguyên Nhân" in md
 

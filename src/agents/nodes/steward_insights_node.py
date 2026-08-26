@@ -23,16 +23,31 @@ logger = logging.getLogger(__name__)
 
 class HypothesisItem(BaseModel):
     hypothesis_type: Literal[
-        "SYSTEM_BUG", "SCHEMA_CHANGE", "UPSTREAM_DATA_DRIFT",
-        "ML_MODEL_DRIFT", "OUTLIER", "DATA_QUALITY_VIOLATION", "UNKNOWN"
+        "SYSTEM_BUG",
+        "SCHEMA_CHANGE",
+        "UPSTREAM_DATA_DRIFT",
+        "ML_MODEL_DRIFT",
+        "OUTLIER",
+        "DATA_QUALITY_VIOLATION",
+        "UNKNOWN",
     ] = Field(description="Loại giả thuyết chẩn đoán nguyên nhân gốc rễ.")
     summary: str = Field(description="Tóm tắt giả thuyết giải thích nguyên nhân bất thường.")
     confidence: float = Field(description="Độ tin cậy của giả thuyết (0.0 đến 1.0).")
-    supporting_signal_ids: list[str] = Field(default_factory=list, description="Danh sách signal_id hỗ trợ giả thuyết này.")
-    contradicting_signal_ids: list[str] = Field(default_factory=list, description="Danh sách signal_id mâu thuẫn với giả thuyết này.")
-    evidence_refs: list[str] = Field(default_factory=list, description="Chứng cứ tham chiếu (tên cột, bảng, hoặc rule_id).")
-    recommended_checks: list[str] = Field(default_factory=list, description="Các đề xuất kiểm tra thủ công hoặc hành động tiếp theo.")
-    missing_evidence: str | None = Field(None, description="Các chứng cứ/metrics còn thiếu chưa có để làm rõ giả thuyết.")
+    supporting_signal_ids: list[str] = Field(
+        default_factory=list, description="Danh sách signal_id hỗ trợ giả thuyết này."
+    )
+    contradicting_signal_ids: list[str] = Field(
+        default_factory=list, description="Danh sách signal_id mâu thuẫn với giả thuyết này."
+    )
+    evidence_refs: list[str] = Field(
+        default_factory=list, description="Chứng cứ tham chiếu (tên cột, bảng, hoặc rule_id)."
+    )
+    recommended_checks: list[str] = Field(
+        default_factory=list, description="Các đề xuất kiểm tra thủ công hoặc hành động tiếp theo."
+    )
+    missing_evidence: str | None = Field(
+        None, description="Các chứng cứ/metrics còn thiếu chưa có để làm rõ giả thuyết."
+    )
     limitations: str | None = Field(None, description="Hạn chế hoặc rủi ro của giả thuyết này.")
 
 
@@ -60,20 +75,22 @@ def _generate_fallback_hypotheses(
         f"Có {len(failed_rules)} quy tắc kiểm thử bị vi phạm nghiêm trọng."
     )
 
-    return [{
-        "hypothesis_type": "DATA_QUALITY_VIOLATION",
-        "summary": fallback_summary,
-        "confidence": 0.70,
-        "supporting_signal_ids": supporting_sigs,
-        "contradicting_signal_ids": [],
-        "evidence_refs": evidence_refs,
-        "recommended_checks": [
-            "Kiểm tra lại dữ liệu nguồn ở các cột hoặc bảng bị cảnh báo lỗi.",
-            "Xác thực xem có sự thay đổi đột biến ở pipeline tải dữ liệu (upstream ingestion pipeline) hay không."
-        ],
-        "missing_evidence": "Lịch sử log chi tiết của hệ thống Ingestion.",
-        "limitations": "Đây là phân tích dự phòng tĩnh, không có suy luận ngữ cảnh từ AI."
-    }]
+    return [
+        {
+            "hypothesis_type": "DATA_QUALITY_VIOLATION",
+            "summary": fallback_summary,
+            "confidence": 0.70,
+            "supporting_signal_ids": supporting_sigs,
+            "contradicting_signal_ids": [],
+            "evidence_refs": evidence_refs,
+            "recommended_checks": [
+                "Kiểm tra lại dữ liệu nguồn ở các cột hoặc bảng bị cảnh báo lỗi.",
+                "Xác thực xem có sự thay đổi đột biến ở pipeline tải dữ liệu (upstream ingestion pipeline) hay không.",
+            ],
+            "missing_evidence": "Lịch sử log chi tiết của hệ thống Ingestion.",
+            "limitations": "Đây là phân tích dự phòng tĩnh, không có suy luận ngữ cảnh từ AI.",
+        }
+    ]
 
 
 def validate_and_sanitize_hypotheses(
@@ -83,8 +100,13 @@ def validate_and_sanitize_hypotheses(
 ) -> list[dict]:
     """Validates generated citations, allowed types, and clamps confidence values."""
     allowed_types = {
-        "SYSTEM_BUG", "SCHEMA_CHANGE", "UPSTREAM_DATA_DRIFT",
-        "ML_MODEL_DRIFT", "OUTLIER", "DATA_QUALITY_VIOLATION", "UNKNOWN"
+        "SYSTEM_BUG",
+        "SCHEMA_CHANGE",
+        "UPSTREAM_DATA_DRIFT",
+        "ML_MODEL_DRIFT",
+        "OUTLIER",
+        "DATA_QUALITY_VIOLATION",
+        "UNKNOWN",
     }
 
     validated = []
@@ -107,17 +129,19 @@ def validate_and_sanitize_hypotheses(
         if not checks:
             checks = ["Liên hệ với đội ngũ kỹ sư dữ liệu để rà soát log chạy."]
 
-        validated.append({
-            "hypothesis_type": h_type,
-            "summary": str(h.get("summary", "Không có tóm tắt")),
-            "confidence": confidence,
-            "supporting_signal_ids": supporting,
-            "contradicting_signal_ids": contradicting,
-            "evidence_refs": [str(e) for e in h.get("evidence_refs", [])],
-            "recommended_checks": checks,
-            "missing_evidence": h.get("missing_evidence"),
-            "limitations": h.get("limitations")
-        })
+        validated.append(
+            {
+                "hypothesis_type": h_type,
+                "summary": str(h.get("summary", "Không có tóm tắt")),
+                "confidence": confidence,
+                "supporting_signal_ids": supporting,
+                "contradicting_signal_ids": contradicting,
+                "evidence_refs": [str(e) for e in h.get("evidence_refs", [])],
+                "recommended_checks": checks,
+                "missing_evidence": h.get("missing_evidence"),
+                "limitations": h.get("limitations"),
+            }
+        )
     return validated
 
 
@@ -134,10 +158,7 @@ async def steward_insights_node(state: AnomalyGraphState) -> dict:
     # 1. Determine if hypothesis is required
     if decision not in ("WATCH", "ANOMALY", "CRITICAL"):
         logger.info("Hypothesis agent skipped. Decision is %s (not WATCH/ANOMALY/CRITICAL)", decision)
-        return {
-            "hypotheses": [],
-            "hypothesis_status": "NOT_REQUIRED"
-        }
+        return {"hypotheses": [], "hypothesis_status": "NOT_REQUIRED"}
 
     execution_run_id = state.get("execution_run_id") or state.get("anomaly_run_id")
     dataset_id = state.get("dataset_id") or "dataset"
@@ -147,21 +168,24 @@ async def steward_insights_node(state: AnomalyGraphState) -> dict:
     engine = get_engine()
     try:
         with Session(engine) as session:
-            rows = session.query(DqResultModel).filter(
-                DqResultModel.run_id == execution_run_id,
-                DqResultModel.status.in_(["FAIL", "FAILED", "ERROR"])
-            ).all()
+            rows = (
+                session.query(DqResultModel)
+                .filter(DqResultModel.run_id == execution_run_id, DqResultModel.status.in_(["FAIL", "FAILED", "ERROR"]))
+                .all()
+            )
             for r in rows:
                 rule_parts = r.rule_id.split(".")
                 col_name = rule_parts[1] if len(rule_parts) > 2 else None
-                failed_rules.append({
-                    "rule_id": r.rule_id,
-                    "rule_title": r.rule_title,
-                    "column": col_name,
-                    "status": r.status,
-                    "violation_rate": r.violation_rate or 0.0,
-                    "violation_count": r.failed_count
-                })
+                failed_rules.append(
+                    {
+                        "rule_id": r.rule_id,
+                        "rule_title": r.rule_title,
+                        "column": col_name,
+                        "status": r.status,
+                        "violation_rate": r.violation_rate or 0.0,
+                        "violation_count": r.failed_count,
+                    }
+                )
     except Exception as exc:
         logger.warning("Failed to fetch failed rules for hypothesis context: %s", exc)
 
@@ -211,9 +235,7 @@ async def steward_insights_node(state: AnomalyGraphState) -> dict:
         raw_list = [h.model_dump() for h in response.hypotheses]
 
         # Validate citations and sanitize types
-        hypotheses_list = validate_and_sanitize_hypotheses(
-            raw_list, valid_signal_ids, valid_evidence_refs
-        )
+        hypotheses_list = validate_and_sanitize_hypotheses(raw_list, valid_signal_ids, valid_evidence_refs)
         logger.info("Successfully generated and validated %d hypotheses via LLM", len(hypotheses_list))
 
     except Exception as exc:
@@ -228,9 +250,7 @@ async def steward_insights_node(state: AnomalyGraphState) -> dict:
 
     # Ghi lại model thật và độ trễ thật để persist_analysis_node lưu đúng vào
     # anomaly_hypotheses thay vì hằng số hardcode.
-    model_name = str(
-        getattr(settings, f"{settings.llm_provider}_model_name", settings.llm_provider)
-    )
+    model_name = str(getattr(settings, f"{settings.llm_provider}_model_name", settings.llm_provider))
     return {
         "hypotheses": hypotheses_list,
         "hypothesis_status": "FALLBACK_USED" if fallback_used else "SUCCEEDED",

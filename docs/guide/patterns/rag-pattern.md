@@ -48,11 +48,13 @@ def build_rag_graph():
 ```python
 from fastapi.responses import StreamingResponse
 
+
 @router.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
     async def generate():
         async for chunk in agent.astream({"query": request.message}):
             yield f"data: {json.dumps(chunk)}\n\n"
+
     return StreamingResponse(generate(), media_type="text/event-stream")
 ```
 
@@ -60,6 +62,7 @@ async def chat_stream(request: ChatRequest):
 
 ```python
 from pydantic_settings import BaseSettings
+
 
 class Settings(BaseSettings):
     api_key: str = ""  # Required in .env
@@ -73,6 +76,7 @@ class Settings(BaseSettings):
 ```python
 from contextlib import asynccontextmanager
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -80,6 +84,7 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     print("Shutting down...")
+
 
 app = FastAPI(lifespan=lifespan)
 ```

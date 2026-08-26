@@ -4,6 +4,7 @@ from src.config import get_settings
 
 Provider_type = Literal["openai", "anthropic", "mistral"]
 
+
 def get_llm(provider: Provider_type, temperature: float | None = None):
     """Tạo LLM instance cho provider được chỉ định.
 

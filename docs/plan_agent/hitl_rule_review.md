@@ -186,7 +186,7 @@ Nếu trùng thì nối hậu tố `#2`, `#3` — deterministic trong 1 run. `ru
 Bỏ `id: Mapped[int]` autoincrement (dòng 59). Dùng **PK ghép**:
 
 ```python
-run_id:  Mapped[str] = mapped_column(String(64),  primary_key=True)
+run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
 rule_id: Mapped[str] = mapped_column(String(512), primary_key=True)
 ```
 
@@ -195,9 +195,9 @@ rule_id: Mapped[str] = mapped_column(String(512), primary_key=True)
 Thêm 4 cột đang thiếu — 3 cột đầu là 3 field vừa thêm cho UI Steward (`rule_schemas.py:78-91`) mà `save_proposed_rules` đang **làm mất**:
 
 ```python
-dimension:        Mapped[str]           = mapped_column(String(32), nullable=False, index=True)
-rule_description: Mapped[str]           = mapped_column(Text, nullable=False)
-review_note:      Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+dimension: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+rule_description: Mapped[str] = mapped_column(Text, nullable=False)
+review_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 ```
 
 Đổi `default="PENDING"` (dòng 77) → `default=RuleStatus.PENDING.value`.

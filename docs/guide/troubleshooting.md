@@ -174,9 +174,11 @@ def route(state) -> str:
         return "search"
     return "answer"  # Fallback
 
+
 graph.add_conditional_edges(
-    "router", route,
-    {"search": "search", "answer": "answer"}  # Map chứa cả fallback
+    "router",
+    route,
+    {"search": "search", "answer": "answer"},  # Map chứa cả fallback
 )
 ```
 

@@ -115,7 +115,10 @@ def _build_row_predicate(
         if not col or not target_col:
             return "1=0", binds
         # Dòng vi phạm khi cả 2 cột đều không NULL và KHÔNG thỏa mãn điều kiện so sánh
-        return f"({quoted_col} IS NOT NULL AND {quoted_target} IS NOT NULL AND NOT ({quoted_col} {safe_op} {quoted_target}))", binds
+        return (
+            f"({quoted_col} IS NOT NULL AND {quoted_target} IS NOT NULL AND NOT ({quoted_col} {safe_op} {quoted_target}))",
+            binds,
+        )
 
     return "1=0", binds
 
@@ -130,17 +133,22 @@ def generate_tests_for_table(
     quoted_table = _quote_ident(table_name, dialect_name)
 
     row_level_types = {
-        RuleType.NOT_NULL.value, "NOT_NULL",
-        RuleType.RANGE.value, "RANGE",
-        RuleType.ACCEPTED_VALUES.value, "ACCEPTED_VALUES",
-        RuleType.REGEX_FORMAT.value, "REGEX_FORMAT",
-        RuleType.NULL_RATE.value, "NULL_RATE",
-        RuleType.CROSS_FIELD_COMPARISON.value, "CROSS_FIELD_COMPARISON",
+        RuleType.NOT_NULL.value,
+        "NOT_NULL",
+        RuleType.RANGE.value,
+        "RANGE",
+        RuleType.ACCEPTED_VALUES.value,
+        "ACCEPTED_VALUES",
+        RuleType.REGEX_FORMAT.value,
+        "REGEX_FORMAT",
+        RuleType.NULL_RATE.value,
+        "NULL_RATE",
+        RuleType.CROSS_FIELD_COMPARISON.value,
+        "CROSS_FIELD_COMPARISON",
     }
 
     row_rules = [r for r in rules if r.get("rule_type") in row_level_types]
     group_rules = [r for r in rules if r.get("rule_type") not in row_level_types]
-
 
     # 1. Gom các row-level rules thành 1 batch query
     if row_rules:
@@ -161,24 +169,28 @@ def generate_tests_for_table(
 
             select_clauses.append(f"SUM(CASE WHEN {pred} THEN 1 ELSE 0 END) AS {alias}")
             batch_binds.update(rule_binds)
-            rule_meta_list.append({
-                "rule": rule,
-                "alias": alias,
-                "predicate": pred,
-            })
+            rule_meta_list.append(
+                {
+                    "rule": rule,
+                    "alias": alias,
+                    "predicate": pred,
+                }
+            )
 
         batch_sql = f"SELECT {', '.join(select_clauses)} FROM {quoted_table}"
-        generated.append({
-            "test_id": f"batch_{table_name}",
-            "table_name": table_name,
-            "query_type": "batch_row",
-            "sql_text": batch_sql,
-            "bind_params": batch_binds,
-            "rules_meta": rule_meta_list,
-            "attempts": 0,
-            "valid": False,
-            "error": None,
-        })
+        generated.append(
+            {
+                "test_id": f"batch_{table_name}",
+                "table_name": table_name,
+                "query_type": "batch_row",
+                "sql_text": batch_sql,
+                "bind_params": batch_binds,
+                "rules_meta": rule_meta_list,
+                "attempts": 0,
+                "valid": False,
+                "error": None,
+            }
+        )
 
     # 2. Xử lý các group/table-level rules riêng biệt
     for idx, rule in enumerate(group_rules):
@@ -194,52 +206,57 @@ def generate_tests_for_table(
                 f"(SELECT COUNT(*) FROM {quoted_table} WHERE {quoted_col} IS NOT NULL) - "
                 f"(SELECT COUNT(DISTINCT {quoted_col}) FROM {quoted_table} WHERE {quoted_col} IS NOT NULL) AS violation_count"
             )
-            generated.append({
-                "test_id": f"unique_{table_name}_{col}_{idx}",
-                "table_name": table_name,
-                "query_type": "unique",
-                "sql_text": sql,
-                "bind_params": {},
-                "rules_meta": [{"rule": rule, "alias": "violation_count", "predicate": None}],
-                "attempts": 0,
-                "valid": False,
-                "error": None,
-            })
+            generated.append(
+                {
+                    "test_id": f"unique_{table_name}_{col}_{idx}",
+                    "table_name": table_name,
+                    "query_type": "unique",
+                    "sql_text": sql,
+                    "bind_params": {},
+                    "rules_meta": [{"rule": rule, "alias": "violation_count", "predicate": None}],
+                    "attempts": 0,
+                    "valid": False,
+                    "error": None,
+                }
+            )
 
         elif r_type in (RuleType.ROW_COUNT.value, "ROW_COUNT"):
             sql = f"SELECT COUNT(*) AS total_rows FROM {quoted_table}"
             min_rows = int(params.get("min_row_count", 0))
-            generated.append({
-                "test_id": f"row_count_{table_name}_{idx}",
-                "table_name": table_name,
-                "query_type": "row_count",
-                "sql_text": sql,
-                "bind_params": {},
-                "min_row_count": min_rows,
-                "rules_meta": [{"rule": rule, "alias": "total_rows", "predicate": None}],
-                "attempts": 0,
-                "valid": False,
-                "error": None,
-            })
+            generated.append(
+                {
+                    "test_id": f"row_count_{table_name}_{idx}",
+                    "table_name": table_name,
+                    "query_type": "row_count",
+                    "sql_text": sql,
+                    "bind_params": {},
+                    "min_row_count": min_rows,
+                    "rules_meta": [{"rule": rule, "alias": "total_rows", "predicate": None}],
+                    "attempts": 0,
+                    "valid": False,
+                    "error": None,
+                }
+            )
 
         elif r_type in (RuleType.FRESHNESS.value, "FRESHNESS"):
             sql = f"SELECT MAX({quoted_col}) AS max_timestamp FROM {quoted_table}"
             max_age_hours = float(params.get("max_age_hours", 24.0))
-            generated.append({
-                "test_id": f"freshness_{table_name}_{col}_{idx}",
-                "table_name": table_name,
-                "query_type": "freshness",
-                "sql_text": sql,
-                "bind_params": {},
-                "max_age_hours": max_age_hours,
-                "rules_meta": [{"rule": rule, "alias": "max_timestamp", "predicate": None}],
-                "attempts": 0,
-                "valid": False,
-                "error": None,
-            })
+            generated.append(
+                {
+                    "test_id": f"freshness_{table_name}_{col}_{idx}",
+                    "table_name": table_name,
+                    "query_type": "freshness",
+                    "sql_text": sql,
+                    "bind_params": {},
+                    "max_age_hours": max_age_hours,
+                    "rules_meta": [{"rule": rule, "alias": "max_timestamp", "predicate": None}],
+                    "attempts": 0,
+                    "valid": False,
+                    "error": None,
+                }
+            )
 
     return generated
-
 
 
 def generate_dbt_test_yaml(approved_rules: list[dict]) -> str:
@@ -297,8 +314,6 @@ def generate_dbt_test_yaml(approved_rules: list[dict]) -> str:
     return yaml.dump(yaml_dict, sort_keys=False, allow_unicode=True)
 
 
-
-
 def validate_ruleset_contract(
     engine,
     approved_rules: list,
@@ -332,11 +347,13 @@ def validate_ruleset_contract(
 
     for t_name in sorted(tables_in_rules):
         if t_name not in db_tables:
-            validation_errors.append({
-                "type": "MISSING_TABLE",
-                "table_name": t_name,
-                "message": f"Table '{t_name}' does not exist in the database catalog."
-            })
+            validation_errors.append(
+                {
+                    "type": "MISSING_TABLE",
+                    "table_name": t_name,
+                    "message": f"Table '{t_name}' does not exist in the database catalog.",
+                }
+            )
             continue
 
         try:
@@ -348,11 +365,13 @@ def validate_ruleset_contract(
             cols_str = ",".join(f"{name}:{type_str}" for name, type_str in col_info)
             schema_parts.append(f"{t_name}({cols_str})")
         except Exception as exc:
-            validation_errors.append({
-                "type": "REFLECTION_ERROR",
-                "table_name": t_name,
-                "message": f"Failed to reflect columns for table '{t_name}': {exc}"
-            })
+            validation_errors.append(
+                {
+                    "type": "REFLECTION_ERROR",
+                    "table_name": t_name,
+                    "message": f"Failed to reflect columns for table '{t_name}': {exc}",
+                }
+            )
 
     live_schema_str = ";".join(schema_parts)
     live_schema_hash = hashlib.md5(live_schema_str.encode("utf-8")).hexdigest() if live_schema_str else ""
@@ -361,24 +380,27 @@ def validate_ruleset_contract(
     if ruleset_version_id:
         try:
             with Session(engine) as session:
-                ruleset_ver = session.query(RulesetVersionModel).filter(RulesetVersionModel.id == ruleset_version_id).first()
+                ruleset_ver = (
+                    session.query(RulesetVersionModel).filter(RulesetVersionModel.id == ruleset_version_id).first()
+                )
                 if ruleset_ver:
                     ref_hash = ruleset_ver.ruleset_hash
                     if ref_hash != live_schema_hash:
-                        validation_errors.append({
-                            "type": "SCHEMA_DRIFT",
-                            "message": f"Schema drift detected. Ruleset version reference schema hash '{ref_hash}' does not match live schema signature hash '{live_schema_hash}'."
-                        })
+                        validation_errors.append(
+                            {
+                                "type": "SCHEMA_DRIFT",
+                                "message": f"Schema drift detected. Ruleset version reference schema hash '{ref_hash}' does not match live schema signature hash '{live_schema_hash}'.",
+                            }
+                        )
                 else:
-                    validation_errors.append({
-                        "type": "MISSING_RULESET_VERSION",
-                        "message": f"Ruleset version '{ruleset_version_id}' not found in ruleset_versions database."
-                    })
+                    validation_errors.append(
+                        {
+                            "type": "MISSING_RULESET_VERSION",
+                            "message": f"Ruleset version '{ruleset_version_id}' not found in ruleset_versions database.",
+                        }
+                    )
         except Exception as exc:
-            validation_errors.append({
-                "type": "DATABASE_ERROR",
-                "message": f"Failed to query ruleset version: {exc}"
-            })
+            validation_errors.append({"type": "DATABASE_ERROR", "message": f"Failed to query ruleset version: {exc}"})
 
     # 3. Validate columns and parameters for each rule
     for rule in approved_rules:
@@ -395,45 +417,55 @@ def validate_ruleset_contract(
         # Check column existence (unless cross-field or table-level rule like ROW_COUNT)
         if rule_type != "ROW_COUNT" and col_name:
             if col_name not in table_columns[t_name]:
-                validation_errors.append({
-                    "type": "MISSING_COLUMN",
-                    "rule_id": rule_id,
-                    "table_name": t_name,
-                    "column_name": col_name,
-                    "message": f"Column '{col_name}' does not exist in table '{t_name}'."
-                })
+                validation_errors.append(
+                    {
+                        "type": "MISSING_COLUMN",
+                        "rule_id": rule_id,
+                        "table_name": t_name,
+                        "column_name": col_name,
+                        "message": f"Column '{col_name}' does not exist in table '{t_name}'.",
+                    }
+                )
 
         # Validate parameters for specific rules
         if rule_type == "RANGE":
             if params.get("min") is None and params.get("max") is None:
-                validation_errors.append({
-                    "type": "INVALID_PARAMETERS",
-                    "rule_id": rule_id,
-                    "message": f"Rule {rule_id} of type RANGE must contain at least a 'min' or 'max' parameter."
-                })
+                validation_errors.append(
+                    {
+                        "type": "INVALID_PARAMETERS",
+                        "rule_id": rule_id,
+                        "message": f"Rule {rule_id} of type RANGE must contain at least a 'min' or 'max' parameter.",
+                    }
+                )
         elif rule_type == "ACCEPTED_VALUES":
             if not params.get("accepted_values"):
-                validation_errors.append({
-                    "type": "INVALID_PARAMETERS",
-                    "rule_id": rule_id,
-                    "message": f"Rule {rule_id} of type ACCEPTED_VALUES must contain a non-empty 'accepted_values' list."
-                })
+                validation_errors.append(
+                    {
+                        "type": "INVALID_PARAMETERS",
+                        "rule_id": rule_id,
+                        "message": f"Rule {rule_id} of type ACCEPTED_VALUES must contain a non-empty 'accepted_values' list.",
+                    }
+                )
         elif rule_type == "CROSS_FIELD_COMPARISON":
             target_col = params.get("target_column")
             if not target_col:
-                validation_errors.append({
-                    "type": "INVALID_PARAMETERS",
-                    "rule_id": rule_id,
-                    "message": f"Rule {rule_id} of type CROSS_FIELD_COMPARISON must specify 'target_column'."
-                })
+                validation_errors.append(
+                    {
+                        "type": "INVALID_PARAMETERS",
+                        "rule_id": rule_id,
+                        "message": f"Rule {rule_id} of type CROSS_FIELD_COMPARISON must specify 'target_column'.",
+                    }
+                )
             elif target_col not in table_columns[t_name]:
-                validation_errors.append({
-                    "type": "MISSING_COLUMN",
-                    "rule_id": rule_id,
-                    "table_name": t_name,
-                    "column_name": target_col,
-                    "message": f"Target column '{target_col}' in rule CROSS_FIELD_COMPARISON does not exist in table '{t_name}'."
-                })
+                validation_errors.append(
+                    {
+                        "type": "MISSING_COLUMN",
+                        "rule_id": rule_id,
+                        "table_name": t_name,
+                        "column_name": target_col,
+                        "message": f"Target column '{target_col}' in rule CROSS_FIELD_COMPARISON does not exist in table '{t_name}'.",
+                    }
+                )
 
     return validation_errors, live_schema_hash
 
@@ -549,7 +581,9 @@ async def test_generator_node(state: AgentState) -> dict:
     save_generated_dbt_yaml(
         run_id,
         dbt_yaml_content,
-        artifact_metadata=artifact_ref.to_dict() if artifact_ref else {
+        artifact_metadata=artifact_ref.to_dict()
+        if artifact_ref
+        else {
             "local_trace_path": str(trace_file),
             "sha256": hashlib.sha256(yaml_bytes).hexdigest(),
             "size_bytes": len(yaml_bytes),
@@ -571,10 +605,10 @@ async def test_generator_node(state: AgentState) -> dict:
     }
 
 
-
 # ---------------------------------------------------------------------------
 # Standalone Test Harness (Chạy từ Database hoặc file output)
 # ---------------------------------------------------------------------------
+
 
 async def main():
     """Hàm chạy test độc lập cho test_generator_node từ database hoặc file output.
@@ -623,18 +657,20 @@ async def main():
             for r in rows:
                 params_raw = r[7] if r[7] else r[6]
                 params_dict = json.loads(params_raw) if params_raw else {}
-                rules.append({
-                    "rule_id": r[1],
-                    "dataset_id": r[2],
-                    "table_name": r[3],
-                    "column": r[4],
-                    "rule_type": r[5],
-                    "parameters": params_dict,
-                    "severity": r[8],
-                    "dimension": r[9],
-                    "rule_description": r[10],
-                    "status": r[11],
-                })
+                rules.append(
+                    {
+                        "rule_id": r[1],
+                        "dataset_id": r[2],
+                        "table_name": r[3],
+                        "column": r[4],
+                        "rule_type": r[5],
+                        "parameters": params_dict,
+                        "severity": r[8],
+                        "dimension": r[9],
+                        "rule_description": r[10],
+                        "status": r[11],
+                    }
+                )
             source_desc = f"bảng proposed_rules trong Database ({len(rules)} rules đã APPROVED)"
         else:
             # 3. Fallback: Đọc từ file output local nếu DB chưa có rule nào được duyệt
@@ -660,9 +696,7 @@ async def main():
 
     # Lọc bỏ bảng hệ thống
     system_tables = {"proposal_runs", "proposed_rules", "active_rules", "test_runs", "test_results"}
-    filtered_rules = [
-        r for r in rules if r.get("table_name", "").lower() not in system_tables
-    ]
+    filtered_rules = [r for r in rules if r.get("table_name", "").lower() not in system_tables]
 
     print(f"📖 Nguồn nạp rules: {source_desc}")
     print(f"🎯 Tổng số rules nạp: {len(filtered_rules)} (đã lọc bảng hệ thống)")
@@ -692,9 +726,5 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(main())
-
-
-
-
-

@@ -87,14 +87,16 @@ import json
 # Cache đơn giản trong memory
 _llm_cache: dict[str, str] = {}
 
+
 def cached_llm_call(prompt: str, model: str = "gpt-4o-mini") -> str:
     """Cache LLM responses để tránh gọi lại cùng prompt."""
     cache_key = hashlib.md5(f"{model}:{prompt}".encode()).hexdigest()
-    
+
     if cache_key in _llm_cache:
         return _llm_cache[cache_key]
-    
+
     from langchain_openai import ChatOpenAI
+
     llm = ChatOpenAI(model=model)
     response = llm.invoke(prompt)
     _llm_cache[cache_key] = response.content
@@ -108,8 +110,10 @@ def cached_llm_call(prompt: str, model: str = "gpt-4o-mini") -> str:
 def test_analyze():
     result = analyze_node({"query": "test"})  # Gọi OpenAI API thật
 
+
 # ✅ Miễn phí — mock LLM response
 from unittest.mock import AsyncMock, patch
+
 
 @pytest.mark.asyncio
 async def test_analyze():
@@ -140,8 +144,10 @@ def should_continue(state):
         return "research"
     return END
 
+
 # ✅ Giới hạn 3 vòng — đủ cho hầu hết câu hỏi
 MAX_ITERATIONS = 3
+
 
 def should_continue(state):
     if state.get("iteration", 0) >= MAX_ITERATIONS:
@@ -175,6 +181,7 @@ import os
 import logging
 
 logger = logging.getLogger(__name__)
+
 
 # Ước tính cost per request
 def estimate_cost(input_tokens: int, output_tokens: int, model: str = "gpt-4o-mini") -> float:

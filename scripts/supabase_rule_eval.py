@@ -38,23 +38,31 @@ def main() -> int:
         raise SystemExit(f"No versioned policy for {args.dataset_id}")
     rules = [
         ("vendor_id must be populated", {"type": "not_null", "column": "vendor_id"}),
-        ("trip_distance must be non-negative", {
-            "type": "numeric_range", "column": "trip_distance", "min_value": 0.0
-        }),
-        ("fare_amount must be non-negative", {
-            "type": "numeric_range", "column": "fare_amount", "min_value": 0.0
-        }),
-        ("payment_type must use governed values", {
-            "type": "accepted_values", "column": "payment_type",
-            "allowed_values": policy.governed_value_sets["payment_type"],
-        }),
-        ("pickup_at must not follow dropoff_at", {
-            "type": "cross_field_comparison", "columns": ["pickup_at", "dropoff_at"], "operator": "<=",
-        }),
-        ("trip fingerprint must not be duplicated", {
-            "type": "duplicate_fingerprint",
-            "fingerprint_columns": policy.duplicate_fingerprint_columns,
-        }),
+        ("trip_distance must be non-negative", {"type": "numeric_range", "column": "trip_distance", "min_value": 0.0}),
+        ("fare_amount must be non-negative", {"type": "numeric_range", "column": "fare_amount", "min_value": 0.0}),
+        (
+            "payment_type must use governed values",
+            {
+                "type": "accepted_values",
+                "column": "payment_type",
+                "allowed_values": policy.governed_value_sets["payment_type"],
+            },
+        ),
+        (
+            "pickup_at must not follow dropoff_at",
+            {
+                "type": "cross_field_comparison",
+                "columns": ["pickup_at", "dropoff_at"],
+                "operator": "<=",
+            },
+        ),
+        (
+            "trip fingerprint must not be duplicated",
+            {
+                "type": "duplicate_fingerprint",
+                "fingerprint_columns": policy.duplicate_fingerprint_columns,
+            },
+        ),
     ]
 
     engine = create_supabase_engine(database_url)

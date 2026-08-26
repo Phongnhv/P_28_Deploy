@@ -1,6 +1,7 @@
 import subprocess
-import time
 import sys
+import time
+
 
 def run_cmd(cmd, check=True):
     print(f"Executing: {cmd}")
@@ -8,6 +9,7 @@ def run_cmd(cmd, check=True):
     if check and res.returncode != 0:
         print(f"❌ Command failed: {cmd}")
         sys.exit(res.returncode)
+
 
 def main():
     print("🚀 Bắt đầu quá trình Reset Database RidePulse...")
@@ -37,7 +39,7 @@ def main():
         "004_fix_audit_schema.sql",
         "005_canonical_dataset_contract.sql",
         "006_rule_proposal_core_evidence.sql",
-        "007_graph2_3_models.sql"
+        "007_graph2_3_models.sql",
     ]
     for m in migrations:
         run_cmd(f"docker compose exec -T db psql -U postgres -d ridepulse -f /scripts/migrations/{m}")
@@ -47,6 +49,7 @@ def main():
     run_cmd("docker compose exec -T db psql -U postgres -d ridepulse -f /scripts/migrations/008_split_schemas.sql")
 
     print("\n🎉 RESET DATABASE VÀ ĐỒNG BỘ CẤU TRÚC THÀNH CÔNG!")
+
 
 if __name__ == "__main__":
     main()

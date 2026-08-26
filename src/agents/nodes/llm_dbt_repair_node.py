@@ -18,10 +18,7 @@ def _extract_yaml(value: str) -> str:
 
 
 def _approved_scope(rules: list[dict]) -> set[tuple[str, str | None]]:
-    return {
-        (str(rule.get("table_name") or "profile_input"), rule.get("column") or "source_row_id")
-        for rule in rules
-    }
+    return {(str(rule.get("table_name") or "profile_input"), rule.get("column") or "source_row_id") for rule in rules}
 
 
 def _yaml_scope(content: str) -> set[tuple[str, str | None]]:

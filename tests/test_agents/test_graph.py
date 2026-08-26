@@ -39,32 +39,36 @@ def setup_test_db(tmp_path, monkeypatch):
     # The graph tests exercise the legacy SQL metrics fallback; dbt CLI integration
     # is covered by the dedicated validation/runner integration tests.
     monkeypatch.setattr("src.agents.nodes.test_runner_node._run_dbt_cli_test", lambda _dbt_dir: False)
-    monkeypatch.setattr("src.agents.nodes.validate_dbt_project_node.run_dbt_parse", lambda _dbt_dir: (True, "mocked output", 0))
+    monkeypatch.setattr(
+        "src.agents.nodes.validate_dbt_project_node.run_dbt_parse", lambda _dbt_dir: (True, "mocked output", 0)
+    )
     init_db()
 
     with test_engine.connect() as conn:
         conn.execute(text("DROP TABLE IF EXISTS demo_graph_table;"))
-        conn.execute(text("""
+        conn.execute(
+            text("""
             CREATE TABLE demo_graph_table (
                 id INTEGER PRIMARY KEY,
                 fare REAL,
                 status TEXT
             );
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
             INSERT INTO demo_graph_table VALUES
             (1, 10.0, 'OK'),
             (2, 20.0, 'OK'),
             (3, NULL, 'ERROR'),
             (4, 50.0, 'OK');
-        """))
+        """)
+        )
         conn.commit()
 
     yield test_engine
 
-    with test_engine.connect() as conn:
-        conn.execute(text("DROP TABLE IF EXISTS demo_graph_table;"))
-        conn.commit()
+    test_engine.dispose()
 
 
 def test_build_graphs():
@@ -120,12 +124,8 @@ async def test_proposal_graph_execution(monkeypatch, tmp_path):
 
     async def mock_dataset_understanding(state):
         return {
-            "semantic_contract": {
-                "dataset_id": state.get("dataset_id"),
-                "tables": {},
-                "status": "confirmed"
-            },
-            "progress_state": "PROPOSING_RULES"
+            "semantic_contract": {"dataset_id": state.get("dataset_id"), "tables": {}, "status": "confirmed"},
+            "progress_state": "PROPOSING_RULES",
         }
 
     async def mock_prompt_customizer(state):
@@ -135,9 +135,13 @@ async def test_proposal_graph_execution(monkeypatch, tmp_path):
         return {"progress_state": "PROPOSING_RULES"}
 
     monkeypatch.setattr("src.agents.nodes.rule_proposer_node.rule_proposer_node", mock_rule_proposer)
-    monkeypatch.setattr("src.agents.nodes.dataset_understanding_node.dataset_understanding_node", mock_dataset_understanding)
+    monkeypatch.setattr(
+        "src.agents.nodes.dataset_understanding_node.dataset_understanding_node", mock_dataset_understanding
+    )
     monkeypatch.setattr("src.agents.nodes.prompt_customizer_node.prompt_customizer_node", mock_prompt_customizer)
-    monkeypatch.setattr("src.agents.nodes.rule_candidate_builder_node.rule_candidate_builder_node", mock_rule_candidate_builder)
+    monkeypatch.setattr(
+        "src.agents.nodes.rule_candidate_builder_node.rule_candidate_builder_node", mock_rule_candidate_builder
+    )
 
     graph = build_proposal_graph()
     initial_state = {
@@ -254,28 +258,24 @@ async def test_runners(monkeypatch, tmp_path):
 
     async def mock_dataset_understanding(state):
         return {
-            "semantic_contract": {
-                "dataset_id": state.get("dataset_id"),
-                "tables": {},
-                "status": "confirmed"
-            },
-            "progress_state": "PROPOSING_RULES"
+            "semantic_contract": {"dataset_id": state.get("dataset_id"), "tables": {}, "status": "confirmed"},
+            "progress_state": "PROPOSING_RULES",
         }
 
     async def mock_data_dict_gen(state):
-        return {
-            "normalized_data_dictionary": {"demo_graph_table": {}},
-            "data_dictionary_source": "inferred"
-        }
+        return {"normalized_data_dictionary": {"demo_graph_table": {}}, "data_dictionary_source": "inferred"}
 
     async def mock_prompt_customizer(state):
         return {"specialized_system_prompts": {}}
 
     monkeypatch.setattr("src.agents.nodes.rule_proposer_node.rule_proposer_node", mock_rule_proposer)
-    monkeypatch.setattr("src.agents.nodes.dataset_understanding_node.dataset_understanding_node", mock_dataset_understanding)
-    monkeypatch.setattr("src.agents.nodes.data_dictionary_generator_node.data_dictionary_generator_node", mock_data_dict_gen)
+    monkeypatch.setattr(
+        "src.agents.nodes.dataset_understanding_node.dataset_understanding_node", mock_dataset_understanding
+    )
+    monkeypatch.setattr(
+        "src.agents.nodes.data_dictionary_generator_node.data_dictionary_generator_node", mock_data_dict_gen
+    )
     monkeypatch.setattr("src.agents.nodes.prompt_customizer_node.prompt_customizer_node", mock_prompt_customizer)
-
 
     # 1. Chạy run_proposal_graph
     prop_res = await run_proposal_graph(
@@ -295,4 +295,3 @@ async def test_runners(monkeypatch, tmp_path):
     assert exec_res["test_run_id"] is not None
     assert len(exec_res["results"]) == 1
     assert exec_res["results"][0]["status"] == "PASS"
-

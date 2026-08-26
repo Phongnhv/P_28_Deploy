@@ -348,8 +348,10 @@ class RangeParameters(BaseModel):
     min: float | None = None
     max: float | None = None
 
+
 class NullRateParameters(BaseModel):
     max_null_pct: float = Field(ge=0, le=100)
+
 
 class CrossFieldParameters(BaseModel):
     target_column: str

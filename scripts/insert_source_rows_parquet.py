@@ -17,12 +17,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import pandas as pd
-from sqlalchemy.orm import Session
+import pandas as pd  # noqa: E402
+from sqlalchemy.orm import Session  # noqa: E402
 
-from src.config import get_settings
-from src.models.database import DatasetModel, SourceRowModel
-from src.services.rule_store import get_engine, init_db
+from src.config import get_settings  # noqa: E402
+from src.models.database import DatasetModel, SourceRowModel  # noqa: E402
+from src.services.rule_store import get_engine, init_db  # noqa: E402
 
 EXPECTED_COLUMNS = [
     "source_row_id",
@@ -68,7 +68,9 @@ def resolve_parquet_path(raw_path: str | None) -> Path:
             local = project_root / candidate
             if local.exists():
                 return local
-    fallback = project_root / "data" / "yellow_tripdata_2025" / "semantic_data" / "yellow_tripdata_2025_semantic_50k.parquet"
+    fallback = (
+        project_root / "data" / "yellow_tripdata_2025" / "semantic_data" / "yellow_tripdata_2025_semantic_50k.parquet"
+    )
     if fallback.exists():
         return fallback
     raise FileNotFoundError(f"Parquet file not found. Tried: {[str(p) for p in candidates + [fallback]]}")

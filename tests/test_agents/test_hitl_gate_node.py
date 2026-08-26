@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 # In-memory DB fixture — isolate khỏi data/app.db
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def in_memory_engine(tmp_path):
     """Tạo SQLite file-based temp engine và khởi tạo schema."""
@@ -27,9 +28,7 @@ def in_memory_engine(tmp_path):
     from src.services.rule_store import Base
 
     db_file = tmp_path / "test.db"
-    test_engine = create_engine(
-        f"sqlite:///{db_file}", connect_args={"check_same_thread": False}
-    )
+    test_engine = create_engine(f"sqlite:///{db_file}", connect_args={"check_same_thread": False})
     Base.metadata.create_all(test_engine)
 
     # Set _engine trực tiếp — thread pool workers cũng thấy engine đúng
@@ -43,6 +42,7 @@ def in_memory_engine(tmp_path):
 def _make_run(engine, run_id: str, dataset_id: str = "yellow_tripdata") -> None:
     """Seed một ProposalRunModel."""
     from src.services.rule_store import ProposalRunModel
+
     with Session(engine) as s:
         s.add(ProposalRunModel(run_id=run_id, dataset_id=dataset_id, status="DONE"))
         s.commit()
@@ -83,6 +83,7 @@ def _make_rule_dict(
 # 1. run_id regression — rule_proposer_node GIỮ nguyên rule_run_id từ state
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_rule_proposer_keeps_run_id_from_state(tmp_path):
     """rule_proposer_node phải dùng state['rule_run_id'] thay vì sinh mới."""
@@ -95,7 +96,9 @@ async def test_rule_proposer_keeps_run_id_from_state(tmp_path):
     with (
         patch("src.agents.nodes.rule_proposer_node.split_digest_by_table", return_value={"t1": {}}),
         patch("src.agents.nodes.rule_proposer_node.get_llm"),
-        patch("src.agents.nodes.rule_proposer_node._propose_for_table", new_callable=AsyncMock, return_value=fake_proposal),
+        patch(
+            "src.agents.nodes.rule_proposer_node._propose_for_table", new_callable=AsyncMock, return_value=fake_proposal
+        ),
         patch("src.agents.nodes.rule_proposer_node.get_settings") as mock_settings,
     ):
         mock_settings.return_value.rule_proposer_concurrency = 1
@@ -125,7 +128,9 @@ async def test_rule_proposer_generates_run_id_when_missing(tmp_path):
     with (
         patch("src.agents.nodes.rule_proposer_node.split_digest_by_table", return_value={"t1": {}}),
         patch("src.agents.nodes.rule_proposer_node.get_llm"),
-        patch("src.agents.nodes.rule_proposer_node._propose_for_table", new_callable=AsyncMock, return_value=fake_proposal),
+        patch(
+            "src.agents.nodes.rule_proposer_node._propose_for_table", new_callable=AsyncMock, return_value=fake_proposal
+        ),
         patch("src.agents.nodes.rule_proposer_node.get_settings") as mock_settings,
     ):
         mock_settings.return_value.rule_proposer_concurrency = 1
@@ -145,6 +150,7 @@ async def test_rule_proposer_generates_run_id_when_missing(tmp_path):
 # ---------------------------------------------------------------------------
 # 2. _stamp_rule backward compat và dedup
 # ---------------------------------------------------------------------------
+
 
 def test_stamp_rule_3_positional_args_backward_compat():
     """_stamp_rule(rule, table, run_id) 3 positional args vẫn chạy."""
@@ -208,6 +214,7 @@ def test_stamp_rule_dedup_suffix():
 # 3. save_proposed_rules — fields đầy đủ và idempotency
 # ---------------------------------------------------------------------------
 
+
 def test_save_proposed_rules_keeps_all_fields(in_memory_engine):
     """save_proposed_rules phải giữ đủ dimension, rule_description, rule_id."""
     from src.services.rule_store import ProposedRuleModel, save_proposed_rules
@@ -257,6 +264,7 @@ def test_two_runs_same_rule_id_coexist(in_memory_engine):
 # ---------------------------------------------------------------------------
 # 4. hitl_gate_node
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_hitl_gate_node_returns_rules_saved(in_memory_engine, tmp_path):
@@ -320,6 +328,7 @@ async def test_hitl_gate_node_does_not_fail_when_trace_dir_missing(in_memory_eng
 # 5. review_rule
 # ---------------------------------------------------------------------------
 
+
 def test_review_rule_sets_status_and_keeps_params(in_memory_engine):
     """review_rule → status, reviewer, reviewed_at được set; parameters gốc không đổi."""
     from src.services.rule_store import review_rule, save_proposed_rules
@@ -349,7 +358,8 @@ def test_review_rule_edited_parameters(in_memory_engine):
     run_id = uuid.uuid4().hex
     rule_id = "t.amount.RANGE"
     original = _make_rule_dict(
-        run_id, rule_id,
+        run_id,
+        rule_id,
         rule_type="RANGE",
         column="amount",
         dimension="VALIDITY",
@@ -384,6 +394,7 @@ def test_review_rule_not_found_returns_none(in_memory_engine):
 # 6. bulk_review
 # ---------------------------------------------------------------------------
 
+
 def test_bulk_review_returns_not_found(in_memory_engine):
     """bulk_review trả đúng not_found cho id sai."""
     from src.services.rule_store import bulk_review, save_proposed_rules
@@ -407,6 +418,7 @@ def test_bulk_review_returns_not_found(in_memory_engine):
 # 7. get_review_summary
 # ---------------------------------------------------------------------------
 
+
 def test_get_review_summary(in_memory_engine):
     """get_review_summary khớp số đúng."""
     from src.services.rule_store import get_review_summary, review_rule, save_proposed_rules
@@ -415,7 +427,9 @@ def test_get_review_summary(in_memory_engine):
     rules = [
         _make_rule_dict(run_id, "t.col_a.NOT_NULL", dimension="COMPLETENESS", severity="CRITICAL"),
         _make_rule_dict(run_id, "t.col_b.NOT_NULL", column="col_b", dimension="COMPLETENESS", severity="HIGH"),
-        _make_rule_dict(run_id, "t.col_c.RANGE", column="col_c", rule_type="RANGE", dimension="VALIDITY", severity="HIGH"),
+        _make_rule_dict(
+            run_id, "t.col_c.RANGE", column="col_c", rule_type="RANGE", dimension="VALIDITY", severity="HIGH"
+        ),
     ]
     save_proposed_rules(run_id, "ds1", rules)
 
@@ -439,6 +453,7 @@ def test_get_review_summary(in_memory_engine):
 # ---------------------------------------------------------------------------
 # 8. edited_parameters guardrail
 # ---------------------------------------------------------------------------
+
 
 def test_edited_parameters_invalid_raises_value_error(in_memory_engine):
     """edited_parameters vô lý (RANGE thiếu cả min/max) → ValueError."""

@@ -49,7 +49,11 @@ def get_anomaly_case(anomaly_run_id: str) -> dict[str, Any]:
                 if not dq_run:
                     # Look up any recent dq run if anomaly_run_id contains prefix or hex
                     cleaned_id = anomaly_run_id.replace("anom-", "")
-                    dq_run = db.query(DqRunModel).filter((DqRunModel.id == cleaned_id) | (DqRunModel.id.like(f"%{cleaned_id}%"))).first()
+                    dq_run = (
+                        db.query(DqRunModel)
+                        .filter((DqRunModel.id == cleaned_id) | (DqRunModel.id.like(f"%{cleaned_id}%")))
+                        .first()
+                    )
                 if not dq_run:
                     dq_run = db.query(DqRunModel).order_by(DqRunModel.created_at.desc()).first()
 
@@ -67,15 +71,23 @@ def get_anomaly_case(anomaly_run_id: str) -> dict[str, Any]:
                         "status": "SUCCEEDED",
                         "signals": [],
                         "failed_rules": [
-                            {"result_id": r.id, "rule_id": r.rule_id, "rule_title": r.rule_title,
-                             "status": r.status, "checked_count": r.checked_count,
-                             "failed_count": r.failed_count, "violation_rate": r.violation_rate}
+                            {
+                                "result_id": r.id,
+                                "rule_id": r.rule_id,
+                                "rule_title": r.rule_title,
+                                "status": r.status,
+                                "checked_count": r.checked_count,
+                                "failed_count": r.failed_count,
+                                "violation_rate": r.violation_rate,
+                            }
                             for r in failed
                         ],
                     }
                 return {"error": "ANOMALY_RUN_NOT_FOUND", "anomaly_run_id": anomaly_run_id}
             try:
-                execution_dataset_id = db.query(DqRunModel.dataset_id).filter(DqRunModel.id == anomaly.execution_run_id).scalar()
+                execution_dataset_id = (
+                    db.query(DqRunModel.dataset_id).filter(DqRunModel.id == anomaly.execution_run_id).scalar()
+                )
             except Exception:
                 execution_dataset_id = None
             signals = db.query(AnomalySignalModel).filter_by(anomaly_run_id=anomaly_run_id).all()
@@ -91,17 +103,31 @@ def get_anomaly_case(anomaly_run_id: str) -> dict[str, Any]:
                 "severity": anomaly.severity,
                 "status": anomaly.status,
                 "signals": [
-                    {"signal_id": s.id, "family": s.family, "target_type": s.target_type,
-                     "target_id": s.target_id, "score": s.score, "reliability": s.reliability,
-                     "observed_value": s.observed_value, "baseline": _json(s.baseline, {}),
-                     "detector_name": s.detector_name, "explanation": s.explanation_code,
-                     "evidence_refs": _json(s.evidence_refs, [])}
+                    {
+                        "signal_id": s.id,
+                        "family": s.family,
+                        "target_type": s.target_type,
+                        "target_id": s.target_id,
+                        "score": s.score,
+                        "reliability": s.reliability,
+                        "observed_value": s.observed_value,
+                        "baseline": _json(s.baseline, {}),
+                        "detector_name": s.detector_name,
+                        "explanation": s.explanation_code,
+                        "evidence_refs": _json(s.evidence_refs, []),
+                    }
                     for s in signals
                 ],
                 "failed_rules": [
-                    {"result_id": r.id, "rule_id": r.rule_id, "rule_title": r.rule_title,
-                     "status": r.status, "checked_count": r.checked_count,
-                     "failed_count": r.failed_count, "violation_rate": r.violation_rate}
+                    {
+                        "result_id": r.id,
+                        "rule_id": r.rule_id,
+                        "rule_title": r.rule_title,
+                        "status": r.status,
+                        "checked_count": r.checked_count,
+                        "failed_count": r.failed_count,
+                        "violation_rate": r.violation_rate,
+                    }
                     for r in failed
                 ],
             }
@@ -115,26 +141,44 @@ def get_metric_history(dataset_id: str, rule_id: str, lookback_runs: int = 30) -
     limit = max(1, min(int(lookback_runs), 100))
     try:
         with Session(get_engine()) as db:
-            rows = (db.query(
-                        DqResultModel.violation_rate,
-                        DqResultModel.failed_count,
-                        DqResultModel.checked_count,
-                        DqResultModel.status,
-                        DqRunModel.id.label("run_id"),
-                        DqRunModel.created_at,
-                    )
-                    .join(DqRunModel, DqRunModel.id == DqResultModel.run_id)
-                    .filter(DqRunModel.dataset_id == dataset_id, DqResultModel.rule_id == rule_id)
-                    .order_by(DqRunModel.created_at.desc()).limit(limit).all())
-            points = [{"run_id": str(r.run_id), "created_at": _iso(r.created_at),
-                       "value": float(r.violation_rate) if r.violation_rate is not None
-                       else (float(r.failed_count) / float(r.checked_count) if r.checked_count else 0.0),
-                       "status": str(r.status)} for r in rows]
+            rows = (
+                db.query(
+                    DqResultModel.violation_rate,
+                    DqResultModel.failed_count,
+                    DqResultModel.checked_count,
+                    DqResultModel.status,
+                    DqRunModel.id.label("run_id"),
+                    DqRunModel.created_at,
+                )
+                .join(DqRunModel, DqRunModel.id == DqResultModel.run_id)
+                .filter(DqRunModel.dataset_id == dataset_id, DqResultModel.rule_id == rule_id)
+                .order_by(DqRunModel.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+            points = [
+                {
+                    "run_id": str(r.run_id),
+                    "created_at": _iso(r.created_at),
+                    "value": float(r.violation_rate)
+                    if r.violation_rate is not None
+                    else (float(r.failed_count) / float(r.checked_count) if r.checked_count else 0.0),
+                    "status": str(r.status),
+                }
+                for r in rows
+            ]
             values = [float(p["value"]) for p in points]
-            return {"dataset_id": dataset_id, "rule_id": rule_id, "points": points,
-                    "summary": {"count": len(values), "min": min(values) if values else None,
-                                 "max": max(values) if values else None,
-                                 "latest": values[0] if values else None}}
+            return {
+                "dataset_id": dataset_id,
+                "rule_id": rule_id,
+                "points": points,
+                "summary": {
+                    "count": len(values),
+                    "min": min(values) if values else None,
+                    "max": max(values) if values else None,
+                    "latest": values[0] if values else None,
+                },
+            }
     except Exception as exc:
         return {"dataset_id": dataset_id, "rule_id": rule_id, "points": [], "summary": {"count": 0, "error": str(exc)}}
 
@@ -148,11 +192,22 @@ def get_related_quality_results(execution_run_id: str, target_id: str = "") -> d
             rows = [r for r in rows if r.status in {"FAIL", "FAILED", "ERROR"}]
             if target_id:
                 rows = [r for r in rows if target_id.lower() in (r.rule_id + " " + r.rule_title).lower()]
-            return {"execution_run_id": execution_run_id, "target_id": target_id,
-                    "related_failures": [{"result_id": r.id, "rule_id": r.rule_id,
-                    "rule_title": r.rule_title, "status": r.status,
-                    "violation_rate": r.violation_rate, "failed_count": r.failed_count,
-                    "checked_count": r.checked_count} for r in rows]}
+            return {
+                "execution_run_id": execution_run_id,
+                "target_id": target_id,
+                "related_failures": [
+                    {
+                        "result_id": r.id,
+                        "rule_id": r.rule_id,
+                        "rule_title": r.rule_title,
+                        "status": r.status,
+                        "violation_rate": r.violation_rate,
+                        "failed_count": r.failed_count,
+                        "checked_count": r.checked_count,
+                    }
+                    for r in rows
+                ],
+            }
     except Exception as exc:
         return {"execution_run_id": execution_run_id, "related_failures": [], "error": str(exc)}
 
@@ -162,18 +217,37 @@ def get_dataset_profile(dataset_id: str) -> dict[str, Any]:
     """Return the latest bounded dataset and column profile, excluding raw sample values."""
     try:
         with Session(get_engine()) as db:
-            profile = (db.query(ProfileModel).filter_by(dataset_id=dataset_id)
-                       .order_by(ProfileModel.generated_at.desc()).first())
+            profile = (
+                db.query(ProfileModel)
+                .filter_by(dataset_id=dataset_id)
+                .order_by(ProfileModel.generated_at.desc())
+                .first()
+            )
             if not profile:
                 return {"error": "PROFILE_NOT_FOUND", "dataset_id": dataset_id}
             columns = db.query(ColumnProfileModel).filter_by(profile_dataset_id=dataset_id).all()
-            return {"dataset_id": dataset_id, "generated_at": _iso(profile.generated_at),
-                    "row_count": profile.row_count, "completeness_score": profile.completeness_score,
-                    "validity_score": profile.validity_score, "duplicate_rate": profile.duplicate_rate,
-                    "columns": [{"name": c.name, "data_type": c.data_type, "null_rate": c.null_rate,
-                    "distinct_count": c.distinct_count, "negative_rate": c.negative_rate,
-                    "quantiles": _json(c.quantiles_json, {}), "min": c.min_value, "max": c.max_value,
-                    "out_of_domain_rate": c.out_of_domain_rate} for c in columns]}
+            return {
+                "dataset_id": dataset_id,
+                "generated_at": _iso(profile.generated_at),
+                "row_count": profile.row_count,
+                "completeness_score": profile.completeness_score,
+                "validity_score": profile.validity_score,
+                "duplicate_rate": profile.duplicate_rate,
+                "columns": [
+                    {
+                        "name": c.name,
+                        "data_type": c.data_type,
+                        "null_rate": c.null_rate,
+                        "distinct_count": c.distinct_count,
+                        "negative_rate": c.negative_rate,
+                        "quantiles": _json(c.quantiles_json, {}),
+                        "min": c.min_value,
+                        "max": c.max_value,
+                        "out_of_domain_rate": c.out_of_domain_rate,
+                    }
+                    for c in columns
+                ],
+            }
     except Exception as exc:
         return {"dataset_id": dataset_id, "error": f"FAILED_TO_LOAD_PROFILE: {exc}"}
 
@@ -192,17 +266,31 @@ def query_readonly_evidence(
             if operation == "failed_rules":
                 rows = [r for r in rows if r.status in {"FAIL", "FAILED", "ERROR"}]
             rows = rows[:limit]
-            return {"execution_run_id": execution_run_id, "operation": operation,
-                    "rows": [{"result_id": r.id, "rule_id": r.rule_id, "status": r.status,
-                    "violation_rate": r.violation_rate, "failed_count": r.failed_count,
-                    "checked_count": r.checked_count} for r in rows]}
+            return {
+                "execution_run_id": execution_run_id,
+                "operation": operation,
+                "rows": [
+                    {
+                        "result_id": r.id,
+                        "rule_id": r.rule_id,
+                        "status": r.status,
+                        "violation_rate": r.violation_rate,
+                        "failed_count": r.failed_count,
+                        "checked_count": r.checked_count,
+                    }
+                    for r in rows
+                ],
+            }
     except Exception as exc:
         return {"execution_run_id": execution_run_id, "rows": [], "error": str(exc)}
 
 
 ANOMALY_INVESTIGATION_TOOLS = [
-    get_anomaly_case, get_metric_history, get_related_quality_results,
-    get_dataset_profile, query_readonly_evidence,
+    get_anomaly_case,
+    get_metric_history,
+    get_related_quality_results,
+    get_dataset_profile,
+    query_readonly_evidence,
 ]
 
 
@@ -233,36 +321,55 @@ if __name__ == "__main__":
         case = {}
 
     default_dataset_id = case.get("dataset_id", "") if isinstance(case, dict) else ""
-    dataset_id = input(
-        f"Dataset ID for metric/profile checks [{default_dataset_id or 'none found'}] (Enter to use default/stop): "
-    ).strip() or default_dataset_id
+    dataset_id = (
+        input(
+            f"Dataset ID for metric/profile checks [{default_dataset_id or 'none found'}] (Enter to use default/stop): "
+        ).strip()
+        or default_dataset_id
+    )
     if dataset_id:
         signals = case.get("signals", []) if isinstance(case, dict) else []
         default_rule_id = next(
-            (s.get("target_id") for s in sorted(
-                signals, key=lambda item: float(item.get("score", 0.0)), reverse=True
-            ) if s.get("target_type") == "RULE" and s.get("target_id")),
+            (
+                s.get("target_id")
+                for s in sorted(signals, key=lambda item: float(item.get("score", 0.0)), reverse=True)
+                if s.get("target_type") == "RULE" and s.get("target_id")
+            ),
             "",
         )
-        rule_id = input(
-            f"Rule ID for metric history [{default_rule_id or 'none found'}] (Enter to use default/skip): "
-        ).strip() or default_rule_id
+        rule_id = (
+            input(
+                f"Rule ID for metric history [{default_rule_id or 'none found'}] (Enter to use default/skip): "
+            ).strip()
+            or default_rule_id
+        )
         if rule_id:
-            pprint(get_metric_history.invoke({
-                "dataset_id": dataset_id,
-                "rule_id": rule_id,
-                "lookback_runs": 10,
-            }))
+            pprint(
+                get_metric_history.invoke(
+                    {
+                        "dataset_id": dataset_id,
+                        "rule_id": rule_id,
+                        "lookback_runs": 10,
+                    }
+                )
+            )
         pprint(get_dataset_profile.invoke({"dataset_id": dataset_id}))
 
     default_execution_id = case.get("execution_run_id", "") if isinstance(case, dict) else ""
-    execution_id = input(
-        f"Execution run ID for related results [{default_execution_id or 'none found'}] (Enter to use default/stop): "
-    ).strip() or default_execution_id
+    execution_id = (
+        input(
+            f"Execution run ID for related results [{default_execution_id or 'none found'}] (Enter to use default/stop): "
+        ).strip()
+        or default_execution_id
+    )
     if execution_id:
         pprint(get_related_quality_results.invoke({"execution_run_id": execution_id}))
-        pprint(query_readonly_evidence.invoke({
-            "execution_run_id": execution_id,
-            "operation": "failed_rules",
-            "limit": 20,
-        }))
+        pprint(
+            query_readonly_evidence.invoke(
+                {
+                    "execution_run_id": execution_id,
+                    "operation": "failed_rules",
+                    "limit": 20,
+                }
+            )
+        )

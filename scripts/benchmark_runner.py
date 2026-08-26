@@ -21,23 +21,18 @@ from pathlib import Path
 
 # Ensure project root is in sys.path
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 # Set SQLite as default DB for stable local benchmark run
 os.environ["DATABASE_URL"] = "sqlite:///steward_local.db"
 os.environ["OPENAI_MODEL"] = "gpt-4o-mini"
 
-from src.config import get_settings
-get_settings.cache_clear()
+from src.agents.graph import run_anomaly_graph, run_execution_graph  # noqa: E402
+from src.config import get_settings  # noqa: E402
+from src.services.rule_store import get_active_rules, init_db  # noqa: E402
 
-from src.agents.graph import (
-    build_anomaly_graph,
-    build_execution_graph,
-    run_anomaly_graph,
-    run_execution_graph,
-)
-from src.config import get_settings
-from src.services.rule_store import get_active_rules, get_test_results, init_db
+get_settings.cache_clear()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -81,7 +76,9 @@ async def run_benchmark():
     print(f"• Test Run ID : {test_run_id}")
     print(f"• Kết quả test: {passed_count} PASS | {failed_count} FAIL | {error_count} ERROR")
     for r in test_results:
-        print(f"  * {r['rule_id']}: status={r['status']}, violations={r.get('violation_count', 0)} ({r.get('violation_rate', 0.0):.2%})")
+        print(
+            f"  * {r['rule_id']}: status={r['status']}, violations={r.get('violation_count', 0)} ({r.get('violation_rate', 0.0):.2%})"
+        )
 
     # ---------------------------------------------------------
     # BƯỚC 2: CHẠY GRAPH 3 - LEGACY MODE (1-Shot Steward Insights)
@@ -189,9 +186,9 @@ async def run_benchmark():
     # Tạo Markdown Report
     md_content = f"""# Báo Cáo Benchmark Đối Chiếu: Graph 3 Anomaly Investigation (Legacy vs DeepAgent)
 
-**Thời gian thực hiện**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  
-**Tập dữ liệu (Dataset)**: `{dataset_id}` (50.000 dòng dữ liệu taxi NYC)  
-**Mã kiểm thử (Execution Run ID)**: `{test_run_id}`  
+**Thời gian thực hiện**: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+**Tập dữ liệu (Dataset)**: `{dataset_id}` (50.000 dòng dữ liệu taxi NYC)
+**Mã kiểm thử (Execution Run ID)**: `{test_run_id}`
 
 ---
 
@@ -216,7 +213,7 @@ async def run_benchmark():
 | Tiêu chí Đánh giá | Legacy (1-Shot Prompt) | DeepAgent (Multi-Tool Agent) | Đánh giá / Ưu thế |
 | :--- | :--- | :--- | :--- |
 | **Thời gian phản hồi (Latency)** | `{legacy_duration:.2f}s` | `{deepagent_duration:.2f}s` | Legacy nhanh hơn do chỉ gọi 1 prompt tĩnh; DeepAgent thực thi đa bước điều tra chuyên sâu |
-| **Quyết định Bất thường** | `{legacy_decision.get('decision')}` (Score: `{legacy_decision.get('score')}`) | `{deepagent_decision.get('decision')}` (Score: `{deepagent_decision.get('score')}`) | Cả 2 đều bảo toàn quyết định chuẩn mực từ Statistical Detector |
+| **Quyết định Bất thường** | `{legacy_decision.get("decision")}` (Score: `{legacy_decision.get("score")}`) | `{deepagent_decision.get("decision")}` (Score: `{deepagent_decision.get("score")}`) | Cả 2 đều bảo toàn quyết định chuẩn mực từ Statistical Detector |
 | **Số giả thuyết đề xuất** | {len(legacy_hypotheses)} giả thuyết | {len(deepagent_hypotheses)} giả thuyết | DeepAgent phân tích toàn diện, bao quát các khía cạnh gốc rễ |
 | **Độ sâu chẩn đoán (Depth)** | Giới hạn trong thông tin prompt tĩnh đưa vào | Tự gọi công cụ tra cứu DB, xem hồ sơ cột và dbt metadata | **DeepAgent vượt trội** về chiều sâu ngữ cảnh |
 | **Khả năng xác thực bằng chứng (Evidence Grounding)** | Dựa trên phỏng đoán từ text đầu vào, dễ hallucinate ID | Xác minh bằng chứng thực từ các tín hiệu và schema thực tế | **DeepAgent chính xác**, không sinh bằng chứng ảo |
@@ -231,9 +228,9 @@ async def run_benchmark():
 
     for i, h in enumerate(legacy_hypotheses, 1):
         md_content += f"""
-#### Giả thuyết #{i}: `{h.get('hypothesis_type')}` (Độ tin cậy: {h.get('confidence', 0.0):.0%})
-- **Tóm tắt nguyên nhân**: {h.get('summary')}
-- **Bằng chứng tham chiếu (Evidence Refs)**: `{h.get('evidence_refs')}`
+#### Giả thuyết #{i}: `{h.get("hypothesis_type")}` (Độ tin cậy: {h.get("confidence", 0.0):.0%})
+- **Tóm tắt nguyên nhân**: {h.get("summary")}
+- **Bằng chứng tham chiếu (Evidence Refs)**: `{h.get("evidence_refs")}`
 - **Khuyến nghị kiểm tra**:
 """
         for check in h.get("recommended_checks", []):
@@ -247,11 +244,11 @@ async def run_benchmark():
 
     for i, h in enumerate(deepagent_hypotheses, 1):
         md_content += f"""
-#### Giả thuyết #{i}: `{h.get('hypothesis_type')}` (Độ tin cậy: {h.get('confidence', 0.0):.0%})
-- **Tóm tắt nguyên nhân**: {h.get('summary')}
-- **Bằng chứng tham chiếu (Evidence Refs)**: `{h.get('evidence_refs')}`
-- **Bằng chứng còn thiếu (Missing Evidence)**: {h.get('missing_evidence') or 'Đã đủ bằng chứng xác thực'}
-- **Giới hạn / Rủi ro**: {h.get('limitations') or 'Không ghi nhận'}
+#### Giả thuyết #{i}: `{h.get("hypothesis_type")}` (Độ tin cậy: {h.get("confidence", 0.0):.0%})
+- **Tóm tắt nguyên nhân**: {h.get("summary")}
+- **Bằng chứng tham chiếu (Evidence Refs)**: `{h.get("evidence_refs")}`
+- **Bằng chứng còn thiếu (Missing Evidence)**: {h.get("missing_evidence") or "Đã đủ bằng chứng xác thực"}
+- **Giới hạn / Rủi ro**: {h.get("limitations") or "Không ghi nhận"}
 - **Khuyến nghị kiểm tra cụ thể**:
 """
         for check in h.get("recommended_checks", []):
@@ -262,7 +259,7 @@ async def run_benchmark():
 
 ## 4. Kết luận Đánh giá (Key Takeaways)
 
-1. **Khả năng suy luận & Tự chủ**: 
+1. **Khả năng suy luận & Tự chủ**:
    - **Legacy** phù hợp cho trường hợp cần phản hồi siêu nhanh hoặc triage nhanh ban đầu.
    - **DeepAgent** hoạt động như một Data Quality Engineer thực thụ: tự dùng tool kiểm tra database, phân tích sự tương quan giữa các lỗi (ví dụ: vi phạm payment_type liên quan đến schema drift), loại bỏ hoàn toàn các nhận định mơ hồ.
 2. **Độ tin cậy của Bằng chứng (Evidence Integrity)**:

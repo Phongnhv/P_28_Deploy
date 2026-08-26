@@ -36,9 +36,7 @@ async def validate_dbt_project_node(state: AgentState) -> dict:
             valid, output, return_code = run_dbt_parse(dbt_dir)
             dbt_skipped = dbt_parse_was_skipped(output)
             if dbt_skipped:
-                logger.warning(
-                    "Chốt chặn dbt BỊ BỎ QUA (không tìm thấy executable dbt): %s", output
-                )
+                logger.warning("Chốt chặn dbt BỊ BỎ QUA (không tìm thấy executable dbt): %s", output)
             if not valid:
                 error = output or "dbt parse failed"
     except Exception as exc:

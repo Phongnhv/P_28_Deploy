@@ -21,26 +21,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ridepulse-worker")
 
+
 def to_float(val):
-    if val is None or val == '':
+    if val is None or val == "":
         return None
     try:
         return float(val)
     except Exception:
         return None
 
+
 def to_int(val):
-    if val is None or val == '':
+    if val is None or val == "":
         return None
     try:
         return int(float(val))
     except Exception:
         return None
 
+
 def to_str(val):
     if val is None:
         return None
     return str(val)
+
 
 def run_ingest_profile(job_id: str, dataset_id: str):
     """
@@ -101,7 +105,7 @@ def run_ingest_profile(job_id: str, dataset_id: str):
                     "Creative Mobile Technologies, LLC": 1,
                     "Curb Mobility, LLC": 2,
                     "Myle Technologies Inc": 6,
-                    "Helix": 7
+                    "Helix": 7,
                 }
                 vendor_id = vendor_map.get(raw_vendor, 0)
             else:
@@ -116,7 +120,7 @@ def run_ingest_profile(job_id: str, dataset_id: str):
                     "Nassau or Westchester": 4,
                     "Negotiated fare": 5,
                     "Group ride": 6,
-                    "Null/Unknown": 99
+                    "Null/Unknown": 99,
                 }
                 rate_code_id = rate_map.get(raw_rate, 1)
             else:
@@ -132,35 +136,45 @@ def run_ingest_profile(job_id: str, dataset_id: str):
                     "Dispute": 4,
                     "Unknown": 5,
                     "Voided trip": 6,
-                    "Invalid Payment (Dispute/Test)": 99
+                    "Invalid Payment (Dispute/Test)": 99,
                 }
                 payment_type = payment_map.get(raw_payment, 1)
             else:
                 payment_type = to_int(raw_payment)
 
-            batch.append({
-                "source_row_id": to_str(r.get("source_row_id")),
-                "vendor_id": vendor_id,
-                "pickup_at": to_str(r.get("pickup_at")),
-                "dropoff_at": to_str(r.get("dropoff_at")),
-                "passenger_count": to_int(r.get("passenger_count")),
-                "trip_distance": to_float(r.get("trip_distance")),
-                "rate_code_id": rate_code_id,
-                "store_and_fwd_flag": to_str(r.get("store_and_fwd_flag"))[:1] if r.get("store_and_fwd_flag") else None,
-                "pickup_location_id": to_int(r.get("pickup_location_id")) if isinstance(r.get("pickup_location_id"), (int, float)) or (isinstance(r.get("pickup_location_id"), str) and r.get("pickup_location_id").isdigit()) else 0, # Location IDs are INT in database
-                "dropoff_location_id": to_int(r.get("dropoff_location_id")) if isinstance(r.get("dropoff_location_id"), (int, float)) or (isinstance(r.get("dropoff_location_id"), str) and r.get("dropoff_location_id").isdigit()) else 0,
-                "payment_type": payment_type,
-                "fare_amount": to_float(r.get("fare_amount")),
-                "extra": to_float(r.get("extra")),
-                "mta_tax": to_float(r.get("mta_tax")),
-                "tip_amount": to_float(r.get("tip_amount")),
-                "tolls_amount": to_float(r.get("tolls_amount")),
-                "improvement_surcharge": to_float(r.get("improvement_surcharge")),
-                "total_amount": to_float(r.get("total_amount")),
-                "congestion_surcharge": to_float(r.get("congestion_surcharge")),
-                "airport_fee": to_float(r.get("airport_fee")),
-                "cbd_congestion_fee": to_float(r.get("cbd_congestion_fee"))
-            })
+            batch.append(
+                {
+                    "source_row_id": to_str(r.get("source_row_id")),
+                    "vendor_id": vendor_id,
+                    "pickup_at": to_str(r.get("pickup_at")),
+                    "dropoff_at": to_str(r.get("dropoff_at")),
+                    "passenger_count": to_int(r.get("passenger_count")),
+                    "trip_distance": to_float(r.get("trip_distance")),
+                    "rate_code_id": rate_code_id,
+                    "store_and_fwd_flag": to_str(r.get("store_and_fwd_flag"))[:1]
+                    if r.get("store_and_fwd_flag")
+                    else None,
+                    "pickup_location_id": to_int(r.get("pickup_location_id"))
+                    if isinstance(r.get("pickup_location_id"), (int, float))
+                    or (isinstance(r.get("pickup_location_id"), str) and r.get("pickup_location_id").isdigit())
+                    else 0,  # Location IDs are INT in database
+                    "dropoff_location_id": to_int(r.get("dropoff_location_id"))
+                    if isinstance(r.get("dropoff_location_id"), (int, float))
+                    or (isinstance(r.get("dropoff_location_id"), str) and r.get("dropoff_location_id").isdigit())
+                    else 0,
+                    "payment_type": payment_type,
+                    "fare_amount": to_float(r.get("fare_amount")),
+                    "extra": to_float(r.get("extra")),
+                    "mta_tax": to_float(r.get("mta_tax")),
+                    "tip_amount": to_float(r.get("tip_amount")),
+                    "tolls_amount": to_float(r.get("tolls_amount")),
+                    "improvement_surcharge": to_float(r.get("improvement_surcharge")),
+                    "total_amount": to_float(r.get("total_amount")),
+                    "congestion_surcharge": to_float(r.get("congestion_surcharge")),
+                    "airport_fee": to_float(r.get("airport_fee")),
+                    "cbd_congestion_fee": to_float(r.get("cbd_congestion_fee")),
+                }
+            )
 
             if len(batch) >= 1000:
                 session.execute(insert_query, batch)
@@ -174,7 +188,7 @@ def run_ingest_profile(job_id: str, dataset_id: str):
 
     # 3. Simulate dbt build
     logger.info("Running dbt build...")
-    time.sleep(1) # Simulate dbt build latency
+    time.sleep(1)  # Simulate dbt build latency
     logger.info("dbt build completed successfully.")
 
     # 4. Trigger profiling (raw_profiler_node) and persist profile
@@ -183,6 +197,7 @@ def run_ingest_profile(job_id: str, dataset_id: str):
     # Triggering proposal pipeline will automatically profile and propose rules.
 
     logger.info(f"INGEST_PROFILE job {job_id} completed successfully.")
+
 
 async def run_propose_rules(job_id: str, dataset_id: str):
     """
@@ -195,7 +210,7 @@ async def run_propose_rules(job_id: str, dataset_id: str):
     proposal_graph = build_proposal_graph()
     state = {
         "dataset_id": dataset_id,
-        "rule_run_id": job_id, # correlation ID/run_id matching job_id
+        "rule_run_id": job_id,  # correlation ID/run_id matching job_id
         "metadata": {
             "connection_string": get_settings().database_url,
             "sampling_rate": 1.0,
@@ -212,6 +227,7 @@ async def run_propose_rules(job_id: str, dataset_id: str):
 
             from src.models.database import JobModel
             from src.services.rule_store import get_engine
+
             with Session(get_engine()) as session:
                 db_job = session.query(JobModel).filter_by(id=job_id).first()
                 if db_job:
@@ -223,6 +239,7 @@ async def run_propose_rules(job_id: str, dataset_id: str):
 
     logger.info(f"PROPOSE_RULES job {job_id} completed successfully.")
 
+
 def run_dq(job_id: str, dataset_id: str):
     """
     Worker handler for RUN_DQ job type.
@@ -232,6 +249,7 @@ def run_dq(job_id: str, dataset_id: str):
     # Simulate DQ evaluation
     time.sleep(1)
     logger.info(f"RUN_DQ job {job_id} completed successfully.")
+
 
 async def main():
     job_id = os.getenv("RUN_JOB_ID")
@@ -289,11 +307,13 @@ async def main():
         with Session(engine) as session:
             db_job = session.query(JobModel).filter_by(id=job_id).first()
             if db_job:
-                db_job.status = 'FAILED'
+                db_job.status = "FAILED"
                 db_job.error = str(e)
                 session.commit()
         sys.exit(1)
 
+
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(main())

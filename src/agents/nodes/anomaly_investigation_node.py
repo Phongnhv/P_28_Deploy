@@ -7,6 +7,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from src.agents.nodes.templates import (
+    ANOMALY_INVESTIGATION_SYSTEM_PROMPT,
+    ANOMALY_INVESTIGATION_USER_PROMPT,
+)
+from src.agents.state import AnomalyGraphState
+from src.agents.tools.anomaly_investigation_tools import ANOMALY_INVESTIGATION_TOOLS
+from src.config import get_settings
+from src.models.rule_schemas import AnomalyInvestigationResponse
+from src.services.llm import get_llm
+
 # Ensure project root is in sys.path when executed directly as a script
 _project_root = str(Path(__file__).resolve().parents[3])
 if _project_root not in sys.path:
@@ -21,16 +31,6 @@ except ImportError:
     except ImportError:
         TodoListMiddleware = None
         ToolCallLimitMiddleware = None
-
-from src.agents.nodes.templates import (
-    ANOMALY_INVESTIGATION_SYSTEM_PROMPT,
-    ANOMALY_INVESTIGATION_USER_PROMPT,
-)
-from src.agents.state import AnomalyGraphState
-from src.agents.tools.anomaly_investigation_tools import ANOMALY_INVESTIGATION_TOOLS
-from src.config import get_settings
-from src.models.rule_schemas import AnomalyInvestigationResponse, InvestigationHypothesis
-from src.services.llm import get_llm
 
 
 def _message_content(result: Any) -> Any:
@@ -54,10 +54,12 @@ def save_investigation_output(
     """Ghi kết quả điều tra của Deep Agent thành file JSON trong thư mục output/anomaly_investigation."""
     try:
         from datetime import datetime
+
         settings = get_settings()
         base_dir = Path(output_dir or getattr(settings, "output_dir", None) or "./output")
     except Exception:
         from datetime import datetime
+
         base_dir = Path(output_dir or "./output")
 
     target_dir = base_dir / "anomaly_investigation"
@@ -151,9 +153,11 @@ __all__ = ["AnomalyInvestigationResponse", "anomaly_investigation_node", "save_i
 
 if __name__ == "__main__":
     import asyncio
+
     from dotenv import load_dotenv
     from sqlalchemy.orm import Session
-    from src.models.database import AnomalyRunModel, AnomalySignalModel, DqRunModel, DqResultModel
+
+    from src.models.database import AnomalyRunModel, AnomalySignalModel, DqResultModel, DqRunModel
     from src.services.rule_store import get_engine
 
     # Nạp biến môi trường từ .env (API Keys, LLM Provider, Database URL)
@@ -193,9 +197,12 @@ if __name__ == "__main__":
                 for s in signal_rows
             ]
 
-            failed_rule_rows = db.query(DqResultModel).filter_by(run_id=execution_run_id).filter(
-                DqResultModel.status.in_(["FAIL", "FAILED", "ERROR"])
-            ).all()
+            failed_rule_rows = (
+                db.query(DqResultModel)
+                .filter_by(run_id=execution_run_id)
+                .filter(DqResultModel.status.in_(["FAIL", "FAILED", "ERROR"]))
+                .all()
+            )
 
         # Tạo State thật truyền vào Deep Agent
         real_state: AnomalyGraphState = {
@@ -227,7 +234,9 @@ if __name__ == "__main__":
         print(f"  • Anomaly Run ID   : {real_state['anomaly_run_id']}")
         print(f"  • Execution Run ID : {real_state['execution_run_id']}")
         print(f"  • Dataset ID       : {real_state['dataset_id']}")
-        print(f"  • Quyết định       : {real_state['anomaly_decision']['decision']} (Score: {real_state['anomaly_decision']['score']}, Severity: {real_state['anomaly_decision']['severity']})")
+        print(
+            f"  • Quyết định       : {real_state['anomaly_decision']['decision']} (Score: {real_state['anomaly_decision']['score']}, Severity: {real_state['anomaly_decision']['severity']})"
+        )
         print(f"  • Số luật vi phạm  : {len(failed_rule_rows)} rules thất bại")
         print(f"  • Số tín hiệu nạp  : {len(signals)} signals từ database")
 
@@ -248,25 +257,31 @@ if __name__ == "__main__":
 
             validation = result.get("hypothesis_validation", {})
             if validation:
-                print(f"\n📝 Đánh giá tổng thể (Overall Assessment):")
+                print("\n📝 Đánh giá tổng thể (Overall Assessment):")
                 print(f"  {validation.get('overall_assessment', 'N/A')}")
-                print(f"\n🔍 Tóm tắt kết quả điều tra (Investigation Summary):")
+                print("\n🔍 Tóm tắt kết quả điều tra (Investigation Summary):")
                 print(f"  {validation.get('investigation_summary', 'N/A')}")
 
             hypotheses = result.get("hypotheses", [])
             print(f"\n💡 Danh sách Giả thuyết Nguyên nhân do Deep Agent suy luận ({len(hypotheses)} hypotheses):")
             for idx, h in enumerate(hypotheses, 1):
-                print(f"\n  [{idx}] Loại nguyên nhân : {h.get('hypothesis_type')} (Độ tin cậy: {h.get('confidence', 0):.0%})")
+                print(
+                    f"\n  [{idx}] Loại nguyên nhân : {h.get('hypothesis_type')} (Độ tin cậy: {h.get('confidence', 0):.0%})"
+                )
                 print(f"      Tóm tắt           : {h.get('summary')}")
                 print(f"      Tín hiệu ủng hộ   : {', '.join(h.get('supporting_signal_ids', [])) or 'None'}")
                 print(f"      Bằng chứng chỉ dẫn: {', '.join(h.get('evidence_refs', [])) or 'None'}")
-                print(f"      Hành động đề xuất (Recommended Checks):")
+                print("      Hành động đề xuất (Recommended Checks):")
                 for check in h.get("recommended_checks", []):
                     print(f"        • {check}")
                 if h.get("missing_evidence"):
-                    print(f"      Bằng chứng còn thiếu: {', '.join(h.get('missing_evidence')) if isinstance(h.get('missing_evidence'), list) else h.get('missing_evidence')}")
+                    print(
+                        f"      Bằng chứng còn thiếu: {', '.join(h.get('missing_evidence')) if isinstance(h.get('missing_evidence'), list) else h.get('missing_evidence')}"
+                    )
                 if h.get("limitations"):
-                    print(f"      Hạn chế / Rủi ro  : {', '.join(h.get('limitations')) if isinstance(h.get('limitations'), list) else h.get('limitations')}")
+                    print(
+                        f"      Hạn chế / Rủi ro  : {', '.join(h.get('limitations')) if isinstance(h.get('limitations'), list) else h.get('limitations')}"
+                    )
 
             trace_file = result.get("metadata", {}).get("investigation_trace_path")
             if trace_file:
@@ -279,8 +294,7 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"\n❌ LỖI TRONG QUÁ TRÌNH CHẠY: {e}")
             import traceback
+
             traceback.print_exc()
 
     asyncio.run(run_real_llm_test())
-
-

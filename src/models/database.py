@@ -7,13 +7,13 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from src.time_utils import utc_now
 
 
-class TriggerTypeEnum(str, enum.Enum):
+class TriggerTypeEnum(enum.StrEnum):
     MANUAL = "MANUAL"
     PUBLISH_AND_RUN = "PUBLISH_AND_RUN"
     SCHEDULED = "SCHEDULED"
 
 
-class ExecutionRunStatusEnum(str, enum.Enum):
+class ExecutionRunStatusEnum(enum.StrEnum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
     DONE = "DONE"
@@ -21,7 +21,7 @@ class ExecutionRunStatusEnum(str, enum.Enum):
     FAILED_TO_START = "FAILED_TO_START"
 
 
-class DqResultStatusEnum(str, enum.Enum):
+class DqResultStatusEnum(enum.StrEnum):
     PASS = "PASS"
     FAIL = "FAIL"
     ERROR = "ERROR"
@@ -29,7 +29,7 @@ class DqResultStatusEnum(str, enum.Enum):
     RESULT_MISMATCH = "RESULT_MISMATCH"
 
 
-class AnomalyFeedbackEnum(str, enum.Enum):
+class AnomalyFeedbackEnum(enum.StrEnum):
     TRUE_ANOMALY = "TRUE_ANOMALY"
     FALSE_POSITIVE = "FALSE_POSITIVE"
     EXPECTED_CHANGE = "EXPECTED_CHANGE"
@@ -64,9 +64,7 @@ class UserAccountModel(Base):
     created_by: Mapped[str | None] = mapped_column(String(100))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=utc_now, onupdate=utc_now
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
 
 class DatasetModel(Base):
@@ -82,9 +80,7 @@ class DatasetModel(Base):
     source_label: Mapped[str] = mapped_column(String(256), nullable=False)
     manifest_version: Mapped[str] = mapped_column(String(64), nullable=False)
     checksum: Mapped[str] = mapped_column(String(256), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=utc_now, onupdate=utc_now
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
 
 class DatasetAccessModel(Base):
@@ -141,9 +137,7 @@ class JobModel(Base):
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=utc_now, onupdate=utc_now
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
 
 class ProfileModel(Base):
@@ -215,9 +209,7 @@ class RuleProposalModel(Base):
     confidence_breakdown: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=utc_now, onupdate=utc_now
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
 
 class WorkflowRunModel(Base):
@@ -281,11 +273,7 @@ class RuleConfigurationModel(Base):
     # Đặt default để insert hợp lệ trên cả schema cũ (đã NOT NULL) lẫn schema mới.
     model_name: Mapped[str] = mapped_column(String(128), nullable=False, default="unspecified")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=utc_now, onupdate=utc_now
-    )
-
-
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
 
 class DqRunModel(Base):
@@ -313,7 +301,9 @@ class DqRunModel(Base):
     dbt_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     metrics_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # Retain execution evidence when an upstream workflow revision supersedes it.
-    workflow_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workflow_runs.id"), nullable=True, index=True)
+    workflow_run_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("workflow_runs.id"), nullable=True, index=True
+    )
     stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
@@ -327,7 +317,6 @@ class SemanticContractModel(Base):
     contract_json: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
-
 
 
 class DqResultModel(Base):
@@ -371,7 +360,9 @@ class RulesetVersionModel(Base):
     dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     proposal_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("rule_proposals.id"), nullable=True)
     # New dashboard rulesets are owned by a workflow batch, not one legacy proposal row.
-    workflow_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workflow_runs.id"), nullable=True, index=True)
+    workflow_run_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("workflow_runs.id"), nullable=True, index=True
+    )
     stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     semantic_contract_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ruleset_hash: Mapped[str] = mapped_column(String(256), nullable=False)
@@ -387,7 +378,9 @@ class AnomalyRunModel(Base):
     execution_run_id: Mapped[str] = mapped_column(String(64), ForeignKey("dq_runs.id"), nullable=False, index=True)
     detector_config_version: Mapped[str] = mapped_column(String(64), nullable=False, default="anomaly-v1")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
-    decision: Mapped[str] = mapped_column(String(32), nullable=False)  # NORMAL, WATCH, ANOMALY, CRITICAL, INSUFFICIENT_HISTORY
+    decision: Mapped[str] = mapped_column(
+        String(32), nullable=False
+    )  # NORMAL, WATCH, ANOMALY, CRITICAL, INSUFFICIENT_HISTORY
     score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     severity: Mapped[str] = mapped_column(String(32), nullable=False, default="LOW")
@@ -443,6 +436,8 @@ class AnomalyFeedbackModel(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     anomaly_run_id: Mapped[str] = mapped_column(String(64), ForeignKey("anomaly_runs.id"), nullable=False, index=True)
     username: Mapped[str] = mapped_column(String(100), ForeignKey("user_accounts.username"), nullable=False)
-    feedback_label: Mapped[str] = mapped_column(String(64), nullable=False)  # TRUE_ANOMALY, FALSE_POSITIVE, EXPECTED_CHANGE, RULE_MISCONFIGURATION, UNKNOWN
+    feedback_label: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )  # TRUE_ANOMALY, FALSE_POSITIVE, EXPECTED_CHANGE, RULE_MISCONFIGURATION, UNKNOWN
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)

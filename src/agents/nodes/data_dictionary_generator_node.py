@@ -17,6 +17,7 @@ from src.services.llm import get_llm
 
 logger = logging.getLogger(__name__)
 
+
 async def data_dictionary_generator_node(state: AgentState) -> dict[str, Any]:
     """Create conservative metadata from the profile and optional domain hint."""
     if state.get("normalized_data_dictionary"):
@@ -60,7 +61,11 @@ async def data_dictionary_generator_node(state: AgentState) -> dict[str, Any]:
     try:
         out_dir = getattr(settings, "output_dir", None)
         res_dir = getattr(settings, "results_dir", None)
-        base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+        base_dir = (
+            out_dir
+            if isinstance(out_dir, (str, Path))
+            else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+        )
         dict_dir = Path(base_dir) / "dictionary"
         dict_dir.mkdir(parents=True, exist_ok=True)
         dump_file = dict_dir / f"debug_inferred_dictionary_{timestamp}_{run_id}.json"

@@ -31,6 +31,7 @@ def setup_test_db(tmp_path, monkeypatch):
     monkeypatch.setattr(rule_store_module, "_engine", test_engine)
     init_db()
     yield test_engine
+    test_engine.dispose()
 
 
 def test_publish_approved_rules_workflow():

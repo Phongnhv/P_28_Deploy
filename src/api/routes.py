@@ -4,7 +4,7 @@ import json
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import (
     APIRouter,
@@ -23,6 +23,14 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from src.config import get_settings
+from src.models.api_schemas import (
+    AnomalyFeedbackRequest,
+    AnomalySignalDTO,
+    CombinedRunStatusResponse,
+    ExecutionRequest,
+    PublishRulesetRequest,
+    PublishRulesetResponse,
+)
 from src.models.database import (
     AnomalyFeedbackModel,
     AnomalyHypothesisModel,
@@ -45,14 +53,6 @@ from src.models.database import (
     UserAccountModel,
     WorkflowArtifactModel,
     WorkflowRunModel,
-)
-from src.models.api_schemas import (
-    AnomalyFeedbackRequest,
-    AnomalySignalDTO,
-    CombinedRunStatusResponse,
-    ExecutionRequest,
-    PublishRulesetRequest,
-    PublishRulesetResponse,
 )
 from src.models.schemas import (
     ActiveRuleResponse,
@@ -584,22 +584,52 @@ async def import_dataset(
         checksum=hashlib.sha256(payload).hexdigest(),
     )
     job_id = str(uuid.uuid4())
-    job = JobModel(id=job_id, type="INGEST_PROFILE", status="PENDING", progress=0.0,
-                   message="Queued for profiling", idempotency_key=f"import-{dataset_id}",
-                   linked_entity=dataset_id, correlation_id=str(uuid.uuid4()), attempt_count=1)
+    job = JobModel(
+        id=job_id,
+        type="INGEST_PROFILE",
+        status="PENDING",
+        progress=0.0,
+        message="Queued for profiling",
+        idempotency_key=f"import-{dataset_id}",
+        linked_entity=dataset_id,
+        correlation_id=str(uuid.uuid4()),
+        attempt_count=1,
+    )
     db.add_all([dataset, job])
-    db.add(DatasetAccessModel(id=str(uuid.uuid4()), dataset_id=dataset_id, username=session.username,
-                              access_level="MANAGE", granted_by=session.username))
+    db.add(
+        DatasetAccessModel(
+            id=str(uuid.uuid4()),
+            dataset_id=dataset_id,
+            username=session.username,
+            access_level="MANAGE",
+            granted_by=session.username,
+        )
+    )
     db.commit()
-    add_audit_event(db, session_id=session.id, actor_role=session.role, action_code="DATASET_IMPORTED",
-                    entity_type="dataset", entity_id=dataset_id,
-                    detail={"filename": file.filename, "job_id": job_id})
+    add_audit_event(
+        db,
+        session_id=session.id,
+        actor_role=session.role,
+        action_code="DATASET_IMPORTED",
+        entity_type="dataset",
+        entity_id=dataset_id,
+        detail={"filename": file.filename, "job_id": job_id},
+    )
     background_tasks.add_task(run_ingest_profile, job_id, dataset_id, session.id, session.role)
-    return {"dataset": {"id": dataset.id, "name": dataset.name, "description": dataset.description,
-                         "status": dataset.status, "row_count": dataset.row_count, "source_label": dataset.source_label,
-                         "manifest_version": dataset.manifest_version, "checksum": dataset.checksum,
-                         "updated_at": dataset.updated_at.isoformat()},
-            "job": {"job_id": job_id, "status": "PENDING"}}
+    return {
+        "dataset": {
+            "id": dataset.id,
+            "name": dataset.name,
+            "description": dataset.description,
+            "status": dataset.status,
+            "row_count": dataset.row_count,
+            "source_label": dataset.source_label,
+            "manifest_version": dataset.manifest_version,
+            "checksum": dataset.checksum,
+            "updated_at": dataset.updated_at.isoformat(),
+        },
+        "job": {"job_id": job_id, "status": "PENDING"},
+    }
 
 
 @router.post("/datasets/{id}/ingestions", status_code=202, response_model=CreateJobResponse)
@@ -768,7 +798,12 @@ def list_workflow_artifacts(
     if not run:
         raise HTTPException(status_code=404, detail="Workflow run not found")
     require_dataset_access(db, session, run.dataset_id)
-    artifacts = db.query(WorkflowArtifactModel).filter_by(workflow_run_id=run.id).order_by(WorkflowArtifactModel.created_at).all()
+    artifacts = (
+        db.query(WorkflowArtifactModel)
+        .filter_by(workflow_run_id=run.id)
+        .order_by(WorkflowArtifactModel.created_at)
+        .all()
+    )
     return [serialize_artifact(artifact) for artifact in artifacts]
 
 
@@ -789,9 +824,19 @@ def run_workflow_step(
     if collision:
         return CreateJobResponse(job_id=collision, status="SUCCEEDED")
     job = JobModel(
-        id=str(uuid.uuid4()), type="UNDERSTAND_DATA" if step == "UNDERSTAND_DATA" else "RUN_DQ" if step in {"RUN_CHECKS", "ANALYZE_REPORT"} else "PROPOSE_RULES",
-        status="RUNNING", progress=10.0, message=f"Running {step}", idempotency_key=idempotency_key or "",
-        linked_entity=run.dataset_id, correlation_id=run.id, attempt_count=1,
+        id=str(uuid.uuid4()),
+        type="UNDERSTAND_DATA"
+        if step == "UNDERSTAND_DATA"
+        else "RUN_DQ"
+        if step in {"RUN_CHECKS", "ANALYZE_REPORT"}
+        else "PROPOSE_RULES",
+        status="RUNNING",
+        progress=10.0,
+        message=f"Running {step}",
+        idempotency_key=idempotency_key or "",
+        linked_entity=run.dataset_id,
+        correlation_id=run.id,
+        attempt_count=1,
     )
     db.add(job)
     try:
@@ -902,16 +947,19 @@ def get_semantic_contract(
     GET /api/v1/datasets/{id}/semantic-contract - Returns the latest semantic contract draft or confirmed version.
     """
     from pathlib import Path
+
     dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
     require_dataset_access(db, session, id)
 
     # Find the latest PROPOSE_RULES job for this dataset
-    job = db.query(JobModel).filter(
-        JobModel.linked_entity == id,
-        JobModel.type == "PROPOSE_RULES"
-    ).order_by(JobModel.created_at.desc()).first()
+    job = (
+        db.query(JobModel)
+        .filter(JobModel.linked_entity == id, JobModel.type == "PROPOSE_RULES")
+        .order_by(JobModel.created_at.desc())
+        .first()
+    )
 
     if not job:
         raise HTTPException(status_code=404, detail="No rule proposal job found for this dataset")
@@ -938,23 +986,26 @@ def confirm_semantic_contract(
     body: dict,
     background_tasks: BackgroundTasks,
     session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     POST /api/v1/datasets/{id}/semantic-contract/confirm - Allows Steward to confirm/update the semantic contract.
     Resumes rule proposal graph execution in background.
     """
     from pathlib import Path
+
     dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
     require_dataset_access(db, session, id, manage=True)
 
     # Find the latest PROPOSE_RULES job
-    job = db.query(JobModel).filter(
-        JobModel.linked_entity == id,
-        JobModel.type == "PROPOSE_RULES"
-    ).order_by(JobModel.created_at.desc()).first()
+    job = (
+        db.query(JobModel)
+        .filter(JobModel.linked_entity == id, JobModel.type == "PROPOSE_RULES")
+        .order_by(JobModel.created_at.desc())
+        .first()
+    )
 
     if not job:
         raise HTTPException(status_code=404, detail="No rule proposal job found to confirm")
@@ -1060,10 +1111,7 @@ def query_dataset_rows(
             & SourceRowModel.dropoff_at.is_not(None)
             & (SourceRowModel.pickup_at > SourceRowModel.dropoff_at)
         ),
-        (
-            SourceRowModel.payment_type.is_not(None)
-            & SourceRowModel.payment_type.notin_(allowed_payments)
-        )
+        (SourceRowModel.payment_type.is_not(None) & SourceRowModel.payment_type.notin_(allowed_payments))
         if allowed_payments
         else SourceRowModel.payment_type.is_(None),
     )
@@ -1111,12 +1159,7 @@ def get_latest_dq_run(
     db: Session = Depends(get_db),
 ):
     require_dataset_access(db, session, id)
-    run = (
-        db.query(DqRunModel)
-        .filter(DqRunModel.dataset_id == id)
-        .order_by(DqRunModel.created_at.desc())
-        .first()
-    )
+    run = db.query(DqRunModel).filter(DqRunModel.dataset_id == id).order_by(DqRunModel.created_at.desc()).first()
     if not run:
         return None
     return DqRunSchema(
@@ -1298,7 +1341,15 @@ def create_manual_rule(
         evidence=json.dumps({"source_refs": ["manual"]}),
         parameter_provenance="[]",
         assumptions="[]",
-        confidence_breakdown=json.dumps({"overall": 1.0, "evidence_strength": 1.0, "business_support": 1.0, "sample_representativeness": 1.0, "explanation": "Manually authored by data steward"}),
+        confidence_breakdown=json.dumps(
+            {
+                "overall": 1.0,
+                "evidence_strength": 1.0,
+                "business_support": 1.0,
+                "sample_representativeness": 1.0,
+                "explanation": "Manually authored by data steward",
+            }
+        ),
         created_at=utc_now(),
         updated_at=utc_now(),
     )
@@ -2315,6 +2366,7 @@ async def list_proposal_rules(
     dimension: str | None = None,
 ) -> list[RuleReviewResponse]:
     from src.services.rule_store import get_run, list_rules
+
     run = await asyncio.to_thread(get_run, run_id)
     if not run:
         raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
@@ -2333,6 +2385,7 @@ async def review_proposal_rule(
     body: RuleUpdateRequest,
 ) -> RuleReviewResponse:
     from src.services.rule_store import get_run, review_rule
+
     run = await asyncio.to_thread(get_run, run_id)
     if not run:
         raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
@@ -2417,6 +2470,7 @@ async def get_run_approved_rules(run_id: str) -> ApprovedRulesResponse:
 # Specialized API v1 Endpoints (Execution & Anomaly Separation)
 # ---------------------------------------------------------------------------
 
+
 @dq_router.post(
     "/rule-runs/{proposal_run_id}/publish",
     response_model=PublishRulesetResponse,
@@ -2427,6 +2481,7 @@ async def publish_ruleset_endpoint(
 ) -> PublishRulesetResponse:
     """Publishes approved rules into an active immutable RulesetVersion."""
     from src.services.rule_store import publish_approved_rules
+
     ruleset_ver_id = await asyncio.to_thread(
         publish_approved_rules,
         proposal_run_id=proposal_run_id,
@@ -2490,8 +2545,16 @@ async def get_execution_run_results_endpoint(
             raise HTTPException(status_code=404, detail=f"Execution run {id} not found")
 
         anomaly_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.execution_run_id == id).first()
-        signals = session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anomaly_run.id).all() if anomaly_run else []
-        hypotheses = session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == anomaly_run.id).all() if anomaly_run else []
+        signals = (
+            session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anomaly_run.id).all()
+            if anomaly_run
+            else []
+        )
+        hypotheses = (
+            session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == anomaly_run.id).all()
+            if anomaly_run
+            else []
+        )
 
         return CombinedRunStatusResponse(
             execution_run_id=id,
@@ -2509,11 +2572,11 @@ async def get_execution_run_results_endpoint(
 
 @dq_router.get(
     "/anomaly-runs/{id}/signals",
-    response_model=List[AnomalySignalDTO],
+    response_model=list[AnomalySignalDTO],
 )
 async def get_anomaly_signals_endpoint(
     id: str,
-) -> List[AnomalySignalDTO]:
+) -> list[AnomalySignalDTO]:
     """Fetches specialized signals for an anomaly run."""
     with Session(get_engine()) as session:
         signals = session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == id).all()
@@ -2521,7 +2584,9 @@ async def get_anomaly_signals_endpoint(
             # Also check if id is execution_run_id
             anom_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.execution_run_id == id).first()
             if anom_run:
-                signals = session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anom_run.id).all()
+                signals = (
+                    session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anom_run.id).all()
+                )
 
         result = []
         for s in signals:
@@ -2546,18 +2611,22 @@ async def get_anomaly_signals_endpoint(
 
 @dq_router.get(
     "/anomaly-runs/{id}/hypotheses",
-    response_model=List[Dict[str, Any]],
+    response_model=list[dict[str, Any]],
 )
 async def get_anomaly_hypotheses_endpoint(
     id: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Fetches detailed hypotheses for an anomaly run."""
     with Session(get_engine()) as session:
         hyps = session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == id).all()
         if not hyps:
             anom_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.execution_run_id == id).first()
             if anom_run:
-                hyps = session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == anom_run.id).all()
+                hyps = (
+                    session.query(AnomalyHypothesisModel)
+                    .filter(AnomalyHypothesisModel.anomaly_run_id == anom_run.id)
+                    .all()
+                )
 
         return [
             {
@@ -2566,7 +2635,9 @@ async def get_anomaly_hypotheses_endpoint(
                 "summary": h.summary,
                 "confidence": h.confidence,
                 "supporting_signal_ids": json.loads(h.supporting_signal_ids) if h.supporting_signal_ids else [],
-                "contradicting_signal_ids": json.loads(h.contradicting_signal_ids) if h.contradicting_signal_ids else [],
+                "contradicting_signal_ids": json.loads(h.contradicting_signal_ids)
+                if h.contradicting_signal_ids
+                else [],
                 "evidence_refs": json.loads(h.evidence_refs) if h.evidence_refs else [],
                 "recommended_checks": json.loads(h.recommended_checks) if h.recommended_checks else [],
                 "missing_evidence": h.missing_evidence,
@@ -2583,7 +2654,7 @@ async def get_anomaly_hypotheses_endpoint(
 async def submit_anomaly_feedback_endpoint(
     id: str,
     body: AnomalyFeedbackRequest,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Submits steward feedback for an anomaly run."""
     with Session(get_engine()) as session:
         anom_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.id == id).first()
@@ -2604,4 +2675,3 @@ async def submit_anomaly_feedback_endpoint(
         session.add(fb)
         session.commit()
         return {"status": "SUCCESS", "feedback_id": feedback_id, "anomaly_run_id": anom_run.id}
-

@@ -111,7 +111,7 @@ Mở http://localhost:8501 — bạn đã có giao diện chat hoàn chỉnh!
 # Thay phần "Call API" bằng streaming version:
 with st.chat_message("assistant"):
     API_URL = "http://localhost:8000/api/v1/chat/stream"
-    
+
     with st.spinner("Đang suy nghĩ..."):
         try:
             response = requests.post(
@@ -120,12 +120,11 @@ with st.chat_message("assistant"):
                 stream=True,  # Bật streaming cho requests
                 timeout=60,
             )
-            
+
             answer = st.write_stream(
                 line.removeprefix("data: ").strip()
                 for line in response.iter_lines(decode_unicode=True)
-                if line and line.startswith("data: ")
-                and not line.endswith('"type": "done"')
+                if line and line.startswith("data: ") and not line.endswith('"type": "done"')
             )
         except Exception as e:
             answer = f"❌ Lỗi: {str(e)}"

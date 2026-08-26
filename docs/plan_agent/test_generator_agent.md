@@ -102,10 +102,10 @@ class TestRunModel(Base):
     __tablename__ = "test_runs"
 
     test_run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    dataset_id:  Mapped[str] = mapped_column(String(256), nullable=False)
-    status:      Mapped[str] = mapped_column(String(32), default="QUEUED") # QUEUED/RUNNING/DONE/FAILED
-    error:       Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at:  Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    dataset_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="QUEUED")  # QUEUED/RUNNING/DONE/FAILED
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
 
     def to_dict(self) -> dict:
         return {
@@ -116,40 +116,41 @@ class TestRunModel(Base):
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
+
 class TestResultModel(Base):
     __tablename__ = "test_results"
 
-    test_run_id:     Mapped[str] = mapped_column(String(64), primary_key=True)
-    rule_id:         Mapped[str] = mapped_column(String(512), primary_key=True)
-    table_name:      Mapped[str] = mapped_column(String(256), nullable=False)
-    column_name:     Mapped[str | None] = mapped_column(String(256), nullable=True)
-    rule_type:       Mapped[str] = mapped_column(String(64), nullable=False)
-    status:          Mapped[str] = mapped_column(String(32), nullable=False) # PASSED/FAILED/ERROR/SKIPPED
+    test_run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    rule_id: Mapped[str] = mapped_column(String(512), primary_key=True)
+    table_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    column_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    rule_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)  # PASSED/FAILED/ERROR/SKIPPED
     violation_count: Mapped[int] = mapped_column(Integer, default=0)
-    total_rows:      Mapped[int] = mapped_column(Integer, default=0)
-    violation_rate:  Mapped[float] = mapped_column(Float, default=0.0)
-    sample_failures: Mapped[str | None] = mapped_column(Text, nullable=True) # JSON list of sample dicts
-    sql_text:        Mapped[str] = mapped_column(Text, nullable=False)
-    duration_ms:     Mapped[float] = mapped_column(Float, default=0.0)
-    error:           Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at:      Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    total_rows: Mapped[int] = mapped_column(Integer, default=0)
+    violation_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    sample_failures: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list of sample dicts
+    sql_text: Mapped[str] = mapped_column(Text, nullable=False)
+    duration_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
 
     def to_dict(self) -> dict:
         return {
-            "test_run_id":     self.test_run_id,
-            "rule_id":         self.rule_id,
-            "table_name":      self.table_name,
-            "column":          self.column_name,
-            "rule_type":       self.rule_type,
-            "status":          self.status,
+            "test_run_id": self.test_run_id,
+            "rule_id": self.rule_id,
+            "table_name": self.table_name,
+            "column": self.column_name,
+            "rule_type": self.rule_type,
+            "status": self.status,
             "violation_count": self.violation_count,
-            "total_rows":      self.total_rows,
-            "violation_rate":  self.violation_rate,
+            "total_rows": self.total_rows,
+            "violation_rate": self.violation_rate,
             "sample_failures": json.loads(self.sample_failures) if self.sample_failures else None,
-            "sql_text":        self.sql_text,
-            "duration_ms":     self.duration_ms,
-            "error":           self.error,
-            "created_at":      self.created_at.isoformat() if self.created_at else None,
+            "sql_text": self.sql_text,
+            "duration_ms": self.duration_ms,
+            "error": self.error,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 ```
 
@@ -173,7 +174,9 @@ Row-level rules can be expressed as a predicate `P(col)` that is **true when the
 ```python
 @event.listens_for(engine, "begin")
 def register_regexp(conn):
-    conn.connection.create_function("REGEXP", 2, lambda expr, item: re.search(expr, str(item)) is not None if item is not None else False)
+    conn.connection.create_function(
+        "REGEXP", 2, lambda expr, item: re.search(expr, str(item)) is not None if item is not None else False
+    )
 ```
 
 ### 4.2 Query Aggregation & Optimization (Batching)
@@ -238,13 +241,13 @@ If a batch query executes successfully:
 ```python
 class AgentState(TypedDict, total=False):
     # Existing fields...
-    
+
     # Run 2 Exec specific fields
     test_run_id: str
     approved_rules: list
-    generated_tests: list          # list of dict with sql, bind_params, metadata
-    test_results: list             # results of running the SQL
-    test_generation_errors: list   # errors during code rendering/repair
+    generated_tests: list  # list of dict with sql, bind_params, metadata
+    test_results: list  # results of running the SQL
+    test_generation_errors: list  # errors during code rendering/repair
 ```
 
 ### 5.2 Node 1: `load_approved_rules_node`
@@ -265,7 +268,7 @@ class AgentState(TypedDict, total=False):
       "bind_params": {"min": 0, "max": 100},
       "query_type": "batch" | "unique" | "row_count" | "freshness",
       "table_name": "yellow_tripdata",
-      "attempts": 0
+      "attempts": 0,
   }
   ```
 

@@ -74,22 +74,14 @@ def calculate_robust_zscore(current: float, history: list[float]) -> tuple[float
         robust_z = 0.6745 * (current - median) / fallback_scale
         return max(-_MAX_ROBUST_Z, min(_MAX_ROBUST_Z, robust_z)), median, 0.0
 
-
     robust_z = 0.6745 * (current - median) / mad
     return robust_z, median, mad
 
 
 def get_excluded_execution_run_ids(db: Session) -> set[str]:
     """Get all execution run IDs that are marked as true anomalies by the steward."""
-    subquery = (
-        select(AnomalyFeedbackModel.anomaly_run_id)
-        .where(AnomalyFeedbackModel.feedback_label == "TRUE_ANOMALY")
-    )
-    runs = (
-        db.query(AnomalyRunModel.execution_run_id)
-        .filter(AnomalyRunModel.id.in_(subquery))
-        .all()
-    )
+    subquery = select(AnomalyFeedbackModel.anomaly_run_id).where(AnomalyFeedbackModel.feedback_label == "TRUE_ANOMALY")
+    runs = db.query(AnomalyRunModel.execution_run_id).filter(AnomalyRunModel.id.in_(subquery)).all()
     return {r.execution_run_id for r in runs}
 
 
@@ -132,9 +124,7 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
                 continue
             bucket = history_by_rule.setdefault(row.rule_id, [])
             if len(bucket) < _HISTORY_WINDOW:
-                bucket.append(
-                    row.failed_count / row.checked_count if row.checked_count > 0 else 0.0
-                )
+                bucket.append(row.failed_count / row.checked_count if row.checked_count > 0 else 0.0)
 
     # 2. Iterate through rules and run detectors
     for res in current_results:
@@ -200,31 +190,42 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
                 explanation_code = "Quy tắc kiểm thử ĐẠT."
 
         # Business rule override check
-        is_business_rule = res.rule_title.startswith("BUSINESS_") or "invariant" in res.rule_title.lower() or res.rule_id.endswith(".BUSINESS_RULE")
+        is_business_rule = (
+            res.rule_title.startswith("BUSINESS_")
+            or "invariant" in res.rule_title.lower()
+            or res.rule_id.endswith(".BUSINESS_RULE")
+        )
         if is_business_rule and res.status in ("FAIL", "FAILED"):
             score = 1.0
             detector_name = "BUSINESS_INVARIANT_DETECTOR"
             explanation_code = f"Vi phạm nghiêm trọng luật nghiệp vụ (Business Invariant): {res.rule_title}."
 
-        signals.append({
-            "signal_id": f"sig-{uuid.uuid4().hex[:12]}",
-            "family": "BUSINESS_RULE" if is_business_rule else "STATISTICAL",
-            "target_type": "RULE",
-            "target_id": rule_id,
-            "score": round(score, 4),
-            "reliability": round(reliability, 4),
-            "observed_value": str(observed_value),
-            "baseline": baseline_stats,
-            "sufficient_history": sufficient_history,
-            "detector_name": detector_name,
-            "detector_version": "1.0.0",
-            "explanation_code": explanation_code,
-            "evidence_refs": [f"dq_results.id={res.id}"]
-        })
+        signals.append(
+            {
+                "signal_id": f"sig-{uuid.uuid4().hex[:12]}",
+                "family": "BUSINESS_RULE" if is_business_rule else "STATISTICAL",
+                "target_type": "RULE",
+                "target_id": rule_id,
+                "score": round(score, 4),
+                "reliability": round(reliability, 4),
+                "observed_value": str(observed_value),
+                "baseline": baseline_stats,
+                "sufficient_history": sufficient_history,
+                "detector_name": detector_name,
+                "detector_version": "1.0.0",
+                "explanation_code": explanation_code,
+                "evidence_refs": [f"dq_results.id={res.id}"],
+            }
+        )
 
     # 3. Table/Dataset Level Detectors (Volume & Freshness)
     # Fetch row count from profile
-    profile = db.query(ProfileModel).filter(ProfileModel.dataset_id == current_run.dataset_id).order_by(ProfileModel.generated_at.desc()).first()
+    profile = (
+        db.query(ProfileModel)
+        .filter(ProfileModel.dataset_id == current_run.dataset_id)
+        .order_by(ProfileModel.generated_at.desc())
+        .first()
+    )
     if profile:
         current_rows = profile.row_count
         # Fetch historical row counts
@@ -232,10 +233,7 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
         # trả về 20 dòng bất kỳ, khiến baseline thay đổi giữa các lần chạy trên cùng dữ liệu.
         hist_profiles = (
             db.query(ProfileModel)
-            .filter(
-                ProfileModel.dataset_id == current_run.dataset_id,
-                ProfileModel.generated_at < profile.generated_at
-            )
+            .filter(ProfileModel.dataset_id == current_run.dataset_id, ProfileModel.generated_at < profile.generated_at)
             .order_by(ProfileModel.generated_at.desc())
             .limit(_VOLUME_HISTORY_WINDOW)
             .all()
@@ -262,21 +260,23 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
             vol_reliability = 0.5
             vol_explanation = "Không đủ lịch sử để đánh giá đột biến số lượng dòng."
 
-        signals.append({
-            "signal_id": f"sig-{uuid.uuid4().hex[:12]}",
-            "family": "VOLUME",
-            "target_type": "DATASET",
-            "target_id": current_run.dataset_id,
-            "score": round(vol_score, 4),
-            "reliability": round(vol_reliability, 4),
-            "observed_value": str(current_rows),
-            "baseline": vol_baseline,
-            "sufficient_history": sufficient_vol_history,
-            "detector_name": "VOLUME_DRIFT_DETECTOR",
-            "detector_version": "1.0.0",
-            "explanation_code": vol_explanation,
-            "evidence_refs": []
-        })
+        signals.append(
+            {
+                "signal_id": f"sig-{uuid.uuid4().hex[:12]}",
+                "family": "VOLUME",
+                "target_type": "DATASET",
+                "target_id": current_run.dataset_id,
+                "score": round(vol_score, 4),
+                "reliability": round(vol_reliability, 4),
+                "observed_value": str(current_rows),
+                "baseline": vol_baseline,
+                "sufficient_history": sufficient_vol_history,
+                "detector_name": "VOLUME_DRIFT_DETECTOR",
+                "detector_version": "1.0.0",
+                "explanation_code": vol_explanation,
+                "evidence_refs": [],
+            }
+        )
 
     # Freshness Check
     freshness_signals = [s for s in signals if s["target_id"].endswith(".FRESHNESS")]
@@ -287,21 +287,23 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
     # Execution Health Check (failures in tests or runtime error)
     exec_errors = [res for res in current_results if res.status == "ERROR"]
     if exec_errors or current_run.error_message:
-        signals.append({
-            "signal_id": f"sig-{uuid.uuid4().hex[:12]}",
-            "family": "EXECUTION",
-            "target_type": "DATASET",
-            "target_id": current_run.dataset_id,
-            "score": 1.0,
-            "reliability": 1.0,
-            "observed_value": "ERROR",
-            "baseline": {},
-            "sufficient_history": True,
-            "detector_name": "EXECUTION_HEALTH_DETECTOR",
-            "detector_version": "1.0.0",
-            "explanation_code": f"Phát hiện {len(exec_errors)} lỗi kiểm thử hệ thống hoặc lỗi thực thi chạy pipeline.",
-            "evidence_refs": [f"dq_results.id={e.id}" for e in exec_errors]
-        })
+        signals.append(
+            {
+                "signal_id": f"sig-{uuid.uuid4().hex[:12]}",
+                "family": "EXECUTION",
+                "target_type": "DATASET",
+                "target_id": current_run.dataset_id,
+                "score": 1.0,
+                "reliability": 1.0,
+                "observed_value": "ERROR",
+                "baseline": {},
+                "sufficient_history": True,
+                "detector_name": "EXECUTION_HEALTH_DETECTOR",
+                "detector_version": "1.0.0",
+                "explanation_code": f"Phát hiện {len(exec_errors)} lỗi kiểm thử hệ thống hoặc lỗi thực thi chạy pipeline.",
+                "evidence_refs": [f"dq_results.id={e.id}" for e in exec_errors],
+            }
+        )
 
     # 4. Deterministic Aggregation (Phase 3.6)
     # 4.1 Group signals by family
@@ -331,7 +333,6 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
             family_reps,
             key=lambda fam: (family_reps[fam], family_weights.get(fam, 0.5)),
         )
-
 
     # Check for priority overrides
     has_critical_override = False

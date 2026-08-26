@@ -27,17 +27,23 @@ class RuleType(str, Enum):
     NOT_NULL = "NOT_NULL"
     UNIQUE = "UNIQUE"
     RANGE = "RANGE"
-    ACCEPTED_VALUES = "ACCEPTED_VALUES"   # enum check
+    ACCEPTED_VALUES = "ACCEPTED_VALUES"  # enum check
     REGEX_FORMAT = "REGEX_FORMAT"
     FRESHNESS = "FRESHNESS"
-    ROW_COUNT = "ROW_COUNT"               # table-level
-    NULL_RATE = "NULL_RATE"               # null_pct must stay below a ceiling
+    ROW_COUNT = "ROW_COUNT"  # table-level
+    NULL_RATE = "NULL_RATE"  # null_pct must stay below a ceiling
+
 
 class Severity(str, Enum):
-    CRITICAL = "CRITICAL"; HIGH = "HIGH"; MEDIUM = "MEDIUM"; LOW = "LOW"
+    CRITICAL = "CRITICAL"
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
 
 class RuleParameters(BaseModel):
     """Closed param bag — every field optional, only the ones relevant to rule_type are filled."""
+
     min: float | None = None
     max: float | None = None
     accepted_values: list[str] | None = None
@@ -45,6 +51,7 @@ class RuleParameters(BaseModel):
     max_age_hours: float | None = None
     max_null_pct: float | None = None
     min_row_count: int | None = None
+
 
 class ProposedRule(BaseModel):
     column: str | None = Field(None, description="None cho rule cấp bảng (ROW_COUNT)")
@@ -54,8 +61,10 @@ class ProposedRule(BaseModel):
     severity: Severity
     ai_reason: str = Field(..., description="Lý do đề xuất, bằng tiếng Việt, dẫn chiếu số liệu profile cụ thể")
 
+
 class TableRuleProposal(BaseModel):
     """Schema the LLM is bound to — one call per table."""
+
     table: str
     rules: list[ProposedRule]
 ```
@@ -75,6 +84,7 @@ Add alongside the existing `generate_profile_digest`, reusing its unwrap convent
 ```python
 def split_digest_by_table(digest: dict) -> dict[str, dict]:
     """Tách digest tổng thành dict {table_name: table_digest}. Bỏ qua bảng có key 'error'."""
+
 
 def dump_table_digests(per_table: dict[str, dict], out_dir: str | Path) -> list[Path]:
     """Ghi mỗi bảng ra 1 file JSON để debug/inspect. Chỉ gọi khi bật cờ debug."""

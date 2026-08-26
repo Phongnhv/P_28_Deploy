@@ -210,10 +210,7 @@ class AnomalyGraphState(TypedDict, total=False):
 ```python
 class SignalObservation(BaseModel):
     signal_id: str
-    family: Literal[
-        "BUSINESS_RULE", "STATISTICAL", "VOLUME", "FRESHNESS",
-        "SCHEMA", "CORRELATION", "EXECUTION", "ML"
-    ]
+    family: Literal["BUSINESS_RULE", "STATISTICAL", "VOLUME", "FRESHNESS", "SCHEMA", "CORRELATION", "EXECUTION", "ML"]
     target_type: Literal["DATASET", "TABLE", "COLUMN", "RULE"]
     target_id: str
     score: float

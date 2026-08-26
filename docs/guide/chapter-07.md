@@ -607,6 +607,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 @app.post("/api/v1/chat")
 async def chat(request: ChatRequest):
     logger.info(

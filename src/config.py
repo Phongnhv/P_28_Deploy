@@ -58,11 +58,11 @@ class Settings(BaseSettings):
     dq_execution_backend: Literal["auto", "local", "supabase"] = os.getenv("DQ_EXECUTION_BACKEND") or "auto"
 
     # Vector Store
-    chroma_persist_dir: str = "./data/chroma" # Change to .env later
+    chroma_persist_dir: str = "./data/chroma"  # Change to .env later
 
     # Output
     output_dir: str = "./output"
-    results_dir: str = "./output" # Backwards-compatible alias
+    results_dir: str = "./output"  # Backwards-compatible alias
 
     # Generated dbt artifacts (AWS S3 in production, MinIO locally)
     object_storage_bucket: str = "ridepulse-dbt-artifacts"

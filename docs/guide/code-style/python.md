@@ -15,6 +15,7 @@ async def analyze_sentiment(text: str) -> dict[str, float]:
     result = await model.predict(text)
     return {"positive": result.pos, "negative": result.neg}
 
+
 # ❌ TỆ — Không type hints
 def process(data):
     x = model.run(data)
