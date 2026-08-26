@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     rule_proposer_concurrency: int = 10
     rule_proposer_max_retries: int = 2
     debug_dump_table_digests: bool = False
+    anomaly_investigation_mode: Literal["deepagent", "legacy"] = os.getenv("ANOMALY_INVESTIGATION_MODE") or "deepagent"
 
     # Database
     database_url: str = Field(default="sqlite:///steward_local.db")

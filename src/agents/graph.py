@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+from typing import Literal
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -217,22 +218,35 @@ def build_execution_graph() -> StateGraph:
 # Run 3: Anomaly Graph (Detector ➔ Hypothesis ➔ Persist)
 # ---------------------------------------------------------------------------
 
-def build_anomaly_graph() -> StateGraph:
+def build_anomaly_graph(investigation_mode: Literal["deepagent", "legacy"] | None = None) -> StateGraph:
     """Xây dựng graph cho Run 3 (Anomaly Analysis Graph).
+
+    Args:
+        investigation_mode: "deepagent" (Deep Agent + Tools + Skills) hoặc "legacy" (Steward Insights prompt cũ).
+                           Nếu None, lấy từ config (settings.anomaly_investigation_mode).
 
     Luồng:
       anomaly_detector ➔ hypothesis_agent ➔ persist_analysis ➔ report_writer ➔ END
     """
+    from src.config import get_settings
     from src.agents.nodes.anomaly_detector_node import anomaly_detector_node
     from src.agents.nodes.persist_analysis_node import persist_analysis_node
     from src.agents.nodes.report_writer_node import report_writer_node
-    from src.agents.nodes.steward_insights_node import steward_insights_node
     from src.agents.state import AnomalyGraphState
+
+    mode = investigation_mode or get_settings().anomaly_investigation_mode
+
+    if mode == "legacy":
+        from src.agents.nodes.steward_insights_node import steward_insights_node
+        hypothesis_agent = steward_insights_node
+    else:
+        from src.agents.nodes.anomaly_investigation_node import anomaly_investigation_node
+        hypothesis_agent = anomaly_investigation_node
 
     graph = StateGraph(AnomalyGraphState)
 
     graph.add_node("anomaly_detector", anomaly_detector_node)
-    graph.add_node("hypothesis_agent", steward_insights_node)
+    graph.add_node("hypothesis_agent", hypothesis_agent)
     graph.add_node("persist_analysis", persist_analysis_node)
     graph.add_node("report_writer", report_writer_node)
 
@@ -430,26 +444,64 @@ async def run_execution_graph(
 
 
 async def run_anomaly_graph(
-    execution_run_id: str,
-    dataset_id: str,
+    execution_run_id: str | None = None,
+    dataset_id: str = DEFAULT_CLI_DATASET_ID,
+    investigation_mode: Literal["deepagent", "legacy"] | None = None,
 ) -> dict:
-    """Chạy toàn bộ pipeline Run 3 (Anomaly Analysis & Hypothesis)."""
+    """Chạy toàn bộ pipeline Run 3 (Anomaly Analysis & Hypothesis).
+
+    Args:
+        execution_run_id: ID của lần chạy test (DqRun). Nếu None, tự động lấy run mới nhất từ CSDL.
+        dataset_id: ID của dataset cần phân tích bất thường.
+        investigation_mode: "deepagent" hoặc "legacy". Nếu None, lấy từ config.
+    """
     import uuid
+    from src.config import get_settings
+    from src.models.database import DqRunModel
+    from src.services.rule_store import get_engine
+    from sqlalchemy.orm import Session
+
+    settings = get_settings()
+    active_mode = investigation_mode or settings.anomaly_investigation_mode
+
+    # Tự động tìm execution_run_id mới nhất nếu caller không truyền
+    if not execution_run_id:
+        try:
+            with Session(get_engine()) as db:
+                latest_run = (
+                    db.query(DqRunModel)
+                    .filter(DqRunModel.dataset_id == dataset_id)
+                    .order_by(DqRunModel.created_at.desc())
+                    .first()
+                )
+                if latest_run:
+                    execution_run_id = latest_run.id
+                else:
+                    # Lấy run bất kỳ mới nhất nếu không khớp dataset_id
+                    any_run = db.query(DqRunModel).order_by(DqRunModel.created_at.desc()).first()
+                    execution_run_id = any_run.id if any_run else uuid.uuid4().hex
+        except Exception:
+            execution_run_id = uuid.uuid4().hex
+
     anomaly_run_id = f"anom-{uuid.uuid4().hex[:12]}"
 
-    anomaly_graph = build_anomaly_graph()
+    anomaly_graph = build_anomaly_graph(investigation_mode=active_mode)
     initial_state = {
         "anomaly_run_id": anomaly_run_id,
         "execution_run_id": execution_run_id,
         "dataset_id": dataset_id,
         "detector_config_version": "anomaly-v1",
-        # KHÔNG hardcode model ở đây: steward_insights_node ghi lại model thật nó đã gọi
-        # (theo settings.llm_provider) vào metadata để persist_analysis_node lưu chính xác.
-        "metadata": {},
+        "metadata": {
+            "investigation_mode": active_mode,
+        },
     }
 
-    logger.info("Bắt đầu Run 3 (Anomaly Analysis) | anomaly_run_id=%s | execution_run_id=%s",
-                anomaly_run_id, execution_run_id)
+    logger.info(
+        "Bắt đầu Run 3 (Anomaly Analysis) [Mode: %s] | anomaly_run_id=%s | execution_run_id=%s",
+        active_mode,
+        anomaly_run_id,
+        execution_run_id,
+    )
 
     try:
         final_state = await anomaly_graph.ainvoke(initial_state)
@@ -462,9 +514,11 @@ async def run_anomaly_graph(
             or final_state.get("metadata", {}).get("steward_report_path")
         )
         llm_used = final_state.get("metadata", {}).get("steward_report_llm_used", False)
+        trace_path = final_state.get("metadata", {}).get("investigation_trace_path", "")
 
         logger.info(
-            "Run 3 completed | anomaly_run_id=%s decision=%s score=%s confidence=%s signals=%d hypotheses=%d report=%s mode=%s",
+            "Run 3 completed | mode=%s anomaly_run_id=%s decision=%s score=%s confidence=%s signals=%d hypotheses=%d report=%s trace=%s",
+            active_mode,
             anomaly_run_id,
             decision_data.get("decision", "NORMAL"),
             decision_data.get("score", 0.0),
@@ -472,7 +526,7 @@ async def run_anomaly_graph(
             len(signals),
             len(hypotheses),
             steward_report_path or "not-written",
-            "llm" if llm_used else "fallback",
+            trace_path or "none",
         )
         return final_state
     except Exception as exc:
@@ -481,7 +535,7 @@ async def run_anomaly_graph(
 
 
 async def main():
-    """CLI Menu lựa chọn chạy Run 1 (Đề xuất) hoặc Run 2 (Chạy test)."""
+    """CLI Menu lựa chọn chạy Run 1, Run 2 hoặc Run 3 (với DeepAgent / Legacy switch)."""
     import sys
 
     logging.basicConfig(
@@ -491,14 +545,34 @@ async def main():
 
     args = sys.argv[1:]
     mode = args[0] if args else "all"
-    dataset_id = args[1] if len(args) > 1 else DEFAULT_CLI_DATASET_ID
 
-    if mode == "1" or mode == "proposal":
+    # Trích xuất các flag điều tra (investigation mode)
+    inv_mode: Literal["deepagent", "legacy"] = "deepagent"
+    cleaned_args = []
+    for arg in args:
+        if arg in ("--legacy", "-legacy", "legacy", "--mode=legacy"):
+            inv_mode = "legacy"
+        elif arg in ("--deepagent", "-deepagent", "deepagent", "--mode=deepagent"):
+            inv_mode = "deepagent"
+        else:
+            cleaned_args.append(arg)
+
+    mode = cleaned_args[0] if cleaned_args else "all"
+    dataset_id = cleaned_args[1] if len(cleaned_args) > 1 else DEFAULT_CLI_DATASET_ID
+
+    if mode in ("1", "proposal"):
         print(f"🚀 Lựa chọn: CHẠY RUN 1 (Proposal Graph) cho dataset {dataset_id}")
         await run_proposal_graph(dataset_id=dataset_id)
-    elif mode == "2" or mode == "execution":
+    elif mode in ("2", "execution"):
         print(f"🚀 Lựa chọn: CHẠY RUN 2 (Execution Graph trên Active Rules) cho dataset {dataset_id}")
         await run_execution_graph(dataset_id=dataset_id)
+    elif mode in ("3", "anomaly", "investigate"):
+        print(f"🚀 Lựa chọn: CHẠY RUN 3 (Anomaly Investigation Graph) cho dataset {dataset_id}")
+        print(f"   ⚙️ Investigation Mode: [{inv_mode.upper()}] (Sử dụng {'Deep Agent + Tools + Skills' if inv_mode == 'deepagent' else 'Legacy Single-Shot Prompt'})")
+        res = await run_anomaly_graph(dataset_id=dataset_id, investigation_mode=inv_mode)
+        print("\n" + "=" * 70)
+        print(f"🎉 HOÀN TẤT RUN 3 [{inv_mode.upper()}]: Quyết định = {res.get('anomaly_decision', {}).get('decision')} | Số giả thuyết = {len(res.get('hypotheses', []))}")
+        print("=" * 70 + "\n")
     else:
         print(f"🚀 Lựa chọn mặc định: CHẠY RUN 1 ➔ DUYỆT & PUBLISH ➔ CHẠY RUN 2 cho dataset {dataset_id}")
         from src.services.rule_store import publish_approved_rules, review_rule

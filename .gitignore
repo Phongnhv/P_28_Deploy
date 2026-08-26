@@ -93,3 +93,5 @@ dbt_project/models/generated_dq_tests.yml
 presentation/VIDEO_REHEARSAL.md
 /evalgate/
 /message.txt
+
+eval/

@@ -126,8 +126,16 @@ async def persist_analysis_node(state: AnomalyGraphState) -> dict:
                     contradicting_signal_ids=json.dumps(h.get("contradicting_signal_ids", [])),
                     evidence_refs=json.dumps(h.get("evidence_refs", [])),
                     recommended_checks=json.dumps(h.get("recommended_checks", [])),
-                    missing_evidence=h.get("missing_evidence"),
-                    limitations=h.get("limitations"),
+                    missing_evidence=(
+                        ", ".join(h.get("missing_evidence"))
+                        if isinstance(h.get("missing_evidence"), list)
+                        else (json.dumps(h.get("missing_evidence"), ensure_ascii=False) if isinstance(h.get("missing_evidence"), dict) else h.get("missing_evidence"))
+                    ),
+                    limitations=(
+                        ", ".join(h.get("limitations"))
+                        if isinstance(h.get("limitations"), list)
+                        else (json.dumps(h.get("limitations"), ensure_ascii=False) if isinstance(h.get("limitations"), dict) else h.get("limitations"))
+                    ),
                     model_name=model_name,
                     prompt_version=HYPOTHESIS_PROMPT_VERSION,
                     latency_ms=hypothesis_latency_ms,
