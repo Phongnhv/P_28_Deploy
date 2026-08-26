@@ -182,6 +182,26 @@ def schema_hash(schema: Iterable[dict[str, Any]]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def schema_contract_hash(schema: Iterable[dict[str, Any]]) -> str:
+    """Hash the stable data contract, independent of pandas physical aliases.
+
+    Pandas 2 represents CSV string columns as ``object`` while pandas 3 may
+    represent the same bytes as ``str``.  The immutable source checksum still
+    verifies the bytes; schema execution should therefore compare the logical
+    contract while retaining the physical dtype in the stored manifest for
+    diagnostics.
+    """
+    normalized: list[dict[str, Any]] = []
+    for raw in schema:
+        item = dict(raw)
+        logical_type = item.get("logical_type")
+        if logical_type:
+            item["physical_type"] = logical_type
+        normalized.append(item)
+    payload = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _read_frame(content: bytes, filename: str) -> Any:
     import pandas as pd
 
@@ -229,7 +249,7 @@ def read_verified_frame(path: Path, *, checksum: str, size_bytes: int, schema: l
     verify_file(path, checksum, size_bytes)
     frame = _read_frame(path.read_bytes(), path.name)
     actual_schema = canonical_schema_manifest(frame)
-    if schema is not None and schema_hash(actual_schema) != schema_hash(schema):
+    if schema is not None and schema_contract_hash(actual_schema) != schema_contract_hash(schema):
         raise SourceIntegrityError("Source artifact schema does not match its immutable version manifest")
     return frame
 
