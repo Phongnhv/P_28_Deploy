@@ -1572,8 +1572,23 @@ function App() {
   }
 
   async function openGraph1ForDataset(datasetId: string) {
+    let targetDataset = datasets.find((item) => item.id === datasetId) ?? null;
+    // Dataset cards can be rendered from a stale list while the workspace
+    // refresh that records the latest version/profile is still in flight.
+    // Always hand Graph1 the fresh immutable version snapshot so its request
+    // carries the matching profile_run_id instead of starting with an empty
+    // profile reference.
     if (datasetId !== selectedDatasetId) await selectDataset(datasetId);
-    setGraph1Dataset(datasets.find((item) => item.id === datasetId) ?? null);
+    if (datasetId !== selectedDatasetId || (targetDataset?.dataset_version_id && !targetDataset.profile_run_id)) {
+      const freshDatasets = await api.listDatasets();
+      targetDataset = freshDatasets.find((item) => item.id === datasetId) ?? targetDataset;
+      if (freshDatasets.length) setDatasets(freshDatasets);
+    }
+    if (!targetDataset) {
+      setError("Không tìm thấy dataset đã chọn để khởi tạo Graph 1.");
+      return;
+    }
+    setGraph1Dataset(targetDataset);
     setAnalysisLaunchError("");
     setWizardStep(2);
     setShowAdmin(false);
