@@ -110,6 +110,12 @@ code,
   font-weight: 800;
   letter-spacing: -0.04em;
 }
+.brand-mark.brand-image {
+  display: block;
+  overflow: hidden;
+  object-fit: cover;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+}
 .theme-control {
   display: inline-grid;
   place-items: center;
@@ -496,9 +502,26 @@ textarea:focus {
 .login-note strong {
   color: var(--ink);
 }
-.lock-icon {
+.demo-credential-button {
+  display: block;
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  color: var(--accent-deep);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.demo-credential-button:hover {
   color: var(--accent);
-  font-size: 18px;
+}
+.lock-icon {
+  flex: 0 0 auto;
+  color: var(--accent);
 }
 code {
   color: var(--accent-deep);

@@ -60,8 +60,8 @@ async def lifespan(app: FastAPI):
 settings = get_settings()
 
 app = FastAPI(
-    title="AI20K Agent",
-    description="RidePulse DQ Localhost MVP",
+    title="DataPulse",
+    description="DataPulse AI Data Quality Platform",
     version="1.0.0",
     lifespan=lifespan,
     docs_url=None if settings.app_env == "production" else "/docs",

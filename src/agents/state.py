@@ -22,7 +22,7 @@ class AgentState(TypedDict, total=False):
     profiler_result: dict
     dataset_profile_digest: dict
 
-    # RidePulse DQ specific state fields
+    # DataPulse-specific state fields
     dataset_id: str
     workspace_id: str
     dataset_version_id: str

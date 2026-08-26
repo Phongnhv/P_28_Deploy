@@ -29,7 +29,7 @@ from src.models.database import (
     SemanticContractModel,
 )
 from src.models.rule_schemas import RuleStatus
-from src.services.session_service import ensure_default_users
+from src.services.session_service import ensure_default_users, ensure_demo_steward
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -324,6 +324,7 @@ def init_db() -> None:
     try:
         with Session(engine) as session:
             ensure_default_users(session)
+            ensure_demo_steward(session)
             demo_dataset = session.get(DatasetModel, "dataset-nyc-yellow-taxi-50k")
             if not demo_dataset:
                 demo_dataset = DatasetModel(
@@ -339,7 +340,7 @@ def init_db() -> None:
                 session.add(demo_dataset)
                 session.commit()
                 logger.info("Seeded default demo dataset 'dataset-nyc-yellow-taxi-50k'")
-            for username, access_level in (("user", "READ"), ("steward", "MANAGE")):
+            for username, access_level in (("user", "READ"), ("steward", "MANAGE"), ("demo-steward", "MANAGE")):
                 existing_access = (
                     session.query(DatasetAccessModel)
                     .filter(

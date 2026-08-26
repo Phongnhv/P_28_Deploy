@@ -9,7 +9,7 @@ import { Graph1Studio } from "./features/graph1/Graph1Studio";
 import { Graph1DetailsSidebar } from "./features/graph1/Graph1DetailsSidebar";
 import { StagePresenter, buildDisplayStages } from "./features/graph1/presenters";
 import { AnalysisStudio } from "./features/analysis/AnalysisStudio";
-import { PanelRightOpen } from "lucide-react";
+import { PanelRightOpen, ShieldCheck } from "lucide-react";
 import type {
   AuditLog,
   CreateJobResponse,
@@ -155,8 +155,14 @@ function LoginScreen({
   busy: boolean;
   error: string;
 }) {
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin");
+  const demoUsername = import.meta.env.VITE_DEMO_STEWARD_USERNAME ?? "demo-steward";
+  const demoPassword = import.meta.env.VITE_DEMO_STEWARD_PASSWORD ?? "ridepulse-demo-2026";
+  const [username, setUsername] = useState(demoUsername);
+  const [password, setPassword] = useState(demoPassword);
+  const fillDemoCredentials = () => {
+    setUsername(demoUsername);
+    setPassword(demoPassword);
+  };
   const submit = (event: FormEvent) => {
     event.preventDefault();
     onLogin(username, password);
@@ -168,10 +174,8 @@ function LoginScreen({
         <div className="orb orb-two" />
         <div className="grid-lines" />
         <div className="brand-lockup">
-          <span className="brand-mark">RP</span>
-          <span>
-            RidePulse <em>DQ</em>
-          </span>
+          <img className="brand-mark brand-image" src="/image.png" alt="" aria-hidden="true" />
+          <span>DataPulse</span>
         </div>
         <div className="login-pitch">
           <span className="eyebrow">HỆ THỐNG TRÍ TUỆ GIÁM SÁT CHẤT LƯỢNG DỮ LIỆU</span>
@@ -200,7 +204,7 @@ function LoginScreen({
       </div>
       <section className="login-card">
         <div className="mobile-brand">
-          <span className="brand-mark">RP</span> RidePulse <em>DQ</em>
+          <img className="brand-mark brand-image" src="/image.png" alt="" aria-hidden="true" /> DataPulse
         </div>
         <span className="eyebrow">TRUY CẬP THEO VAI TRÒ</span>
         <h2>Chào mừng trở lại</h2>
@@ -214,6 +218,7 @@ function LoginScreen({
             value={username}
             onChange={(event) => setUsername(event.target.value)}
             placeholder="user, steward, hoặc admin"
+            autoComplete="username"
             autoFocus
           />
           <label htmlFor="password">Mật khẩu</label>
@@ -223,6 +228,7 @@ function LoginScreen({
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             placeholder="Nhập mật khẩu"
+            autoComplete="current-password"
           />
           {error && <div className="inline-error">{error}</div>}
           <button
@@ -233,12 +239,15 @@ function LoginScreen({
           </button>
         </form>
         <div className="login-note">
-          <span className="lock-icon">⌁</span>
+          <ShieldCheck className="lock-icon" size={20} aria-hidden="true" />
           <span>
-            <strong>Tài khoản dùng thử</strong>
+            <strong>Tài khoản demo Steward</strong>
             <br />
-            Thông tin đăng nhập được cấp riêng cho người trình diễn. Không có
-            mật khẩu mặc định trên giao diện.
+            Tài khoản đã được điền sẵn cho giám khảo. Demo bị giới hạn 40 thao tác
+            ghi API, 3 upload, 3 profiler và 2 lần chạy phân tích trong 24 giờ.
+            <button type="button" className="demo-credential-button" onClick={fillDemoCredentials}>
+              Điền lại thông tin demo
+            </button>
           </span>
         </div>
       </section>
@@ -2422,10 +2431,8 @@ function App() {
       <main className="main-content full-width">
         <header className="topbar">
           <div className="brand-lockup">
-            <span className="brand-mark">RP</span>
-            <span>
-              RidePulse <em>DQ</em>
-            </span>
+            <img className="brand-mark brand-image" src="/image.png" alt="" aria-hidden="true" />
+            <span>DataPulse</span>
           </div>
           <div className="topbar-actions">
             <span className="role-badge">{role}</span>

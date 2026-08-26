@@ -25,6 +25,7 @@ from src.services.data_access_service import (
     list_audit_events,
     revoke_grant_set,
 )
+from src.services.demo_quota import enforce_demo_quota
 from src.services.rule_store import get_engine
 from src.services.session_service import get_current_session, verify_csrf
 
@@ -50,6 +51,7 @@ def get_db():
 def get_session(request: Request, db: Session = Depends(get_db)) -> SessionModel:
     session = get_current_session(request, db)
     verify_csrf(request, session)
+    enforce_demo_quota(db, request, session)
     return session
 
 

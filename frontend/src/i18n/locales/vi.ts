@@ -1,6 +1,6 @@
 export const vi = {
   app: {
-    title: "RidePulse",
+    title: "DataPulse",
     subtitle: "DQ",
     tagline: "Trí tuệ Chất lượng Dữ liệu",
     signOut: "Đăng xuất",

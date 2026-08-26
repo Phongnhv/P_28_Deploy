@@ -83,6 +83,7 @@ from src.models.schemas import (
     TestResultsListResponse,
     TestRunStatusResponse,
 )
+from src.services.demo_quota import enforce_demo_quota
 from src.services.job_dispatch import create_persisted_job, dispatch_or_mark_failed, job_checksum
 from src.services.job_runner import (
     _supabase_source_url,
@@ -147,6 +148,7 @@ def get_db():
 async def get_session(request: Request, db: Session = Depends(get_db)) -> SessionModel:
     session = get_current_session(request, db)
     verify_csrf(request, session)
+    enforce_demo_quota(db, request, session)
     return session
 
 
@@ -3145,7 +3147,14 @@ def list_audit_logs(
     """
     GET /api/v1/audit-logs - Returns paginated system logs.
     """
-    logs = db.query(AuditEventModel).order_by(AuditEventModel.created_at.desc()).offset(offset).limit(limit).all()
+    logs = (
+        db.query(AuditEventModel)
+        .filter(AuditEventModel.entity_type != "demo_quota")
+        .order_by(AuditEventModel.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
     session_ids = {log.session_id for log in logs if log.session_id}
     sessions = {}
     if session_ids:

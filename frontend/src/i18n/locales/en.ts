@@ -1,6 +1,6 @@
 export const en = {
   app: {
-    title: "RidePulse",
+    title: "DataPulse",
     subtitle: "DQ",
     tagline: "Data Quality Intelligence",
     signOut: "Sign out",
