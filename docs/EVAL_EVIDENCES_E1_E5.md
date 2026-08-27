@@ -10,9 +10,12 @@
 > runs and can fail a build. Where the two disagree, the YAML is authoritative,
 > because prose cannot be checked.
 
-This report records the bounded local/Supabase MVP verification. The agent only
-receives aggregate profile evidence; rule approval remains a Data Steward action.
-The runner compiles approved specifications through fixed, parameterized templates.
+This report records a bounded historical local/Supabase MVP verification on the
+taxi-shaped E1–E5 fixture. The current product path is generic and versioned, so
+these values are a baseline rather than a claim about every uploaded dataset or
+the latest cloud deployment. The agent only receives aggregate profile evidence;
+rule approval remains a Data Steward action. The runner compiles approved
+specifications through fixed, parameterized templates.
 
 | Case | Rule type | Evidence and expected behaviour |
 | --- | --- | --- |

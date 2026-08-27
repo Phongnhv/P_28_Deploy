@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from src.api.data_access_routes import router as data_access_router
 from src.api.routes import dq_router, require_role, router
 from src.config import get_settings
 from src.services.rule_store import get_engine, init_db
@@ -50,14 +51,17 @@ async def lifespan(app: FastAPI):
     yield
     print("Shutting down...")
 
+settings = get_settings()
+
 app = FastAPI(
-    title="AI20K Agent",
-    description="RidePulse DQ Localhost MVP",
+    title="DataPulse",
+    description="DataPulse AI Data Quality Platform",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url=None if settings.app_env == "production" else "/docs",
+    redoc_url=None if settings.app_env == "production" else "/redoc",
+    openapi_url=None if settings.app_env == "production" else "/openapi.json",
 )
-
-settings = get_settings()
 
 # CORS Configuration
 frontend_origin_env = os.getenv("FRONTEND_ORIGIN")
@@ -149,24 +153,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 app.include_router(router, prefix="/api/v1")
-
-# Every dq_router endpoint requires an authenticated session.
-#
-# The dependency is attached here rather than on each route because dq_router is
-# constructed at routes.py:96, before require_role is defined at routes.py:116.
-# Attaching it once at mount time also means a new endpoint added to dq_router
-# cannot be shipped unprotected by accident -- which is how eight of them, including
-# publish, review and bulk-review, ended up reachable without any session at all.
-#
-# PRODUCT_SPEC.md safety rules 3 and 5 ("only an approved typed rule can compile and
-# run", "all state transitions create an audit record") are unenforceable without
-# this: on a public URL anyone could approve and publish rules, and the audit trail
-# records whoever the request body names.
 app.include_router(
     dq_router,
     prefix="/api/v1",
     dependencies=[Depends(require_role(["USER", "STEWARD", "ADMIN"]))],
 )
+app.include_router(data_access_router)
 
 @app.get("/health", tags=["System"])
 async def health():

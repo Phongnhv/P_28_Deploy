@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from src.agents.state import AgentState
 from src.config import get_settings
-from src.models.database import RulesetVersionModel
+from src.models.database import DatasetVersionModel, GovernedArtifactModel, RulesetVersionModel
 from src.models.rule_schemas import RuleType
 from src.services.dbt_artifact_store import get_dbt_artifact_store, validate_run_id
 from src.services.rule_store import get_approved_rules, get_engine
@@ -297,6 +297,134 @@ def generate_dbt_test_yaml(approved_rules: list[dict]) -> str:
     return yaml.dump(yaml_dict, sort_keys=False, allow_unicode=True)
 
 
+def generate_versioned_dbt_test_yaml(
+    schema_manifest: list[dict],
+    approved_rules: list[dict],
+    *,
+    schema_hash_value: str,
+    source_checksum: str,
+    alias: str = "version_source",
+) -> str:
+    """Generate a schema-driven dbt metadata artifact for a versioned source.
+
+    The physical CSV/Parquet object is intentionally not represented as a dbt
+    source relation.  Graph 2 executes through the verified source adapter;
+    this YAML is a deterministic, governed description of the exact schema and
+    the dbt-native checks that were approved for this run.  Keeping the alias
+    fixed also prevents an LLM or browser payload from selecting a relation.
+    """
+    if alias != "version_source":
+        raise ValueError("Versioned dbt artifacts must use the version_source alias")
+    manifest_by_name = {
+        str(item.get("name")): item
+        for item in schema_manifest
+        if isinstance(item, dict) and item.get("name")
+    }
+    if not manifest_by_name:
+        raise ValueError("Versioned dbt artifacts require a non-empty schema manifest")
+
+    rules_by_column: dict[str, list[dict]] = {}
+    for rule in approved_rules:
+        table_name = rule.get("table_name") or alias
+        if table_name != alias:
+            raise ValueError("Versioned rules must target the version_source alias")
+        column = rule.get("column")
+        if column in manifest_by_name:
+            rules_by_column.setdefault(str(column), []).append(rule)
+
+    columns: list[dict] = []
+    for item in sorted(manifest_by_name.values(), key=lambda value: int(value.get("ordinal", 0))):
+        name = str(item["name"])
+        tests: list[str | dict] = []
+        for rule in rules_by_column.get(name, []):
+            rule_type = str(rule.get("rule_type") or "").upper()
+            if rule_type == "NOT_NULL" and "not_null" not in tests:
+                tests.append("not_null")
+            elif rule_type == "UNIQUE" and "unique" not in tests:
+                tests.append("unique")
+            elif rule_type == "ACCEPTED_VALUES":
+                params = rule.get("effective_parameters") or rule.get("parameters") or {}
+                values = params.get("accepted_values") or params.get("allowed_values") or []
+                tests.append({"accepted_values": {"values": values}})
+        columns.append({"name": name, "tests": tests})
+
+    model = {
+        "name": alias,
+        "description": (
+            "Deterministic metadata for the immutable versioned source adapter; "
+            f"schema_hash={schema_hash_value}; source_checksum={source_checksum}"
+        ),
+        "columns": columns,
+    }
+    return yaml.dump({"version": 2, "models": [model]}, sort_keys=False, allow_unicode=True)
+
+
+def build_versioned_generated_tests(approved_rules: list[dict]) -> list[dict]:
+    """Return one observable generated-check record per approved versioned rule.
+
+    Versioned datasets execute through the immutable source adapter rather than
+    the legacy SQL-query compiler, so ``generated_tests`` used to be left empty
+    even though the governed YAML artifact and adapter executed every approved
+    rule.  These records are metadata for counters/observability; the runner
+    still evaluates the immutable source with ``approved_rules`` directly.
+    """
+    return [
+        {
+            "rule_id": rule.get("rule_id"),
+            "rule_type": rule.get("rule_type"),
+            "table_name": rule.get("table_name") or "version_source",
+            "column_name": rule.get("column") or None,
+            "execution_mode": "versioned_source_adapter",
+        }
+        for rule in approved_rules
+        if isinstance(rule, dict) and rule.get("rule_id")
+    ]
+
+
+def _persist_versioned_dbt_artifact(
+    state: AgentState,
+    *,
+    content: bytes,
+    artifact_ref: dict | None,
+    local_trace: Path,
+) -> None:
+    """Register the run artifact with the existing governed-artifact model."""
+    version_id = str(state.get("dataset_version_id") or "")
+    dataset_id = str(state.get("dataset_id") or "")
+    run_id = validate_run_id(str(state.get("test_run_id") or state.get("rule_run_id") or "test_run"))
+    if not version_id or not dataset_id:
+        raise ValueError("Versioned dbt artifact registration requires dataset and version lineage")
+    with Session(get_engine()) as db:
+        version = db.query(DatasetVersionModel).filter_by(
+            id=version_id, dataset_id=dataset_id, status="READY"
+        ).first()
+        if not version:
+            raise ValueError("Cannot register a dbt artifact for a non-READY dataset version")
+        checksum = hashlib.sha256(content).hexdigest()
+        artifact_id = f"artifact-dbt-{run_id}"
+        locator = (
+            f"object://{artifact_ref['bucket']}/{artifact_ref['object_key']}"
+            if artifact_ref and artifact_ref.get("bucket") and artifact_ref.get("object_key")
+            else f"local:{local_trace}"
+        )
+        existing = db.get(GovernedArtifactModel, artifact_id)
+        if existing and existing.checksum != checksum:
+            raise ValueError("A governed dbt artifact already exists with a different checksum")
+        if existing is None:
+            db.add(GovernedArtifactModel(
+                id=artifact_id,
+                workspace_id=version.workspace_id,
+                dataset_id=dataset_id,
+                dataset_version_id=version_id,
+                run_id=run_id,
+                artifact_type="DBT_TEST_YAML",
+                storage_locator=locator,
+                checksum=checksum,
+                created_by=version.created_by,
+            ))
+        db.commit()
+
+
 
 
 def validate_ruleset_contract(
@@ -304,6 +432,7 @@ def validate_ruleset_contract(
     approved_rules: list,
     dataset_id: str,
     ruleset_version_id: str | None,
+    dataset_profile: dict | None = None,
 ) -> tuple[list[dict], str]:
     """Perform Phase 2.2 contract validation and calculate schema signature hash.
 
@@ -312,13 +441,6 @@ def validate_ruleset_contract(
     """
     validation_errors = []
 
-    # 1. Reflect database schema for target tables
-    try:
-        inspector = inspect(engine)
-        db_tables = inspector.get_table_names()
-    except Exception as exc:
-        return [{"type": "DB_CONNECTION_ERROR", "message": f"Cannot connect to database: {exc}"}], ""
-
     # Group rules by table to inspect
     tables_in_rules = set()
     for rule in approved_rules:
@@ -326,33 +448,60 @@ def validate_ruleset_contract(
         if t_name:
             tables_in_rules.add(t_name)
 
-    # Compute live schema signature hash
+    # Compute the target schema signature. Imported datasets are executed from
+    # their uploaded CSV/Parquet file, so their Graph 1 profile is the canonical
+    # schema. Reflecting the control-plane/Supabase database here incorrectly
+    # compares uploaded columns (for example ``career_assists``) with the pinned
+    # NYC ``source_rows`` table.
     schema_parts = []
     table_columns = {}
-
-    for t_name in sorted(tables_in_rules):
-        if t_name not in db_tables:
-            validation_errors.append({
-                "type": "MISSING_TABLE",
-                "table_name": t_name,
-                "message": f"Table '{t_name}' does not exist in the database catalog."
-            })
-            continue
-
+    profiled_tables = dataset_profile if isinstance(dataset_profile, dict) else {}
+    if profiled_tables:
+        for t_name in sorted(tables_in_rules):
+            table_profile = profiled_tables.get(t_name)
+            raw_columns = table_profile.get("columns") if isinstance(table_profile, dict) else None
+            if not isinstance(raw_columns, dict):
+                validation_errors.append({
+                    "type": "MISSING_TABLE",
+                    "table_name": t_name,
+                    "message": f"Table '{t_name}' does not exist in the dataset profile.",
+                })
+                continue
+            col_info = sorted(
+                (str(name), str(details.get("type") or "unknown"))
+                for name, details in raw_columns.items()
+                if isinstance(details, dict)
+            )
+            table_columns[t_name] = {name: type_name for name, type_name in col_info}
+            schema_parts.append(f"{t_name}({','.join(f'{name}:{type_name}' for name, type_name in col_info)})")
+    else:
+        # Legacy/CLI runs without a Graph 1 profile still validate against the
+        # physical execution database.
         try:
-            cols = inspector.get_columns(t_name)
-            col_info = sorted([(c["name"], str(c["type"])) for c in cols], key=lambda x: x[0])
-            table_columns[t_name] = {c[0]: c[1] for c in col_info}
-
-            # format table signature: table_name(col1:type1,col2:type2,...)
-            cols_str = ",".join(f"{name}:{type_str}" for name, type_str in col_info)
-            schema_parts.append(f"{t_name}({cols_str})")
+            inspector = inspect(engine)
+            db_tables = inspector.get_table_names()
         except Exception as exc:
-            validation_errors.append({
-                "type": "REFLECTION_ERROR",
-                "table_name": t_name,
-                "message": f"Failed to reflect columns for table '{t_name}': {exc}"
-            })
+            return [{"type": "DB_CONNECTION_ERROR", "message": f"Cannot connect to database: {exc}"}], ""
+
+        for t_name in sorted(tables_in_rules):
+            if t_name not in db_tables:
+                validation_errors.append({
+                    "type": "MISSING_TABLE",
+                    "table_name": t_name,
+                    "message": f"Table '{t_name}' does not exist in the database catalog.",
+                })
+                continue
+            try:
+                cols = inspector.get_columns(t_name)
+                col_info = sorted([(c["name"], str(c["type"])) for c in cols], key=lambda x: x[0])
+                table_columns[t_name] = {c[0]: c[1] for c in col_info}
+                schema_parts.append(f"{t_name}({','.join(f'{name}:{type_str}' for name, type_str in col_info)})")
+            except Exception as exc:
+                validation_errors.append({
+                    "type": "REFLECTION_ERROR",
+                    "table_name": t_name,
+                    "message": f"Failed to reflect columns for table '{t_name}': {exc}",
+                })
 
     live_schema_str = ";".join(schema_parts)
     live_schema_hash = hashlib.md5(live_schema_str.encode("utf-8")).hexdigest() if live_schema_str else ""
@@ -465,13 +614,91 @@ async def test_generator_node(state: AgentState) -> dict:
     engine = get_engine()
     dialect_name = engine.dialect.name
 
+    versioned_schema: list[dict] | None = None
+    versioned_checksum: str | None = None
+    versioned_schema_hash: str | None = None
+    if state.get("dataset_version_id"):
+        with Session(engine) as db:
+            version = db.query(DatasetVersionModel).filter_by(
+                id=state["dataset_version_id"],
+                dataset_id=state.get("dataset_id"),
+                status="READY",
+            ).first()
+            if not version:
+                message = "The selected dataset version is not READY or does not belong to the dataset."
+                return {
+                    "approved_rules": approved_rules,
+                    "generated_tests": [],
+                    "generated_dbt_yaml": "",
+                    "dbt_artifact_ref": None,
+                    "dbt_trace_file_path": None,
+                    "dbt_validation_valid": False,
+                    "dbt_validation_error": message,
+                    "dbt_validation_attempts": 0,
+                    "dbt_repair_history": [],
+                    "test_generation_errors": [message],
+                    "error": message,
+                }
+            try:
+                version_metadata = json.loads(version.source_metadata_json or "{}")
+            except ValueError:
+                version_metadata = {}
+            versioned_schema = version_metadata.get("schema")
+            versioned_checksum = version.checksum
+            versioned_schema_hash = version.schema_hash
+            if not isinstance(versioned_schema, list) or not versioned_schema:
+                message = "The selected dataset version has no immutable schema manifest."
+                return {
+                    "approved_rules": approved_rules,
+                    "generated_tests": [],
+                    "generated_dbt_yaml": "",
+                    "dbt_artifact_ref": None,
+                    "dbt_trace_file_path": None,
+                    "dbt_validation_valid": False,
+                    "dbt_validation_error": message,
+                    "dbt_validation_attempts": 0,
+                    "dbt_repair_history": [],
+                    "test_generation_errors": [message],
+                    "error": message,
+                }
+
     # Contract Validation (Phase 2.2)
     ruleset_version_id = state.get("ruleset_version_id")
+    profile_for_contract = (state.get("metadata") or {}).get("uploaded_dataset_profile")
+    if versioned_schema and isinstance(profile_for_contract, dict):
+        profile_meta = (profile_for_contract.get("version_source") or {}).get("table_metadata")
+        if isinstance(profile_meta, dict):
+            if profile_meta.get("dataset_version_id") not in {None, str(state.get("dataset_version_id"))}:
+                message = "The selected Graph 1 profile does not belong to the requested dataset version."
+                return {
+                    "approved_rules": approved_rules,
+                    "generated_tests": [],
+                    "generated_dbt_yaml": "",
+                    "dbt_artifact_ref": None,
+                    "dbt_trace_file_path": None,
+                    "dbt_validation_valid": False,
+                    "dbt_validation_error": message,
+                    "dbt_validation_attempts": 0,
+                    "dbt_repair_history": [],
+                    "test_generation_errors": [message],
+                    "error": message,
+                }
+    if versioned_schema and not isinstance(profile_for_contract, dict):
+        profile_for_contract = {
+            "version_source": {
+                "columns": {
+                    str(item["name"]): {"type": item.get("logical_type", "string")}
+                    for item in versioned_schema
+                    if isinstance(item, dict) and item.get("name")
+                }
+            }
+        }
     validation_errors, schema_hash = validate_ruleset_contract(
         engine,
         approved_rules,
         state.get("dataset_id", "unknown"),
         ruleset_version_id,
+        profile_for_contract,
     )
 
     if validation_errors:
@@ -490,19 +717,28 @@ async def test_generator_node(state: AgentState) -> dict:
             "error": f"Contract validation failed: {validation_errors}",
         }
 
-    # Gom rules theo bảng
-    by_table: dict[str, list[dict]] = {}
-    for r in approved_rules:
-        t = r.get("table_name", "")
-        by_table.setdefault(t, []).append(r)
+    # 2. Sinh tệp dbt test YAML. Versioned runs use only the immutable schema
+    # manifest and the fixed adapter alias; the legacy SQL query compiler is
+    # retained below for the explicit taxi compatibility path.
+    if versioned_schema:
+        all_generated = build_versioned_generated_tests(approved_rules)
+        dbt_yaml_content = generate_versioned_dbt_test_yaml(
+            versioned_schema,
+            approved_rules,
+            schema_hash_value=versioned_schema_hash or schema_hash,
+            source_checksum=versioned_checksum or str(state.get("source_checksum") or ""),
+        )
+    else:
+        by_table: dict[str, list[dict]] = {}
+        for r in approved_rules:
+            t = r.get("table_name", "")
+            by_table.setdefault(t, []).append(r)
 
-    all_generated: list[dict] = []
-    for table_name, table_rules in by_table.items():
-        tests = generate_tests_for_table(table_name, table_rules, dialect_name)
-        all_generated.extend(tests)
-
-    # 2. Sinh tệp dbt test YAML
-    dbt_yaml_content = generate_dbt_test_yaml(approved_rules)
+        all_generated = []
+        for table_name, table_rules in by_table.items():
+            tests = generate_tests_for_table(table_name, table_rules, dialect_name)
+            all_generated.extend(tests)
+        dbt_yaml_content = generate_dbt_test_yaml(approved_rules)
 
     # 3. Keep one deterministic trace per run; this is the local/test fallback only.
     settings = get_settings()
@@ -530,9 +766,25 @@ async def test_generator_node(state: AgentState) -> dict:
         logger.info("Uploaded dbt test artifact: s3://%s/%s", artifact_ref.bucket, artifact_ref.object_key)
     except Exception as exc:
         upload_error = str(exc)
-        if settings.app_env not in ("local", "development", "test") or not trace_file.exists():
+        storage_is_configured = bool(
+            settings.object_storage_provider == "gcs"
+            or settings.object_storage_endpoint_url
+            or settings.object_storage_access_key_id
+            or settings.object_storage_secret_access_key
+        )
+        if (
+            versioned_schema
+            and settings.app_env not in ("local", "development", "test")
+        ) or (
+            settings.app_env not in ("local", "development", "test")
+            and storage_is_configured
+        ) or not trace_file.exists():
             raise RuntimeError(f"Unable to upload generated dbt artifact for run {run_id}") from exc
-        logger.warning("Object storage upload failed; using local trace fallback for run %s: %s", run_id, exc)
+        logger.warning(
+            "Object storage is unavailable or unconfigured; using the run-scoped local trace for %s: %s",
+            run_id,
+            exc,
+        )
 
     # 5. Preserve a timestamped trace for existing debugging workflows.
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -557,6 +809,14 @@ async def test_generator_node(state: AgentState) -> dict:
         },
     )
 
+    if versioned_schema:
+        _persist_versioned_dbt_artifact(
+            state,
+            content=yaml_bytes,
+            artifact_ref=artifact_ref.to_dict() if artifact_ref else None,
+            local_trace=trace_file,
+        )
+
     return {
         "approved_rules": approved_rules,
         "generated_tests": all_generated,
@@ -568,6 +828,12 @@ async def test_generator_node(state: AgentState) -> dict:
         "dbt_validation_attempts": 0,
         "dbt_repair_history": [],
         "test_generation_errors": [],
+        "metadata": {
+            **state.get("metadata", {}),
+            "artifact_hash": hashlib.sha256(yaml_bytes).hexdigest(),
+            "dbt_artifact_type": "DBT_TEST_YAML" if versioned_schema else "legacy_run_yaml",
+            "dbt_execution_mode": "versioned_source_adapter" if versioned_schema else None,
+        },
     }
 
 

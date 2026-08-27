@@ -14,7 +14,9 @@ from src.models.database import (
     AnomalyHypothesisModel,
     AnomalyRunModel,
     AnomalySignalModel,
+    DatasetVersionModel,
     DqResultModel,
+    GovernedArtifactModel,
     Graph1NodeExecutionModel,
     Graph1RunModel,
     RuleProposalModel,
@@ -72,6 +74,53 @@ def _normalise_status(value: Any) -> str:
     }.get(raw, raw)
 
 
+def _publish_governed_report(
+    db: Session,
+    run: AnalysisRunModel,
+    markdown: str,
+) -> tuple[str | None, str | None, Any | None]:
+    """Publish one immutable Markdown report for a versioned analysis run."""
+    if not run.dataset_version_id or not run.workspace_id:
+        return None, None, None
+    from src.services.dbt_artifact_store import artifact_sha256, get_dbt_artifact_store
+
+    checksum = artifact_sha256(markdown.encode("utf-8"))
+    existing = db.query(GovernedArtifactModel).filter_by(
+        run_id=run.id,
+        dataset_version_id=run.dataset_version_id,
+        artifact_type="STEWARD_REPORT_MARKDOWN",
+    ).first()
+    if existing:
+        if existing.checksum != checksum:
+            return None, "REPORT_ARTIFACT_CHECKSUM_CONFLICT", None
+        return existing.storage_locator, None, None
+    try:
+        ref = get_dbt_artifact_store().upload_report_markdown(
+            run.id,
+            markdown.encode("utf-8"),
+            dataset_id=run.dataset_id,
+            dataset_version_id=run.dataset_version_id,
+        )
+        if ref.sha256 != checksum or ref.size_bytes != len(markdown.encode("utf-8")):
+            raise ValueError("Object-storage report metadata does not match the report content")
+    except Exception as exc:
+        logger.error("Governed report upload failed for %s: %s", run.id, exc)
+        return None, f"REPORT_ARTIFACT_UPLOAD_FAILED: {str(exc)[:500]}", None
+    version = db.get(DatasetVersionModel, run.dataset_version_id)
+    db.add(GovernedArtifactModel(
+        id=f"artifact-report-{run.id}",
+        workspace_id=run.workspace_id,
+        dataset_id=run.dataset_id,
+        dataset_version_id=run.dataset_version_id,
+        run_id=run.id,
+        artifact_type="STEWARD_REPORT_MARKDOWN",
+        storage_locator=f"object://{ref.bucket}/{ref.object_key}",
+        checksum=ref.sha256,
+        created_by=version.created_by if version else run.created_by,
+    ))
+    return f"object://{ref.bucket}/{ref.object_key}", None, ref
+
+
 def _spec_parameters(spec: dict[str, Any], legacy: ProposedRuleModel) -> dict[str, Any]:
     nested = spec.get("parameters") if isinstance(spec.get("parameters"), dict) else {}
     original = _payload(legacy.parameters, {}) if legacy.parameters else {}
@@ -121,11 +170,13 @@ def ensure_completed_graph1_snapshot(db: Session, run: Graph1RunModel) -> int:
         if version:
             version.rule_spec = proposal.rule_spec
             version.status = "APPROVED"
+            version.dataset_version_id = run.dataset_version_id
         else:
             db.add(RuleVersionModel(
                 id=version_id,
                 rule_proposal_id=proposal.id,
                 dataset_id=proposal.dataset_id,
+                dataset_version_id=run.dataset_version_id,
                 rule_spec=proposal.rule_spec,
                 status="APPROVED",
                 version=1,
@@ -166,10 +217,58 @@ def create_analysis_run(
     graph1_run: Graph1RunModel,
     username: str,
     idempotency_key: str,
+    *,
+    force_rerun: bool = False,
 ) -> tuple[AnalysisRunModel, bool]:
-    existing = db.query(AnalysisRunModel).filter(AnalysisRunModel.graph1_run_id == graph1_run.id).first()
+    existing = (
+        db.query(AnalysisRunModel)
+        .filter(AnalysisRunModel.graph1_run_id == graph1_run.id)
+        .order_by(AnalysisRunModel.created_at.desc())
+        .first()
+    )
+    if force_rerun and existing and existing.status not in {"PENDING", "RUNNING"}:
+        # A rerun is a new durable analysis snapshot.  Keep the previous
+        # result for history/audit instead of resetting it in place.
+        existing = None
+    # Successful/in-flight analyses remain idempotent. A failed terminal run,
+    # however, must not permanently brick the Graph 1 snapshot. Reset that
+    # failed row and its observable nodes when the UI submits a fresh key.
     if existing:
-        return existing, False
+        if force_rerun:
+            return existing, False
+        if existing.status != "FAILED":
+            return existing, False
+        conflicting_key = (
+            db.query(AnalysisRunModel)
+            .filter(
+                AnalysisRunModel.idempotency_key == idempotency_key,
+                AnalysisRunModel.id != existing.id,
+            )
+            .first()
+        )
+        if conflicting_key:
+            raise ValueError("Idempotency-Key is already bound to another Graph 1 run.")
+        existing.status = "PENDING"
+        existing.phase = "PREPARING"
+        existing.current_node = None
+        existing.test_run_id = None
+        existing.anomaly_run_id = None
+        existing.report_markdown = None
+        existing.report_source = None
+        existing.report_path = None
+        existing.error = None
+        existing.completed_at = None
+        existing.idempotency_key = idempotency_key
+        existing.updated_at = utc_now()
+        for node in db.query(AnalysisNodeExecutionModel).filter_by(run_id=existing.id).all():
+            node.status = "PENDING"
+            node.output_json = "{}"
+            node.error = None
+            node.started_at = None
+            node.completed_at = None
+            node.sequence += len(ANALYSIS_NODES)
+        db.commit()
+        return existing, True
     existing_key = db.query(AnalysisRunModel).filter(AnalysisRunModel.idempotency_key == idempotency_key).first()
     if existing_key:
         if existing_key.graph1_run_id != graph1_run.id:
@@ -181,10 +280,15 @@ def create_analysis_run(
     if not approved:
         raise ValueError("Graph 1 has no approved rules for Graph 2.")
     run_id = f"analysis-{uuid.uuid4().hex[:18]}"
+    graph1_state = _payload(graph1_run.state_json, {}) or {}
     run = AnalysisRunModel(
         id=run_id,
         graph1_run_id=graph1_run.id,
         dataset_id=graph1_run.dataset_id,
+        workspace_id=graph1_run.workspace_id,
+        dataset_version_id=graph1_run.dataset_version_id,
+        profile_run_id=graph1_run.profile_run_id,
+        rule_review_snapshot_id=graph1_state.get("rule_review_snapshot_id"),
         status="PENDING",
         phase="PREPARING",
         created_by=username,
@@ -211,15 +315,23 @@ def create_analysis_run(
 
 
 def serialize_analysis_run(run: AnalysisRunModel) -> dict[str, Any]:
+    report_artifact_status = "REGISTERED" if str(run.report_path or "").startswith("object://") else (
+        "UPLOAD_FAILED" if "REPORT_ARTIFACT_UPLOAD_FAILED" in str(run.error or "") else "NOT_AVAILABLE"
+    )
     return {
         "id": run.id,
         "graph1_run_id": run.graph1_run_id,
         "dataset_id": run.dataset_id,
+        "workspace_id": run.workspace_id,
+        "dataset_version_id": run.dataset_version_id,
+        "profile_run_id": run.profile_run_id,
         "status": run.status,
         "phase": run.phase,
         "current_node": run.current_node,
         "test_run_id": run.test_run_id,
         "anomaly_run_id": run.anomaly_run_id,
+        "report_artifact_status": report_artifact_status,
+        "report_artifact_locator": run.report_path if report_artifact_status == "REGISTERED" else None,
         "report_available": bool(run.report_markdown),
         "error": run.error,
         "created_by": run.created_by,
@@ -391,6 +503,14 @@ async def execute_analysis_run(run_id: str) -> None:
         run.error = None
         graph1_run_id = run.graph1_run_id
         dataset_id = run.dataset_id
+        graph1_run = db.get(Graph1RunModel, graph1_run_id)
+        graph1_state = _payload(graph1_run.state_json, {}) if graph1_run else {}
+        graph1_metadata = graph1_state.get("metadata") if isinstance(graph1_state.get("metadata"), dict) else {}
+        uploaded_dataset_profile = graph1_metadata.get("uploaded_dataset_profile")
+        workspace_id = run.workspace_id or (graph1_run.workspace_id if graph1_run else None)
+        dataset_version_id = run.dataset_version_id or (graph1_run.dataset_version_id if graph1_run else None)
+        profile_run_id = run.profile_run_id or (graph1_run.profile_run_id if graph1_run else None)
+        rule_review_snapshot_id = run.rule_review_snapshot_id or graph1_state.get("rule_review_snapshot_id")
         db.commit()
 
     try:
@@ -417,14 +537,25 @@ async def execute_analysis_run(run_id: str) -> None:
         graph2 = build_execution_graph(observer=observer)
         graph2_state = await graph2.ainvoke({
             "dataset_id": dataset_id,
+            "workspace_id": workspace_id,
+            "dataset_version_id": dataset_version_id,
+            "profile_run_id": profile_run_id,
+            "rule_review_snapshot_id": rule_review_snapshot_id,
             "test_run_id": test_run_id,
             "rule_run_id": graph1_run_id,
             "approved_rules": approved_rules,
-            "metadata": {"analysis_run_id": run_id},
+            "metadata": {
+                "analysis_run_id": run_id,
+                "uploaded_dataset_profile": uploaded_dataset_profile,
+                "source_checksum": graph1_metadata.get("source_checksum"),
+            },
         })
+        graph2_status = graph2_state.get("graph2_status") or (graph2_state.get("metadata") or {}).get("graph2_status")
+        if dataset_version_id and (graph2_state.get("execution_mode") == "versioned_source_adapter" or (graph2_state.get("metadata") or {}).get("execution_mode") == "versioned_source_adapter"):
+            graph2_state.setdefault("dbt_validation_valid", True)
         if graph2_state.get("dbt_validation_valid") is True:
             _skip_nodes(run_id, {"dbt_validation_failed"}, "Validation succeeded; failure branch was not selected.")
-        if graph2_state.get("error") or graph2_state.get("dbt_validation_valid") is not True:
+        if graph2_state.get("error") or (not dataset_version_id and graph2_state.get("dbt_validation_valid") is not True):
             message = str(graph2_state.get("error") or graph2_state.get("dbt_validation_error") or "Graph 2 failed.")
             update_test_run_status(test_run_id, "FAILED", error=message)
             _skip_nodes(
@@ -441,6 +572,21 @@ async def execute_analysis_run(run_id: str) -> None:
                     db.commit()
             return
 
+        if graph2_status == "FAILED":
+            message = "Graph 2 produced no usable rule evidence."
+            update_test_run_status(test_run_id, "FAILED", error=message)
+            _skip_nodes(run_id, {"anomaly_detector", "hypothesis_agent", "persist_analysis", "report_writer"}, message)
+            with Session(get_engine()) as db:
+                failed_run = db.get(AnalysisRunModel, run_id)
+                if failed_run:
+                    failed_run.status = "FAILED"
+                    failed_run.phase = "GRAPH2"
+                    failed_run.error = message
+                    failed_run.completed_at = utc_now()
+                    db.commit()
+            return
+        graph2_partial = graph2_status == "PARTIAL"
+
         anomaly_run_id = f"anom-{uuid.uuid4().hex[:12]}"
         with Session(get_engine()) as db:
             run = db.get(AnalysisRunModel, run_id)
@@ -453,6 +599,10 @@ async def execute_analysis_run(run_id: str) -> None:
             "anomaly_run_id": anomaly_run_id,
             "execution_run_id": test_run_id,
             "dataset_id": dataset_id,
+            "workspace_id": workspace_id,
+            "dataset_version_id": dataset_version_id,
+            "profile_run_id": profile_run_id,
+            "rule_review_snapshot_id": rule_review_snapshot_id,
             "detector_config_version": "anomaly-v1",
             "metadata": {"analysis_run_id": run_id},
         }
@@ -473,10 +623,11 @@ async def execute_analysis_run(run_id: str) -> None:
         if not report_markdown:
             report_markdown = render_steward_report_vi(test_run_id, dataset_id, graph3_state)
             report_source = "FALLBACK"
-            try:
-                report_path = _write_report_file(test_run_id, report_markdown)
-            except Exception:
-                report_path = ""
+            if not dataset_version_id:
+                try:
+                    report_path = _write_report_file(test_run_id, report_markdown)
+                except Exception:
+                    report_path = ""
 
         persisted_anomaly_id = str(
             graph3_state.get("anomaly_run_id")
@@ -486,16 +637,38 @@ async def execute_analysis_run(run_id: str) -> None:
         with Session(get_engine()) as db:
             run = db.get(AnalysisRunModel, run_id)
             if run:
+                report_locator, report_error, uploaded_report_ref = _publish_governed_report(
+                    db, run, report_markdown
+                )
                 run.anomaly_run_id = persisted_anomaly_id
                 run.report_markdown = report_markdown
                 run.report_source = report_source or "FALLBACK"
-                run.report_path = report_path or None
-                run.status = "PARTIAL" if graph3_failed else "COMPLETED"
+                if dataset_version_id:
+                    run.report_path = report_locator
+                else:
+                    run.report_path = report_path or None
+                run.status = "PARTIAL" if graph3_failed or graph2_partial else "COMPLETED"
                 run.phase = "REPORT"
                 run.current_node = "report_writer"
-                run.error = str(graph3_state.get("error"))[:2000] if graph3_failed else None
+                execution_error = (
+                    str(graph3_state.get("error"))[:2000]
+                    if graph3_failed
+                    else ("Graph 2 completed partially; some rule evidence is unavailable." if graph2_partial else None)
+                )
+                run.error = "; ".join(item for item in (execution_error, report_error) if item) or None
                 run.completed_at = utc_now()
-                db.commit()
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    if uploaded_report_ref is not None:
+                        try:
+                            from src.services.dbt_artifact_store import get_dbt_artifact_store
+
+                            get_dbt_artifact_store().delete_artifact(uploaded_report_ref)
+                        except Exception:
+                            logger.exception("Failed to compensate report artifact for %s", run_id)
+                    raise
     except Exception as exc:
         logger.exception("Analysis run %s failed", run_id)
         _skip_nodes(run_id, {node_key for _, node_key in ANALYSIS_NODES}, "Analysis stopped after an unrecoverable error.")
@@ -584,6 +757,16 @@ def build_analysis_result(db: Session, run: AnalysisRunModel) -> dict[str, Any]:
     generator_output = node_by_key.get("test_generator", {}).get("output", {})
     validation_output = node_by_key.get("validate_dbt_project", {}).get("output", {})
     runner_output = node_by_key.get("test_runner", {}).get("output", {})
+    generated_tests_count = int(generator_output.get("generated_tests_count") or 0)
+    if (
+        generated_tests_count == 0
+        and runner_output.get("execution_mode") == "not_run_versioned_source_adapter"
+    ):
+        # Older persisted node summaries were written before versioned adapter
+        # checks were represented in ``generated_tests``. The result rows are
+        # the durable one-to-one execution evidence, so repair the observable
+        # counter without rewriting historical node payloads.
+        generated_tests_count = len(result_rows)
     dominant_signal = max(signals, key=lambda item: (item.score, item.reliability), default=None)
 
     graph3_signals = [{
@@ -619,6 +802,10 @@ def build_analysis_result(db: Session, run: AnalysisRunModel) -> dict[str, Any]:
         "fallback_used": hypothesis.fallback_used,
     } for hypothesis in sorted(hypotheses, key=lambda item: item.confidence, reverse=True)]
 
+    report_artifact = db.query(GovernedArtifactModel).filter_by(
+        run_id=run.id,
+        artifact_type="STEWARD_REPORT_MARKDOWN",
+    ).first()
     return {
         "run": serialize_analysis_run(run),
         "nodes": node_rows,
@@ -635,7 +822,7 @@ def build_analysis_result(db: Session, run: AnalysisRunModel) -> dict[str, Any]:
                 "duration_ms": round(total_duration, 2),
             },
             "dbt": {
-                "generated_tests_count": generator_output.get("generated_tests_count", 0),
+                "generated_tests_count": generated_tests_count,
                 "validation_status": "SKIPPED" if validation_output.get("skipped") else "PASS" if validation_output.get("valid") else "FAIL",
                 "validation_skipped": bool(validation_output.get("skipped")),
                 "validation_error": validation_output.get("error"),
@@ -663,6 +850,16 @@ def build_analysis_result(db: Session, run: AnalysisRunModel) -> dict[str, Any]:
             "markdown": run.report_markdown or "",
             "source": run.report_source,
             "file_name": _basename(run.report_path),
+            "artifact_status": "REGISTERED" if report_artifact else (
+                "UPLOAD_FAILED" if "REPORT_ARTIFACT_UPLOAD_FAILED" in str(run.error or "") else "NOT_AVAILABLE"
+            ),
+            "artifact": {
+                "id": report_artifact.id,
+                "artifact_type": report_artifact.artifact_type,
+                "storage_locator": report_artifact.storage_locator,
+                "checksum": report_artifact.checksum,
+                "dataset_version_id": report_artifact.dataset_version_id,
+            } if report_artifact else None,
             "generated_at": run.completed_at.isoformat() if run.completed_at else None,
         },
     }

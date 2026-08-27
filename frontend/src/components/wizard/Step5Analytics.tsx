@@ -1,6 +1,6 @@
 import React from "react";
 import { useI18n } from "../../i18n/context";
-import type { DqResult, DqAnomaly } from "../../types";
+import type { AnalysisResult, AnalysisRunStatus, DqResult, DqAnomaly, QualityTrendPoint } from "../../types";
 import {
   ResponsiveContainer,
   AreaChart,
@@ -17,26 +17,67 @@ import {
 interface Step5AnalyticsProps {
   results: DqResult[];
   anomalies: DqAnomaly[];
+  trends: QualityTrendPoint[];
+  analysis?: AnalysisResult | null;
+  analysisStatus?: AnalysisRunStatus | null;
+  analysisRunId?: string;
   onBack: () => void;
   onStartNewRun: () => void;
+  onRerunAnalysis?: () => void;
+  rerunBusy?: boolean;
 }
+
+type DashboardRuleResult = {
+  rule_id: string;
+  rule_title: string;
+  status: string;
+  checked_count: number;
+  failed_count: number;
+  anomaly?: { flagged: boolean };
+};
 
 export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
   results,
   anomalies,
+  trends,
+  analysis,
+  analysisStatus,
+  analysisRunId,
   onBack,
   onStartNewRun,
+  onRerunAnalysis,
+  rerunBusy = false,
 }) => {
   const { t, language } = useI18n();
 
-  // Metrics Calculation
-  const totalRules = results.length;
-  const passedRules = results.filter((r) => r.status === "PASS").length;
-  const failedRules = results.filter((r) => r.status === "FAIL").length;
-  const totalRowsChecked = results.reduce((acc, r) => acc + (r.checked_count || 0), 0);
-  const totalRowsFailed = results.reduce((acc, r) => acc + (r.failed_count || 0), 0);
+  const hasAnalysisEvidence = Boolean(analysis?.graph2?.available);
+  const dashboardResults: DashboardRuleResult[] = hasAnalysisEvidence
+    ? analysis!.graph2.results
+    : results;
+  const totalRules = hasAnalysisEvidence ? analysis!.graph2.summary.total : dashboardResults.length;
+  const passedRules = hasAnalysisEvidence
+    ? analysis!.graph2.summary.passed
+    : dashboardResults.filter((r) => r.status === "PASS").length;
+  const failedRules = hasAnalysisEvidence
+    ? analysis!.graph2.summary.failed
+    : dashboardResults.filter((r) => r.status === "FAIL").length;
+  const errorRules = hasAnalysisEvidence ? analysis!.graph2.summary.errors : 0;
+  const totalRowsChecked = hasAnalysisEvidence
+    ? analysis!.graph2.summary.total_checked
+    : dashboardResults.reduce((acc, r) => acc + (r.checked_count || 0), 0);
+  const totalRowsFailed = hasAnalysisEvidence
+    ? analysis!.graph2.summary.total_failed
+    : dashboardResults.reduce((acc, r) => acc + (r.failed_count || 0), 0);
 
-  const score = totalRules > 0 ? Math.round((passedRules / totalRules) * 100) : 100;
+  const rulePassScore = totalRules > 0 ? (passedRules / totalRules) * 100 : 100;
+  const score = hasAnalysisEvidence
+    ? totalRowsChecked > 0
+      ? Number(((1 - totalRowsFailed / totalRowsChecked) * 100).toFixed(2))
+      : Number(rulePassScore.toFixed(2))
+    : trends.length > 0
+      ? trends[trends.length - 1].quality_score
+      : Number(rulePassScore.toFixed(2));
+  const scoreLabel = Number.isInteger(score) ? score.toFixed(0) : score.toFixed(2);
 
   // Grade determination
   const gradeLabel =
@@ -52,10 +93,11 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
     score >= 80 ? "#10b981" : score >= 60 ? "#f59e0b" : "#ef4444";
 
   // Data for Rule Performance Breakdown (Top Failed or Checked Rules)
-  const ruleBreakdownData = results.map((r) => {
+  const ruleBreakdownData = dashboardResults
+    .map((r) => {
     const passRate =
       r.checked_count > 0
-        ? Math.round(((r.checked_count - r.failed_count) / r.checked_count) * 100)
+        ? Number((((r.checked_count - r.failed_count) / r.checked_count) * 100).toFixed(2))
         : r.status === "PASS" ? 100 : 0;
     return {
       name: r.rule_title.length > 22 ? r.rule_title.substring(0, 22) + "…" : r.rule_title,
@@ -65,15 +107,44 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
       passRate: passRate,
       status: r.status,
     };
-  });
+    })
+    .sort((a, b) => a.passRate - b.passRate)
+    .slice(0, 12);
 
-  // Historical trend data (simulated smooth progression + current score)
-  const trendData = [
-    { run: language === "vi" ? "Lượt 1" : "Run 1", score: Math.min(100, score - 15 > 0 ? score - 15 : 65) },
-    { run: language === "vi" ? "Lượt 2" : "Run 2", score: Math.min(100, score - 8 > 0 ? score - 8 : 78) },
-    { run: language === "vi" ? "Lượt 3" : "Run 3", score: Math.min(100, score - 3 > 0 ? score - 3 : 88) },
-    { run: language === "vi" ? "Hiện tại" : "Current", score: score },
-  ];
+  // Show only persisted history. A first run must not be padded with
+  // fabricated scores that look like production evidence.
+  const trendData = trends.length > 0 ? trends.slice(-8).map((point, index, points) => ({
+    run:
+      index === points.length - 1
+        ? (language === "vi" ? "Hiện tại" : "Current")
+        : new Date(point.created_at).toLocaleDateString(language === "vi" ? "vi-VN" : "en-US", {
+            month: "short",
+            day: "numeric",
+          }),
+    score: point.quality_score,
+  })) : hasAnalysisEvidence ? [{
+    run: language === "vi" ? "Hiện tại" : "Current",
+    score,
+  }] : [];
+
+  const visibleAnomalies = hasAnalysisEvidence
+    ? (analysis?.graph3.signals ?? [])
+        // Keep the alert banner aligned with the backend anomaly adapter:
+        // cold-start observations without enough history are evidence, not
+        // anomalies. Only signals at the persisted attention threshold belong
+        // in the warning surface.
+        .filter((signal) => signal.score >= 0.7)
+        .slice(0, 8)
+        .map((signal) => ({
+          rule_title: signal.target_id,
+          reason: signal.explanation,
+          anomaly_type: signal.family,
+        }))
+    : anomalies.map((item) => ({
+        rule_title: item.rule_title,
+        reason: item.reason,
+        anomaly_type: item.anomaly_type,
+      }));
 
   return (
     <div>
@@ -93,6 +164,7 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
           <span className="eyebrow">STEP 4 · {t("wizard.step4Title").toUpperCase()}</span>
           <h1>{t("analytics.title") || "Đánh giá kết quả & Bảng phân tích"}</h1>
           <p>{t("analytics.subtitle") || "Tổng quan chất lượng dữ liệu sau khi thực thi các quy tắc kiểm thử."}</p>
+          {hasAnalysisEvidence && <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "10px" }}><span className="status-pill info">RULE PROPOSAL + ANOMALY DETECTION</span><span className="status-pill success">VERSIONED SOURCE ADAPTER</span>{analysisRunId && <code style={{ color: "var(--muted)", fontSize: "11px" }}>{analysisRunId}</code>}</div>}
         </div>
         <div style={{ display: "flex", gap: "12px" }}>
           <button
@@ -102,6 +174,14 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
           >
             {t("wizard.back")}
           </button>
+          {onRerunAnalysis && analysisRunId && <button
+            className="button secondary"
+            onClick={onRerunAnalysis}
+            disabled={rerunBusy || analysisStatus === "RUNNING" || analysisStatus === "PENDING"}
+            style={{ fontSize: "14px", padding: "8px 16px" }}
+          >
+            {rerunBusy ? "Đang rerun…" : "Rerun Rule Proposal & Anomaly Detection"}
+          </button>}
           <button
             className="button primary"
             onClick={onStartNewRun}
@@ -151,7 +231,7 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
               marginBottom: "8px",
             }}
           >
-            {score}%
+            {scoreLabel}%
           </div>
           <span
             className={`status-pill ${score >= 80 ? "success" : score >= 60 ? "warning" : "danger"}`}
@@ -174,6 +254,7 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
               : (language === "vi"
                   ? `Phát hiện ${failedRules} / ${totalRules} quy tắc vi phạm với tổng cộng ${totalRowsFailed.toLocaleString()} dòng dữ liệu không đạt yêu cầu.`
                   : `Detected ${failedRules} / ${totalRules} failing rules with ${totalRowsFailed.toLocaleString()} total non-compliant rows.`)}
+            {errorRules > 0 && ` ${errorRules} rule execution error${errorRules === 1 ? "" : "s"} also needs attention.`}
           </p>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "16px" }}>
@@ -206,7 +287,7 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
       </div>
 
       {/* AI Anomaly Alert Banner */}
-      {anomalies.length > 0 ? (
+      {visibleAnomalies.length > 0 ? (
         <div
           style={{
             background: "linear-gradient(135deg, rgba(245, 158, 11, 0.08) 0%, rgba(239, 68, 68, 0.08) 100%)",
@@ -220,12 +301,12 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
             <span style={{ fontSize: "18px" }}>⚠️</span>
             <h3 style={{ fontSize: "16px", fontWeight: 700, color: "#d97706", margin: 0 }}>
               {language === "vi"
-                ? `Cảnh báo: Phát hiện ${anomalies.length} biến động dữ liệu bất thường`
-                : `Alert: ${anomalies.length} Data Quality Anomalies Detected`}
+                ? `Cảnh báo: Phát hiện ${visibleAnomalies.length} tín hiệu cần xem xét`
+                : `Alert: ${visibleAnomalies.length} quality signals need review`}
             </h3>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {anomalies.map((item, idx) => (
+            {visibleAnomalies.map((item, idx) => (
               <div
                 key={idx}
                 style={{
@@ -272,6 +353,31 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
               : "No historical data anomalies or sudden violation spikes detected."}
           </span>
         </div>
+      )}
+
+      {hasAnalysisEvidence && analysis && (
+        <section className="panel" style={{ marginBottom: "24px", padding: "22px 24px", border: "1px solid var(--border)", background: "var(--surface)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "16px", flexWrap: "wrap" }}>
+            <div>
+              <span className="eyebrow">ANOMALY DETECTION · STEWARD DECISION</span>
+              <h3 style={{ margin: "4px 0 6px" }}>{language === "vi" ? "Tín hiệu bất thường & khuyến nghị" : "Anomaly signals & recommendation"}</h3>
+              <p className="muted" style={{ margin: 0, maxWidth: "760px", lineHeight: 1.5 }}>
+                {analysis.graph3.decision?.override_reason || (analysis.graph3.decision
+                  ? `${analysis.graph3.decision.decision} · confidence ${(analysis.graph3.decision.confidence * 100).toFixed(0)}%`
+                  : language === "vi" ? "Anomaly Detection chưa phát sinh quyết định." : "Anomaly Detection has not produced a decision yet.")}
+              </p>
+            </div>
+            <span className={`status-pill ${analysis.graph3.decision?.severity === "HIGH" ? "danger" : "info"}`}>
+              {analysis.graph3.decision?.severity || (language === "vi" ? "CHƯA CÓ" : "NO DECISION")}
+            </span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "12px", marginTop: "18px" }}>
+            <div style={{ padding: "12px 14px", borderRadius: "10px", background: "var(--surface-muted)", border: "1px solid var(--border)" }}><span className="muted">Rule Proposal results</span><strong style={{ display: "block", marginTop: "4px", fontSize: "20px" }}>{analysis.graph2.summary.total}</strong></div>
+            <div style={{ padding: "12px 14px", borderRadius: "10px", background: "var(--surface-muted)", border: "1px solid var(--border)" }}><span className="muted">Anomaly Detection signals</span><strong style={{ display: "block", marginTop: "4px", fontSize: "20px" }}>{analysis.graph3.signals.length}</strong></div>
+            <div style={{ padding: "12px 14px", borderRadius: "10px", background: "var(--surface-muted)", border: "1px solid var(--border)" }}><span className="muted">Report</span><strong style={{ display: "block", marginTop: "4px", fontSize: "14px" }}>{analysis.report.available ? (analysis.report.source || "AVAILABLE") : "PENDING"}</strong></div>
+          </div>
+          {analysis.report.available && <details style={{ marginTop: "16px" }}><summary style={{ cursor: "pointer", fontWeight: 700 }}>{language === "vi" ? "Mở báo cáo Data Steward" : "Open Data Steward report"}</summary><pre style={{ maxHeight: "260px", overflow: "auto", whiteSpace: "pre-wrap", marginTop: "12px", padding: "14px", borderRadius: "10px", background: "var(--surface-muted)", color: "var(--ink-soft)", fontSize: "12px", lineHeight: 1.55 }}>{analysis.report.markdown}</pre></details>}
+        </section>
       )}
 
       {/* Visual Charts Grid */}
@@ -405,7 +511,7 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
             </p>
           </div>
           <span className="status-pill gray" style={{ fontSize: "12px" }}>
-            {results.length} {language === "vi" ? "quy tắc" : "rules"}
+            {dashboardResults.length} {language === "vi" ? "quy tắc" : "rules"}
           </span>
         </div>
 
@@ -421,18 +527,21 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
               </tr>
             </thead>
             <tbody>
-              {results.length === 0 ? (
+              {dashboardResults.length === 0 ? (
                 <tr>
                   <td colSpan={5} style={{ padding: "24px", textAlign: "center", color: "var(--muted)" }}>
                     {t("analytics.noResults") || "Chưa có kết quả kiểm tra nào."}
                   </td>
                 </tr>
               ) : (
-                results.map((res, i) => {
+                dashboardResults.map((res, i) => {
                   const passRate =
                     res.checked_count > 0
-                      ? Math.round(((res.checked_count - res.failed_count) / res.checked_count) * 100)
+                      ? Number((((res.checked_count - res.failed_count) / res.checked_count) * 100).toFixed(2))
                       : res.status === "PASS" ? 100 : 0;
+                  const passRateLabel = Number.isInteger(passRate)
+                    ? `${passRate.toFixed(0)}%`
+                    : `${passRate.toFixed(2)}%`;
 
                   return (
                     <tr key={i} style={{ borderBottom: "1px solid var(--border)", height: "48px" }}>
@@ -457,14 +566,14 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
                               }}
                             />
                           </div>
-                          <span style={{ fontSize: "12px", fontWeight: 700, width: "36px", textAlign: "right" }}>
-                            {passRate}%
+                          <span style={{ fontSize: "12px", fontWeight: 700, width: "48px", textAlign: "right" }}>
+                            {passRateLabel}
                           </span>
                         </div>
                       </td>
                       <td style={{ padding: "10px" }}>
                         <span
-                          className={`status-pill ${res.status === "PASS" ? "success" : "danger"}`}
+                          className={`status-pill ${res.status === "PASS" ? "success" : res.status === "FAIL" ? "danger" : "warning"}`}
                           style={{ fontSize: "11px", fontWeight: 700 }}
                         >
                           {res.status}

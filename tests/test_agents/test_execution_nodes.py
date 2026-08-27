@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, event, text
 
 import src.services.rule_store as rule_store_module
 from src.agents.graph import build_execution_graph
-from src.agents.nodes.test_generator_node import generate_tests_for_table
+from src.agents.nodes.test_generator_node import generate_tests_for_table, validate_ruleset_contract
 from src.agents.nodes.validate_sql_node import validate_single_sql
 from src.services.rule_store import (
     create_test_run,
@@ -76,6 +76,44 @@ def setup_test_db(tmp_path, monkeypatch):
     with engine.connect() as conn:
         conn.execute(text("DROP TABLE IF EXISTS mock_trips;"))
         conn.commit()
+
+
+def test_uploaded_dataset_contract_uses_graph1_profile_instead_of_control_database():
+    rules = [
+        {
+            "rule_id": "source_rows.career_assists.NOT_NULL",
+            "table_name": "source_rows",
+            "column": "career_assists",
+            "rule_type": "NOT_NULL",
+            "parameters": {},
+        },
+        {
+            "rule_id": "source_rows.venue.NOT_NULL",
+            "table_name": "source_rows",
+            "column": "venue",
+            "rule_type": "NOT_NULL",
+            "parameters": {},
+        },
+    ]
+    profile = {
+        "source_rows": {
+            "columns": {
+                "career_assists": {"type": "integer"},
+                "venue": {"type": "string"},
+            }
+        }
+    }
+
+    errors, schema_hash = validate_ruleset_contract(
+        rule_store_module.get_engine(),
+        rules,
+        "uploaded-messi",
+        None,
+        profile,
+    )
+
+    assert errors == []
+    assert schema_hash
 
 
 @pytest.mark.asyncio

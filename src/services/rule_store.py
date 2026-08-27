@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 import uuid
 from datetime import UTC, datetime
@@ -29,12 +30,20 @@ from src.models.database import (
     SemanticContractModel,
 )
 from src.models.rule_schemas import RuleStatus
-from src.services.session_service import ensure_default_users
+from src.services.session_service import ensure_default_users, ensure_demo_steward
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
 _engine = None  # lazy-initialised
+
+
+def should_seed_legacy_demo_dataset(app_env: str) -> bool:
+    """Keep the taxi compatibility fixture out of production by default."""
+    configured = os.getenv("SEED_LEGACY_DEMO_DATASET")
+    if configured is None:
+        return app_env != "production"
+    return configured.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def get_engine():
@@ -43,10 +52,23 @@ def get_engine():
         _settings = get_settings()
         db_url = _settings.database_url
         connect_args = {}
+        engine_options = {}
         if "sqlite" in db_url:
             connect_args["check_same_thread"] = False
+        else:
+            # Supabase's session-mode pool has a small, project-wide client
+            # limit. Keep each Cloud Run instance bounded so overlapping
+            # revisions and autoscaling cannot exhaust every DB session.
+            engine_options.update(
+                pool_size=_settings.database_pool_size,
+                max_overflow=_settings.database_max_overflow,
+                pool_timeout=_settings.database_pool_timeout_seconds,
+                pool_recycle=300,
+                pool_pre_ping=True,
+                pool_use_lifo=True,
+            )
 
-        _engine = create_engine(db_url, connect_args=connect_args)
+        _engine = create_engine(db_url, connect_args=connect_args, **engine_options)
 
         @event.listens_for(_engine, "connect")
         def _set_sqlite_pragma(dbapi_conn, _connection_record):
@@ -66,7 +88,6 @@ def get_engine():
                 # cursor so SQLite does not retain a busy statement on startup.
                 cursor.fetchone()
                 cursor.close()
-
 
     return _engine
 
@@ -295,65 +316,73 @@ class TestResultModel(Base):
 def init_db() -> None:
     """Tạo tất cả bảng nếu chưa tồn tại. Tự động đồng bộ legacy approved rules vào active_rules."""
     engine = get_engine()
-    Base.metadata.create_all(engine)
-    _migrate_local_profile_columns(engine)
-    _migrate_local_proposal_columns(engine)
-    _migrate_local_workflow_columns(engine)
+    settings = get_settings()
+    if settings.app_env == "production":
+        # Production schema changes are a controlled release operation. Running
+        # create/alter DDL in every Cloud Run startup races active revisions,
+        # takes table locks, and can make a healthy rollout fail its probe.
+        logger.info("Skipping startup schema mutations in production.")
+    else:
+        Base.metadata.create_all(engine)
+        _migrate_local_profile_columns(engine)
+        _migrate_local_proposal_columns(engine)
+        _migrate_local_workflow_columns(engine)
     logger.info("Database đã được khởi tạo tại: %s", get_settings().database_url)
 
-    # Seed default demo dataset if not present
-    try:
-        with Session(engine) as session:
-            # The three demo accounts have passwords equal to their usernames, so
-            # seeding them wherever init_db() runs would put steward/steward on any
-            # public deployment. Restricted to the environments they exist for.
-            #
-            # A deployment that needs accounts creates them through
-            # POST /api/v1/admin/users, which is audited; this path is not.
-            if get_settings().app_env in {"local", "test", "development"}:
+    # The legacy taxi fixture is useful for local compatibility tests, but a
+    # production restart must never recreate data that an operator deleted.
+    if should_seed_legacy_demo_dataset(settings.app_env):
+        try:
+            with Session(engine) as session:
                 ensure_default_users(session)
-            else:
-                logger.info(
-                    "Bỏ qua seed tài khoản demo: app_env=%s không phải môi trường cục bộ",
-                    get_settings().app_env,
-                )
-            demo_dataset = session.get(DatasetModel, "dataset-nyc-yellow-taxi-50k")
-            if not demo_dataset:
-                demo_dataset = DatasetModel(
-                    id="dataset-nyc-yellow-taxi-50k",
-                    name="NYC Yellow Taxi 50k Sample",
-                    description="Sample trip data for DQ profiling",
-                    status="REGISTERED",
-                    row_count=50000,
-                    source_label="semantic",
-                    manifest_version="1.0.0",
-                    checksum="dummy",
-                )
-                session.add(demo_dataset)
-                session.commit()
-                logger.info("Seeded default demo dataset 'dataset-nyc-yellow-taxi-50k'")
-            for username, access_level in (("user", "READ"), ("steward", "MANAGE")):
-                existing_access = (
-                    session.query(DatasetAccessModel)
-                    .filter(
-                        DatasetAccessModel.dataset_id == demo_dataset.id,
-                        DatasetAccessModel.username == username,
+                ensure_demo_steward(session)
+                demo_dataset = session.get(DatasetModel, "dataset-nyc-yellow-taxi-50k")
+                if not demo_dataset:
+                    demo_dataset = DatasetModel(
+                        id="dataset-nyc-yellow-taxi-50k",
+                        name="NYC Yellow Taxi 50k Sample",
+                        description="Sample trip data for DQ profiling",
+                        status="REGISTERED",
+                        row_count=50000,
+                        source_label="semantic",
+                        manifest_version="1.0.0",
+                        checksum="dummy",
                     )
-                    .first()
-                )
-                if not existing_access:
-                    session.add(
-                        DatasetAccessModel(
-                            id=f"access-{demo_dataset.id}-{username}",
-                            dataset_id=demo_dataset.id,
-                            username=username,
-                            access_level=access_level,
-                            granted_by="system-seed",
+                    session.add(demo_dataset)
+                    session.commit()
+                    logger.info("Seeded default demo dataset 'dataset-nyc-yellow-taxi-50k'")
+                for username, access_level in (("user", "READ"), ("steward", "MANAGE"), ("demo-steward", "MANAGE")):
+                    existing_access = (
+                        session.query(DatasetAccessModel)
+                        .filter(
+                            DatasetAccessModel.dataset_id == demo_dataset.id,
+                            DatasetAccessModel.username == username,
                         )
+                        .first()
                     )
-            session.commit()
-    except Exception as e:
-        logger.warning("Failed to seed default dataset: %s", e)
+                    if not existing_access:
+                        session.add(
+                            DatasetAccessModel(
+                                id=f"access-{demo_dataset.id}-{username}",
+                                dataset_id=demo_dataset.id,
+                                username=username,
+                                access_level=access_level,
+                                granted_by="system-seed",
+                            )
+                        )
+                session.commit()
+        except Exception as e:
+            logger.warning("Failed to seed default dataset: %s", e)
+    else:
+        # Accounts are independent from the legacy fixture and remain required
+        # for the bounded judge login in production.
+        try:
+            with Session(engine) as session:
+                ensure_default_users(session)
+                ensure_demo_steward(session)
+            logger.info("Legacy demo dataset seeding is disabled for %s.", settings.app_env)
+        except Exception as e:
+            logger.warning("Failed to seed default accounts: %s", e)
 
     # Migration helper: nếu active_rules đang trống nhưng có proposed_rules APPROVED, tự động publish
     try:
@@ -459,16 +488,71 @@ def _migrate_local_proposal_columns(engine) -> None:
             columns = {column["name"] for column in inspector.get_columns(table_name)}
             for name, sql_type in additions.items():
                 if name not in columns:
-                    connection.exec_driver_sql(
-                        f"ALTER TABLE {table_name} ADD COLUMN {name} {sql_type}"
-                    )
+                    connection.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {name} {sql_type}")
 
 
 def _migrate_local_workflow_columns(engine) -> None:
     """Reconcile additive workflow provenance columns on existing databases."""
     if engine.dialect.name == "postgresql":
         with engine.begin() as connection:
-            for statement in (
+            # Older local/compose schemas used the ORM attribute name as the
+            # physical primary-key column.  The deployed Supabase contract uses
+            # ``rule_id`` instead.  Reconcile the name before ORM queries run,
+            # otherwise proposal persistence fails when SQLAlchemy issues a
+            # DELETE against a column that does not exist.
+            inspector = inspect(engine)
+            configuration_columns = (
+                {column["name"] for column in inspector.get_columns("rule_configurations")}
+                if "rule_configurations" in inspector.get_table_names()
+                else set()
+            )
+            if "rule_proposal_id" in configuration_columns and "rule_id" not in configuration_columns:
+                connection.exec_driver_sql("ALTER TABLE rule_configurations RENAME COLUMN rule_proposal_id TO rule_id")
+            table_names = set(inspector.get_table_names())
+            jobs_columns = (
+                {column["name"] for column in inspector.get_columns("jobs")} if "jobs" in table_names else set()
+            )
+            proposal_columns = (
+                {column["name"] for column in inspector.get_columns("rule_proposals")}
+                if "rule_proposals" in table_names
+                else set()
+            )
+            access_columns = (
+                {column["name"] for column in inspector.get_columns("dataset_access")}
+                if "dataset_access" in table_names
+                else set()
+            )
+            statements = [
+                # Rule identities are semantic paths, not UUIDs.  The initial
+                # Supabase schema used VARCHAR(36), which truncates valid IDs
+                # produced by the real Graph 1 proposer.  Expand every related
+                # key before proposal persistence or review can run.
+                "ALTER TABLE rule_proposals ALTER COLUMN id TYPE VARCHAR(512)",
+                "ALTER TABLE rule_versions ALTER COLUMN id TYPE VARCHAR(640)",
+                "ALTER TABLE rule_versions ALTER COLUMN rule_proposal_id TYPE VARCHAR(512)",
+                "ALTER TABLE rule_configurations ALTER COLUMN rule_id TYPE VARCHAR(512)",
+                "ALTER TABLE ruleset_versions ALTER COLUMN proposal_run_id TYPE VARCHAR(512)",
+                "ALTER TABLE dq_results ALTER COLUMN rule_id TYPE VARCHAR(512)",
+                # The first Supabase schema used different physical names from
+                # the dashboard ORM.  ``create_all`` never reconciles existing
+                # tables, so every select attempted to read columns that were
+                # not present and surfaced as a generic HTTP 500.
+                "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS linked_entity VARCHAR(256)",
+                "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS correlation_id VARCHAR(64)",
+                "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ",
+                "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS rule_spec TEXT",
+                "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS rule_type VARCHAR(64)",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS trigger_type VARCHAR(32) NOT NULL DEFAULT 'MANUAL'",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS started_at TIMESTAMP",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS ruleset_hash VARCHAR(256)",
+                # psycopg returns native list/dict values for legacy JSON
+                # columns, while this ORM intentionally stores serialized JSON
+                # text.  Convert once so all old and new records have the same
+                # runtime type and json.loads remains deterministic.
+                "ALTER TABLE rule_proposals ALTER COLUMN evidence_refs TYPE TEXT USING evidence_refs::text",
+                "ALTER TABLE dq_runs ALTER COLUMN rule_ids TYPE TEXT USING rule_ids::text",
+                "ALTER TABLE dq_results ALTER COLUMN failed_row_ids TYPE TEXT USING failed_row_ids::text",
                 "ALTER TABLE rule_proposals ADD COLUMN IF NOT EXISTS workflow_run_id VARCHAR(64)",
                 "ALTER TABLE ruleset_versions ADD COLUMN IF NOT EXISTS workflow_run_id VARCHAR(64)",
                 "ALTER TABLE ruleset_versions ADD COLUMN IF NOT EXISTS stale BOOLEAN NOT NULL DEFAULT FALSE",
@@ -486,6 +570,19 @@ def _migrate_local_workflow_columns(engine) -> None:
                 "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS error_message TEXT",
                 "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS dbt_status VARCHAR(32)",
                 "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS metrics_status VARCHAR(32)",
+                "ALTER TABLE graph1_runs ADD COLUMN IF NOT EXISTS workspace_id VARCHAR(64)",
+                "ALTER TABLE graph1_runs ADD COLUMN IF NOT EXISTS dataset_version_id VARCHAR(64)",
+                "ALTER TABLE graph1_runs ADD COLUMN IF NOT EXISTS profile_run_id VARCHAR(64)",
+                "ALTER TABLE analysis_runs ADD COLUMN IF NOT EXISTS workspace_id VARCHAR(64)",
+                "ALTER TABLE analysis_runs ADD COLUMN IF NOT EXISTS dataset_version_id VARCHAR(64)",
+                "ALTER TABLE analysis_runs ADD COLUMN IF NOT EXISTS profile_run_id VARCHAR(64)",
+                "ALTER TABLE analysis_runs ADD COLUMN IF NOT EXISTS rule_review_snapshot_id VARCHAR(64)",
+                "ALTER TABLE rule_versions ADD COLUMN IF NOT EXISTS dataset_version_id VARCHAR(64)",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS workspace_id VARCHAR(64)",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS dataset_version_id VARCHAR(64)",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS profile_run_id VARCHAR(64)",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS rule_review_snapshot_id VARCHAR(64)",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS source_checksum VARCHAR(256)",
                 "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS violation_rate DOUBLE PRECISION",
                 "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS duration_ms DOUBLE PRECISION",
                 "ALTER TABLE dq_results ADD COLUMN IF NOT EXISTS dbt_status VARCHAR(32)",
@@ -500,7 +597,33 @@ def _migrate_local_workflow_columns(engine) -> None:
                 "ALTER TABLE user_accounts ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'ACTIVE'",
                 "ALTER TABLE user_accounts ADD COLUMN IF NOT EXISTS created_by VARCHAR(100)",
                 "ALTER TABLE user_accounts ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP",
-            ):
+                "ALTER TABLE dataset_access ADD COLUMN IF NOT EXISTS username VARCHAR(100)",
+                "CREATE INDEX IF NOT EXISTS ix_dataset_access_username ON dataset_access (username)",
+                "UPDATE rule_proposals SET rule_name = 'Rule proposal' WHERE rule_name IS NULL",
+                "UPDATE rule_proposals SET business_rationale = '' WHERE business_rationale IS NULL",
+                "UPDATE rule_proposals SET proposal_basis = 'DATA_PROFILE' WHERE proposal_basis IS NULL",
+                "UPDATE rule_proposals SET evidence = '{}' WHERE evidence IS NULL",
+                "UPDATE rule_proposals SET parameter_provenance = '[]' WHERE parameter_provenance IS NULL",
+                "UPDATE rule_proposals SET assumptions = '[]' WHERE assumptions IS NULL",
+                "UPDATE rule_proposals SET confidence_breakdown = '{}' WHERE confidence_breakdown IS NULL",
+            ]
+            if "dataset_id" in jobs_columns:
+                statements.append(
+                    "UPDATE jobs SET linked_entity = dataset_id WHERE linked_entity IS NULL AND dataset_id IS NOT NULL"
+                )
+            if "rule" in proposal_columns:
+                statements.extend(
+                    [
+                        "UPDATE rule_proposals SET rule_spec = rule::text WHERE rule_spec IS NULL AND rule IS NOT NULL",
+                        "UPDATE rule_proposals SET rule_type = rule->>'type' "
+                        "WHERE rule_type IS NULL AND rule IS NOT NULL",
+                        "ALTER TABLE rule_proposals ALTER COLUMN rule DROP NOT NULL",
+                        "ALTER TABLE rule_proposals ALTER COLUMN rule SET DEFAULT '{}'::json",
+                    ]
+                )
+            if "user_id" in access_columns:
+                statements.append("ALTER TABLE dataset_access ALTER COLUMN user_id DROP NOT NULL")
+            for statement in statements:
                 connection.exec_driver_sql(statement)
         return
     if engine.dialect.name != "sqlite":
@@ -510,13 +633,36 @@ def _migrate_local_workflow_columns(engine) -> None:
         "rule_proposals": {"workflow_run_id": "VARCHAR(64)"},
         "ruleset_versions": {"workflow_run_id": "VARCHAR(64)", "stale": "BOOLEAN NOT NULL DEFAULT 0"},
         "dq_runs": {
-            "workflow_run_id": "VARCHAR(64)", "stale": "BOOLEAN NOT NULL DEFAULT 0",
-            "trigger_type": "VARCHAR(32) NOT NULL DEFAULT 'MANUAL'", "started_at": "DATETIME",
-            "ruleset_version_id": "VARCHAR(64)", "ruleset_hash": "VARCHAR(256)",
-            "compiler_version": "VARCHAR(64)", "artifact_hash": "VARCHAR(256)",
-            "retry_history_json": "TEXT", "error_message": "TEXT",
-            "dbt_status": "VARCHAR(32)", "metrics_status": "VARCHAR(32)",
+            "workflow_run_id": "VARCHAR(64)",
+            "stale": "BOOLEAN NOT NULL DEFAULT 0",
+            "trigger_type": "VARCHAR(32) NOT NULL DEFAULT 'MANUAL'",
+            "started_at": "DATETIME",
+            "ruleset_version_id": "VARCHAR(64)",
+            "ruleset_hash": "VARCHAR(256)",
+            "compiler_version": "VARCHAR(64)",
+            "artifact_hash": "VARCHAR(256)",
+            "retry_history_json": "TEXT",
+            "error_message": "TEXT",
+            "dbt_status": "VARCHAR(32)",
+            "metrics_status": "VARCHAR(32)",
+            "workspace_id": "VARCHAR(64)",
+            "dataset_version_id": "VARCHAR(64)",
+            "profile_run_id": "VARCHAR(64)",
+            "rule_review_snapshot_id": "VARCHAR(64)",
+            "source_checksum": "VARCHAR(256)",
         },
+        "graph1_runs": {
+            "workspace_id": "VARCHAR(64)",
+            "dataset_version_id": "VARCHAR(64)",
+            "profile_run_id": "VARCHAR(64)",
+        },
+        "analysis_runs": {
+            "workspace_id": "VARCHAR(64)",
+            "dataset_version_id": "VARCHAR(64)",
+            "profile_run_id": "VARCHAR(64)",
+            "rule_review_snapshot_id": "VARCHAR(64)",
+        },
+        "rule_versions": {"dataset_version_id": "VARCHAR(64)"},
         # Existing local databases predate the provenance field on the ORM
         # model.  Without this additive migration, approving a proposal fails
         # when SQLAlchemy selects RuleConfigurationModel.
@@ -525,8 +671,11 @@ def _migrate_local_workflow_columns(engine) -> None:
             "created_at": "DATETIME",
         },
         "dq_results": {
-            "violation_rate": "FLOAT", "duration_ms": "FLOAT", "dbt_status": "VARCHAR(32)",
-            "metrics_status": "VARCHAR(32)", "error_message": "TEXT",
+            "violation_rate": "FLOAT",
+            "duration_ms": "FLOAT",
+            "dbt_status": "VARCHAR(32)",
+            "metrics_status": "VARCHAR(32)",
+            "error_message": "TEXT",
         },
     }
     with engine.begin() as connection:
@@ -537,6 +686,45 @@ def _migrate_local_workflow_columns(engine) -> None:
             for name, sql_type in columns_to_add.items():
                 if name not in columns:
                     connection.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {name} {sql_type}")
+
+        # SQLite cannot rename a primary-key column in-place.  Rebuild only
+        # this small configuration table, preserving every configuration while
+        # moving its physical key from the old local name to the Supabase
+        # contract name expected by RuleConfigurationModel.
+        refreshed = inspect(engine)
+        if "rule_configurations" in refreshed.get_table_names():
+            configuration_columns = {column["name"] for column in refreshed.get_columns("rule_configurations")}
+            if "rule_proposal_id" in configuration_columns and "rule_id" not in configuration_columns:
+                connection.exec_driver_sql("ALTER TABLE rule_configurations RENAME TO rule_configurations_legacy_key")
+                connection.exec_driver_sql(
+                    """
+                    CREATE TABLE rule_configurations (
+                        rule_id VARCHAR(64) NOT NULL PRIMARY KEY,
+                        execution_status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
+                        schedule_frequency VARCHAR(16) NOT NULL DEFAULT 'MANUAL',
+                        timezone VARCHAR(64) NOT NULL DEFAULT 'UTC',
+                        last_run_at DATETIME,
+                        next_run_at DATETIME,
+                        model_name VARCHAR(128) NOT NULL DEFAULT 'unspecified',
+                        created_at DATETIME NOT NULL,
+                        updated_at DATETIME NOT NULL,
+                        FOREIGN KEY(rule_id) REFERENCES rule_proposals (id)
+                    )
+                    """
+                )
+                connection.exec_driver_sql(
+                    """
+                    INSERT INTO rule_configurations (
+                        rule_id, execution_status, schedule_frequency, timezone,
+                        last_run_at, next_run_at, model_name, created_at, updated_at
+                    )
+                    SELECT
+                        rule_proposal_id, execution_status, schedule_frequency, timezone,
+                        last_run_at, next_run_at, model_name, created_at, updated_at
+                    FROM rule_configurations_legacy_key
+                    """
+                )
+                connection.exec_driver_sql("DROP TABLE rule_configurations_legacy_key")
 
 
 # ---------------------------------------------------------------------------
@@ -552,6 +740,7 @@ def create_run(run_id: str, dataset_id: str) -> dict:
             type="PROPOSE_RULES",
             status="PENDING",
             progress=0.0,
+            message="Queued for rule proposal generation",
             attempt_count=0,
             linked_entity=dataset_id,
             idempotency_key=f"propose-run-{run_id}",
@@ -605,8 +794,7 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
 
         # 1. Clean pending proposals that have not been approved/merged yet (they have no versions/configs)
         session.query(RuleProposalModel).filter(
-            RuleProposalModel.dataset_id == dataset_id,
-            RuleProposalModel.status.in_(["PROPOSED", "PENDING"])
+            RuleProposalModel.dataset_id == dataset_id, RuleProposalModel.status.in_(["PROPOSED", "PENDING"])
         ).delete(synchronize_session=False)
 
         # 2. Identify the specific rule IDs being proposed in this run
@@ -623,13 +811,13 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
                 RuleConfigurationModel.rule_proposal_id.in_(new_rule_ids)
             ).delete(synchronize_session=False)
 
-            session.query(RuleVersionModel).filter(
-                RuleVersionModel.rule_proposal_id.in_(new_rule_ids)
-            ).delete(synchronize_session=False)
+            session.query(RuleVersionModel).filter(RuleVersionModel.rule_proposal_id.in_(new_rule_ids)).delete(
+                synchronize_session=False
+            )
 
-            session.query(RuleProposalModel).filter(
-                RuleProposalModel.id.in_(new_rule_ids)
-            ).delete(synchronize_session=False)
+            session.query(RuleProposalModel).filter(RuleProposalModel.id.in_(new_rule_ids)).delete(
+                synchronize_session=False
+            )
 
         # 4. Clean proposed rules run logs for idempotency
         session.query(ProposedRuleModel).filter(ProposedRuleModel.run_id == run_id).delete(synchronize_session=False)
@@ -676,7 +864,8 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
                 proposal_basis=rule.get("proposal_basis", "DATA_PROFILE"),
                 evidence=json.dumps(rule.get("evidence", {}), ensure_ascii=False),
                 confidence_breakdown=json.dumps(
-                    rule.get("confidence") or {
+                    rule.get("confidence")
+                    or {
                         "overall": rule.get("confidence_score", 1.0),
                         "evidence_strength": rule.get("confidence_score", 1.0),
                         "business_support": rule.get("confidence_score", 1.0),
@@ -711,7 +900,8 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
                 proposal_basis=rule.get("proposal_basis", "DATA_PROFILE"),
                 evidence=json.dumps(rule.get("evidence", {}), ensure_ascii=False),
                 confidence_breakdown=json.dumps(
-                    rule.get("confidence") or {
+                    rule.get("confidence")
+                    or {
                         "overall": rule.get("confidence_score", 1.0),
                         "evidence_strength": rule.get("confidence_score", 1.0),
                         "business_support": rule.get("confidence_score", 1.0),
@@ -971,6 +1161,7 @@ def create_test_run(test_run_id: str, dataset_id: str) -> dict:
                 type="RUN_DQ",
                 status="RUNNING",
                 progress=0.0,
+                message="Running Graph 2 data-quality checks",
                 attempt_count=0,
                 linked_entity=dataset_id,
                 idempotency_key=f"run-dq-job-{test_run_id}",
@@ -1267,11 +1458,7 @@ def save_semantic_contract(
     contract_id = f"sem-{uuid.uuid4().hex[:12]}"
     try:
         with Session(get_engine()) as session:
-            existing = (
-                session.query(SemanticContractModel)
-                .filter(SemanticContractModel.run_id == run_id)
-                .first()
-            )
+            existing = session.query(SemanticContractModel).filter(SemanticContractModel.run_id == run_id).first()
             if existing:
                 existing.status = status
                 existing.contract_json = json.dumps(contract, ensure_ascii=False)
@@ -1294,4 +1481,3 @@ def save_semantic_contract(
     except Exception as exc:
         logger.warning("save_semantic_contract failed: %s", exc)
         return ""
-

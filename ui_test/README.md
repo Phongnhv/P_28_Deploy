@@ -1,6 +1,6 @@
-# RidePulse DQ – UI Test & Interactive HTML Prototype
+# DataPulse – UI Test & Interactive HTML Prototype
 
-Thư mục này chứa bản **Interactive UI Prototype (Web Application)** trực quan hóa đầy đủ 11 màn hình wireframe theo đúng thiết kế Ant Design Admin Dashboard cho dự án **RidePulse DQ – Autonomous Data Quality & Anomaly Intelligence Platform**.
+Thư mục này chứa bản **Interactive UI Prototype (Web Application)** trực quan hóa đầy đủ 11 màn hình wireframe theo đúng thiết kế Ant Design Admin Dashboard cho dự án **DataPulse – Autonomous Data Quality & Anomaly Intelligence Platform**.
 
 ---
 
@@ -51,4 +51,4 @@ Sau đó truy cập: `http://localhost:8000/ui_test/index.html`
    - **Screen 11:** Viewer Dashboard (Giao diện Read-only cho cấp quản lý)
 
 ---
-*Tài liệu kiểm thử giao diện người dùng RidePulse DQ Platform.*
+*Tài liệu kiểm thử giao diện người dùng DataPulse Platform.*

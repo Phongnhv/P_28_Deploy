@@ -1,6 +1,7 @@
 import subprocess
-import time
 import sys
+import time
+
 
 def run_cmd(cmd, check=True):
     print(f"Executing: {cmd}")
@@ -10,7 +11,7 @@ def run_cmd(cmd, check=True):
         sys.exit(res.returncode)
 
 def main():
-    print("🚀 Bắt đầu quá trình Reset Database RidePulse...")
+    print("🚀 Bắt đầu quá trình Reset Database DataPulse...")
 
     # Bước 1: Clear database & storage volumes
     print("\n--- BƯỚC 1: Xóa DB & Volumes cũ ---")
@@ -30,14 +31,19 @@ def main():
     print("⏳ Chờ API khởi động và tạo bảng (8 giây)...")
     time.sleep(8)
 
-    # Bước 4: Chạy các migration bổ trợ từ 003 đến 007
-    print("\n--- BƯỚC 4: Chạy các migration bổ trợ từ 003 đến 007 ---")
+    # Bước 4: Chạy các migration tương thích với local split-schema.
+    # 009 là contract-test-only và 010 là Supabase public-schema security,
+    # nên chúng được áp dụng bằng workflow riêng, không qua reset local này.
+    print("\n--- BƯỚC 4: Chạy các migration tương thích local ---")
     migrations = [
         "003_gate2_schema.sql",
         "004_fix_audit_schema.sql",
         "005_canonical_dataset_contract.sql",
         "006_rule_proposal_core_evidence.sql",
-        "007_graph2_3_models.sql"
+        "007_graph2_3_models.sql",
+        "011_versioned_runtime_lineage.sql",
+        "012_backfill_legacy_governance.sql",
+        "013_analysis_run_history.sql",
     ]
     for m in migrations:
         run_cmd(f"docker compose exec -T db psql -U postgres -d ridepulse -f /scripts/migrations/{m}")

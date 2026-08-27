@@ -60,7 +60,7 @@ async def raw_profiler_node(state: AgentState) -> dict:
     metadata = state.get("metadata", {})
     # Uploaded datasets are profiled by the bounded CSV/Parquet profiler during
     # ingestion. Reuse that real, persisted result so this node remains scoped to
-    # the selected dataset instead of scanning RidePulse's metadata database.
+    # the selected dataset instead of scanning DataPulse's metadata database.
     uploaded_profile = metadata.get("uploaded_dataset_profile")
     if isinstance(uploaded_profile, dict) and uploaded_profile:
         return {
@@ -85,7 +85,7 @@ async def raw_profiler_node(state: AgentState) -> dict:
     if connection_string.startswith("postgresql://"):
         connection_string = connection_string.replace("postgresql://", "postgresql+psycopg2://", 1)
 
-    # Danh sách các bảng hệ thống/metadata của RidePulse DQ cần bỏ qua
+    # Danh sách các bảng hệ thống/metadata của DataPulse cần bỏ qua
     system_tables = {
         "proposal_runs",
         "proposed_rules",
@@ -223,7 +223,7 @@ async def main():
     # Thiết lập workflow state giả lập
     state = {
         "metadata": {
-            "connection_string": "postgresql+psycopg2://postgres:admin@localhost:5433/taxidb",  # Hardcode để thử nghiệm
+            "connection_string": get_settings().database_url,
             "sampling_rate": 1,  # Tỷ lệ lấy mẫu 5% để chạy nhanh. Bạn có thể đổi thành 1.0 (100%). Đã set về 1.0 để test chuẩn nhất
         }
     }
