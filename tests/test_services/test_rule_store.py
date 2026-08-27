@@ -18,6 +18,7 @@ from src.services.rule_store import (
     publish_approved_rules,
     review_rule,
     save_proposed_rules,
+    should_seed_legacy_demo_dataset,
 )
 
 
@@ -125,6 +126,19 @@ def test_canonical_rule_identifiers_are_not_uuid_limited():
     assert RuleVersionModel.__table__.c.id.type.length == 640
     assert RuleConfigurationModel.__table__.c.rule_id.type.length == 512
     assert DqResultModel.__table__.c.rule_id.type.length == 512
+
+
+def test_legacy_demo_dataset_is_not_seeded_in_production_by_default(monkeypatch):
+    monkeypatch.delenv("SEED_LEGACY_DEMO_DATASET", raising=False)
+    assert should_seed_legacy_demo_dataset("production") is False
+    assert should_seed_legacy_demo_dataset("test") is True
+
+
+def test_legacy_demo_dataset_requires_explicit_production_opt_in(monkeypatch):
+    monkeypatch.setenv("SEED_LEGACY_DEMO_DATASET", "true")
+    assert should_seed_legacy_demo_dataset("production") is True
+    monkeypatch.setenv("SEED_LEGACY_DEMO_DATASET", "false")
+    assert should_seed_legacy_demo_dataset("development") is False
 
 
 def test_publish_api_endpoints():
