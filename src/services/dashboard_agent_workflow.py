@@ -450,24 +450,21 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
 
 
 def generate_dashboard_proposals(db: Session, dataset_id: str) -> list[DashboardProposal]:
-    """Return two to five validated proposals in the configured local agent mode."""
+    """Return validated proposals in the configured local agent mode."""
     evidence = build_proposal_evidence(db, dataset_id)
     settings = get_settings()
     if settings.agent_mode == "mock":
         return _mock_proposals(evidence)
 
-    try:
-        candidates = _build_dashboard_rule_candidates(evidence)
-        if len(candidates) >= 1:
-            raw_rules = _invoke_dashboard_proposal_graph(evidence)
-            proposals = _normalise_graph_rules(raw_rules, evidence)
-            if proposals:
-                proposals = _complete_with_policy_candidates(proposals, evidence)
-                return proposals
-    except Exception as exc:
-        logger.warning("Graph proposal generation failed for dataset %s, falling back: %s", dataset_id, exc)
+    candidates = _build_dashboard_rule_candidates(evidence)
+    if len(candidates) >= 1:
+        raw_rules = _invoke_dashboard_proposal_graph(evidence)
+        proposals = _normalise_graph_rules(raw_rules, evidence)
+        if proposals:
+            proposals = _complete_with_policy_candidates(proposals, evidence)
+            return proposals
 
-    return _mock_proposals(evidence)
+    raise AgentWorkflowError("The proposal graph did not produce enough valid rules for dashboard display.")
 
 
 def _invoke_dashboard_proposal_graph(evidence: ProposalEvidence) -> list[dict[str, Any]]:
@@ -884,10 +881,11 @@ def _complete_with_policy_candidates(
         present_types.add(candidate.dashboard_rule_type)
         if len(completed) == 2:
             break
-    priority_by_type = {
-        candidate.dashboard_rule_type: candidate.priority
-        for candidate in _build_dashboard_rule_candidates(evidence)
-    }
+    priority_by_type: dict[str, int] = {}
+    for candidate in _build_dashboard_rule_candidates(evidence):
+        priority_by_type[candidate.dashboard_rule_type] = max(
+            priority_by_type.get(candidate.dashboard_rule_type, 0), candidate.priority
+        )
     return sorted(completed, key=lambda proposal: priority_by_type.get(proposal.rule_type, 0), reverse=True)
 
 
@@ -906,23 +904,38 @@ def _policy_severity(candidate: DashboardRuleCandidate) -> str:
 def _mock_proposals(evidence: ProposalEvidence) -> list[DashboardProposal]:
     """Explicit offline mode for deterministic UI and automated tests."""
     available = {column.name for column in evidence.columns}
+    mock_ids = {
+        "not_null": "proposal-not-null",
+        "numeric_range": "proposal-range",
+        "accepted_values": "proposal-accepted-values",
+        "cross_field_comparison": "proposal-cross-field",
+    }
+    used_ids: set[str] = set()
 
-    result = [
-        DashboardProposal(
-            id=f"proposal-{uuid.uuid4().hex}",
-            title=candidate.title,
-            description=candidate.description,
-            severity=candidate.severity,
-            rule_type=candidate.dashboard_rule_type,
-            rule_spec=candidate.rule_spec,
-            evidence_refs=candidate.evidence_refs,
-            evidence_summary=_safe_evidence_summary(evidence, candidate.evidence_refs),
-            confidence=candidate.confidence_ceiling,
-            model_name="agent-mock-v1",
-            **_fallback_core_fields(candidate, evidence, candidate.confidence_ceiling),
+    result: list[DashboardProposal] = []
+    for candidate in _build_dashboard_rule_candidates(evidence):
+        primary_id = mock_ids.get(candidate.dashboard_rule_type)
+        if primary_id and primary_id not in used_ids:
+            proposal_id = primary_id
+        else:
+            proposal_id = f"proposal-{candidate.id.replace(':', '-')}"
+        used_ids.add(proposal_id)
+
+        result.append(
+            DashboardProposal(
+                id=proposal_id,
+                title=candidate.title,
+                description=candidate.description,
+                severity=candidate.severity,
+                rule_type=candidate.dashboard_rule_type,
+                rule_spec=candidate.rule_spec,
+                evidence_refs=candidate.evidence_refs,
+                evidence_summary=_safe_evidence_summary(evidence, candidate.evidence_refs),
+                confidence=candidate.confidence_ceiling,
+                model_name="agent-mock-v1",
+                **_fallback_core_fields(candidate, evidence, candidate.confidence_ceiling),
+            )
         )
-        for candidate in _build_dashboard_rule_candidates(evidence)
-    ]
 
     policy = get_dataset_rule_policy(evidence.dataset_id, evidence.columns)
     fingerprint_columns = policy.duplicate_fingerprint_columns if policy else []
