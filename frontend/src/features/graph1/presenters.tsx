@@ -139,7 +139,9 @@ function Table({ rows, columns }: { rows: Row[]; columns: Array<[string, string,
 }
 
 function Metric({ label, value, hint }: { label: string; value: unknown; hint?: string }) {
-  return <div className="g1-metric"><span>{label}</span><strong>{scalar(value)}</strong>{hint && <small>{hint}</small>}</div>;
+  const text = scalar(value);
+  const isLongText = text.length > 20;
+  return <div className={`g1-metric${isLongText ? " g1-metric-text" : ""}`}><span>{label}</span><strong>{text}</strong>{hint && <small>{hint}</small>}</div>;
 }
 
 function Empty({ text = "Node sẽ cập nhật khi backend thực thi." }: { text?: string }) {
@@ -224,7 +226,8 @@ function SemanticPresenter({ stage, review }: { stage: DisplayStage; review?: Se
   return <div className="g1-presenter">
     <div className={`g1-summary-strip ${review?.editable ? "review" : ""}`}><strong>Semantic Contract</strong><span>{review?.editable ? "Cần steward xác nhận trước khi Graph tiếp tục" : `Review: ${scalar(gateOutput.decision ?? contract.status, "Generated from profile and dictionary")}`}</span></div>
     {Object.entries(tables).map(([tableKey, tableValue]) => { const table = record(tableValue); const columns = records(table.columns); return <section className="g1-data-section" key={tableKey}>
-      <div className="g1-metric-grid four"><Metric label="DOMAIN" value={table.domain} /><Metric label="PURPOSE" value={table.table_purpose} /><Metric label="STATUS" value={contract.status} /><Metric label="COLUMNS" value={columns.length} /></div>
+      <div className="g1-metric-grid three"><Metric label="DOMAIN" value={table.domain} /><Metric label="STATUS" value={contract.status} /><Metric label="COLUMNS" value={columns.length} /></div>
+      <div className="g1-purpose-card"><span>PURPOSE</span><p>{scalar(table.table_purpose, "Chưa có mô tả mục đích.")}</p></div>
       <div className="g1-table-wrap"><table className="g1-table g1-semantic-table"><thead><tr><th>Name</th><th>Description</th><th>Semantic type</th><th>Business role</th><th>Nullable</th><th>Confidence</th></tr></thead><tbody>{columns.map((column, index) => <tr key={scalar(column.name, String(index))}>
         <td data-label="Name">{review?.editable ? <input aria-label={`Name ${tableKey} ${index}`} value={scalar(column.name, "")} onChange={(event) => review.onColumnChange(tableKey, index, "name", event.target.value)} /> : <code className="g1-inline-code">{scalar(column.name)}</code>}</td>
         <td data-label="Description">{review?.editable ? <textarea rows={2} aria-label={`Description ${tableKey} ${index}`} value={scalar(column.description, "")} onInput={(event) => { event.currentTarget.style.height = "auto"; event.currentTarget.style.height = `${event.currentTarget.scrollHeight}px`; }} onChange={(event) => review.onColumnChange(tableKey, index, "description", event.target.value)} /> : <ValueCell value={column.description} />}</td>

@@ -41,6 +41,27 @@ def _normalize_status(raw: str | None) -> str:
     return "SKIPPED"
 
 
+def aggregate_graph2_status(
+    test_results: list[dict] | None,
+    generation_errors: list[str] | None = None,
+) -> str:
+    """Return the honest Graph 2 terminal status.
+
+    PASS/FAIL are usable evidence. ERROR/SKIPPED are execution-health
+    outcomes and must never be counted as successful checks.
+    """
+    results = test_results or []
+    usable = sum(_normalize_status(row.get("status")) in {"PASS", "FAIL"} for row in results)
+    unhealthy = sum(_normalize_status(row.get("status")) in {"ERROR", "SKIPPED"} for row in results)
+    if not results or (usable == 0 and (unhealthy > 0 or generation_errors)):
+        return "FAILED"
+    if usable == 0:
+        return "FAILED"
+    if unhealthy or generation_errors:
+        return "PARTIAL"
+    return "SUCCEEDED"
+
+
 def _dump_report_file(test_run_id: str, payload: dict, steward_summary: str | None = None) -> tuple[str, str | None]:
     """Ghi báo cáo kết quả test ra file JSON và Markdown phục vụ debug / audit."""
     from src.config import get_settings
@@ -89,8 +110,13 @@ async def persist_report_node(state: AgentState) -> dict:
     # Lưu vào database
     await asyncio.to_thread(save_test_results, test_run_id, test_results)
 
-    final_status = "FAILED" if (errors and not test_results) else "DONE"
-    err_str = "; ".join(errors) if errors else None
+    graph2_status = aggregate_graph2_status(test_results, errors)
+    # The legacy test_runs table only knows DONE/FAILED. Keep that projection
+    # compatible while the decoupled dq_runs row carries SUCCEEDED/PARTIAL/
+    # FAILED exactly as the canonical Graph 2 contract requires.
+    final_status = "DONE" if graph2_status in {"SUCCEEDED", "PARTIAL"} else "FAILED"
+    result_errors = [str(row.get("error")) for row in test_results if row.get("error")]
+    err_str = "; ".join([*errors, *result_errors]) or None
     await asyncio.to_thread(update_test_run_status, test_run_id, final_status, err_str)
 
     # 1.1 Also persist to decoupled Graph 2/3 tables (dq_runs and dq_results)
@@ -107,7 +133,7 @@ async def persist_report_node(state: AgentState) -> dict:
             session.query(DqRunModel).filter_by(id=test_run_id).delete()
 
             # Map statuses
-            dq_status = "SUCCEEDED" if final_status == "DONE" else "FAILED"
+            dq_status = graph2_status
 
             # Tiêu đề rule lấy từ luật đã duyệt. Trước đây cắt đuôi rule_id
             # ("yellow_tripdata.fare_amount.RANGE" -> "RANGE") nên steward_insights_node
@@ -130,6 +156,11 @@ async def persist_report_node(state: AgentState) -> dict:
                 id=test_run_id,
                 job_id=state.get("job_id") or test_run_id,
                 dataset_id=state.get("dataset_id") or "unknown",
+                workspace_id=state.get("workspace_id"),
+                dataset_version_id=state.get("dataset_version_id"),
+                profile_run_id=state.get("profile_run_id"),
+                rule_review_snapshot_id=state.get("rule_review_snapshot_id"),
+                source_checksum=state.get("source_checksum") or state.get("metadata", {}).get("source_checksum"),
                 rule_ids=json.dumps([r.get("rule_id") for r in test_results if r.get("rule_id")]),
                 status=dq_status,
                 total_failed=failed_count,
@@ -144,9 +175,9 @@ async def persist_report_node(state: AgentState) -> dict:
                 dbt_status=(
                     "SKIPPED"
                     if state.get("dbt_validation_skipped")
-                    else state.get("metadata", {}).get("dbt_status", "SUCCESS")
+                    else state.get("metadata", {}).get("dbt_status", "NOT_RUN")
                 ),
-                metrics_status=state.get("metadata", {}).get("metrics_status", "SUCCESS"),
+                metrics_status=state.get("metadata", {}).get("metrics_status", graph2_status),
             )
             session.add(dq_run)
             session.flush()
@@ -174,8 +205,8 @@ async def persist_report_node(state: AgentState) -> dict:
                     failed_row_ids=json.dumps(res.get("sample_refs") or res.get("sample_failures") or []),
                     violation_rate=float(res.get("violation_rate") or 0.0),
                     duration_ms=float(res.get("duration_ms") or 0.0),
-                    dbt_status=res.get("dbt_status") or ("SUCCESS" if r_status == "PASS" else "FAIL"),
-                    metrics_status=res.get("metrics_status") or "SUCCESS",
+                    dbt_status=res.get("dbt_status") or "NOT_RUN",
+                    metrics_status=res.get("metrics_status") or r_status,
                     error_message=res.get("error"),
                 )
                 session.add(dq_res)
@@ -204,6 +235,7 @@ async def persist_report_node(state: AgentState) -> dict:
         "remediation_actions": remediation_actions,
         "test_results": test_results,
         "errors": errors,
+        "graph2_status": graph2_status,
     }
     report_file_path, steward_md_path = await asyncio.to_thread(
         _dump_report_file, test_run_id, report_payload, steward_summary
@@ -216,6 +248,7 @@ async def persist_report_node(state: AgentState) -> dict:
     if steward_md_path:
         metadata["steward_report_path"] = steward_md_path
     metadata["test_run_status"] = final_status
+    metadata["graph2_status"] = graph2_status
 
     return {
         "metadata": metadata,

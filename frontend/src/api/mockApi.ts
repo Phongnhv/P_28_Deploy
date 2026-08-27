@@ -511,13 +511,16 @@ export const mockApi: ApiClient = {
       if (query.payment_type && row.payment_type !== query.payment_type) return false;
       if (query.min_distance !== undefined && (row.trip_distance ?? 0) < query.min_distance) return false;
       if (query.max_distance !== undefined && (row.trip_distance ?? 0) > query.max_distance) return false;
+      if (query.filter_column && String(row[query.filter_column] ?? "") !== String(query.filter_value ?? "")) return false;
       if (query.quality_status === "ISSUE" && !rowHasIssue(row)) return false;
       if (query.quality_status === "VALID" && rowHasIssue(row)) return false;
       return true;
     });
-    const sortBy = query.sort_by ?? "pickup_at";
-    const direction = query.sort_direction === "asc" ? 1 : -1;
-    filtered = filtered.sort((left, right) => String(left[sortBy] ?? "").localeCompare(String(right[sortBy] ?? "")) * direction);
+    if (query.sort_by) {
+      const direction = query.sort_direction === "asc" ? 1 : -1;
+      const sortBy = query.sort_by;
+      filtered = filtered.sort((left, right) => String(left[sortBy] ?? "").localeCompare(String(right[sortBy] ?? "")) * direction);
+    }
     const offset = query.offset ?? 0;
     const limit = query.limit ?? 25;
     return { dataset_id: id, total: filtered.length, offset, limit, rows: filtered.slice(offset, offset + limit) };
@@ -678,12 +681,13 @@ export const mockApi: ApiClient = {
     addAudit("WORKFLOW_REWOUND", "workflow", id, `Returned to ${targetStep}; downstream sessions were kept temporarily.`);
     return structuredClone(workflow);
   },
-  async createGraph1Run() { throw new Error("Graph 1 requires the real backend. Set VITE_USE_MOCK_API=false."); },
-  async getGraph1Run() { throw new Error("Graph 1 requires the real backend."); },
-  async listGraph1Nodes() { throw new Error("Graph 1 requires the real backend."); },
-  async confirmGraph1Semantic() { throw new Error("Graph 1 requires the real backend."); },
-  async reviewGraph1Rules() { throw new Error("Graph 1 requires the real backend."); },
-  async createAnalysisRun() { throw new Error("Graph 2 and Graph 3 analysis requires the real backend."); },
+  async createGraph1Run(_datasetId: string, _datasetVersionId?: string, _profileRunId?: string) { throw new Error("Profiler requires the real backend. Set VITE_USE_MOCK_API=false."); },
+  async getGraph1Run() { throw new Error("Profiler requires the real backend."); },
+  async getLatestGraph1Run() { throw new Error("Profiler requires the real backend."); },
+  async listGraph1Nodes() { throw new Error("Profiler requires the real backend."); },
+  async confirmGraph1Semantic() { throw new Error("Profiler requires the real backend."); },
+  async reviewGraph1Rules() { throw new Error("Profiler requires the real backend."); },
+  async createAnalysisRun() { throw new Error("Rule Proposal and Anomaly Detection require the real backend."); },
   async getAnalysisRun() { throw new Error("Analysis requires the real backend."); },
   async listAnalysisNodes() { throw new Error("Analysis requires the real backend."); },
   async getAnalysisResult() { throw new Error("Analysis requires the real backend."); },

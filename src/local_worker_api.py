@@ -2,11 +2,11 @@ import os
 import subprocess
 import sys
 
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import FastAPI, HTTPException
 
 app = FastAPI()
 
-def run_job(job_id: str, job_type: str):
+def run_job(job_id: str, job_type: str) -> bool:
     """
     Mocks a Cloud Run Job execution by spawning a subprocess of the worker module.
     """
@@ -17,12 +17,17 @@ def run_job(job_id: str, job_type: str):
     # Replace 'src.worker' with your actual worker entrypoint module
     print(f"[LocalWorker] Starting Job {job_id} ({job_type})...")
     try:
-        subprocess.run([sys.executable, "-m", "src.worker"], env=env, check=False)
-        print(f"[LocalWorker] Job {job_id} finished.")
+        # Popen hands the durable job to an independent worker process.  A
+        # FastAPI BackgroundTask would die with the API process and could leave
+        # a job stuck in PENDING/RUNNING forever.
+        subprocess.Popen([sys.executable, "-m", "src.worker"], env=env, close_fds=True)
+        return True
     except Exception as e:
         print(f"[LocalWorker] Error executing Job {job_id}: {e}")
+        return False
 
 @app.post("/run")
-def trigger_job(job_id: str, job_type: str, background_tasks: BackgroundTasks):
-    background_tasks.add_task(run_job, job_id, job_type)
+def trigger_job(job_id: str, job_type: str):
+    if not run_job(job_id, job_type):
+        raise HTTPException(status_code=503, detail="Local worker process could not be started")
     return {"status": "started", "job_id": job_id}

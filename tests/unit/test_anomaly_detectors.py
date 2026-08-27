@@ -1,6 +1,5 @@
 """Unit tests for Anomaly Signal Detectors (8 scenarios)."""
 
-import pytest
 from src.services.anomaly_service import calculate_robust_zscore
 
 

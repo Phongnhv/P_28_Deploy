@@ -19,3 +19,65 @@
 @media(max-width:430px){.analysis-kpi-grid{grid-template-columns:minmax(0,1fr)}.analysis-table-toolbar{grid-template-columns:minmax(0,1fr)}.analysis-decision{grid-template-columns:minmax(0,1fr)}.analysis-decision-score{align-items:flex-start}.analysis-decision>div:last-child{grid-column:auto}.analysis-run-meta{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
 @media(prefers-color-scheme:dark){.analysis-alert.danger{border-color:#991b1b;background:#450a0a;color:#fecaca}.analysis-node.succeeded{border-color:#065f46}.analysis-node.succeeded .analysis-node-icon,.analysis-source.llm,.analysis-chip.success,.analysis-result-status.pass{background:#052e26;color:#6ee7b7!important}.analysis-node.running .analysis-node-icon{background:#172554;color:#93c5fd}.analysis-node.failed .analysis-node-icon,.analysis-result-status.fail,.analysis-anomaly-badge{background:#450a0a;color:#fecaca}.analysis-source.fallback,.analysis-dbt-strip p{border-color:#92400e;background:#422006;color:#fcd34d!important}.analysis-checks{background:#172554;color:#bfdbfe}.analysis-decision{border-color:#9a3412;background:linear-gradient(125deg,#431407,#450a0a)}.analysis-decision span,.analysis-decision small,.analysis-decision p{color:#fdba74}.analysis-decision.low,.analysis-decision.normal{border-color:#065f46;background:#052e26}.analysis-result-status.error{background:#431407;color:#fdba74}.analysis-result-status.skipped{background:#1e293b;color:#cbd5e1}.analysis-result-status.result_mismatch{background:#2e1065;color:#d8b4fe}}
 @media(prefers-reduced-motion:reduce){.analysis-studio *{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}
+.analysis-hero-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+
+/* Readability pass: preserve hierarchy without shrinking operational content into microcopy. */
+.analysis-run-id span { font-size: 11px; }
+.analysis-run-meta small { font-size: 10px; }
+.analysis-run-meta strong { font-size: 13px; }
+.analysis-node small { font-size: 10px; }
+.analysis-node strong { font-size: 12px; }
+.analysis-node span { font-size: 10px; }
+.analysis-panel-header > div > div > span { font-size: 10px; }
+.analysis-panel-header > div > div > p { font-size: 12px; line-height: 1.5; }
+.analysis-panel-header h2 { font-size: 18px; }
+.analysis-source,
+.analysis-chip { font-size: 10px !important; }
+.analysis-report-actions button { font-size: 12px; }
+.analysis-toc strong { font-size: 11px; }
+.analysis-toc a { font-size: 11px; }
+.analysis-markdown { font-size: 13.5px; }
+.analysis-markdown h2 { font-size: 18px; }
+.analysis-markdown h3 { font-size: 15px; }
+.analysis-markdown th,
+.analysis-markdown td { font-size: 12px; line-height: 1.45; }
+.analysis-report-empty p,
+.analysis-pending-block p { font-size: 12px; }
+.analysis-metric span { font-size: 10px; }
+.analysis-chart-card figcaption strong { font-size: 12px; }
+.analysis-chart-card figcaption span { font-size: 10px; }
+.analysis-chart-legend span { font-size: 10px; }
+.analysis-dbt-strip small { font-size: 10px; }
+.analysis-dbt-strip strong { font-size: 12px; }
+.analysis-dbt-strip p { font-size: 11px; line-height: 1.45; }
+.analysis-table-toolbar label { font-size: 10px; }
+.analysis-table-toolbar input,
+.analysis-table-toolbar select { font-size: 12px; }
+.analysis-table th { font-size: 10px; }
+.analysis-table td { font-size: 12px; line-height: 1.45; }
+.analysis-table td > code { font-size: 10px; }
+.analysis-table td > small { font-size: 10px; }
+.analysis-result-status,
+.analysis-anomaly-badge { font-size: 10px; }
+.analysis-detail-row section > span { font-size: 10px; }
+.analysis-detail-row p { font-size: 11px; line-height: 1.45; }
+.analysis-decision span,
+.analysis-decision small { font-size: 10px; }
+.analysis-decision p { font-size: 12px; line-height: 1.45; }
+.analysis-decision-score span { font-size: 10px; }
+.analysis-section-title span { font-size: 10px; }
+.analysis-section-title > strong { font-size: 11px; }
+.analysis-hypotheses article > header span { font-size: 10px; }
+.analysis-hypotheses article > header strong { font-size: 10px; }
+.analysis-hypothesis-grid small { font-size: 10px; }
+.analysis-hypothesis-grid p { font-size: 10px; line-height: 1.45; }
+.analysis-checks strong,
+.analysis-checks ol { font-size: 10px; line-height: 1.45; }
+.analysis-hypotheses article > footer { font-size: 10px; }
+.analysis-empty-card { font-size: 12px; line-height: 1.5; }
+
+@media (max-width: 760px) {
+  .analysis-panel-header > div > div > p { font-size: 11px; }
+  .analysis-table td { font-size: 11px; }
+  .analysis-markdown { font-size: 13px; }
+}

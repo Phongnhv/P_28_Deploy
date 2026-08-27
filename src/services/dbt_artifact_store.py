@@ -45,6 +45,14 @@ class DbtArtifactStore:
     @property
     def client(self) -> Any:
         if self._client is None:
+            if self.settings.object_storage_provider == "gcs":
+                from google.cloud import storage
+
+                # Cloud Run resolves this through the revision's attached
+                # service account. Local runs use ADC or a credential file.
+                self._client = storage.Client()
+                return self._client
+
             import boto3
             from botocore.config import Config
 
@@ -72,6 +80,57 @@ class DbtArtifactStore:
         prefix = self.settings.object_storage_prefix.strip("/")
         return f"{prefix}/runs/{safe_run_id}/generated_dq_tests.yml"
 
+    def report_object_key(self, analysis_run_id: str) -> str:
+        """Return the immutable, analysis-run-scoped Markdown key."""
+        safe_run_id = validate_run_id(analysis_run_id)
+        prefix = self.settings.object_storage_prefix.strip("/")
+        return f"{prefix}/reports/analysis/{safe_run_id}/steward_report.md"
+
+    def upload_report_markdown(
+        self,
+        analysis_run_id: str,
+        content: bytes,
+        *,
+        dataset_id: str,
+        dataset_version_id: str,
+    ) -> DbtArtifactRef:
+        """Upload one immutable governed report artifact.
+
+        The deterministic key makes retries address the same artifact.  The
+        database registry is the source of truth for whether it is published;
+        object-store preconditions prevent an overwrite.
+        """
+        object_key = self.report_object_key(analysis_run_id)
+        digest = artifact_sha256(content)
+        metadata = {
+            "analysis-run-id": analysis_run_id,
+            "dataset-id": dataset_id,
+            "dataset-version-id": dataset_version_id,
+            "sha256": digest,
+        }
+        bucket = self.settings.object_storage_bucket
+        if self.settings.object_storage_provider == "gcs":
+            blob = self.client.bucket(bucket).blob(object_key)
+            blob.metadata = metadata
+            blob.upload_from_string(content, content_type="text/markdown; charset=utf-8", if_generation_match=0)
+            return DbtArtifactRef(bucket, object_key, digest, len(content), blob.etag, str(blob.generation) if blob.generation is not None else None)
+        response = self.client.put_object(
+            Bucket=bucket,
+            Key=object_key,
+            Body=content,
+            ContentType="text/markdown; charset=utf-8",
+            Metadata=metadata,
+            IfNoneMatch="*",
+        )
+        return DbtArtifactRef(
+            bucket=bucket,
+            object_key=object_key,
+            sha256=digest,
+            size_bytes=len(content),
+            etag=response.get("ETag", "").strip('"') or None,
+            version_id=response.get("VersionId"),
+        )
+
     def upload_yaml(
         self,
         run_id: str,
@@ -87,29 +146,45 @@ class DbtArtifactStore:
             metadata["dataset-id"] = dataset_id
         if rule_run_id:
             metadata["rule-run-id"] = rule_run_id
-        response = self.client.put_object(
-            Bucket=self.settings.object_storage_bucket,
-            Key=object_key,
-            Body=content,
-            ContentType="application/yaml",
-            Metadata=metadata,
-        )
+        if self.settings.object_storage_provider == "gcs":
+            blob = self.client.bucket(self.settings.object_storage_bucket).blob(object_key)
+            blob.metadata = metadata
+            blob.upload_from_string(content, content_type="application/yaml")
+            etag = blob.etag
+            version_id = str(blob.generation) if blob.generation is not None else None
+        else:
+            response = self.client.put_object(
+                Bucket=self.settings.object_storage_bucket,
+                Key=object_key,
+                Body=content,
+                ContentType="application/yaml",
+                Metadata=metadata,
+            )
+            etag = response.get("ETag", "").strip('"') or None
+            version_id = response.get("VersionId")
         return DbtArtifactRef(
             bucket=self.settings.object_storage_bucket,
             object_key=object_key,
             sha256=digest,
             size_bytes=len(content),
-            etag=response.get("ETag", "").strip('"') or None,
-            version_id=response.get("VersionId"),
+            etag=etag,
+            version_id=version_id,
         )
 
     def download_yaml(self, artifact: DbtArtifactRef | dict[str, Any]) -> bytes:
         ref = artifact if isinstance(artifact, DbtArtifactRef) else DbtArtifactRef(**artifact)
-        request: dict[str, Any] = {"Bucket": ref.bucket, "Key": ref.object_key}
-        if ref.version_id:
-            request["VersionId"] = ref.version_id
-        response = self.client.get_object(**request)
-        content = response["Body"].read()
+        if self.settings.object_storage_provider == "gcs":
+            blob = self.client.bucket(ref.bucket).blob(
+                ref.object_key,
+                generation=int(ref.version_id) if ref.version_id else None,
+            )
+            content = blob.download_as_bytes()
+        else:
+            request: dict[str, Any] = {"Bucket": ref.bucket, "Key": ref.object_key}
+            if ref.version_id:
+                request["VersionId"] = ref.version_id
+            response = self.client.get_object(**request)
+            content = response["Body"].read()
         if len(content) != ref.size_bytes:
             raise ValueError("Downloaded dbt artifact size does not match its metadata")
         if artifact_sha256(content) != ref.sha256:
@@ -125,21 +200,92 @@ class DbtArtifactStore:
         object_key = f"datasets/{dataset_id}/{filename}"
         bucket = self.settings.object_storage_bucket
         try:
-            try:
-                self.client.head_bucket(Bucket=bucket)
-            except Exception:
-                self.client.create_bucket(Bucket=bucket)
+            if self.settings.object_storage_provider == "gcs":
+                blob = self.client.bucket(bucket).blob(object_key)
+                blob.metadata = {"dataset-id": dataset_id, "filename": filename}
+                blob.upload_from_string(content)
+            else:
+                try:
+                    self.client.head_bucket(Bucket=bucket)
+                except Exception:
+                    self.client.create_bucket(Bucket=bucket)
 
-            self.client.put_object(
-                Bucket=bucket,
-                Key=object_key,
-                Body=content,
-                Metadata={"dataset-id": dataset_id, "filename": filename},
-            )
-            logger.info("Successfully uploaded dataset %s to MinIO bucket %s at key %s", dataset_id, bucket, object_key)
+                self.client.put_object(
+                    Bucket=bucket,
+                    Key=object_key,
+                    Body=content,
+                    Metadata={"dataset-id": dataset_id, "filename": filename},
+                )
+            logger.info("Successfully uploaded dataset %s to object storage bucket %s at key %s", dataset_id, bucket, object_key)
         except Exception as e:
-            logger.warning("Failed to upload dataset %s to MinIO: %s", dataset_id, e)
+            logger.warning("Failed to upload dataset %s to object storage: %s", dataset_id, e)
         return object_key
+
+    def upload_source_file(
+        self,
+        object_key: str,
+        content: bytes,
+        *,
+        checksum: str,
+    ) -> DbtArtifactRef:
+        """Upload an immutable CSV/Parquet source object.
+
+        Unlike the historical ``upload_dataset_file`` compatibility helper,
+        this method never swallows an object-storage error.  Callers can
+        therefore keep a version non-executable when storage is unavailable.
+        """
+        if not object_key or object_key.startswith(("/", "\\")) or ".." in object_key.split("/"):
+            raise ValueError("Unsafe source object key")
+        bucket = self.settings.object_storage_bucket
+        if self.settings.object_storage_provider == "gcs":
+            blob = self.client.bucket(bucket).blob(object_key)
+            blob.metadata = {"sha256": checksum, "size-bytes": str(len(content))}
+            blob.upload_from_string(content, if_generation_match=0)
+            return DbtArtifactRef(bucket, object_key, checksum, len(content), blob.etag, str(blob.generation) if blob.generation else None)
+        response = self.client.put_object(
+            Bucket=bucket,
+            Key=object_key,
+            Body=content,
+            ContentType="application/octet-stream",
+            Metadata={"sha256": checksum, "size-bytes": str(len(content))},
+            IfNoneMatch="*",
+        )
+        return DbtArtifactRef(
+            bucket=bucket,
+            object_key=object_key,
+            sha256=checksum,
+            size_bytes=len(content),
+            etag=response.get("ETag", "").strip('"') or None,
+            version_id=response.get("VersionId"),
+        )
+
+    def download_source_file(self, artifact: DbtArtifactRef | dict[str, Any]) -> bytes:
+        """Download a source object and verify its recorded size/checksum."""
+        content = self.download_yaml(artifact)
+        return content
+
+    def delete_artifact(self, artifact: DbtArtifactRef | dict[str, Any]) -> None:
+        """Delete exactly one immutable object during request compensation.
+
+        Callers only invoke this for an object successfully created by the
+        current request.  Generation/version identifiers are passed through so
+        a later object at the same key cannot be removed accidentally.
+        """
+        ref = artifact if isinstance(artifact, DbtArtifactRef) else DbtArtifactRef(**artifact)
+        if self.settings.object_storage_provider == "gcs":
+            blob = self.client.bucket(ref.bucket).blob(
+                ref.object_key,
+                generation=int(ref.version_id) if ref.version_id else None,
+            )
+            if ref.version_id:
+                blob.delete(if_generation_match=int(ref.version_id))
+            else:
+                blob.delete()
+            return
+        request: dict[str, Any] = {"Bucket": ref.bucket, "Key": ref.object_key}
+        if ref.version_id:
+            request["VersionId"] = ref.version_id
+        self.client.delete_object(**request)
 
 
 @lru_cache

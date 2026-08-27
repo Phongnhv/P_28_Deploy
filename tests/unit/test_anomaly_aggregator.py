@@ -1,6 +1,5 @@
 """Unit tests for Anomaly Signal Aggregator (4 scenarios)."""
 
-import pytest
 from src.detector_config import get_detector_config
 
 

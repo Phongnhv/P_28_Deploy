@@ -20,7 +20,8 @@ def create_job(job_type: str, idempotency_key: str, linked_entity: str = None, c
             idempotency_key=idempotency_key,
             linked_entity=linked_entity,
             correlation_id=correlation_id or str(uuid.uuid4()),
-            status='PENDING'
+            status='PENDING',
+            message=f"Queued {job_type}",
         )
         session.add(new_job)
         session.commit()
@@ -29,7 +30,9 @@ def create_job(job_type: str, idempotency_key: str, linked_entity: str = None, c
 
 def update_job_status(job_id: str, status: str, error: str = None) -> JobModel:
     with Session(get_engine()) as session:
-        job = session.query(JobModel).filter_by(id=job_id).first()
+        # PostgreSQL workers may race on the same dispatch.  Lock the row for
+        # the short claim transaction so exactly one worker owns the lease.
+        job = session.query(JobModel).filter_by(id=job_id).with_for_update().first()
         if job:
             job.status = status
             if error:
@@ -51,13 +54,17 @@ def claim_job(job_id: str, lease_duration_seconds: int = 300) -> bool:
     """
     now = datetime.now(UTC)
     with Session(get_engine()) as session:
-        job = session.query(JobModel).filter_by(id=job_id).first()
+        # PostgreSQL workers may race on the same dispatch. Lock the row for
+        # the short claim transaction so exactly one worker owns the lease.
+        job = session.query(JobModel).filter_by(id=job_id).with_for_update().first()
         if not job:
             return False
 
         if job.status == 'RUNNING':
             lease_expires = getattr(job, 'lease_expires_at', None)
-            if lease_expires and lease_expires.replace(tzinfo=UTC) < now:
+            if lease_expires and lease_expires.tzinfo is None:
+                lease_expires = lease_expires.replace(tzinfo=UTC)
+            if lease_expires and lease_expires < now:
                 # Stale lease, we can reclaim it
                 job.status = 'PENDING'
                 job.error = "Lease expired, reclaimed by worker"
@@ -71,6 +78,18 @@ def claim_job(job_id: str, lease_duration_seconds: int = 300) -> bool:
         job.attempt_count = (job.attempt_count or 0) + 1
         if hasattr(job, 'lease_expires_at'):
             job.lease_expires_at = now + timedelta(seconds=lease_duration_seconds)
+        session.commit()
+        return True
+
+
+def renew_job_lease(job_id: str, lease_duration_seconds: int = 300) -> bool:
+    """Extend a worker lease only while the job is still RUNNING."""
+    now = datetime.now(UTC)
+    with Session(get_engine()) as session:
+        job = session.query(JobModel).filter_by(id=job_id, status="RUNNING").first()
+        if not job:
+            return False
+        job.lease_expires_at = now + timedelta(seconds=lease_duration_seconds)
         session.commit()
         return True
 

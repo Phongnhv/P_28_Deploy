@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, isMockMode, workflowApi } from "./api";
 import { ApiError, clearApiSession } from "./api/client";
 import ThemeControl from "./ThemeControl";
@@ -9,7 +9,7 @@ import { Graph1Studio } from "./features/graph1/Graph1Studio";
 import { Graph1DetailsSidebar } from "./features/graph1/Graph1DetailsSidebar";
 import { StagePresenter, buildDisplayStages } from "./features/graph1/presenters";
 import { AnalysisStudio } from "./features/analysis/AnalysisStudio";
-import { PanelRightOpen } from "lucide-react";
+import { PanelRightOpen, ShieldCheck } from "lucide-react";
 import type {
   AuditLog,
   CreateJobResponse,
@@ -42,6 +42,8 @@ import type {
   WorkflowStepKey,
   Graph1Run,
   Graph1NodeExecution,
+  AnalysisRunStatus,
+  AnalysisResult,
 } from "./types";
 
 type View =
@@ -91,12 +93,21 @@ function getErrorMessage(error: unknown, fallback: string) {
       error.message || "The workflow cannot continue from its current state."
     );
   if (error.status === 422)
-    return "The request is not valid for the current workflow state.";
+    return error.message || "The request is not valid for the current workflow state.";
   if (error.status === 429)
     return "The demo quota has been reached. Please try again later.";
   if (error.status >= 500)
     return "The service is temporarily unavailable. Retry when it is ready.";
   return error.message || fallback;
+}
+
+function isVersionedDataset(dataset?: Dataset) {
+  return Boolean(dataset?.dataset_version_id || dataset?.manifest_version === "versioned-v1");
+}
+
+function matchesDatasetSnapshot(run: Graph1Run | null | undefined, dataset: Dataset | null | undefined) {
+  if (!run || !dataset || run.dataset_id !== dataset.id) return false;
+  return (run.dataset_version_id ?? null) === (dataset.dataset_version_id ?? null);
 }
 
 function StatusPill({
@@ -144,8 +155,14 @@ function LoginScreen({
   busy: boolean;
   error: string;
 }) {
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin");
+  const demoUsername = import.meta.env.VITE_DEMO_STEWARD_USERNAME ?? "demo-steward";
+  const demoPassword = import.meta.env.VITE_DEMO_STEWARD_PASSWORD ?? "ridepulse-demo-2026";
+  const [username, setUsername] = useState(demoUsername);
+  const [password, setPassword] = useState(demoPassword);
+  const fillDemoCredentials = () => {
+    setUsername(demoUsername);
+    setPassword(demoPassword);
+  };
   const submit = (event: FormEvent) => {
     event.preventDefault();
     onLogin(username, password);
@@ -157,10 +174,8 @@ function LoginScreen({
         <div className="orb orb-two" />
         <div className="grid-lines" />
         <div className="brand-lockup">
-          <span className="brand-mark">RP</span>
-          <span>
-            RidePulse <em>DQ</em>
-          </span>
+          <img className="brand-mark brand-image" src="/image.png" alt="" aria-hidden="true" />
+          <span>DataPulse</span>
         </div>
         <div className="login-pitch">
           <span className="eyebrow">HỆ THỐNG TRÍ TUỆ GIÁM SÁT CHẤT LƯỢNG DỮ LIỆU</span>
@@ -172,8 +187,8 @@ function LoginScreen({
           </p>
           <div className="metric-row">
             <div>
-              <strong>50k+</strong>
-              <span>dòng dữ liệu đã đăng ký</span>
+              <strong>LIVE</strong>
+              <span>dữ liệu Supabase trực tiếp</span>
             </div>
             <div>
               <strong>5</strong>
@@ -189,7 +204,7 @@ function LoginScreen({
       </div>
       <section className="login-card">
         <div className="mobile-brand">
-          <span className="brand-mark">RP</span> RidePulse <em>DQ</em>
+          <img className="brand-mark brand-image" src="/image.png" alt="" aria-hidden="true" /> DataPulse
         </div>
         <span className="eyebrow">TRUY CẬP THEO VAI TRÒ</span>
         <h2>Chào mừng trở lại</h2>
@@ -203,6 +218,7 @@ function LoginScreen({
             value={username}
             onChange={(event) => setUsername(event.target.value)}
             placeholder="user, steward, hoặc admin"
+            autoComplete="username"
             autoFocus
           />
           <label htmlFor="password">Mật khẩu</label>
@@ -212,6 +228,7 @@ function LoginScreen({
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             placeholder="Nhập mật khẩu"
+            autoComplete="current-password"
           />
           {error && <div className="inline-error">{error}</div>}
           <button
@@ -222,15 +239,15 @@ function LoginScreen({
           </button>
         </form>
         <div className="login-note">
-          <span className="lock-icon">⌁</span>
+          <ShieldCheck className="lock-icon" size={20} aria-hidden="true" />
           <span>
-            <strong>Tài khoản dùng thử</strong>
+            <strong>Tài khoản demo Steward</strong>
             <br />
-            · <code>user/user</code> chỉ xem
-            <br />
-            · <code>steward/steward</code> kiểm duyệt
-            <br />
-            · <code>admin/admin</code> toàn quyền.
+            Tài khoản đã được điền sẵn cho giám khảo. Demo bị giới hạn 40 thao tác
+            ghi API, 3 upload, 3 profiler và 2 lần chạy phân tích trong 24 giờ.
+            <button type="button" className="demo-credential-button" onClick={fillDemoCredentials}>
+              Điền lại thông tin demo
+            </button>
           </span>
         </div>
       </section>
@@ -364,6 +381,15 @@ function DatasetsPage({
   const hasWorkflowResults = Boolean(graph1Run || graph1Nodes.length);
   const displayStages = useMemo(() => buildDisplayStages(graph1Nodes), [graph1Nodes]);
   const stageFor = (key: string) => displayStages.find((stage) => stage.key === key);
+  const agentDisabledReason = !canOperate
+    ? "Run Profiler requires a Steward or Admin session. Sign in with a steward account to start it."
+    : importing
+      ? "Wait for the dataset import and profile to finish before starting the Agent Workflow."
+      : busy
+        ? "The Agent Workflow request is being prepared. Please wait a moment."
+        : dataset?.status !== "PROFILE_READY"
+          ? "The dataset profile must be ready before the Agent Workflow can run."
+          : null;
 
   return (
     <div className="datasets-page">
@@ -415,8 +441,34 @@ function DatasetsPage({
                     <strong>{formatTime(item.updated_at)}</strong>
                   </div>
                 </div>
-                <div className="dataset-catalog-actions" style={{ display: "flex", justifyContent: "flex-end", marginTop: "12px" }}>
+                <div className="dataset-catalog-actions" style={{ display: "flex", justifyContent: "space-between", gap: "12px", marginTop: "12px" }}>
+                  {isSelected && item.status === "PROFILE_READY" && item.data_explorer_available === true && (
+                    <button
+                      type="button"
+                      className="button ghost"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onOpenExplorer(item.id);
+                      }}
+                    >
+                      Open Data Explorer
+                    </button>
+                  )}
+                  {isSelected && canOperate && item.status === "PROFILE_READY" && (
+                    <button
+                      type="button"
+                      className="button primary"
+                      disabled={busy || importing}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onStartUnderstand(item.id);
+                      }}
+                    >
+                      Generate Rules →
+                    </button>
+                  )}
                   <button
+                    type="button"
                     className="button ghost"
                     style={{ color: "#dc2626", borderColor: "#fca5a5" }}
                     onClick={(e) => {
@@ -444,21 +496,23 @@ function DatasetsPage({
       )}
 
       {/* Understand Data Agent Output Card */}
-      {dataset && (
+      {false && dataset && (
         <section className="panel" style={{ marginTop: "24px", padding: "24px" }}>
           <div className="panel-heading">
             <div>
               <span className="eyebrow">{t("datasets.agentCapability")}</span>
-              <h2>{t("datasets.understandAgentTitle", { name: dataset.name })}</h2>
+        <h2>{t("datasets.understandAgentTitle", { name: dataset!.name })}</h2>
               <p className="muted">{t("datasets.understandAgentDesc")}</p>
             </div>
             <button
               type="button"
               className="button primary"
-              disabled={!canOperate || importing || busy || dataset.status !== "PROFILE_READY"}
-              onClick={() => onStartUnderstand(dataset.id)}
+              disabled={Boolean(agentDisabledReason)}
+              title={agentDisabledReason ?? "Generate the Data Dictionary, Semantic Contract, and Rule Proposal."}
+              aria-describedby={agentDisabledReason ? "agent-workflow-disabled-reason" : undefined}
+              onClick={() => onStartUnderstand(dataset!.id)}
             >
-              {busy ? "Starting Agent…" : "Run Agent Workflow →"}
+              {busy ? "Starting profiler…" : "Run Profiler →"}
             </button>
             {graph1Run && (
               <button
@@ -467,7 +521,7 @@ function DatasetsPage({
                 className={`button secondary ${showNodeDetails ? "active" : ""}`}
                 aria-controls="graph1-details-sidebar"
                 aria-expanded={showNodeDetails}
-                onClick={() => onViewNodeDetails(dataset.id)}
+                onClick={() => onViewNodeDetails(dataset!.id)}
               >
                 <PanelRightOpen aria-hidden="true" />
                 {showNodeDetails ? "Hide node details" : "View node details"}
@@ -497,8 +551,18 @@ function DatasetsPage({
             </div>
           ) : (
             <div className="workflow-artifact-empty" style={{ marginTop: "16px", padding: "20px", background: "var(--color-bg-subtle, #f8fafc)", borderRadius: "8px", textAlign: "center" }}>
-              Run Agent Workflow to generate the Data Dictionary, Semantic Contract, and Rule Proposal.
+              Run Profiler to generate the Data Dictionary, Semantic Contract, and Rule Proposal.
             </div>
+          )}
+          {agentDisabledReason && (
+            <p
+              id="agent-workflow-disabled-reason"
+              className="muted"
+              role="status"
+              style={{ marginTop: "12px" }}
+            >
+              {agentDisabledReason}
+            </p>
           )}
         </section>
       )}
@@ -772,13 +836,13 @@ function WorkflowPage({
             <div>
               <span>Completeness</span>
               <strong>
-                {profile ? `${profile.completeness_score.toFixed(1)}%` : "—"}
+                {profile ? `${profile!.completeness_score.toFixed(1)}%` : "—"}
               </strong>
             </div>
             <div>
               <span>Validity</span>
               <strong>
-                {profile ? `${profile.validity_score.toFixed(1)}%` : "—"}
+                {profile ? `${profile!.validity_score.toFixed(1)}%` : "—"}
               </strong>
             </div>
             <div>
@@ -999,8 +1063,8 @@ function WorkflowPage({
     step === "PUBLISH_RULESET"
       ? "Publish approved rules"
       : step === "RUN_CHECKS"
-        ? "Run Graph 2 checks"
-        : "Run Graph 3 analysis";
+        ? "Run Rule Proposal checks"
+        : "Run Anomaly Detection analysis";
   const currentStepIndex = currentStep
     ? visibleWorkflowSteps.findIndex((step) => step.key === currentStep.key)
     : -1;
@@ -1192,7 +1256,7 @@ function WorkflowPage({
               onSaveConfiguration={onSaveConfiguration}
               onCreateManual={onCreateManualRule}
               onRun={() => undefined}
-              pipelineMode
+              pipelineMode={false}
             />
           )}
           {currentPhaseIndex !== 3 && <div className="workflow-actions">
@@ -1270,6 +1334,11 @@ function App() {
   const [showGraph1Studio, setShowGraph1Studio] = useState<boolean>(() => sessionStorage.getItem("ridepulse.graph1.open") === "1" && Boolean(sessionStorage.getItem("ridepulse.graph1.run")));
   const [analysisRunId, setAnalysisRunId] = useState(() => sessionStorage.getItem("ridepulse.analysis.run") ?? "");
   const [showAnalysisStudio, setShowAnalysisStudio] = useState<boolean>(() => sessionStorage.getItem("ridepulse.analysis.open") === "1" && Boolean(sessionStorage.getItem("ridepulse.analysis.run")));
+  const [analysisStarting, setAnalysisStarting] = useState(false);
+  const [analysisRerunBusy, setAnalysisRerunBusy] = useState(false);
+  const [analysisLaunchError, setAnalysisLaunchError] = useState("");
+  const [analysisStatus, setAnalysisStatus] = useState<AnalysisRunStatus | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [graph1Dataset, setGraph1Dataset] = useState<Dataset | null>(null);
   const [graph1Run, setGraph1Run] = useState<Graph1Run | null>(null);
   const [graph1Nodes, setGraph1Nodes] = useState<Graph1NodeExecution[]>([]);
@@ -1310,6 +1379,7 @@ function App() {
     null,
   );
   const [manualRuleOpen, setManualRuleOpen] = useState(false);
+  const workspaceRefreshSequence = useRef(0);
 
   const dataset = useMemo(
     () => datasets.find((item) => item.id === selectedDatasetId) ?? datasets[0],
@@ -1321,8 +1391,23 @@ function App() {
   );
   const canOperate = role === "STEWARD" || role === "ADMIN";
   const canAdmin = role === "ADMIN";
+  const profileReady = Boolean(dataset && (profile || dataset.status === "PROFILE_READY"));
+  const graph1Complete = Boolean(
+    matchesDatasetSnapshot(graph1Run, dataset) &&
+    sessionStorage.getItem("ridepulse.graph1.run") &&
+    graph1Run?.status === "COMPLETED",
+  );
+  const analysisReady = analysisStatus === "COMPLETED" || analysisStatus === "PARTIAL" || analysisResult?.run.status === "COMPLETED" || analysisResult?.run.status === "PARTIAL";
+  const isWizardStepUnlocked = (step: number) =>
+    step === 1 || (step === 2 && profileReady) || (step === 3 && profileReady && graph1Complete) || (step === 4 && profileReady && graph1Complete && analysisReady);
+  const wizardNextDisabled =
+    wizardStep === 4 ||
+    (wizardStep === 1 && !isWizardStepUnlocked(2)) ||
+    (wizardStep === 2 && !isWizardStepUnlocked(3)) ||
+    (wizardStep === 3 && !isWizardStepUnlocked(4));
 
   const refreshWorkspace = useCallback(async () => {
+    const refreshId = ++workspaceRefreshSequence.current;
     setLoading(true);
     setError("");
     try {
@@ -1330,6 +1415,7 @@ function App() {
         api.listDatasets(),
         api.listAuditLogs(),
       ]);
+      if (refreshId !== workspaceRefreshSequence.current) return;
       setDatasets(nextDatasets);
       setAuditLogs(nextAudit);
       const profileEntries = await Promise.all(
@@ -1344,6 +1430,7 @@ function App() {
           Boolean(entry[1]),
         ),
       ) as Record<string, DatasetProfile>;
+      if (refreshId !== workspaceRefreshSequence.current) return;
       setDatasetProfiles(nextProfiles);
       const rememberedDatasetId = sessionStorage.getItem("ridepulse.dataset");
       const nextDataset =
@@ -1352,6 +1439,30 @@ function App() {
       setSelectedDatasetId(nextDataset?.id ?? null);
       if (nextDataset)
         sessionStorage.setItem("ridepulse.dataset", nextDataset.id);
+      if (nextDataset) {
+        try {
+          const recoveredGraph1 = await api.getLatestGraph1Run(nextDataset.id, nextDataset.dataset_version_id);
+          if (refreshId !== workspaceRefreshSequence.current) return;
+          if (recoveredGraph1 && matchesDatasetSnapshot(recoveredGraph1, nextDataset)) {
+            setGraph1Dataset(nextDataset);
+            setGraph1Run(recoveredGraph1);
+            sessionStorage.setItem("ridepulse.graph1.run", recoveredGraph1.id);
+            sessionStorage.setItem("ridepulse.graph1.dataset", nextDataset.id);
+            if (recoveredGraph1.dataset_version_id) sessionStorage.setItem("ridepulse.graph1.version", recoveredGraph1.dataset_version_id);
+            else sessionStorage.removeItem("ridepulse.graph1.version");
+            const recoveredNodes = await api.listGraph1Nodes(recoveredGraph1.id);
+            if (refreshId !== workspaceRefreshSequence.current) return;
+            setGraph1Nodes(recoveredNodes);
+          } else if (sessionStorage.getItem("ridepulse.graph1.dataset") === nextDataset.id) {
+            sessionStorage.removeItem("ridepulse.graph1.run");
+            sessionStorage.removeItem("ridepulse.graph1.version");
+            setGraph1Run(null);
+            setGraph1Nodes([]);
+          }
+        } catch {
+          // Keep the durable pointer and let the regular run refresh retry.
+        }
+      }
       if (nextDataset?.status === "PROFILE_READY") {
         const [nextProposals, nextConfigurations, latestRun, nextTrends] =
           await Promise.all([
@@ -1360,6 +1471,7 @@ function App() {
             api.getLatestDqRun(nextDataset.id),
             api.getQualityTrends(nextDataset.id),
           ]);
+        if (refreshId !== workspaceRefreshSequence.current) return;
         const nextProfile = nextProfiles[nextDataset.id] ?? null;
         setProfile(nextProfile);
         setProposals(nextProposals);
@@ -1374,12 +1486,46 @@ function App() {
           setDqResults(latestResults);
           setDqAnomalies(latestAnomalies);
         }
+        const rememberedWorkflowId = sessionStorage.getItem(
+          "ridepulse.workflow",
+        );
+        if (rememberedWorkflowId) {
+          try {
+            const [rememberedWorkflow, rememberedArtifacts] =
+              await Promise.all([
+                workflowApi.getWorkflow(rememberedWorkflowId),
+                workflowApi.listWorkflowArtifacts(rememberedWorkflowId),
+              ]);
+            if (
+              refreshId === workspaceRefreshSequence.current &&
+              rememberedWorkflow.dataset_id === nextDataset.id
+            ) {
+              setWorkflow(rememberedWorkflow);
+              setWorkflowArtifacts(rememberedArtifacts);
+              setProposals(
+                await api.listProposals(
+                  nextDataset.id,
+                  rememberedWorkflow.id,
+                ),
+              );
+            } else if (rememberedWorkflow.dataset_id !== nextDataset.id) {
+              sessionStorage.removeItem("ridepulse.workflow");
+            }
+          } catch (err) {
+            if (err instanceof ApiError && err.status === 404) {
+              sessionStorage.removeItem("ridepulse.workflow");
+            } else {
+              throw err;
+            }
+          }
+        }
       } else {
         setProfile(null);
         setProposals([]);
         setRuleConfigurations([]);
       }
     } catch (err) {
+      if (refreshId !== workspaceRefreshSequence.current) return;
       if (err instanceof ApiError && err.status === 401) {
         clearApiSession();
         sessionStorage.removeItem("ridepulse.auth");
@@ -1389,7 +1535,7 @@ function App() {
       }
       setError(getErrorMessage(err, "Unable to load workspace."));
     } finally {
-      setLoading(false);
+      if (refreshId === workspaceRefreshSequence.current) setLoading(false);
     }
   }, []);
 
@@ -1411,7 +1557,22 @@ function App() {
   }, [canAdmin, dataset]);
 
   async function selectDataset(datasetId: string) {
+    const changedDataset = datasetId !== selectedDatasetId;
     setShowGraph1Sidebar(false);
+    if (changedDataset) {
+      setGraph1Run(null);
+      setGraph1Nodes([]);
+      setGraph1Dataset(null);
+      setAnalysisRunId("");
+      setAnalysisLaunchError("");
+      setShowAnalysisStudio(false);
+      sessionStorage.removeItem("ridepulse.graph1.open");
+      sessionStorage.removeItem("ridepulse.graph1.run");
+      sessionStorage.removeItem("ridepulse.graph1.dataset");
+      sessionStorage.removeItem("ridepulse.graph1.version");
+      sessionStorage.removeItem("ridepulse.analysis.open");
+      sessionStorage.removeItem("ridepulse.analysis.run");
+    }
     sessionStorage.setItem("ridepulse.dataset", datasetId);
     setSelectedDatasetId(datasetId);
     setWorkflow(null);
@@ -1420,22 +1581,168 @@ function App() {
   }
 
   async function openGraph1ForDataset(datasetId: string) {
+    let targetDataset = datasets.find((item) => item.id === datasetId) ?? null;
+    // Dataset cards can be rendered from a stale list while the workspace
+    // refresh that records the latest version/profile is still in flight.
+    // Always hand Graph1 the fresh immutable version snapshot so its request
+    // carries the matching profile_run_id instead of starting with an empty
+    // profile reference.
     if (datasetId !== selectedDatasetId) await selectDataset(datasetId);
-    setGraph1Dataset(datasets.find((item) => item.id === datasetId) ?? null);
+    if (datasetId !== selectedDatasetId || (targetDataset?.dataset_version_id && !targetDataset.profile_run_id)) {
+      const freshDatasets = await api.listDatasets();
+      targetDataset = freshDatasets.find((item) => item.id === datasetId) ?? targetDataset;
+      if (freshDatasets.length) setDatasets(freshDatasets);
+    }
+    if (!targetDataset) {
+      setError("Không tìm thấy dataset đã chọn để khởi tạo Graph 1.");
+      return;
+    }
+    setGraph1Dataset(targetDataset);
+    setAnalysisLaunchError("");
     setWizardStep(2);
     setShowAdmin(false);
     sessionStorage.setItem("ridepulse.graph1.open", "1");
     setShowGraph1Studio(true);
   }
 
-  async function openAnalysisForGraph1(graph1RunId: string) {
+  async function openAnalysisForGraph1(graph1RunId: string, rerun = false) {
     if (isMockMode) throw new Error("Analysis Studio requires the real backend.");
-    const analysisRun = await api.createAnalysisRun(graph1RunId);
-    sessionStorage.setItem("ridepulse.analysis.run", analysisRun.id);
-    sessionStorage.setItem("ridepulse.analysis.open", "1");
-    setAnalysisRunId(analysisRun.id);
-    setShowAnalysisStudio(true);
+    const previousAnalysisRunId = analysisRunId || sessionStorage.getItem("ridepulse.analysis.run") || "";
+    const previousAnalysisStatus = analysisStatus;
+    const previousAnalysisResult = analysisResult;
+    const previousWizardStep = wizardStep;
+    setAnalysisStarting(true);
+    setAnalysisLaunchError("");
+    try {
+      const analysisRun = await api.createAnalysisRun(graph1RunId, rerun);
+      sessionStorage.setItem("ridepulse.analysis.run", analysisRun.id);
+      sessionStorage.setItem("ridepulse.analysis.open", "1");
+      sessionStorage.removeItem("ridepulse.graph1.open");
+      setAnalysisRunId(analysisRun.id);
+      setAnalysisStatus(analysisRun.status);
+      setAnalysisResult(null);
+      setWizardStep(3);
+      sessionStorage.setItem("ridepulse.wizard.step", "3");
+      setShowAnalysisStudio(true);
+      setShowGraph1Studio(false);
+    } catch (reason) {
+      setAnalysisLaunchError(getErrorMessage(reason, "Unable to start Rule Proposal and Anomaly Detection."));
+      if (rerun && previousAnalysisRunId) {
+        // A failed rerun must not erase the last usable report. Restore the
+        // previous durable snapshot and leave the user on the initiating screen.
+        sessionStorage.setItem("ridepulse.analysis.run", previousAnalysisRunId);
+        if (previousWizardStep === 3) sessionStorage.setItem("ridepulse.analysis.open", "1");
+        else sessionStorage.removeItem("ridepulse.analysis.open");
+        setAnalysisRunId(previousAnalysisRunId);
+        setAnalysisStatus(previousAnalysisStatus);
+        setAnalysisResult(previousAnalysisResult);
+        setWizardStep(previousWizardStep);
+        sessionStorage.setItem("ridepulse.wizard.step", String(previousWizardStep));
+        setShowAnalysisStudio(previousWizardStep === 3);
+      } else {
+        sessionStorage.removeItem("ridepulse.analysis.open");
+        sessionStorage.removeItem("ridepulse.analysis.run");
+        sessionStorage.removeItem("ridepulse.graph1.open");
+        setAnalysisRunId("");
+        setWizardStep(3);
+        sessionStorage.setItem("ridepulse.wizard.step", "3");
+        setShowAnalysisStudio(false);
+      }
+      setShowGraph1Studio(false);
+    } finally {
+      setAnalysisStarting(false);
+    }
+  }
+
+  function closeAnalysisStudio() {
+    sessionStorage.removeItem("ridepulse.analysis.open");
+    sessionStorage.removeItem("ridepulse.graph1.open");
+    setShowAnalysisStudio(false);
+    setAnalysisLaunchError("");
+    // Keep the durable run id so Step 3 can reopen the studio in this session.
+    setWizardStep(3);
+    sessionStorage.setItem("ridepulse.wizard.step", "3");
+  }
+
+  function backToGraph1FromAnalysis() {
+    sessionStorage.removeItem("ridepulse.analysis.open");
+    sessionStorage.setItem("ridepulse.graph1.open", "1");
+    setShowAnalysisStudio(false);
+    setAnalysisLaunchError("");
+    setShowGraph1Studio(true);
+    setWizardStep(2);
+    sessionStorage.setItem("ridepulse.wizard.step", "2");
+  }
+
+  function prepareGraph1Rerun() {
+    sessionStorage.removeItem("ridepulse.analysis.open");
+    sessionStorage.removeItem("ridepulse.analysis.run");
+    setShowAnalysisStudio(false);
+    setAnalysisRunId("");
+    setAnalysisStatus(null);
+    setAnalysisResult(null);
+    setAnalysisLaunchError("");
+    setWizardStep(2);
+    sessionStorage.setItem("ridepulse.wizard.step", "2");
+  }
+
+  function navigateWizardStep(targetStep: number) {
+    if (!isWizardStepUnlocked(targetStep)) return;
+    setShowAdmin(false);
+    setShowGraph1Sidebar(false);
     setShowGraph1Studio(false);
+    setAnalysisLaunchError("");
+    sessionStorage.removeItem("ridepulse.graph1.open");
+    const persistedAnalysisRunId = analysisRunId || sessionStorage.getItem("ridepulse.analysis.run") || "";
+    if (targetStep === 3 && persistedAnalysisRunId) {
+      setAnalysisRunId(persistedAnalysisRunId);
+      sessionStorage.setItem("ridepulse.analysis.open", "1");
+      setShowAnalysisStudio(true);
+    } else {
+      sessionStorage.removeItem("ridepulse.analysis.open");
+      setShowAnalysisStudio(false);
+    }
+    setWizardStep(targetStep);
+    sessionStorage.setItem("ridepulse.wizard.step", String(targetStep));
+  }
+
+  async function retryAnalysisFromStep3() {
+    const storedRunId = sessionStorage.getItem("ridepulse.graph1.run") ?? "";
+    const storedDatasetId = sessionStorage.getItem("ridepulse.graph1.dataset") ?? "";
+    const storedVersionId = sessionStorage.getItem("ridepulse.graph1.version") ?? "";
+    const currentDatasetId = dataset?.id ?? selectedDatasetId ?? "";
+    const graph1RunId = matchesDatasetSnapshot(graph1Run, dataset)
+      ? graph1Run?.id ?? ""
+      : storedDatasetId === currentDatasetId && storedVersionId === (dataset?.dataset_version_id ?? "")
+        ? storedRunId
+        : "";
+    if (!graph1RunId) {
+      setAnalysisLaunchError("Complete the Profiler in Step 2 before starting Rule Proposal and Anomaly Detection.");
+      return;
+    }
+    await openAnalysisForGraph1(graph1RunId);
+  }
+
+  async function rerunAnalysisFromStep3() {
+    const storedRunId = sessionStorage.getItem("ridepulse.graph1.run") ?? "";
+    const storedDatasetId = sessionStorage.getItem("ridepulse.graph1.dataset") ?? "";
+    const storedVersionId = sessionStorage.getItem("ridepulse.graph1.version") ?? "";
+    const currentDatasetId = dataset?.id ?? selectedDatasetId ?? "";
+    const graph1RunId = matchesDatasetSnapshot(graph1Run, dataset)
+      ? graph1Run?.id ?? ""
+      : storedDatasetId === currentDatasetId && storedVersionId === (dataset?.dataset_version_id ?? "")
+        ? storedRunId
+        : "";
+    if (!graph1RunId || !graph1Complete) {
+      setAnalysisLaunchError("Hoàn tất Profiler ở Step 2 trước khi rerun Rule Proposal và Anomaly Detection.");
+      return;
+    }
+    setAnalysisRerunBusy(true);
+    try {
+      await openAnalysisForGraph1(graph1RunId, true);
+    } finally {
+      setAnalysisRerunBusy(false);
+    }
   }
 
   async function toggleGraph1Sidebar(datasetId: string) {
@@ -1462,20 +1769,54 @@ function App() {
     return nextRun;
   }, []);
 
+  useEffect(() => {
+    if (!analysisRunId) {
+      setAnalysisStatus(null);
+      setAnalysisResult(null);
+      return;
+    }
+    let cancelled = false;
+    const refreshAnalysisSnapshot = async () => {
+      try {
+        const nextRun = await api.getAnalysisRun(analysisRunId);
+        if (cancelled) return;
+        setAnalysisStatus(nextRun.status);
+        const nextResult = await api.getAnalysisResult(analysisRunId);
+        if (!cancelled) setAnalysisResult(nextResult);
+      } catch {
+        // Analysis Studio owns its own error surface.  Keep the wizard state
+        // intact so a transient refresh failure never unlocks a later step.
+      }
+    };
+    void refreshAnalysisSnapshot();
+    const terminal = analysisStatus === "COMPLETED" || analysisStatus === "PARTIAL" || analysisStatus === "FAILED";
+    const timer = terminal ? undefined : window.setInterval(() => void refreshAnalysisSnapshot(), 2500);
+    return () => {
+      cancelled = true;
+      if (timer) window.clearInterval(timer);
+    };
+  }, [analysisRunId, analysisStatus]);
+
   async function startGraph1InBackground(datasetId: string) {
     if (!canOperate || graph1Starting) return;
     setError("");
     setGraph1Starting(true);
     try {
       if (datasetId !== selectedDatasetId) await selectDataset(datasetId);
+      const targetDataset = datasets.find((item) => item.id === datasetId);
       const storedRun = sessionStorage.getItem("ridepulse.graph1.run");
       const storedDataset = sessionStorage.getItem("ridepulse.graph1.dataset");
-      const nextRun = storedRun && storedDataset === datasetId
+      const storedVersion = sessionStorage.getItem("ridepulse.graph1.version") ?? "";
+      const targetVersion = targetDataset?.dataset_version_id ?? "";
+      const nextRun = storedRun && storedDataset === datasetId && storedVersion === targetVersion
         ? await api.getGraph1Run(storedRun)
-        : await api.createGraph1Run(datasetId);
+        : await api.createGraph1Run(datasetId, targetDataset?.dataset_version_id, targetDataset?.profile_run_id);
       sessionStorage.setItem("ridepulse.graph1.run", nextRun.id);
       sessionStorage.setItem("ridepulse.graph1.dataset", datasetId);
+      if (nextRun.dataset_version_id) sessionStorage.setItem("ridepulse.graph1.version", nextRun.dataset_version_id);
+      else sessionStorage.removeItem("ridepulse.graph1.version");
       setGraph1Run(nextRun);
+      setGraph1Dataset(targetDataset ?? null);
       setGraph1Nodes(await api.listGraph1Nodes(nextRun.id));
       setToast("Agent Workflow is running in the background.");
     } catch (err) {
@@ -1489,7 +1830,8 @@ function App() {
     if (!dataset) return;
     const storedRun = sessionStorage.getItem("ridepulse.graph1.run");
     const storedDataset = sessionStorage.getItem("ridepulse.graph1.dataset");
-    if (!storedRun || storedDataset !== dataset.id) {
+    const storedVersion = sessionStorage.getItem("ridepulse.graph1.version") ?? "";
+    if (!storedRun || storedDataset !== dataset.id || storedVersion !== (dataset.dataset_version_id ?? "")) {
       setGraph1Run(null);
       setGraph1Nodes([]);
       return;
@@ -1497,10 +1839,11 @@ function App() {
     void refreshGraph1(storedRun).catch(() => {
       sessionStorage.removeItem("ridepulse.graph1.run");
       sessionStorage.removeItem("ridepulse.graph1.dataset");
+      sessionStorage.removeItem("ridepulse.graph1.version");
       setGraph1Run(null);
       setGraph1Nodes([]);
     });
-  }, [dataset?.id, refreshGraph1]);
+  }, [dataset?.id, dataset?.dataset_version_id, refreshGraph1]);
 
   useEffect(() => {
     if (!graph1Run || ["COMPLETED", "FAILED", "AWAITING_SEMANTIC_REVIEW", "AWAITING_RULE_REVIEW"].includes(graph1Run.status)) return;
@@ -1512,8 +1855,8 @@ function App() {
     if (authenticated) void refreshWorkspace();
   }, [authenticated, refreshWorkspace]);
   useEffect(() => {
-    if (view === "admin") void refreshAdmin();
-  }, [refreshAdmin, view]);
+    if (showAdmin) void refreshAdmin();
+  }, [refreshAdmin, showAdmin]);
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(""), 3500);
@@ -1532,7 +1875,13 @@ function App() {
       setUsername(session.username);
       setAuthenticated(true);
     } catch (err) {
-      setLoginError(getErrorMessage(err, "Unable to start session."));
+      setLoginError(
+        err instanceof ApiError && err.status === 401
+          ? language === "vi"
+            ? "Tên đăng nhập hoặc mật khẩu không đúng."
+            : "The username or password is incorrect."
+          : getErrorMessage(err, "Unable to start session."),
+      );
     } finally {
       setLoginBusy(false);
     }
@@ -1544,9 +1893,17 @@ function App() {
     sessionStorage.removeItem("ridepulse.role");
     sessionStorage.removeItem("ridepulse.username");
     sessionStorage.removeItem("ridepulse.dataset");
+    sessionStorage.removeItem("ridepulse.graph1.open");
+    sessionStorage.removeItem("ridepulse.graph1.run");
+    sessionStorage.removeItem("ridepulse.graph1.dataset");
+    sessionStorage.removeItem("ridepulse.graph1.version");
     sessionStorage.removeItem("ridepulse.analysis.open");
     sessionStorage.removeItem("ridepulse.analysis.run");
     setShowAnalysisStudio(false);
+    setShowGraph1Studio(false);
+    setGraph1Run(null);
+    setGraph1Nodes([]);
+    setGraph1Dataset(null);
     setAnalysisRunId("");
     setAuthenticated(false);
   }
@@ -1588,7 +1945,7 @@ function App() {
   }
 
   async function startAnalysis() {
-    if (!dataset) return;
+    if (!dataset || isVersionedDataset(dataset)) return;
     setError("");
     setRetryAction(null);
     try {
@@ -1609,7 +1966,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (wizardStep === 2 && dataset && !profile && !activeJob && dataset.status !== "PROFILE_READY") {
+    if (wizardStep === 2 && dataset && !isVersionedDataset(dataset) && !profile && !activeJob) {
       void startAnalysis();
     }
   }, [wizardStep, dataset, profile, activeJob]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1622,14 +1979,17 @@ function App() {
       const imported = await api.importDataset(file);
       sessionStorage.setItem("ridepulse.dataset", imported.dataset.id);
       setSelectedDatasetId(imported.dataset.id);
-      setDatasets((current) => [imported.dataset, ...current]);
+      setDatasets((current) => [
+        imported.dataset,
+        ...current.filter((item) => item.id !== imported.dataset.id),
+      ]);
       setView("datasets");
       await pollJob(imported.job, async () => {
         await refreshWorkspace();
         setGraph1Dataset({ ...imported.dataset, status: "PROFILE_READY" });
-        setWizardStep(2);
-        sessionStorage.setItem("ridepulse.graph1.open", "1");
-        setShowGraph1Studio(true);
+        setWizardStep(1);
+        sessionStorage.removeItem("ridepulse.graph1.open");
+        setShowGraph1Studio(false);
       });
     } catch (err) {
       setError(getErrorMessage(err, "Unable to import dataset."));
@@ -1833,25 +2193,32 @@ function App() {
     setWorkflowArtifacts(nextArtifacts);
   }
 
-  async function startWorkflowStep(step: WorkflowStepKey, fresh = false) {
-    if (!dataset || !canOperate || workflowActionBusy || activeJob) return;
+  async function startWorkflowStep(
+    step: WorkflowStepKey,
+    fresh = false,
+    requestedDatasetId?: string,
+  ) {
+    const targetDatasetId = requestedDatasetId ?? dataset?.id;
+    if (!targetDatasetId || !canOperate || workflowActionBusy || activeJob)
+      return;
     setError("");
     setRetryAction(null);
     setWorkflowActionBusy(true);
     try {
       if (!workflow && step === "UPLOAD_PROFILE") {
         const ingestion = await api.startIngestion(
-          dataset.id,
+          targetDatasetId,
           crypto.randomUUID(),
         );
         await pollJob(ingestion, async () => {
           const [nextDatasets, currentWorkflow] = await Promise.all([
             api.listDatasets(),
-            workflowApi.createWorkflow(dataset.id, true),
+            workflowApi.createWorkflow(targetDatasetId, true),
           ]);
           setDatasets(nextDatasets);
-          setProfile(await api.getProfile(dataset.id));
+          setProfile(await api.getProfile(targetDatasetId));
           setWorkflow(currentWorkflow);
+          sessionStorage.setItem("ridepulse.workflow", currentWorkflow.id);
           setWorkflowArtifacts(
             await workflowApi.listWorkflowArtifacts(currentWorkflow.id),
           );
@@ -1859,14 +2226,21 @@ function App() {
         });
         return;
       }
-      let currentWorkflow = workflow;
-      if (!currentWorkflow) {
-        currentWorkflow = await workflowApi.createWorkflow(dataset.id, fresh);
+      let currentWorkflow =
+        workflow?.dataset_id === targetDatasetId ? workflow : null;
+      if (!currentWorkflow || fresh) {
+        currentWorkflow = await workflowApi.createWorkflow(
+          targetDatasetId,
+          fresh,
+        );
         setWorkflow(currentWorkflow);
+        sessionStorage.setItem("ridepulse.workflow", currentWorkflow.id);
         setWorkflowArtifacts(
           await workflowApi.listWorkflowArtifacts(currentWorkflow.id),
         );
-        setProposals(await api.listProposals(dataset.id, currentWorkflow.id));
+        setProposals(
+          await api.listProposals(targetDatasetId, currentWorkflow.id),
+        );
       }
       const queuedJob = await workflowApi.runWorkflowStep(
         currentWorkflow.id,
@@ -1876,10 +2250,28 @@ function App() {
         queuedJob,
         async () => {
           await refreshWorkflow(currentWorkflow!.id);
-          setProfile(await api.getProfile(dataset.id));
+          setProfile(await api.getProfile(targetDatasetId));
           setProposals(
-            await api.listProposals(dataset.id, currentWorkflow!.id),
+            await api.listProposals(targetDatasetId, currentWorkflow!.id),
           );
+          setRuleConfigurations(
+            await api.listRuleConfigurations(targetDatasetId),
+          );
+          if (step === "RUN_CHECKS" || step === "ANALYZE_REPORT") {
+            const latestRun = await api.getLatestDqRun(targetDatasetId);
+            setActiveRun(latestRun);
+            if (latestRun?.status === "SUCCEEDED") {
+              const [latestResults, latestAnomalies, nextTrends] =
+                await Promise.all([
+                  api.getDqResults(latestRun.id),
+                  api.getDqAnomalies(latestRun.id),
+                  api.getQualityTrends(targetDatasetId),
+                ]);
+              setDqResults(latestResults);
+              setDqAnomalies(latestAnomalies);
+              setQualityTrends(nextTrends);
+            }
+          }
           setAuditLogs(await api.listAuditLogs());
         },
         workflowApi,
@@ -1888,6 +2280,54 @@ function App() {
       setError(getErrorMessage(err, "Unable to run workflow step."));
     } finally {
       setWorkflowActionBusy(false);
+    }
+  }
+
+  async function startDatasetUnderstanding(datasetId: string) {
+    if (!canOperate || workflowActionBusy || activeJob) return;
+    // Prevent a slower initial workspace refresh from overwriting the new
+    // workflow-scoped profile, proposals, and artifacts with dataset history.
+    workspaceRefreshSequence.current += 1;
+    setLoading(false);
+    sessionStorage.setItem("ridepulse.dataset", datasetId);
+    setSelectedDatasetId(datasetId);
+    setError("");
+    setRetryAction(null);
+
+    try {
+      let nextProfile: DatasetProfile | null = null;
+      try {
+        nextProfile = await api.getProfile(datasetId);
+      } catch (err) {
+        if (!(err instanceof ApiError) || err.status !== 404) throw err;
+      }
+
+      if (!nextProfile) {
+        const ingestion = await api.startIngestion(
+          datasetId,
+          crypto.randomUUID(),
+        );
+        await pollJob(ingestion, async () => {
+          nextProfile = await api.getProfile(datasetId);
+          setDatasets(await api.listDatasets());
+        });
+      }
+
+      if (nextProfile) {
+        setProfile(nextProfile);
+        setDatasetProfiles((current) => ({
+          ...current,
+          [datasetId]: nextProfile!,
+        }));
+      }
+      await startWorkflowStep("UNDERSTAND_DATA", true, datasetId);
+    } catch (err) {
+      setError(
+        getErrorMessage(
+          err,
+          "Unable to prepare the profile and run the Understand Data Agent.",
+        ),
+      );
     }
   }
 
@@ -1991,10 +2431,8 @@ function App() {
       <main className="main-content full-width">
         <header className="topbar">
           <div className="brand-lockup">
-            <span className="brand-mark">RP</span>
-            <span>
-              RidePulse <em>DQ</em>
-            </span>
+            <img className="brand-mark brand-image" src="/image.png" alt="" aria-hidden="true" />
+            <span>DataPulse</span>
           </div>
           <div className="topbar-actions">
             <span className="role-badge">{role}</span>
@@ -2028,7 +2466,7 @@ function App() {
           </div>
         </header>
 
-        {!showAdmin && !showGraph1Studio && !showAnalysisStudio && (
+        {!showAdmin && (
           <div className="wizard-header-container">
             <nav className="wizard-stepper" aria-label="Wizard Steps">
               {[
@@ -2061,21 +2499,14 @@ function App() {
                   )}
                   <button
                     type="button"
+                    disabled={!isWizardStepUnlocked(step.id) || workflowActionBusy}
                     className={`wizard-step-node ${wizardStep === step.id
                       ? "active"
                       : wizardStep > step.id
                         ? "completed"
                         : ""
                       }`}
-                    onClick={() => {
-                      setShowAdmin(false);
-                      setShowGraph1Sidebar(false);
-                      sessionStorage.removeItem("ridepulse.graph1.open");
-                      setShowGraph1Studio(false);
-                      sessionStorage.removeItem("ridepulse.analysis.open");
-                      setShowAnalysisStudio(false);
-                      setWizardStep(step.id);
-                    }}
+                    onClick={() => navigateWizardStep(step.id)}
                   >
                     <div className="wizard-step-badge">
                       {wizardStep > step.id ? "✓" : step.id}
@@ -2129,6 +2560,9 @@ function App() {
                       ? (language === "vi" ? "Đang phân tích hồ sơ dữ liệu…" : "Building dataset profile")
                       : activeJob.type === "PROPOSE_RULES"
                         ? (language === "vi" ? "Đang sinh đề xuất quy tắc…" : "Generating rule proposals")
+                        : activeJob.type === "RUN_DQ" &&
+                            /ANALYZE_REPORT|analysis report/i.test(activeJob.message)
+                          ? (language === "vi" ? "Đang phân tích và tạo báo cáo…" : "Analyzing results and building report")
                         : (language === "vi" ? "Đang chạy kiểm thử quy tắc…" : "Running approved checks")
                   }
                 />
@@ -2157,20 +2591,13 @@ function App() {
           {showAnalysisStudio && analysisRunId ? (
             <AnalysisStudio
               analysisRunId={analysisRunId}
-              onExit={() => {
-                sessionStorage.removeItem("ridepulse.analysis.open");
-                setShowAnalysisStudio(false);
-                setAnalysisRunId("");
-              }}
-              onBackToGraph1={() => {
-                sessionStorage.removeItem("ridepulse.analysis.open");
-                sessionStorage.setItem("ridepulse.graph1.open", "1");
-                setShowAnalysisStudio(false);
-                setShowGraph1Studio(true);
-              }}
+              onExit={closeAnalysisStudio}
+              onBackToGraph1={backToGraph1FromAnalysis}
+              onRerun={() => void rerunAnalysisFromStep3()}
+              rerunBusy={analysisRerunBusy}
             />
           ) : showGraph1Studio ? (
-            <Graph1Studio
+              <Graph1Studio
               onExit={() => {
                 sessionStorage.removeItem("ridepulse.graph1.open");
                 setShowGraph1Studio(false);
@@ -2180,8 +2607,10 @@ function App() {
                 if (runId) void refreshGraph1(runId);
               }}
               onDatasetImported={() => void refreshWorkspace()}
-              onAnalyze={openAnalysisForGraph1}
-              initialDataset={graph1Dataset ?? dataset}
+                onAnalyze={openAnalysisForGraph1}
+                onRerun={prepareGraph1Rerun}
+                onRunChange={setGraph1Run}
+                initialDataset={graph1Dataset ?? dataset}
             />
           ) : showAdmin && canAdmin ? (
             <AdminPage
@@ -2195,8 +2624,21 @@ function App() {
             />
           ) : (
             <>
-              {/* STEP 1: Dataset Preparation */}
-              {wizardStep === 1 && (
+              {/* Schema-driven explorer for the selected immutable version. */}
+              {showDataExplorer && dataset ? (
+                <div>
+                  <div className="page-heading">
+                    <button
+                      type="button"
+                      className="step-nav-button backward"
+                      onClick={() => setShowDataExplorer(false)}
+                    >
+                      ← Back to datasets
+                    </button>
+                  </div>
+                  <DataExplorerPage dataset={dataset} />
+                </div>
+              ) : wizardStep === 1 ? (
                 <div>
                   <DatasetsPage
                     datasets={datasets}
@@ -2208,7 +2650,7 @@ function App() {
                     onImportDataset={(file) => void importDataset(file)}
                     onSelectDataset={(id) => void selectDataset(id)}
                     onDeleteDataset={(id) => void deleteDataset(id)}
-                    onStartUnderstand={(id) => { void startGraph1InBackground(id); }}
+                    onStartUnderstand={(id) => void openGraph1ForDataset(id)}
                     onViewNodeDetails={(id) => { void toggleGraph1Sidebar(id); }}
                     canOperate={canOperate}
                     importing={Boolean(activeJob)}
@@ -2219,10 +2661,23 @@ function App() {
                     onRefreshGraph1={refreshGraph1}
                   />
                 </div>
-              )}
+              ) : null}
 
-              {/* STEP 2: Quality Profiling (Selected Dataset Only) */}
+              {/* STEP 2: Profiler execution studio */}
               {wizardStep === 2 && (
+                <div>
+                  <Graph1Studio
+                    onExit={() => setWizardStep(1)}
+                    onDatasetImported={() => void refreshWorkspace()}
+                    onAnalyze={openAnalysisForGraph1}
+                    onRerun={prepareGraph1Rerun}
+                    onRunChange={setGraph1Run}
+                    initialDataset={dataset}
+                  />
+                </div>
+              )}
+              {/* Legacy quality profiling UI retained below for reference */}
+              {false && wizardStep === 2 && (
                 <div>
                   <div className="page-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div>
@@ -2234,8 +2689,8 @@ function App() {
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" }}>
                         {profile ? (
                           <>
-                            <div style={{ width: "48px", height: "48px", borderRadius: "50%", border: `3px solid ${profile.validity_score >= 90 ? "#10b981" : profile.validity_score >= 75 ? "#f59e0b" : "#ef4444"}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "20px", fontWeight: "800", color: profile.validity_score >= 90 ? "#10b981" : profile.validity_score >= 75 ? "#f59e0b" : "#ef4444", background: "var(--surface)", boxShadow: "0 2px 10px rgba(0,0,0,0.05)" }}>
-                              {profile.validity_score >= 90 ? "A" : profile.validity_score >= 75 ? "B" : profile.validity_score >= 60 ? "C" : "D"}
+                            <div style={{ width: "48px", height: "48px", borderRadius: "50%", border: `3px solid ${profile!.validity_score >= 90 ? "#10b981" : profile!.validity_score >= 75 ? "#f59e0b" : "#ef4444"}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "20px", fontWeight: "800", color: profile!.validity_score >= 90 ? "#10b981" : profile!.validity_score >= 75 ? "#f59e0b" : "#ef4444", background: "var(--surface)", boxShadow: "0 2px 10px rgba(0,0,0,0.05)" }}>
+                              {profile!.validity_score >= 90 ? "A" : profile!.validity_score >= 75 ? "B" : profile!.validity_score >= 60 ? "C" : "D"}
                             </div>
                             <span style={{ fontSize: "10px", fontWeight: 700, color: "var(--muted)", letterSpacing: "0.5px" }}>GRADE</span>
                           </>
@@ -2276,11 +2731,11 @@ function App() {
                         <div style={{ padding: "24px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", boxShadow: "0 2px 12px rgba(0,0,0,0.03)" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "16px" }}>
                             <span style={{ fontSize: "13px", fontWeight: "700", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{t("overview.completeness")}</span>
-                            <span style={{ fontSize: "28px", fontWeight: "800", color: "var(--accent)", lineHeight: "1" }}>{profile ? `${profile.completeness_score.toFixed(1)}%` : "—"}</span>
+                            <span style={{ fontSize: "28px", fontWeight: "800", color: "var(--accent)", lineHeight: "1" }}>{profile ? `${profile!.completeness_score.toFixed(1)}%` : "—"}</span>
                           </div>
                           {profile && (
                             <div style={{ width: "100%", height: "8px", background: "var(--surface-muted)", borderRadius: "999px", overflow: "hidden", marginBottom: "16px" }}>
-                              <div style={{ width: `${profile.completeness_score}%`, height: "100%", background: "var(--accent)", borderRadius: "999px", transition: "width 1s cubic-bezier(0.4, 0, 0.2, 1)" }} />
+                              <div style={{ width: `${profile!.completeness_score}%`, height: "100%", background: "var(--accent)", borderRadius: "999px", transition: "width 1s cubic-bezier(0.4, 0, 0.2, 1)" }} />
                             </div>
                           )}
                           <div style={{ fontSize: "13px", color: "var(--muted)", lineHeight: "1.4" }}>{t("datasets.nonNullRatio")}</div>
@@ -2290,11 +2745,11 @@ function App() {
                         <div style={{ padding: "24px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", boxShadow: "0 2px 12px rgba(0,0,0,0.03)" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "16px" }}>
                             <span style={{ fontSize: "13px", fontWeight: "700", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{t("overview.duplicateRate")}</span>
-                            <span style={{ fontSize: "28px", fontWeight: "800", color: profile && profile.duplicate_rate > 5 ? "#d97706" : "#059669", lineHeight: "1" }}>{profile ? `${profile.duplicate_rate.toFixed(2)}%` : "—"}</span>
+                            <span style={{ fontSize: "28px", fontWeight: "800", color: profile && profile!.duplicate_rate > 5 ? "#d97706" : "#059669", lineHeight: "1" }}>{profile ? `${profile!.duplicate_rate.toFixed(2)}%` : "—"}</span>
                           </div>
                           {profile && (
                             <div style={{ width: "100%", height: "8px", background: "var(--surface-muted)", borderRadius: "999px", overflow: "hidden", marginBottom: "16px" }}>
-                              <div style={{ width: `${Math.min(profile.duplicate_rate, 100)}%`, height: "100%", background: profile.duplicate_rate > 5 ? "#d97706" : "#059669", borderRadius: "999px", transition: "width 1s cubic-bezier(0.4, 0, 0.2, 1)" }} />
+                              <div style={{ width: `${Math.min(profile!.duplicate_rate, 100)}%`, height: "100%", background: profile!.duplicate_rate > 5 ? "#d97706" : "#059669", borderRadius: "999px", transition: "width 1s cubic-bezier(0.4, 0, 0.2, 1)" }} />
                             </div>
                           )}
                           <div style={{ fontSize: "13px", color: "var(--muted)", lineHeight: "1.4" }}>{t("datasets.duplicateRowsRatio")}</div>
@@ -2304,11 +2759,11 @@ function App() {
                         <div style={{ padding: "24px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", boxShadow: "0 2px 12px rgba(0,0,0,0.03)" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "16px" }}>
                             <span style={{ fontSize: "13px", fontWeight: "700", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{t("datasets.validityScore")}</span>
-                            <span style={{ fontSize: "28px", fontWeight: "800", color: "#2563eb", lineHeight: "1" }}>{profile ? `${profile.validity_score.toFixed(1)}%` : "—"}</span>
+                            <span style={{ fontSize: "28px", fontWeight: "800", color: "#2563eb", lineHeight: "1" }}>{profile ? `${profile!.validity_score.toFixed(1)}%` : "—"}</span>
                           </div>
                           {profile && (
                             <div style={{ width: "100%", height: "8px", background: "var(--surface-muted)", borderRadius: "999px", overflow: "hidden", marginBottom: "16px" }}>
-                              <div style={{ width: `${profile.validity_score}%`, height: "100%", background: "#2563eb", borderRadius: "999px", transition: "width 1s cubic-bezier(0.4, 0, 0.2, 1)" }} />
+                              <div style={{ width: `${profile!.validity_score}%`, height: "100%", background: "#2563eb", borderRadius: "999px", transition: "width 1s cubic-bezier(0.4, 0, 0.2, 1)" }} />
                             </div>
                           )}
                           <div style={{ fontSize: "13px", color: "var(--muted)", lineHeight: "1.4" }}>{t("datasets.schemaDomainValidity")}</div>
@@ -2316,12 +2771,12 @@ function App() {
                       </section>
 
                       {/* Schema & Column Breakdown Table for selected dataset */}
-                      {profile?.columns && profile.columns.length > 0 ? (
+                      {profile?.columns && profile!.columns.length > 0 ? (
                         <section className="panel" style={{ marginTop: "24px", padding: "24px" }}>
                           <div className="panel-heading" style={{ marginBottom: "16px" }}>
                             <div>
                               <span className="eyebrow">{t("datasets.schemaBreakdown")}</span>
-                              <h3>{t("datasets.columnHealth").replace("{{count}}", profile.columns.length.toString())}</h3>
+                              <h3>{t("datasets.columnHealth").replace("{{count}}", profile!.columns.length.toString())}</h3>
                             </div>
                           </div>
                           <div style={{ overflowX: "auto" }}>
@@ -2336,7 +2791,7 @@ function App() {
                                 </tr>
                               </thead>
                               <tbody>
-                                {profile.columns.map((col, idx) => (
+                                {profile!.columns.map((col, idx) => (
                                   <tr key={idx} style={{ borderBottom: "1px solid var(--border, #f1f5f9)" }}>
                                     <td style={{ padding: "10px", fontWeight: 600 }}><code>{col.name}</code></td>
                                     <td style={{ padding: "10px" }}><span className="status-pill info">{col.data_type}</span></td>
@@ -2351,8 +2806,16 @@ function App() {
                         </section>
                       ) : (
                         <div style={{ textAlign: "center", padding: "40px", background: "var(--surface-muted, #f8fafc)", borderRadius: "12px", marginTop: "24px", border: "1px dashed var(--border, #e2e8f0)" }}>
-                          <div className="workflow-pending-indicator" style={{ margin: "0 auto 16px auto", width: "20px", height: "20px" }} />
-                          <p className="muted" style={{ margin: 0, fontSize: "14px" }}>{t("datasets.profilingQuality") || t("datasets.profiling")}</p>
+                          {activeJob && (
+                            <div className="workflow-pending-indicator" style={{ margin: "0 auto 16px auto", width: "20px", height: "20px" }} />
+                          )}
+                          <p className="muted" style={{ margin: 0, fontSize: "14px" }}>
+                            {activeJob
+                              ? t("datasets.profiling")
+                              : language === "vi"
+                                ? "Chưa có profile hoàn chỉnh. Hệ thống sẽ tạo profile trước khi mở bước tiếp theo."
+                                : "No complete profile is available. Build the profile before continuing."}
+                          </p>
                         </div>
                       )}
 
@@ -2364,14 +2827,14 @@ function App() {
                           </div>
                           <div style={{ fontSize: "14px", lineHeight: "1.6", color: "var(--ink-soft)" }}>
                             <p style={{ margin: 0 }}>
-                              Dựa trên kết quả phân tích hệ thống, tập dữ liệu <strong>{dataset.name}</strong> đạt mức độ hoàn thiện <strong>{profile.completeness_score.toFixed(1)}%</strong> và độ tin cậy cấu trúc <strong>{profile.validity_score.toFixed(1)}%</strong>.
-                              {profile.duplicate_rate > 5
-                                ? ` Tuy nhiên, tỷ lệ trùng lặp đang ở ngưỡng cảnh báo (${profile.duplicate_rate.toFixed(1)}%), có thể gây ảnh hưởng đến tính toàn vẹn của các phân tích chuyên sâu.`
-                                : ` Tỷ lệ trùng lặp được duy trì ở mức an toàn (${profile.duplicate_rate.toFixed(1)}%), đảm bảo dữ liệu sạch và không bị nhiễu.`
+                              Dựa trên kết quả phân tích hệ thống, tập dữ liệu <strong>{dataset.name}</strong> đạt mức độ hoàn thiện <strong>{profile!.completeness_score.toFixed(1)}%</strong> và độ tin cậy cấu trúc <strong>{profile!.validity_score.toFixed(1)}%</strong>.
+                              {profile!.duplicate_rate > 5
+                                ? ` Tuy nhiên, tỷ lệ trùng lặp đang ở ngưỡng cảnh báo (${profile!.duplicate_rate.toFixed(1)}%), có thể gây ảnh hưởng đến tính toàn vẹn của các phân tích chuyên sâu.`
+                                : ` Tỷ lệ trùng lặp được duy trì ở mức an toàn (${profile!.duplicate_rate.toFixed(1)}%), đảm bảo dữ liệu sạch và không bị nhiễu.`
                               }
-                              {profile.validity_score < 80
+                              {profile!.validity_score < 80
                                 ? ` Khuyến nghị thiết lập thêm các quy tắc kiểm duyệt (Guardrails) nghiêm ngặt ở bước tiếp theo để ngăn chặn dữ liệu rác thâm nhập vào các luồng xử lý downstream.`
-                                : ` Chất lượng dữ liệu nhìn chung đạt chuẩn (Grade ${profile.validity_score >= 90 ? "A" : profile.validity_score >= 75 ? "B" : "C"}) và hoàn toàn đủ điều kiện sử dụng làm nguồn tham chiếu tin cậy.`
+                                : ` Chất lượng dữ liệu nhìn chung đạt chuẩn (Grade ${profile!.validity_score >= 90 ? "A" : profile!.validity_score >= 75 ? "B" : "C"}) và hoàn toàn đủ điều kiện sử dụng làm nguồn tham chiếu tin cậy.`
                               }
                             </p>
                           </div>
@@ -2384,6 +2847,57 @@ function App() {
 
               {/* STEP 3: Execution & Rules Selection & Monitoring */}
               {wizardStep === 3 && (
+                <div>
+                  {analysisRunId && showAnalysisStudio ? (
+                    <AnalysisStudio
+                      analysisRunId={analysisRunId}
+                      onExit={closeAnalysisStudio}
+                      onBackToGraph1={backToGraph1FromAnalysis}
+                    />
+                  ) : (
+                    <section className="panel" style={{ marginTop: "16px", padding: "28px", textAlign: "center" }}>
+                      <span className="eyebrow">STEP 3 · RULE PROPOSAL + ANOMALY DETECTION</span>
+                      <h2 style={{ margin: "8px 0" }}>Agent execution studio</h2>
+                      <p
+                        className="muted"
+                        role={analysisLaunchError ? "alert" : undefined}
+                        style={{ maxWidth: "560px", margin: "0 auto 18px" }}
+                      >
+                        {analysisLaunchError || (analysisRunId
+                          ? "The Agent execution studio is ready to resume this analysis run."
+                          : "Complete the Profiler in Step 2, then start Rule Proposal and Anomaly Detection.")}
+                      </p>
+                      <div style={{ display: "flex", justifyContent: "center", gap: "10px", flexWrap: "wrap" }}>
+                        {analysisRunId ? (
+                          <button
+                            type="button"
+                            className="button primary"
+                            onClick={() => {
+                              sessionStorage.setItem("ridepulse.analysis.open", "1");
+                              setShowAnalysisStudio(true);
+                            }}
+                          >
+                            Open Agent execution studio →
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="button primary"
+                            disabled={analysisStarting}
+                            onClick={() => void retryAnalysisFromStep3()}
+                          >
+                            {analysisStarting ? "Starting analysis…" : "Run Rule Proposal & Anomaly Detection →"}
+                          </button>
+                        )}
+                        <button type="button" className="button secondary" onClick={() => { setWizardStep(2); setShowAnalysisStudio(false); }}>
+                          Back to Profiler
+                        </button>
+                      </div>
+                    </section>
+                  )}
+                </div>
+              )}
+              {false && wizardStep === 3 && (
                 <div>
                   <RulesPage
                     proposals={proposals}
@@ -2467,8 +2981,14 @@ function App() {
                 <Step5Analytics
                   results={dqResults}
                   anomalies={dqAnomalies}
-                  onBack={() => setWizardStep(3)}
-                  onStartNewRun={() => setWizardStep(1)}
+                  trends={qualityTrends}
+                  analysis={analysisResult}
+                  analysisStatus={analysisStatus}
+                  analysisRunId={analysisRunId}
+                  onBack={() => navigateWizardStep(3)}
+                  onStartNewRun={() => navigateWizardStep(1)}
+                  onRerunAnalysis={() => void rerunAnalysisFromStep3()}
+                  rerunBusy={analysisRerunBusy}
                 />
               )}
 
@@ -2479,7 +2999,7 @@ function App() {
                   className="button secondary"
                   disabled={wizardStep === 1}
                   title={wizardStep === 1 ? (t("wizard.firstStepTooltip") || "Đây là bước đầu tiên") : ""}
-                  onClick={() => setWizardStep((prev) => Math.max(1, prev - 1))}
+                  onClick={() => navigateWizardStep(Math.max(1, wizardStep - 1))}
                 >
                   {t("wizard.back")}
                 </button>
@@ -2491,17 +3011,25 @@ function App() {
                 <button
                   type="button"
                   className="button primary"
-                  disabled={wizardStep === 4 || (!dataset && wizardStep === 1)}
+                  disabled={wizardNextDisabled}
                   title={
                     !dataset && wizardStep === 1
                       ? (t("wizard.selectDatasetTooltip") || "Vui lòng chọn hoặc tải lên một bộ dữ liệu ở Bước 1")
+                      : wizardStep === 1 && !profile
+                        ? (language === "vi" ? "Hãy tạo profile cho tập dữ liệu trước" : "Build the dataset profile first")
                       : wizardStep === 4
                         ? (t("wizard.lastStepTooltip") || "Bạn đang ở bước cuối cùng")
                         : ""
                   }
-                  onClick={() => setWizardStep((prev) => Math.min(4, prev + 1))}
+                  onClick={() => {
+                    if (wizardStep === 1 && dataset) {
+                      void openGraph1ForDataset(dataset.id);
+                      return;
+                    }
+                    navigateWizardStep(Math.min(4, wizardStep + 1));
+                  }}
                 >
-                  {t("wizard.next")}
+                  {wizardStep === 1 && dataset && profile ? "Generate Rules →" : t("wizard.next")}
                 </button>
               </div>
             </>
@@ -2840,7 +3368,7 @@ function OverviewQualityBars({
               </div>
               <strong>
                 {row.profile
-                  ? `${row.profile.completeness_score.toFixed(1)}%`
+                  ? `${row.profile!.completeness_score.toFixed(1)}%`
                   : "—"}
               </strong>
             </div>
@@ -2851,7 +3379,7 @@ function OverviewQualityBars({
               </div>
               <strong>
                 {row.profile
-                  ? `${row.profile.validity_score.toFixed(1)}%`
+                  ? `${row.profile!.validity_score.toFixed(1)}%`
                   : "—"}
               </strong>
             </div>
@@ -3829,7 +4357,7 @@ function VisualizationPage({
         </div>
         <div style={{ padding: "18px", borderRadius: "10px", background: "var(--surface-card, #fff)", border: "1px solid var(--border, #e2e8f0)" }}>
           <span className="muted" style={{ fontSize: "12px", textTransform: "uppercase" }}>Tỷ lệ không trùng lặp</span>
-          <strong style={{ fontSize: "22px", display: "block", margin: "4px 0", color: profile && profile.duplicate_rate > 0 ? "#f59e0b" : "#10b981" }}>
+          <strong style={{ fontSize: "22px", display: "block", margin: "4px 0", color: profile && profile!.duplicate_rate > 0 ? "#f59e0b" : "#10b981" }}>
             {uniqueness.toFixed(2)}%
           </strong>
           <small className="muted">{profile?.duplicate_rate ?? 0}% trùng lặp dòng</small>
@@ -3924,19 +4452,13 @@ function VisualizationPage({
   );
 }
 
-function rowHasQualityIssue(row: DatasetRow) {
-  return (
-    (row.trip_distance ?? 0) < 0 ||
-    (row.fare_amount ?? 0) < 0 ||
-    Boolean(row.payment_type?.startsWith("Invalid")) ||
-    Boolean(
-      row.pickup_at && row.dropoff_at && row.pickup_at > row.dropoff_at,
-    ) ||
-    !row.vendor_id
-  );
+// Row-level quality is sourced from persisted rule evidence. The explorer
+// deliberately does not infer quality from domain-specific taxi heuristics.
+function rowHasQualityIssue(_row: DatasetRow) {
+  return false;
 }
 
-function DataExplorerPage({ dataset }: { dataset?: Dataset }) {
+function LegacyDataExplorerPage({ dataset }: { dataset?: Dataset }) {
   const [query, setQuery] = useState<DatasetRowQuery>({
     quality_status: "ALL",
     sort_by: "pickup_at",
@@ -3955,8 +4477,9 @@ function DataExplorerPage({ dataset }: { dataset?: Dataset }) {
       setBusy(true);
       setQueryError("");
       try {
-        setResponse(await api.queryDatasetRows(dataset.id, nextQuery));
-        setQuery(nextQuery);
+        const loaded = await api.queryDatasetRows(dataset.id, nextQuery);
+        setResponse(loaded);
+        setQuery({ ...nextQuery, dataset_version_id: loaded.dataset_version_id ?? nextQuery.dataset_version_id });
       } catch (requestError) {
         setQueryError(
           getErrorMessage(requestError, "Unable to query dataset rows."),
@@ -4297,6 +4820,110 @@ function DataExplorerPage({ dataset }: { dataset?: Dataset }) {
             Next →
           </button>
         </div>
+      </section>
+    </>
+  );
+}
+
+function DataExplorerPage({ dataset }: { dataset?: Dataset }) {
+  const [query, setQuery] = useState<DatasetRowQuery>({
+    filter_column: undefined,
+    filter_value: undefined,
+    sort_by: undefined,
+    sort_direction: "asc",
+    limit: 25,
+    offset: 0,
+  });
+  const [response, setResponse] = useState<DatasetRowsResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [queryError, setQueryError] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  const loadRows = useCallback(async (nextQuery: DatasetRowQuery) => {
+    if (!dataset) return;
+    setBusy(true);
+    setQueryError("");
+    try {
+      const loaded = await api.queryDatasetRows(dataset.id, nextQuery);
+      setResponse(loaded);
+      setQuery({ ...nextQuery, dataset_version_id: loaded.dataset_version_id ?? nextQuery.dataset_version_id });
+    } catch (requestError) {
+      setQueryError(getErrorMessage(requestError, "Unable to query dataset rows."));
+    } finally {
+      setBusy(false);
+    }
+  }, [dataset]);
+
+  useEffect(() => {
+    if (dataset) void loadRows(query);
+  }, [dataset, loadRows]);
+
+  const schemaColumns = response?.schema?.map((column) => column.name) ?? [];
+  const columns = schemaColumns.length
+    ? schemaColumns
+    : response?.rows.length
+      ? Object.keys(response.rows[0])
+      : [];
+  const page = response ? Math.floor(response.offset / response.limit) + 1 : 1;
+  const pageCount = response ? Math.max(1, Math.ceil(response.total / response.limit)) : 1;
+  const updateQuery = (patch: Partial<DatasetRowQuery>) =>
+    setQuery((current) => ({ ...current, ...patch, offset: 0 }));
+  const activeFilterCount = [query.filter_column, query.filter_value, query.sort_by].filter(Boolean).length;
+  const filterSummary = query.filter_column && query.filter_value
+    ? `${query.filter_column}: ${query.filter_value}`
+    : "All authorized rows";
+  const formatCell = (value: unknown, column: string) => {
+    if (value === null || value === undefined || value === "") return "—";
+    if (typeof value === "number") return value.toLocaleString(undefined, { maximumFractionDigits: 4 });
+    if (typeof value === "boolean") return value ? "true" : "false";
+    const textValue = String(value);
+    if (/(date|time|_at|timestamp)/i.test(column)) {
+      const date = new Date(textValue);
+      if (!Number.isNaN(date.getTime())) return date.toLocaleString();
+    }
+    return textValue;
+  };
+
+  return (
+    <>
+      <div className="page-heading data-explorer-heading">
+        <div>
+          <span className="eyebrow">BOUNDED READ ACCESS</span>
+          <h1>Data explorer</h1>
+          <p>Browse the selected version using only its authorized schema and persisted quality evidence.</p>
+        </div>
+        <span className="data-count">{response?.total.toLocaleString() ?? "—"}<small>matching rows</small></span>
+      </div>
+      <section className={`panel filter-panel ${filtersOpen ? "is-open" : "is-collapsed"}`}>
+        <div className="filter-toolbar">
+          <div className="filter-toolbar-copy">
+            <span className="eyebrow">QUERY CONTROLS</span>
+            <button type="button" className="filter-toggle" aria-expanded={filtersOpen} aria-controls="data-explorer-filters" onClick={() => setFiltersOpen((open) => !open)}>
+              <span className="filter-toggle-icon" aria-hidden="true">{filtersOpen ? "−" : "+"}</span>
+              <span>{filtersOpen ? "Hide filters" : "Filter rows"}</span>
+            </button>
+            {!filtersOpen && <span className="filter-summary">{filterSummary}</span>}
+          </div>
+          <div className="filter-toolbar-state"><span className={activeFilterCount ? "filter-active-count" : "filter-default-state"}>{activeFilterCount ? `${activeFilterCount} active` : "Default view"}</span><span>Read-only</span></div>
+        </div>
+        {filtersOpen && (
+          <form id="data-explorer-filters" onSubmit={(event) => { event.preventDefault(); void loadRows({ ...query, offset: 0 }); }}>
+            <label>Filter column<select value={query.filter_column ?? ""} onChange={(event) => updateQuery({ filter_column: event.target.value || undefined })}><option value="">Any column</option>{columns.map((column) => <option key={column}>{column}</option>)}</select></label>
+            <label>Filter value<input value={query.filter_value ?? ""} onChange={(event) => updateQuery({ filter_value: event.target.value || undefined })} placeholder="Exact value" /></label>
+            <label>Sort by<select value={query.sort_by ?? ""} onChange={(event) => updateQuery({ sort_by: event.target.value || undefined })}><option value="">Source order</option>{columns.map((column) => <option key={column}>{column}</option>)}</select></label>
+            <label>Direction<select value={query.sort_direction ?? "asc"} onChange={(event) => updateQuery({ sort_direction: event.target.value as "asc" | "desc" })}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
+            <button className="button primary filter-apply" disabled={busy}>{busy ? "Querying…" : "Apply filters"}</button>
+          </form>
+        )}
+        {filtersOpen && <div className="filter-note">Read-only · up to 100 authorized rows</div>}
+      </section>
+      {queryError && <div className="alert error"><strong>Query failed</strong><span>{queryError}</span></div>}
+      <section className="panel data-panel">
+        <div className="panel-heading"><div><span className="eyebrow">QUERY RESULT</span><h3>Dataset rows</h3></div><span className="panel-caption">page {page} / {pageCount}</span></div>
+        {busy && !response ? <div className="data-skeleton">Loading bounded dataset projection…</div> : response?.rows.length ? (
+          <div className="data-table-wrap"><table className="data-table"><thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{response.rows.map((row, index) => <tr key={String(row.source_row_id ?? row.id ?? index)}>{columns.map((column) => <td key={column} title={formatCell(row[column], column)}>{formatCell(row[column], column)}</td>)}</tr>)}</tbody></table></div>
+        ) : <div className="table-empty">No authorized rows match the current filters.</div>}
+        <div className="pagination"><button className="button ghost" disabled={!response || response.offset === 0 || busy} onClick={() => void loadRows({ ...query, offset: Math.max(0, (response?.offset ?? 0) - (response?.limit ?? 25)) })}>← Previous</button><span>{response ? `${response.offset + 1}–${Math.min(response.offset + response.limit, response.total)} of ${response.total.toLocaleString()}` : "No result"}</span><button className="button ghost" disabled={!response || response.offset + response.limit >= response.total || busy} onClick={() => void loadRows({ ...query, offset: (response?.offset ?? 0) + (response?.limit ?? 25) })}>Next →</button></div>
       </section>
     </>
   );

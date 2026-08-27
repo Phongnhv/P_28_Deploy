@@ -1,5 +1,8 @@
 import pytest
 from fastapi import status
+from httpx import ASGITransport, AsyncClient
+
+from src.main import app
 
 
 @pytest.mark.asyncio
@@ -23,6 +26,24 @@ async def test_login_invalid_credentials(client):
     response = await client.post("/api/v1/session", json={"username": "steward", "password": "wrongpassword"})
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
     assert response.json()["code"] == "UNAUTHORIZED"
+
+
+@pytest.mark.asyncio
+async def test_login_does_not_revoke_another_active_session(client):
+    first_login = await client.post("/api/v1/session", json={"username": "steward", "password": "steward"})
+    assert first_login.status_code == status.HTTP_200_OK
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as second_client:
+        second_login = await second_client.post(
+            "/api/v1/session",
+            json={"username": "steward", "password": "steward"},
+        )
+        assert second_login.status_code == status.HTTP_200_OK
+
+        # The first browser session remains usable after the second tab logs in.
+        first_tab_request = await client.get("/api/v1/datasets")
+        assert first_tab_request.status_code == status.HTTP_200_OK
 
 
 @pytest.mark.asyncio

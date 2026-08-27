@@ -111,6 +111,18 @@ NORMAL_STATE = {
     "metadata": {},
 }
 
+INSUFFICIENT_HISTORY_STATE = {
+    **NORMAL_STATE,
+    "anomaly_run_id": "anom-writer-003",
+    "anomaly_decision": {
+        "decision": "INSUFFICIENT_HISTORY",
+        "score": 0.4,
+        "confidence": 0.4,
+        "severity": "LOW",
+        "override_reason": "",
+    },
+}
+
 
 def _mock_db(run=SAMPLE_DQ_RUN, results=SAMPLE_RESULTS):
     return patch(
@@ -180,6 +192,15 @@ def test_build_data_context_normal_decision():
         SAMPLE_DQ_RUN, []
     )
     assert "NORMAL" in ctx
+
+
+def test_build_data_context_insufficient_history_does_not_call_it_normal():
+    ctx = _build_data_context(
+        EXECUTION_RUN_ID, DATASET_ID, INSUFFICIENT_HISTORY_STATE,
+        SAMPLE_DQ_RUN, [],
+    )
+    assert "INSUFFICIENT_HISTORY" in ctx
+    assert "kết luận là NORMAL" not in ctx
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +369,15 @@ def test_vi_fallback_normal_decision():
         md = render_steward_report_vi(EXECUTION_RUN_ID, DATASET_ID, NORMAL_STATE)
     assert "Bình thường" in md or "NORMAL" in md
     assert "Phân tích giả thuyết không cần thiết" in md
+
+
+def test_vi_fallback_insufficient_history_is_not_normal():
+    with patch("src.services.report_renderer._load_execution_data", return_value=(SAMPLE_DQ_RUN, [])):
+        md = render_steward_report_vi(EXECUTION_RUN_ID, DATASET_ID, INSUFFICIENT_HISTORY_STATE)
+    assert "Chưa đủ lịch sử" in md
+    assert "chưa đủ lịch sử dữ liệu" in md
+    assert "Bình thường" not in md
+    assert "NORMAL" not in md
 
 
 def test_vi_fallback_has_fallback_note():

@@ -21,12 +21,32 @@ from pathlib import Path
 
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from src.agents.nodes.dbt_validation import get_state_dbt_yaml, materialize_dbt_project, validate_dbt_yaml_structure
+from src.agents.nodes.test_generator_node import _build_row_predicate
 from src.agents.state import AgentState
 from src.config import get_settings
+from src.models.database import (
+    DatasetVersionModel,
+    GovernedArtifactModel,
+    ProfileRunSnapshotModel,
+    RuleReviewSnapshotModel,
+    RuleVersionModel,
+)
 from src.models.rule_schemas import RuleType
 from src.services.rule_store import get_engine
+from src.services.supabase_dataset import (
+    CANONICAL_COLUMNS,
+    create_supabase_engine,
+    is_postgres_database_url,
+)
+from src.services.versioned_dataset import (
+    SOURCE_ADAPTER_VERSION,
+    execute_rules_frame,
+    materialize_source_artifact,
+    read_verified_frame,
+)
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -43,6 +63,158 @@ SAMPLE_FAILURE_LIMIT = 20
 
 # Thứ tự ưu tiên khi dò cột định danh của bảng.
 _IDENTITY_COLUMN_PREFERENCES = ("source_row_id", "id", "row_id")
+
+
+def _supabase_execution_url() -> str | None:
+    """Return the canonical source URL when Graph 2 must execute on Supabase."""
+    settings = get_settings()
+    if settings.dq_execution_backend == "local":
+        return None
+    if settings.dq_execution_backend == "auto" and get_engine().dialect.name != "postgresql":
+        return None
+    candidate = settings.supabase_database_url or settings.database_url
+    if is_postgres_database_url(candidate):
+        return candidate
+    if settings.dq_execution_backend == "supabase":
+        raise RuntimeError("DQ_EXECUTION_BACKEND=supabase requires a PostgreSQL Supabase URL")
+    return None
+
+
+def _canonical_identifier(column: str) -> str:
+    if column not in CANONICAL_COLUMNS or column == "dataset_id":
+        raise ValueError(f"Column is not in the canonical execution allowlist: {column}")
+    return f'"{column}"'
+
+
+def _execute_supabase_rules(rules: list[dict], dataset_id: str, database_url: str) -> list[dict]:
+    """Execute approved Graph 1 rules against ``public.trips_canonical``.
+
+    The dashboard's logical table is named ``source_rows``.  Production data is
+    stored in the canonical Supabase table, so running generated SQL against the
+    empty compatibility table produces false PASS results with zero checked rows.
+    """
+    source_engine = create_supabase_engine(database_url)
+    results: list[dict] = []
+    with source_engine.connect() as connection:
+        for index, rule in enumerate(rules):
+            started = time.perf_counter()
+            rule_type = str(rule.get("rule_type") or "").upper()
+            column = str(rule.get("column") or "")
+            parameters = rule.get("effective_parameters") or rule.get("parameters") or {}
+            sql_text = ""
+            try:
+                bind_params: dict = {"dataset_id": dataset_id}
+                samples: list[str] = []
+                error = None
+
+                if rule_type == "UNIQUE":
+                    quoted = _canonical_identifier(column)
+                    sql_text = (
+                        f"SELECT COUNT(*) AS total_rows, COUNT({quoted}) - COUNT(DISTINCT {quoted}) AS violation_count "
+                        "FROM public.trips_canonical WHERE dataset_id = :dataset_id"
+                    )
+                    row = connection.execute(text(sql_text), bind_params).mappings().one()
+                    total_rows = int(row["total_rows"] or 0)
+                    violation_count = max(0, int(row["violation_count"] or 0))
+                    if violation_count:
+                        sample_sql = (
+                            f'SELECT "source_row_id" FROM public.trips_canonical '
+                            f"WHERE dataset_id = :dataset_id AND {quoted} IN ("
+                            f"SELECT {quoted} FROM public.trips_canonical WHERE dataset_id = :dataset_id "
+                            f"AND {quoted} IS NOT NULL GROUP BY {quoted} HAVING COUNT(*) > 1) "
+                            'ORDER BY "source_row_id" LIMIT :sample_limit'
+                        )
+                        samples = [str(row[0]) for row in connection.execute(
+                            text(sample_sql), {**bind_params, "sample_limit": SAMPLE_FAILURE_LIMIT}
+                        ).all()]
+                    passed = violation_count == 0
+                elif rule_type == "ROW_COUNT":
+                    sql_text = "SELECT COUNT(*) AS total_rows FROM public.trips_canonical WHERE dataset_id = :dataset_id"
+                    total_rows = int(connection.execute(text(sql_text), bind_params).scalar_one())
+                    passed = total_rows >= int(parameters.get("min_row_count", 0))
+                    violation_count = 0 if passed else 1
+                elif rule_type == "FRESHNESS":
+                    quoted = _canonical_identifier(column)
+                    sql_text = f"SELECT COUNT(*) AS total_rows, MAX({quoted}) AS max_timestamp FROM public.trips_canonical WHERE dataset_id = :dataset_id"
+                    row = connection.execute(text(sql_text), bind_params).mappings().one()
+                    total_rows = int(row["total_rows"] or 0)
+                    max_timestamp = row["max_timestamp"]
+                    max_age_hours = float(parameters.get("max_age_hours", 24.0))
+                    if max_timestamp is None:
+                        passed, error = False, "No timestamp was available for freshness evaluation."
+                    else:
+                        now_value = datetime.now(UTC) if max_timestamp.tzinfo else utc_now()
+                        age_hours = (now_value - max_timestamp).total_seconds() / 3600
+                        passed = age_hours <= max_age_hours
+                        error = None if passed else f"Latest value is {age_hours:.1f} hours old (limit {max_age_hours})."
+                    violation_count = 0 if passed else 1
+                else:
+                    _canonical_identifier(column)
+                    if rule_type == "CROSS_FIELD_COMPARISON":
+                        _canonical_identifier(str(parameters.get("target_column") or ""))
+                    if rule_type == "NULL_RATE":
+                        predicate, predicate_params = f"{_canonical_identifier(column)} IS NULL", {}
+                    else:
+                        predicate, predicate_params = _build_row_predicate(rule, index, "postgresql")
+                    bind_params.update(predicate_params)
+                    sql_text = (
+                        "SELECT COUNT(*) AS total_rows, "
+                        f"COUNT(*) FILTER (WHERE {predicate}) AS violation_count "
+                        "FROM public.trips_canonical WHERE dataset_id = :dataset_id"
+                    )
+                    row = connection.execute(text(sql_text), bind_params).mappings().one()
+                    total_rows = int(row["total_rows"] or 0)
+                    violation_count = int(row["violation_count"] or 0)
+                    null_rate = violation_count / total_rows if total_rows else 0.0
+                    passed = (
+                        null_rate * 100 <= float(parameters.get("max_null_pct", 5.0))
+                        if rule_type == "NULL_RATE"
+                        else violation_count == 0
+                    )
+                    if violation_count:
+                        sample_sql = (
+                            'SELECT "source_row_id" FROM public.trips_canonical '
+                            f"WHERE dataset_id = :dataset_id AND ({predicate}) "
+                            'ORDER BY "source_row_id" LIMIT :sample_limit'
+                        )
+                        samples = [str(row[0]) for row in connection.execute(
+                            text(sample_sql), {**bind_params, "sample_limit": SAMPLE_FAILURE_LIMIT}
+                        ).all()]
+
+                violation_rate = violation_count / total_rows if total_rows else 0.0
+                results.append({
+                    "rule_id": rule.get("rule_id", ""),
+                    "table_name": "trips_canonical",
+                    "column": rule.get("column"),
+                    "rule_type": rule_type,
+                    "severity": rule.get("severity", "MEDIUM"),
+                    "dimension": rule.get("dimension", "VALIDITY"),
+                    "status": "PASSED" if passed else "FAILED",
+                    "violation_count": violation_count,
+                    "total_rows": total_rows,
+                    "violation_rate": round(violation_rate, 6),
+                    "sample_failures": samples,
+                    "sql_text": sql_text,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                    "error": error,
+                })
+            except Exception as exc:
+                # PostgreSQL marks the transaction failed after one bad
+                # statement. Roll it back before the next rule so an
+                # independent rule is still evaluated deterministically.
+                try:
+                    connection.rollback()
+                except Exception:
+                    logger.debug("Unable to rollback failed rule boundary", exc_info=True)
+                results.append({
+                    "rule_id": rule.get("rule_id", ""), "table_name": "trips_canonical",
+                    "column": rule.get("column"), "rule_type": rule_type,
+                    "severity": rule.get("severity", "MEDIUM"), "dimension": rule.get("dimension", "VALIDITY"),
+                    "status": "ERROR", "violation_count": 0, "total_rows": 0,
+                    "violation_rate": 0.0, "sample_failures": [], "sql_text": sql_text,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 2), "error": str(exc),
+                })
+    return results
 
 
 def _resolve_identity_column(table_name: str) -> str | None:
@@ -438,6 +610,105 @@ def _run_dbt_cli_test(dbt_dir: Path) -> bool:
 
 async def test_runner_node(state: AgentState) -> dict:
     """LangGraph Node: Thực thi dbt test CLI (nếu có) hoặc fallback thực thi các test queries đã sinh."""
+    # Canonical path for arbitrary CSV/Parquet uploads. It deliberately does
+    # not compile or execute SQL and therefore cannot reach a taxi table.
+    if state.get("dataset_version_id"):
+        version_id = str(state["dataset_version_id"])
+        dataset_id = str(state.get("dataset_id") or "")
+        with Session(get_engine()) as db:
+            version = db.query(DatasetVersionModel).filter_by(id=version_id, dataset_id=dataset_id).first()
+            if not version or version.status != "READY":
+                raise RuntimeError("The requested dataset version is not READY for execution")
+            profile_run_id = str(state.get("profile_run_id") or "")
+            review_snapshot_id = str(state.get("rule_review_snapshot_id") or "")
+            if not profile_run_id or not review_snapshot_id:
+                raise RuntimeError("Versioned execution requires the selected profile and rule-review snapshot")
+            profile = db.query(ProfileRunSnapshotModel).filter_by(
+                id=profile_run_id,
+                workspace_id=version.workspace_id,
+                dataset_id=dataset_id,
+                dataset_version_id=version_id,
+                status="COMPLETED",
+            ).first()
+            snapshot = db.query(RuleReviewSnapshotModel).filter_by(
+                id=review_snapshot_id,
+                workspace_id=version.workspace_id,
+                dataset_id=dataset_id,
+                dataset_version_id=version_id,
+                profile_run_id=profile_run_id,
+                status="APPROVED",
+            ).first()
+            if not profile or not snapshot:
+                raise RuntimeError("The selected profile or rule-review snapshot does not match the source version")
+            selected_rule_ids = {
+                str(rule.get("rule_id")) for rule in state.get("approved_rules", [])
+                if isinstance(rule, dict) and rule.get("rule_id")
+            }
+            if selected_rule_ids:
+                rule_versions = db.query(RuleVersionModel).filter(
+                    RuleVersionModel.rule_proposal_id.in_(selected_rule_ids),
+                    RuleVersionModel.dataset_id == dataset_id,
+                    RuleVersionModel.dataset_version_id == version_id,
+                    RuleVersionModel.status == "APPROVED",
+                ).all()
+                if {row.rule_proposal_id for row in rule_versions} != selected_rule_ids:
+                    raise RuntimeError("Approved rules do not belong to the selected dataset version")
+            artifact_id = None
+            source_metadata = json.loads(version.source_metadata_json or "{}")
+            artifact_id = source_metadata.get("source_artifact_id")
+            artifact = db.query(GovernedArtifactModel).filter_by(
+                id=artifact_id,
+                workspace_id=version.workspace_id,
+                dataset_id=version.dataset_id,
+                dataset_version_id=version.id,
+                artifact_type="SOURCE_DATASET",
+            ).first() if artifact_id else None
+            if not artifact or artifact.checksum != version.checksum:
+                raise RuntimeError("A verified SOURCE_DATASET artifact is required for execution")
+            source_ref = {
+                "bucket": source_metadata.get("bucket"),
+                "object_key": source_metadata.get("object_key") or artifact.storage_locator,
+                "checksum": version.checksum,
+                "size_bytes": int(source_metadata.get("size_bytes") or 0),
+                "format": source_metadata.get("format") or Path(source_metadata.get("filename", "dataset.csv")).suffix.lstrip("."),
+                "filename": source_metadata.get("filename") or "dataset.csv",
+                "storage_locator": artifact.storage_locator,
+            }
+        path = materialize_source_artifact(source_ref)
+        temporary = source_ref["storage_locator"].startswith("object://")
+        try:
+            frame = read_verified_frame(
+                path,
+                checksum=version.checksum,
+                size_bytes=source_ref["size_bytes"],
+                schema=source_metadata.get("schema"),
+            )
+            results = execute_rules_frame(frame, list(state.get("approved_rules") or []))
+        finally:
+            if temporary:
+                path.unlink(missing_ok=True)
+        normalized = [{
+            **result,
+            "rule_version": result.get("rule_version", "rule-v1"),
+            "severity": next((r.get("severity", "MEDIUM") for r in state.get("approved_rules", []) if r.get("rule_id") == result.get("rule_id")), "MEDIUM"),
+            "dimension": next((r.get("dimension", "VALIDITY") for r in state.get("approved_rules", []) if r.get("rule_id") == result.get("rule_id")), "VALIDITY"),
+            "dbt_status": "NOT_RUN",
+            "metrics_status": result.get("status", "ERROR"),
+        } for result in results]
+        return {
+            "test_results": normalized,
+            "source_checksum": version.checksum,
+            "metadata": {
+                **state.get("metadata", {}),
+                "execution_mode": "versioned_source_adapter",
+                "dbt_execution_mode": "not_run_versioned_source_adapter",
+                "dbt_status": "NOT_RUN",
+                "metrics_status": "SUCCESS" if any(r.get("status") in {"PASS", "FAIL"} for r in normalized) else "ERROR",
+                "source_checksum": version.checksum,
+                "compiler_version": SOURCE_ADAPTER_VERSION,
+            },
+        }
+
     # These deterministic SQL queries remain the compatibility metrics source.
     # The dbt artifact quality gate, rather than per-query EXPLAIN, authorizes execution.
     tests = [{**test, "valid": True, "error": None} for test in state.get("generated_tests", [])]
@@ -457,16 +728,26 @@ async def test_runner_node(state: AgentState) -> dict:
         dbt_dir = materialize_dbt_project(dbt_template_dir, Path(workspace), content)
         dbt_executed = _run_dbt_cli_test(dbt_dir)
 
-        all_results: list[dict] = []
-
-        # Chạy các test queries bất đồng bộ trong threadpool
-        tasks = [
-            asyncio.to_thread(_execute_single_test, test, dialect_name)
-            for test in tests
-        ]
-        outputs = await asyncio.gather(*tasks)
-        for res_list in outputs:
-            all_results.extend(res_list)
+        source_url = _supabase_execution_url()
+        if source_url:
+            all_results = await asyncio.to_thread(
+                _execute_supabase_rules,
+                list(state.get("approved_rules") or []),
+                str(state.get("dataset_id") or ""),
+                source_url,
+            )
+            execution_mode = "supabase_canonical"
+        else:
+            all_results: list[dict] = []
+            # Chạy các test queries bất đồng bộ trong threadpool
+            tasks = [
+                asyncio.to_thread(_execute_single_test, test, dialect_name)
+                for test in tests
+            ]
+            outputs = await asyncio.gather(*tasks)
+            for res_list in outputs:
+                all_results.extend(res_list)
+            execution_mode = "dbt" if dbt_executed else "legacy_sql_fallback"
 
     # Post-process and normalize results to match the canonical result format (Phase 2.7)
     normalized_results = []
@@ -486,9 +767,12 @@ async def test_runner_node(state: AgentState) -> dict:
             "rule_version": r.get("rule_version", "rule-v1"),
             "table_name": r.get("table_name", ""),
             "column": r.get("column"),
+            "rule_type": r.get("rule_type", ""),
             "status": status,
             "checked_count": checked_count,
             "failed_count": failed_count,
+            "total_rows": checked_count,
+            "violation_count": failed_count,
             "violation_rate": violation_rate,
             "severity": r.get("severity", "MEDIUM"),
             "dimension": r.get("dimension", "VALIDITY"),
@@ -496,6 +780,7 @@ async def test_runner_node(state: AgentState) -> dict:
             "dbt_status": dbt_status,
             "metrics_status": metrics_status,
             "sample_refs": r.get("sample_failures", []),
+            "sql_text": r.get("sql_text", ""),
             "error": r.get("error"),
             "evidence_refs": r.get("evidence_refs", []),
         })
@@ -520,7 +805,7 @@ async def test_runner_node(state: AgentState) -> dict:
 
     return {
         "test_results": normalized_results,
-        "metadata": {**state.get("metadata", {}), "dbt_execution_mode": "dbt" if dbt_executed else "legacy_sql_fallback"},
+        "metadata": {**state.get("metadata", {}), "dbt_execution_mode": execution_mode},
     }
 # Standalone Test Harness (Chạy từ file output thực tế)
 # ---------------------------------------------------------------------------

@@ -192,16 +192,48 @@ def _agent_semantic_payload(db: Session, dataset_id: str) -> dict[str, Any]:
             ],
         }
     }
+    from src.agents.nodes.data_dictionary_generator_node import data_dictionary_generator_node
     from src.agents.nodes.dataset_understanding_node import dataset_understanding_node
 
-    result = asyncio.run(asyncio.wait_for(dataset_understanding_node({
-        "dataset_id": dataset_id,
-        "dataset_profile_digest": digest,
-        "normalized_data_dictionary": {},
-        "metadata": {"domain_hint": "NYC Yellow Taxi trip operations"},
-    }), timeout=90))
+    dataset = db.get(DatasetModel, dataset_id)
+    domain_hint = " ".join(
+        part for part in (
+            dataset.name if dataset else "",
+            dataset.description if dataset else "",
+            dataset.source_label if dataset else "",
+        ) if part
+    )[:800]
+
+    async def run_understanding_stage() -> dict[str, Any]:
+        state: dict[str, Any] = {
+            "dataset_id": dataset_id,
+            "dataset_profile_digest": digest,
+            "normalized_data_dictionary": {},
+            "metadata": {
+                "domain_hint": domain_hint or "Unknown business dataset",
+                "workflow": "dashboard-graph-1-understanding",
+            },
+        }
+        dictionary = await asyncio.wait_for(
+            data_dictionary_generator_node(state), timeout=90
+        )
+        if dictionary.get("error"):
+            return {"error": "data_dictionary_unavailable"}
+        state.update(dictionary)
+        return await asyncio.wait_for(dataset_understanding_node(state), timeout=90)
+
+    try:
+        result = asyncio.run(run_understanding_stage())
+    except Exception:
+        result = {"error": "understanding_agent_unavailable"}
     if result.get("error") or not result.get("semantic_contract", {}).get("tables"):
-        raise WorkflowError(f"Dataset Understanding Agent failed: {result.get('error', 'no semantic contract returned')}")
+        fallback["summary"] = (
+            "Profile-backed semantic contract. The language-model enrichment "
+            "was unavailable, so only deterministic aggregate evidence is shown."
+        )
+        fallback["agent_mode"] = "deterministic-fallback"
+        fallback["fallback_reason"] = "agent_provider_unavailable"
+        return fallback
     contract = next(iter(result["semantic_contract"]["tables"].values()))
     return {
         **fallback,
@@ -258,7 +290,10 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
             old.status = "STALE"
         proposal_ids = []
         for proposal in proposals:
-            proposal_id = f"wf-{run.id[-8:]}-{proposal.id}"[:64]
+            # The original Supabase schema uses VARCHAR(36) for proposal IDs.
+            # Keep workflow-generated IDs within that legacy boundary while
+            # retaining enough random entropy for independent revisions.
+            proposal_id = f"wf-{run.id[-8:]}-{uuid.uuid4().hex[:20]}"
             db.add(RuleProposalModel(id=proposal_id, dataset_id=run.dataset_id, workflow_run_id=run.id,
                 title=proposal.title, description=proposal.description, severity=proposal.severity, status="PROPOSED",
                 rule_type=proposal.rule_type, rule_spec=json.dumps(proposal.rule_spec),

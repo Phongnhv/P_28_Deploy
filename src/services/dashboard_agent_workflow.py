@@ -15,8 +15,6 @@ import logging
 import math
 import threading
 import uuid
-
-logger = logging.getLogger(__name__)
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -27,6 +25,8 @@ from sqlalchemy.orm import Session
 
 from src.config import get_settings
 from src.models.database import ColumnProfileModel, DatasetModel, ProfileModel
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_RULE_TYPES = {
     "not_null",
@@ -134,7 +134,10 @@ def get_dataset_rule_policy(dataset_id: str, columns: list[Any] | None = None) -
         return policy
     if columns:
         return infer_dataset_rule_policy(columns)
-    return doc.datasets.get("dataset-nyc-yellow-taxi-50k")
+    # Unknown datasets must not inherit NYC Taxi semantics. Callers that have
+    # no immutable schema evidence receive no domain policy and can only use
+    # explicitly supplied semantic contracts.
+    return None
 
 
 
@@ -325,7 +328,7 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
 
     if not profile or not columns or dataset.status != "PROFILE_READY":
         try:
-            from src.services.job_runner import _uploaded_dataset_path, _profile_uploaded_dataset
+            from src.services.job_runner import _profile_uploaded_dataset, _uploaded_dataset_path
             uploaded_path = _uploaded_dataset_path(dataset_id)
             if uploaded_path:
                 _profile_uploaded_dataset(db, dataset_id, uploaded_path)
@@ -433,22 +436,72 @@ def generate_dashboard_proposals(db: Session, dataset_id: str) -> list[Dashboard
 
     try:
         candidates = _build_dashboard_rule_candidates(evidence)
-        if len(candidates) >= 2:
-            raw_rules = _invoke_dashboard_proposal_graph(evidence)
-            proposals = _normalise_graph_rules(raw_rules, evidence)
-            if proposals:
-                proposals = _complete_with_policy_candidates(proposals, evidence)
-                if 2 <= len(proposals) <= 5:
-                    return proposals
+        if len(candidates) < 2:
+            return _mock_proposals(evidence)
+        raw_rules = _invoke_dashboard_proposal_graph(evidence)
     except Exception as exc:
         logger.warning("Graph proposal generation failed for dataset %s, falling back: %s", dataset_id, exc)
+        return _mock_proposals(evidence)
+
+    proposals = _normalise_graph_rules(raw_rules, evidence)
+    if not proposals:
+        raise AgentWorkflowError(
+            "The proposal graph did not return enough valid evidence-backed rules."
+        )
+    proposals = _complete_with_policy_candidates(proposals, evidence)
+    if 2 <= len(proposals) <= 5:
+        return proposals
 
     return _mock_proposals(evidence)
 
 
 def _invoke_dashboard_proposal_graph(evidence: ProposalEvidence) -> list[dict[str, Any]]:
-    """Run only the structured proposer node with the safe persisted-profile digest."""
+    """Resume Graph 1 after semantic review using aggregate-only evidence."""
     from src.agents.graph import build_dashboard_proposal_graph
+
+    policy = get_dataset_rule_policy(evidence.dataset_id, evidence.columns)
+    required = set(policy.required_identifiers if policy else [])
+    governed = set(policy.governed_value_sets if policy else {})
+    semantic_columns = []
+    for column in evidence.columns:
+        inferred_role = _column_role(column.name, column.data_type)
+        semantic_type = (
+            "identifier"
+            if column.name in required
+            else "category"
+            if column.name in governed
+            else "timestamp"
+            if inferred_role == "datetime"
+            else "numeric"
+            if inferred_role == "numeric"
+            else "category"
+        )
+        semantic_columns.append(
+            {
+                "name": column.name,
+                "semantic_type": semantic_type,
+                "nullable_expected": column.name not in required,
+                "confidence": 1.0 if column.name in required or column.name in governed else 0.8,
+            }
+        )
+    relationships = [
+        {
+            "left_column": item.left_column,
+            "operator": item.operator,
+            "right_column": item.right_column,
+        }
+        for item in (policy.cross_field_rules if policy else [])
+    ]
+    semantic_contract = {
+        "status": "confirmed",
+        "tables": {
+            "source_rows": {
+                "table_purpose": "Validated dashboard dataset",
+                "columns": semantic_columns,
+                "relationships": relationships,
+            }
+        },
+    }
 
     async def invoke() -> list[dict[str, Any]]:
         graph = build_dashboard_proposal_graph()
@@ -457,9 +510,15 @@ def _invoke_dashboard_proposal_graph(evidence: ProposalEvidence) -> list[dict[st
                 "dataset_id": evidence.dataset_id,
                 "rule_run_id": f"dashboard-proposal-{uuid.uuid4().hex}",
                 "dataset_profile_digest": evidence.to_agent_digest(),
+                "semantic_contract": semantic_contract,
                 "metadata": {
                     "workflow": "dashboard",
                     "evidence_source": "persisted_aggregate_profile",
+                    "graph_stages": [
+                        "rule_candidate_builder",
+                        "prompt_customizer",
+                        "rule_proposer",
+                    ],
                     "max_retries": 0,
                 },
             }
@@ -886,12 +945,6 @@ def _policy_severity(candidate: DashboardRuleCandidate) -> str:
 def _mock_proposals(evidence: ProposalEvidence) -> list[DashboardProposal]:
     """Explicit offline mode for deterministic UI and automated tests."""
     available = {column.name for column in evidence.columns}
-    mock_ids = {
-        "not_null": "proposal-not-null",
-        "numeric_range": "proposal-range",
-        "accepted_values": "proposal-accepted-values",
-        "cross_field_comparison": "proposal-cross-field",
-    }
     result = [
         DashboardProposal(
             id=f"proposal-{uuid.uuid4().hex}",

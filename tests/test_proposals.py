@@ -69,35 +69,38 @@ async def test_proposal_review_transitions(client):
     assert len(proposals) == 5
     for p in proposals:
         assert p["status"] == "PROPOSED"
+    range_id = next(p["id"] for p in proposals if p["rule"]["type"] == "numeric_range")
+    not_null_id = next(p["id"] for p in proposals if p["rule"]["type"] == "not_null")
+    accepted_values_id = next(p["id"] for p in proposals if p["rule"]["type"] == "accepted_values")
 
-    # 3. Approve a proposal (e.g. proposal-range)
+    # 3. Approve the generated range proposal.
     approve_res = await client.patch(
-        "/api/v1/rule-proposals/proposal-range", headers=headers, json={"action": "approve"}
+        f"/api/v1/rule-proposals/{range_id}", headers=headers, json={"action": "approve"}
     )
     assert approve_res.status_code == 200
     assert approve_res.json()["status"] == "APPROVED"
 
     # Verify rule version is created in DB
     with Session(get_engine()) as session:
-        rv = session.query(RuleVersionModel).filter(RuleVersionModel.rule_proposal_id == "proposal-range").first()
+        rv = session.query(RuleVersionModel).filter(RuleVersionModel.rule_proposal_id == range_id).first()
         assert rv is not None
         assert rv.status == "APPROVED"
 
-    # 4. Reject a proposal (e.g. proposal-not-null)
+    # 4. Reject the generated not-null proposal.
     reject_res = await client.patch(
-        "/api/v1/rule-proposals/proposal-not-null", headers=headers, json={"action": "reject"}
+        f"/api/v1/rule-proposals/{not_null_id}", headers=headers, json={"action": "reject"}
     )
     assert reject_res.status_code == 200
     assert reject_res.json()["status"] == "REJECTED"
 
     # Verify rule version is deleted/absent in DB
     with Session(get_engine()) as session:
-        rv = session.query(RuleVersionModel).filter(RuleVersionModel.rule_proposal_id == "proposal-not-null").first()
+        rv = session.query(RuleVersionModel).filter(RuleVersionModel.rule_proposal_id == not_null_id).first()
         assert rv is None
 
-    # 5. Edit a proposal (e.g. proposal-accepted-values)
+    # 5. Edit the generated accepted-values proposal.
     edit_res = await client.patch(
-        "/api/v1/rule-proposals/proposal-accepted-values",
+        f"/api/v1/rule-proposals/{accepted_values_id}",
         headers=headers,
         json={
             "action": "edit",
@@ -113,7 +116,7 @@ async def test_proposal_review_transitions(client):
     with Session(get_engine()) as session:
         rv = (
             session.query(RuleVersionModel)
-            .filter(RuleVersionModel.rule_proposal_id == "proposal-accepted-values")
+            .filter(RuleVersionModel.rule_proposal_id == accepted_values_id)
             .first()
         )
         assert rv is not None

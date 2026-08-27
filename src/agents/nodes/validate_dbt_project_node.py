@@ -15,7 +15,7 @@ from src.agents.nodes.dbt_validation import (
 )
 from src.agents.state import AgentState
 from src.config import get_settings
-from src.services.dbt_artifact_store import get_dbt_artifact_store, validate_run_id
+from src.services.dbt_artifact_store import artifact_sha256, get_dbt_artifact_store, validate_run_id
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,12 @@ async def validate_dbt_project_node(state: AgentState) -> dict:
         validate_dbt_yaml_structure(content)
         root_dir = Path(__file__).resolve().parents[3]
         with tempfile.TemporaryDirectory(prefix=f"dbt-parse-{run_id}-") as workspace:
-            dbt_dir = materialize_dbt_project(root_dir / "dbt_project", Path(workspace), content)
+            dbt_dir = materialize_dbt_project(
+                root_dir / "dbt_project",
+                Path(workspace),
+                content,
+                generic=bool(state.get("dataset_version_id")),
+            )
             valid, output, return_code = run_dbt_parse(dbt_dir)
             dbt_skipped = dbt_parse_was_skipped(output)
             if dbt_skipped:
@@ -69,6 +74,10 @@ async def validate_dbt_project_node(state: AgentState) -> dict:
         local_trace.parent.mkdir(parents=True, exist_ok=True)
         local_trace.write_bytes(content_bytes)
         updates["dbt_trace_file_path"] = str(local_trace)
+        existing_ref = state.get("dbt_artifact_ref")
+        if isinstance(existing_ref, dict) and existing_ref.get("sha256") == artifact_sha256(content_bytes):
+            updates["dbt_artifact_ref"] = existing_ref
+            return updates
         try:
             ref = get_dbt_artifact_store().upload_yaml(
                 run_id,
@@ -78,7 +87,16 @@ async def validate_dbt_project_node(state: AgentState) -> dict:
             )
             updates["dbt_artifact_ref"] = ref.to_dict()
         except Exception as exc:
-            if settings.app_env not in ("local", "development", "test"):
+            storage_is_configured = bool(
+                settings.object_storage_provider == "gcs"
+                or settings.object_storage_endpoint_url
+                or settings.object_storage_access_key_id
+                or settings.object_storage_secret_access_key
+            )
+            if (
+                settings.app_env not in ("local", "development", "test")
+                and (storage_is_configured or state.get("dataset_version_id"))
+            ):
                 updates["dbt_validation_valid"] = False
                 updates["dbt_validation_error"] = f"Unable to persist validated dbt artifact: {exc}"
             else:

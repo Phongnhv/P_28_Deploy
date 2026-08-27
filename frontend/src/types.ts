@@ -1,5 +1,5 @@
 export type JobStatus = "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED_RETRYABLE" | "FAILED";
-export type JobType = "INGEST_PROFILE" | "UNDERSTAND_DATA" | "PROPOSE_RULES" | "RUN_DQ";
+export type JobType = "INGEST_PROFILE" | "GRAPH1_EXECUTION" | "GRAPH1_CONTINUATION" | "ANALYSIS_GRAPH2_GRAPH3" | "UNDERSTAND_DATA" | "PROPOSE_RULES" | "RUN_DQ";
 export type ProposalStatus = "PROPOSED" | "APPROVED" | "EDITED" | "REJECTED";
 export type UserRole = "USER" | "STEWARD" | "ADMIN";
 export type AccountStatus = "ACTIVE" | "SUSPENDED" | "DISABLED";
@@ -94,6 +94,10 @@ export interface Dataset {
   manifest_version: string;
   checksum: string;
   updated_at: string;
+  data_explorer_available?: boolean;
+  dataset_version_id?: string;
+  version_number?: number;
+  profile_run_id?: string;
 }
 
 export interface DatasetImportResponse {
@@ -115,7 +119,7 @@ export interface Job {
 /** The stable 202 response returned by create-work endpoints. */
 export interface CreateJobResponse {
   job_id: string;
-  status: Extract<JobStatus, "PENDING" | "RUNNING">;
+  status: JobStatus;
 }
 
 export interface ColumnProfile {
@@ -233,6 +237,7 @@ export interface DqAnomaly {
 
 export interface DatasetRow {
   source_row_id: string;
+  [key: string]: unknown;
   vendor_id?: string;
   pickup_at?: string;
   dropoff_at?: string;
@@ -245,19 +250,24 @@ export interface DatasetRow {
 
 export interface DatasetRowsResponse {
   dataset_id: string;
+  dataset_version_id?: string;
   total: number;
   limit: number;
   offset: number;
   rows: DatasetRow[];
+  schema?: Array<{ name: string; logical_type?: string; physical_type?: string; nullable?: boolean }>;
 }
 
 export interface DatasetRowQuery {
+  dataset_version_id?: string;
   vendor_id?: string;
   payment_type?: string;
   min_distance?: number;
   max_distance?: number;
   quality_status?: "ALL" | "VALID" | "ISSUE";
-  sort_by?: "pickup_at" | "trip_distance" | "fare_amount" | "total_amount";
+  filter_column?: string;
+  filter_value?: string;
+  sort_by?: string;
   sort_direction?: "asc" | "desc";
   limit?: number;
   offset?: number;
@@ -337,6 +347,10 @@ export type Graph1NodeStatus = "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED" | 
 export interface Graph1Run {
   id: string;
   dataset_id: string;
+  job_id?: string | null;
+  workspace_id?: string | null;
+  dataset_version_id?: string | null;
+  profile_run_id?: string | null;
   status: Graph1RunStatus;
   current_node?: string | null;
   error?: string | null;
@@ -368,8 +382,13 @@ export type AnalysisNodeStatus = "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED" 
 
 export interface AnalysisRun {
   id: string;
+  job_id?: string | null;
   graph1_run_id: string;
   dataset_id: string;
+  workspace_id?: string | null;
+  dataset_version_id?: string | null;
+  report_artifact_status?: "REGISTERED" | "UPLOAD_FAILED" | "NOT_AVAILABLE";
+  report_artifact_locator?: string | null;
   status: AnalysisRunStatus;
   phase: AnalysisPhase;
   current_node?: string | null;
@@ -476,7 +495,7 @@ export interface AnalysisResult {
     signals: AnalysisSignal[];
     hypotheses: AnalysisHypothesis[];
   };
-  report: { available: boolean; markdown: string; source?: "LLM" | "FALLBACK" | null; file_name?: string | null; generated_at?: string | null };
+  report: { available: boolean; markdown: string; source?: "LLM" | "FALLBACK" | null; file_name?: string | null; generated_at?: string | null; artifact_status?: string; artifact?: Record<string, unknown> | null };
 }
 
 export interface ArtifactReviewInput {
@@ -527,12 +546,13 @@ export interface ApiClient {
   reviewArtifact(artifactId: string, input: ArtifactReviewInput): Promise<AgentArtifact>;
   continueLoop(workflowRunId: string, input: LoopDecisionInput): Promise<WorkflowRun>;
   rewindWorkflow(workflowRunId: string, targetStep: WorkflowStepKey): Promise<WorkflowRun>;
-  createGraph1Run(datasetId: string): Promise<Graph1Run>;
+  createGraph1Run(datasetId: string, datasetVersionId?: string, profileRunId?: string): Promise<Graph1Run>;
+  getLatestGraph1Run(datasetId: string, datasetVersionId?: string): Promise<Graph1Run | null>;
   getGraph1Run(runId: string): Promise<Graph1Run>;
   listGraph1Nodes(runId: string): Promise<Graph1NodeExecution[]>;
   confirmGraph1Semantic(runId: string, contract: Record<string, unknown>): Promise<Graph1Run>;
   reviewGraph1Rules(runId: string, decisions: Graph1RuleDecision[]): Promise<Graph1Run>;
-  createAnalysisRun(graph1RunId: string): Promise<AnalysisRun>;
+  createAnalysisRun(graph1RunId: string, rerun?: boolean): Promise<AnalysisRun>;
   getAnalysisRun(analysisRunId: string): Promise<AnalysisRun>;
   listAnalysisNodes(analysisRunId: string): Promise<AnalysisNodeExecution[]>;
   getAnalysisResult(analysisRunId: string): Promise<AnalysisResult>;

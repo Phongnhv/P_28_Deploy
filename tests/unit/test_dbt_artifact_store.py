@@ -23,10 +23,46 @@ class FakeS3Client:
         return {"Body": io.BytesIO(content)}
 
 
+class FakeGcsBlob:
+    def __init__(self, objects: dict[tuple[str, str], bytes], bucket: str, key: str, generation=None) -> None:
+        self.objects = objects
+        self.bucket = bucket
+        self.key = key
+        self.metadata = None
+        self.etag = None
+        self.generation = generation
+
+    def upload_from_string(self, content: bytes, content_type: str | None = None) -> None:
+        self.objects[(self.bucket, self.key)] = content
+        self.etag = "gcs-etag"
+        self.generation = 42
+
+    def download_as_bytes(self) -> bytes:
+        return self.objects[(self.bucket, self.key)]
+
+
+class FakeGcsBucket:
+    def __init__(self, client, name: str) -> None:
+        self.client = client
+        self.name = name
+
+    def blob(self, key: str, generation=None) -> FakeGcsBlob:
+        return FakeGcsBlob(self.client.objects, self.name, key, generation)
+
+
+class FakeGcsClient:
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], bytes] = {}
+
+    def bucket(self, name: str) -> FakeGcsBucket:
+        return FakeGcsBucket(self, name)
+
+
 def _settings() -> Settings:
     return Settings(
         _env_file=None,
         app_env="test",
+        object_storage_provider="s3",
         object_storage_bucket="test-bucket",
         object_storage_prefix="dbt-tests",
         object_storage_endpoint_url="http://minio:9000",
@@ -72,6 +108,19 @@ def test_download_rejects_corrupt_content():
     )
     with pytest.raises(ValueError, match="checksum"):
         store.download_yaml(corrupt_ref)
+
+
+def test_gcs_upload_and_download_uses_generation():
+    client = FakeGcsClient()
+    settings = _settings().model_copy(update={"object_storage_provider": "gcs"})
+    store = DbtArtifactStore(settings, client=client)
+    content = b"version: 2\nmodels: []\n"
+
+    artifact = store.upload_yaml("gcs_run", content, dataset_id="dataset-1")
+
+    assert artifact.etag == "gcs-etag"
+    assert artifact.version_id == "42"
+    assert store.download_yaml(artifact) == content
 
 
 @pytest.mark.parametrize("run_id", ["../other-run", "run/id", "", "run id"])

@@ -4,13 +4,14 @@ import json
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import (
     APIRouter,
     BackgroundTasks,
     Depends,
     File,
+    Form,
     Header,
     HTTPException,
     Query,
@@ -20,25 +21,41 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import or_
+from sqlalchemy import or_, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.config import get_settings
+from src.models.api_schemas import (
+    AnomalyFeedbackRequest,
+    AnomalySignalDTO,
+    CombinedRunStatusResponse,
+    ExecutionRequest,
+    PublishRulesetRequest,
+    PublishRulesetResponse,
+)
 from src.models.database import (
+    AnalysisNodeExecutionModel,
+    AnalysisRunModel,
     AnomalyFeedbackModel,
     AnomalyHypothesisModel,
     AnomalyRunModel,
     AnomalySignalModel,
-    AnalysisNodeExecutionModel,
-    AnalysisRunModel,
     AuditEventModel,
     ColumnProfileModel,
     DatasetAccessModel,
+    DatasetGovernanceModel,
     DatasetModel,
+    DatasetVersionModel,
     DqResultModel,
     DqRunModel,
+    GovernanceAuditEventModel,
+    GovernedArtifactModel,
+    Graph1NodeExecutionModel,
+    Graph1RunModel,
     JobModel,
     ProfileModel,
+    ProfileRunSnapshotModel,
     RuleConfigurationModel,
     RuleProposalModel,
     RulesetVersionModel,
@@ -48,16 +65,7 @@ from src.models.database import (
     UserAccountModel,
     WorkflowArtifactModel,
     WorkflowRunModel,
-    Graph1RunModel,
-    Graph1NodeExecutionModel,
-)
-from src.models.api_schemas import (
-    AnomalyFeedbackRequest,
-    AnomalySignalDTO,
-    CombinedRunStatusResponse,
-    ExecutionRequest,
-    PublishRulesetRequest,
-    PublishRulesetResponse,
+    WorkspaceMembershipModel,
 )
 from src.models.schemas import (
     ActiveRuleResponse,
@@ -75,6 +83,8 @@ from src.models.schemas import (
     TestResultsListResponse,
     TestRunStatusResponse,
 )
+from src.services.demo_quota import enforce_demo_quota
+from src.services.job_dispatch import create_persisted_job, dispatch_or_mark_failed, job_checksum
 from src.services.job_runner import (
     _supabase_source_url,
     add_audit_event,
@@ -108,6 +118,15 @@ from src.services.session_service import (
 )
 from src.services.supabase_dataset import create_supabase_engine
 from src.services.supabase_dataset import query_dataset_rows as query_supabase_dataset_rows
+from src.services.versioned_dataset import (
+    DatasetContractError,
+    SourceIntegrityError,
+    canonical_schema_manifest,
+    delete_source_artifact,
+    inspect_upload,
+    schema_hash,
+    store_source_artifact,
+)
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -129,6 +148,7 @@ def get_db():
 async def get_session(request: Request, db: Session = Depends(get_db)) -> SessionModel:
     session = get_current_session(request, db)
     verify_csrf(request, session)
+    enforce_demo_quota(db, request, session)
     return session
 
 
@@ -335,10 +355,12 @@ class DatasetRowSchema(BaseModel):
 
 class DatasetRowsResponse(BaseModel):
     dataset_id: str
+    dataset_version_id: str | None = None
     total: int
     limit: int
     offset: int
-    rows: list[DatasetRowSchema]
+    rows: list[dict[str, Any]]
+    schema: list[dict[str, Any]] | None = None
 
 
 class QualityTrendPointSchema(BaseModel):
@@ -428,6 +450,9 @@ class AnalysisRunSchema(BaseModel):
     test_run_id: str | None = None
     anomaly_run_id: str | None = None
     report_available: bool
+    job_id: str | None = None
+    report_artifact_status: str = "NOT_AVAILABLE"
+    report_artifact_locator: str | None = None
     error: str | None = None
     created_by: str
     created_at: str
@@ -517,10 +542,20 @@ def login(request: Request, body: LoginRequest, response: Response, db: Session 
     """
     POST /api/v1/session - Authenticates user and sets session cookie + CSRF token.
     """
-    session = create_user_session(body.username, body.password, db)
+    session = create_user_session(request, body.username, body.password, db)
 
-    # Set HTTP-only cookie
-    response.set_cookie(key=SESSION_COOKIE_NAME, value=session.id, httponly=True, samesite="lax", path="/")
+    # The Vercel frontend and Cloud Run API are separate sites in production.
+    # Cross-site requests therefore require a Secure SameSite=None session
+    # cookie; local development remains compatible with HTTP and localhost.
+    production = get_settings().app_env == "production"
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=session.id,
+        httponly=True,
+        secure=production,
+        samesite="none" if production else "lax",
+        path="/",
+    )
 
     add_audit_event(
         db,
@@ -584,8 +619,24 @@ def list_datasets(
             .all()
         }
         datasets = [dataset for dataset in datasets if dataset.id in allowed_ids]
-    return [
-        {
+    response = []
+    for d in datasets:
+        latest_version = (
+            db.query(DatasetVersionModel)
+            .filter_by(dataset_id=d.id, status="READY")
+            .order_by(DatasetVersionModel.version_number.desc())
+            .first()
+        )
+        latest_profile = (
+            db.query(ProfileRunSnapshotModel)
+            .filter_by(dataset_version_id=latest_version.id, status="COMPLETED")
+            .order_by(ProfileRunSnapshotModel.completed_at.desc())
+            .first()
+            if latest_version
+            else None
+        )
+        has_local_source = any((Path("data/uploads") / f"{d.id}{suffix}").exists() for suffix in (".parquet", ".csv"))
+        response.append({
             "id": d.id,
             "name": d.name,
             "description": d.description,
@@ -595,9 +646,12 @@ def list_datasets(
             "manifest_version": d.manifest_version,
             "checksum": d.checksum,
             "updated_at": d.updated_at.isoformat(),
-        }
-        for d in datasets
-    ]
+            "data_explorer_available": bool(latest_version or has_local_source),
+            "dataset_version_id": latest_version.id if latest_version else None,
+            "version_number": latest_version.version_number if latest_version else None,
+            "profile_run_id": latest_profile.id if latest_profile else None,
+        })
+    return response
 
 
 @router.post("/datasets/import")
@@ -607,7 +661,11 @@ async def import_dataset(
     session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
-    """Persist a CSV/Parquet artifact and immediately queue its aggregate profile."""
+    """Legacy dashboard import; canonical arbitrary imports use the workspace route below.
+
+    This compatibility endpoint retains the historical local dashboard profile
+    contract. It is deliberately not used by versioned Graph 1/2/3 flows.
+    """
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in {".csv", ".parquet"}:
         raise HTTPException(status_code=415, detail="Only CSV and Parquet files are supported.")
@@ -658,6 +716,281 @@ async def import_dataset(
             "job": {"job_id": job_id, "status": "PENDING"}}
 
 
+@router.post("/workspaces/{workspace_id}/datasets/import", status_code=202)
+async def import_versioned_dataset(
+    workspace_id: str,
+    file: UploadFile = File(...),
+    dataset_id: str | None = Form(None),
+    dataset_name: str | None = Form(None),
+    client_sha256: str | None = Form(None),
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """Canonical arbitrary CSV/Parquet import with immutable version lineage.
+
+    The job row is reserved before object storage is touched.  That reservation
+    is the concurrency gate for the canonical idempotency key and lets a second
+    request replay the same version without creating an object, audit event or
+    artifact of its own.
+    """
+    account = db.query(UserAccountModel).filter_by(username=session.username).first()
+    membership = db.query(WorkspaceMembershipModel).filter_by(
+        workspace_id=workspace_id,
+        user_id=account.id if account else "",
+        status="ACTIVE",
+    ).first()
+    if not account or not membership:
+        raise HTTPException(status_code=404, detail={"code": "WORKSPACE_NOT_FOUND", "message": "Workspace not found"})
+    if membership.role not in {"ADMIN", "STEWARD"} and session.role not in {"ADMIN", "STEWARD"}:
+        raise HTTPException(status_code=403, detail={"code": "WORKSPACE_MANAGE_FORBIDDEN", "message": "Workspace management permission is required"})
+    payload = await file.read()
+    try:
+        inspected = inspect_upload(payload, file.filename or "dataset.csv", file.content_type)
+    except DatasetContractError as exc:
+        raise HTTPException(status_code=422, detail={"code": "INVALID_DATASET", "message": str(exc)}) from exc
+    if client_sha256 and client_sha256.lower() != inspected.checksum:
+        raise HTTPException(status_code=422, detail={"code": "CHECKSUM_MISMATCH", "message": "Uploaded checksum does not match content"})
+
+    idempotency_key = idempotency_key.strip()
+    if not idempotency_key:
+        raise HTTPException(status_code=422, detail={"code": "IDEMPOTENCY_KEY_REQUIRED", "message": "Idempotency-Key must not be empty"})
+    # The database keeps one globally unique idempotency key.  Include the
+    # workspace so the same client key can safely be reused in another
+    # workspace without colliding with this import reservation.
+    canonical_key = f"versioned-import-{workspace_id}-{idempotency_key}"
+
+    def replay_response(version: DatasetVersionModel | None, job: JobModel | None, *, replay: bool = True) -> dict[str, Any]:
+        if version:
+            replay_dataset_id = version.dataset_id
+            replay_name = (db.get(DatasetModel, replay_dataset_id) or DatasetModel(id=replay_dataset_id, name=replay_dataset_id)).name
+            return {
+                "dataset": {"id": replay_dataset_id, "name": replay_name, "status": (db.get(DatasetModel, replay_dataset_id).status if db.get(DatasetModel, replay_dataset_id) else "REGISTERED")},
+                "version": {"id": version.id, "version_number": version.version_number, "status": version.status, "checksum": version.checksum, "schema_hash": version.schema_hash, "row_count": version.row_count},
+                "profile_run_id": f"profile-{version.id}",
+                "job": {"job_id": job.id if job else None, "status": job.status if job else "COMPLETED"},
+                "idempotent_replay": replay,
+            }
+        reservation = {}
+        if job:
+            try:
+                reservation = json.loads(job.message or "{}")
+            except (TypeError, ValueError):
+                reservation = {}
+        return {
+            "dataset": {"id": reservation.get("dataset_id", dataset_id or ""), "name": reservation.get("dataset_name") or dataset_name or "Imported dataset", "status": "REGISTERED"},
+            "version": {"id": reservation.get("version_id"), "version_number": reservation.get("version_number", 1), "status": "PENDING", "checksum": reservation.get("checksum", inspected.checksum), "schema_hash": reservation.get("schema_hash"), "row_count": reservation.get("row_count", inspected.row_count)},
+            "profile_run_id": f"profile-{reservation.get('version_id')}" if reservation.get("version_id") else None,
+            "job": {"job_id": job.id if job else None, "status": job.status if job else "PENDING"},
+            "idempotent_replay": replay,
+        }
+
+    # Canonical key lookup happens before dataset creation, object storage, or
+    # audit/artifact writes.  A reused key is allowed only for the same bytes.
+    existing_job = db.query(JobModel).filter(JobModel.idempotency_key == canonical_key).first()
+    if existing_job:
+        existing_version = db.get(DatasetVersionModel, existing_job.linked_entity) if existing_job.linked_entity else None
+        known_checksum = existing_version.checksum if existing_version else job_checksum(existing_job)
+        if known_checksum and known_checksum != inspected.checksum:
+            raise HTTPException(status_code=409, detail={"code": "IDEMPOTENCY_KEY_REUSED", "message": "Idempotency-Key is already bound to a different payload"})
+        return replay_response(existing_version, existing_job)
+
+    # For a request that does not supply a dataset id, checksum identity is
+    # workspace-scoped.  This is what makes two UI retries with different
+    # generated names converge on one immutable version.
+    checksum_query = db.query(DatasetVersionModel).filter(
+        DatasetVersionModel.workspace_id == workspace_id,
+        DatasetVersionModel.checksum == inspected.checksum,
+    )
+    if dataset_id:
+        checksum_query = checksum_query.filter(DatasetVersionModel.dataset_id == dataset_id)
+    checksum_version = checksum_query.order_by(DatasetVersionModel.created_at.asc()).first()
+    if checksum_version:
+        checksum_job = db.query(JobModel).filter(JobModel.linked_entity == checksum_version.id).order_by(JobModel.created_at.desc()).first()
+        return replay_response(checksum_version, checksum_job)
+
+    logical_id = dataset_id or f"dataset-import-{uuid.uuid4().hex[:20]}"
+    existing_dataset = db.get(DatasetModel, logical_id)
+    if existing_dataset:
+        governance = db.query(DatasetGovernanceModel).filter_by(dataset_id=logical_id, workspace_id=workspace_id).first()
+        if not governance:
+            raise HTTPException(status_code=404, detail={"code": "DATASET_NOT_FOUND", "message": "Dataset not found in workspace"})
+    else:
+        governance = None
+
+    version_number = (db.query(DatasetVersionModel.version_number).filter_by(workspace_id=workspace_id, dataset_id=logical_id).order_by(DatasetVersionModel.version_number.desc()).first() or (0,))[0] + 1
+    parent = db.query(DatasetVersionModel).filter_by(workspace_id=workspace_id, dataset_id=logical_id).order_by(DatasetVersionModel.version_number.desc()).first()
+    version_id = f"dv-{uuid.uuid4().hex[:24]}"
+    reservation_message = json.dumps({
+        "kind": "VERSIONED_IMPORT_RESERVATION",
+        "checksum": inspected.checksum,
+        "schema_hash": schema_hash(inspected.schema),
+        "dataset_id": logical_id,
+        "dataset_name": dataset_name or Path(inspected.filename).stem or logical_id,
+        "version_id": version_id,
+        "version_number": version_number,
+        "row_count": inspected.row_count,
+    }, ensure_ascii=False, sort_keys=True)
+    try:
+        job, created = create_persisted_job(
+            db,
+            job_type="INGEST_PROFILE",
+            linked_entity=version_id,
+            idempotency_key=canonical_key,
+            message=reservation_message,
+        )
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail={"code": "IDEMPOTENCY_RESERVATION_CONFLICT", "message": "The import reservation could not be claimed safely"}) from exc
+    if not created:
+        existing_version = db.get(DatasetVersionModel, job.linked_entity) if job.linked_entity else None
+        known_checksum = existing_version.checksum if existing_version else job_checksum(job)
+        if known_checksum and known_checksum != inspected.checksum:
+            raise HTTPException(status_code=409, detail={"code": "IDEMPOTENCY_KEY_REUSED", "message": "Idempotency-Key is already bound to a different payload"})
+        return replay_response(existing_version, job)
+
+    artifact_ref = None
+    try:
+        artifact_ref = store_source_artifact(payload, inspected, workspace_id=workspace_id, dataset_id=logical_id, dataset_version_id=version_id)
+    except SourceIntegrityError as exc:
+        db.rollback()
+        try:
+            db.query(JobModel).filter(JobModel.id == job.id).delete(synchronize_session=False)
+            db.commit()
+        except Exception:
+            # If the cleanup transaction is itself unavailable, leave an
+            # explicit retryable reservation rather than a misleading PENDING
+            # job that can never be diagnosed or retried safely.
+            db.rollback()
+            try:
+                reserved = db.get(JobModel, job.id)
+                if reserved:
+                    reserved.status = "FAILED_RETRYABLE"
+                    reserved.error = "Source storage failed and reservation cleanup could not be completed"
+                    reserved.message = "Import reservation requires retry"
+                    db.commit()
+            except Exception:
+                db.rollback()
+        raise HTTPException(status_code=502, detail={"code": "SOURCE_STORAGE_FAILED", "message": str(exc)}) from exc
+    artifact_id = f"artifact-{uuid.uuid4().hex}"
+    metadata = {
+        "filename": inspected.filename,
+        "format": inspected.format,
+        "content_type": file.content_type,
+        "size_bytes": inspected.size_bytes,
+        "checksum": inspected.checksum,
+        "schema": inspected.schema,
+        "schema_hash": schema_hash(inspected.schema),
+        "source_artifact_id": artifact_id,
+        "bucket": artifact_ref.bucket,
+        "object_key": artifact_ref.object_key,
+        "version_id": artifact_ref.version_id,
+        "idempotency_key": idempotency_key,
+    }
+    if not existing_dataset:
+        existing_dataset = DatasetModel(
+            id=logical_id,
+            name=(dataset_name or Path(inspected.filename).stem or logical_id)[:256],
+            description="Generic versioned CSV/Parquet dataset",
+            status="REGISTERED",
+            row_count=inspected.row_count,
+            source_label=inspected.filename,
+            manifest_version="versioned-v1",
+            checksum=inspected.checksum,
+        )
+        db.add(existing_dataset)
+        db.flush()
+        governance = DatasetGovernanceModel(dataset_id=logical_id, workspace_id=workspace_id, owner_user_id=account.id)
+        db.add(governance)
+    else:
+        existing_dataset.checksum = inspected.checksum
+        existing_dataset.source_label = inspected.filename
+        existing_dataset.row_count = inspected.row_count
+    version = DatasetVersionModel(
+        id=version_id,
+        workspace_id=workspace_id,
+        dataset_id=logical_id,
+        version_number=version_number,
+        parent_version_id=parent.id if parent else None,
+        status="READY",
+        checksum=inspected.checksum,
+        schema_hash=metadata["schema_hash"],
+        row_count=inspected.row_count,
+        source_metadata_json=json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+        created_by=account.id,
+    )
+    job.message = "Queued for immutable version profiling"
+    db.add_all([version, GovernedArtifactModel(
+        id=artifact_id, workspace_id=workspace_id, dataset_id=logical_id, dataset_version_id=version_id,
+        artifact_type="SOURCE_DATASET", storage_locator=artifact_ref.storage_locator,
+        checksum=inspected.checksum, created_by=account.id,
+    ), job, DatasetAccessModel(
+        id=str(uuid.uuid4()), dataset_id=logical_id, username=session.username,
+        access_level="MANAGE", granted_by=session.username,
+    )])
+    audit_common = {
+        "workspace_id": workspace_id,
+        "actor_id": account.id,
+        "actor_role": membership.role,
+        "dataset_id": logical_id,
+        "dataset_version_id": version_id,
+        "run_id": job.id,
+        "correlation_id": job.correlation_id,
+        "request_metadata_json": json.dumps({"filename": inspected.filename, "content_type": file.content_type}, ensure_ascii=False),
+        "source": "API",
+        "occurred_at": utc_now(),
+    }
+    db.add_all([
+        GovernanceAuditEventModel(
+            id=f"gaudit-{uuid.uuid4().hex}", action="DATASET_UPLOAD_ACCEPTED",
+            entity_type="dataset", entity_id=logical_id,
+            detail_json=json.dumps({"size_bytes": inspected.size_bytes, "format": inspected.format}, ensure_ascii=False),
+            **audit_common,
+        ),
+        GovernanceAuditEventModel(
+            id=f"gaudit-{uuid.uuid4().hex}", action="SOURCE_ARTIFACT_REGISTERED",
+            entity_type="governed_artifact", entity_id=artifact_id,
+            detail_json=json.dumps({"artifact_type": "SOURCE_DATASET", "checksum": inspected.checksum}, ensure_ascii=False),
+            **audit_common,
+        ),
+        GovernanceAuditEventModel(
+            id=f"gaudit-{uuid.uuid4().hex}", action="DATASET_VERSION_CREATED",
+            entity_type="dataset_version", entity_id=version_id,
+            detail_json=json.dumps({"checksum": inspected.checksum, "schema_hash": metadata["schema_hash"], "row_count": inspected.row_count}, ensure_ascii=False),
+            **audit_common,
+        ),
+    ])
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        try:
+            delete_source_artifact(artifact_ref)
+        except Exception:
+            logger.exception("Failed to compensate source artifact for import %s", version_id)
+        # The reservation is ours; remove it so a subsequent retry can safely
+        # claim the canonical key.  This is deliberately best effort because a
+        # database outage is the original failure being reported.
+        try:
+            db.query(JobModel).filter(JobModel.id == job.id).delete(synchronize_session=False)
+            db.commit()
+        except Exception:
+            db.rollback()
+        if isinstance(exc, IntegrityError):
+            raise HTTPException(status_code=409, detail={"code": "IDEMPOTENCY_COMMIT_CONFLICT", "message": "The import collided with another committed request"}) from exc
+        raise HTTPException(status_code=503, detail={"code": "IMPORT_COMMIT_FAILED", "message": "Dataset import could not be committed; no source object was retained"}) from exc
+
+    dispatch_or_mark_failed(db, job)
+    db.refresh(job)
+    db.refresh(version)
+    return {
+        "dataset": {"id": logical_id, "name": existing_dataset.name, "status": existing_dataset.status},
+        "version": {"id": version.id, "version_number": version.version_number, "status": version.status, "checksum": version.checksum, "schema_hash": version.schema_hash, "row_count": version.row_count},
+        "profile_run_id": f"profile-{version.id}",
+        "job": {"job_id": job.id, "status": job.status},
+        "idempotent_replay": False,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Canonical Graph 1 API (real agent execution; never falls back to fixtures)
 # ---------------------------------------------------------------------------
@@ -679,27 +1012,86 @@ def _require_graph_provider() -> None:
 @router.post("/datasets/{dataset_id}/graph1-runs", status_code=202)
 def start_graph1_run(
     dataset_id: str,
-    background_tasks: BackgroundTasks,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    dataset_version_id: str | None = Query(None),
+    profile_run_id: str | None = Query(None),
     session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
-    from src.services.graph1_workflow import create_graph1_run, execute_graph1_run, serialize_run
+    from src.services.graph1_workflow import create_graph1_run, serialize_run
 
     _require_graph_provider()
     dataset = db.get(DatasetModel, dataset_id)
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
     require_dataset_access(db, session, dataset_id, manage=True)
+    if dataset_version_id:
+        selected_version = db.query(DatasetVersionModel).filter_by(
+            id=dataset_version_id, dataset_id=dataset_id, status="READY"
+        ).first()
+        if not selected_version:
+            raise HTTPException(status_code=404, detail={"code": "DATASET_VERSION_NOT_FOUND", "message": "Dataset version not found"})
+        if not profile_run_id:
+            raise HTTPException(status_code=422, detail={"code": "PROFILE_RUN_REQUIRED", "message": "profile_run_id is required for a versioned Graph 1 run"})
     try:
-        run = create_graph1_run(db, dataset_id, session.username, idempotency_key)
+        run = create_graph1_run(
+            db, dataset_id, session.username, idempotency_key,
+            workspace_id=selected_version.workspace_id if dataset_version_id else None,
+            dataset_version_id=dataset_version_id,
+            profile_run_id=profile_run_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail={"code": "DATASET_NOT_READY", "message": str(exc)})
+    workflow_job = db.query(JobModel).filter(
+        JobModel.linked_entity == run.id,
+        JobModel.type.in_(["GRAPH1_EXECUTION", "GRAPH1_CONTINUATION"]),
+    ).order_by(JobModel.created_at.desc()).first()
     if run.status == "PENDING":
-        background_tasks.add_task(execute_graph1_run, run.id)
+        job, job_created = create_persisted_job(
+            db,
+            job_type="GRAPH1_EXECUTION",
+            linked_entity=run.id,
+            idempotency_key=f"graph1-execution-{run.id}",
+            message="Queued Graph 1 execution",
+        )
+        if job_created or job.status == "FAILED_RETRYABLE":
+            dispatch_or_mark_failed(db, job)
+        workflow_job = db.get(JobModel, job.id)
+        db.refresh(run)
     add_audit_event(db, session.id, session.role, "GRAPH1_STARTED", "graph1_run", run.id,
                     {"message": "Canonical Graph 1 started.", "dataset_id": dataset_id, "provider": get_settings().llm_provider})
-    return serialize_run(run)
+    response_payload = serialize_run(run)
+    response_payload["job_id"] = workflow_job.id if workflow_job else None
+    return response_payload
+
+
+@router.get("/datasets/{dataset_id}/graph1-runs/latest")
+def get_latest_graph1_run(
+    dataset_id: str,
+    dataset_version_id: str | None = Query(None),
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """Recover the latest durable Graph 1 snapshot for a dataset version."""
+    dataset = db.get(DatasetModel, dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    require_dataset_access(db, session, dataset_id)
+    query = db.query(Graph1RunModel).filter(Graph1RunModel.dataset_id == dataset_id)
+    if dataset_version_id:
+        query = query.filter(Graph1RunModel.dataset_version_id == dataset_version_id)
+    run = query.order_by(Graph1RunModel.updated_at.desc(), Graph1RunModel.created_at.desc()).first()
+    if not run:
+        return None
+    from src.services.graph1_workflow import serialize_run
+
+    response_payload = serialize_run(run)
+    latest_job = db.query(JobModel).filter(
+        JobModel.linked_entity == run.id,
+        JobModel.type.in_(["GRAPH1_EXECUTION", "GRAPH1_CONTINUATION"]),
+    ).order_by(JobModel.created_at.desc()).first()
+    response_payload["job_id"] = latest_job.id if latest_job else None
+    return response_payload
 
 
 @router.get("/graph1-runs/{run_id}")
@@ -744,6 +1136,10 @@ async def stream_graph1_run(
         raise HTTPException(status_code=404, detail="Graph 1 run not found")
     require_dataset_access(db, session, run.dataset_id)
     dataset_id = run.dataset_id
+    # A streaming response can remain open for minutes. Release the request
+    # dependency's checked-out connection before starting the SSE loop; each
+    # snapshot below deliberately uses its own short-lived session.
+    db.close()
 
     async def events():
         last_signature = ""
@@ -773,11 +1169,10 @@ async def stream_graph1_run(
 def review_graph1_semantics(
     run_id: str,
     body: Graph1SemanticReviewInput,
-    background_tasks: BackgroundTasks,
     session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
-    from src.services.graph1_workflow import confirm_semantic_review, execute_graph1_run, serialize_run
+    from src.services.graph1_workflow import confirm_semantic_review, serialize_run
     run = db.get(Graph1RunModel, run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Graph 1 run not found")
@@ -786,10 +1181,21 @@ def review_graph1_semantics(
         confirm_semantic_review(db, run, body.contract)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail={"code": "GRAPH1_STATE", "message": str(exc)})
-    background_tasks.add_task(execute_graph1_run, run.id)
+    job, job_created = create_persisted_job(
+        db,
+        job_type="GRAPH1_CONTINUATION",
+        linked_entity=run.id,
+        idempotency_key=f"graph1-continuation-{run.id}-semantic",
+        message="Queued Graph 1 continuation after semantic review",
+    )
+    if job_created or job.status == "FAILED_RETRYABLE":
+        dispatch_or_mark_failed(db, job)
+    db.refresh(run)
     add_audit_event(db, session.id, session.role, "GRAPH1_SEMANTIC_APPROVED", "graph1_run", run.id,
                     {"message": "Semantic Contract approved; Graph 1 resumed."})
-    return serialize_run(run)
+    response_payload = serialize_run(run)
+    response_payload["job_id"] = job.id
+    return response_payload
 
 
 @router.post("/graph1-runs/{run_id}/rule-review")
@@ -820,15 +1226,14 @@ def review_graph1_rules(
 )
 def start_analysis_run(
     run_id: str,
-    background_tasks: BackgroundTasks,
     response: Response,
+    rerun: bool = Query(False),
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
     session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
     from src.services.analysis_workflow import (
         create_analysis_run,
-        execute_analysis_run,
         serialize_analysis_run,
     )
 
@@ -837,11 +1242,25 @@ def start_analysis_run(
         raise HTTPException(status_code=404, detail="Graph 1 run not found")
     require_dataset_access(db, session, graph1_run.dataset_id, manage=True)
     try:
-        analysis_run, created = create_analysis_run(db, graph1_run, session.username, idempotency_key)
+        analysis_run, created = create_analysis_run(
+            db,
+            graph1_run,
+            session.username,
+            idempotency_key,
+            force_rerun=rerun,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail={"code": "ANALYSIS_NOT_READY", "message": str(exc)})
     if created:
-        background_tasks.add_task(execute_analysis_run, analysis_run.id)
+        job, _ = create_persisted_job(
+            db,
+            job_type="ANALYSIS_GRAPH2_GRAPH3",
+            linked_entity=analysis_run.id,
+            idempotency_key=f"analysis-graph2-graph3-{analysis_run.id}",
+            message="Queued Graph 2 and Graph 3 analysis",
+        )
+        dispatch_or_mark_failed(db, job)
+        db.refresh(analysis_run)
         add_audit_event(
             db,
             session.id,
@@ -853,7 +1272,13 @@ def start_analysis_run(
         )
     else:
         response.status_code = 200
-    return serialize_analysis_run(analysis_run)
+    analysis_job = db.query(JobModel).filter(
+        JobModel.type == "ANALYSIS_GRAPH2_GRAPH3",
+        JobModel.linked_entity == analysis_run.id,
+    ).order_by(JobModel.created_at.desc()).first()
+    payload = serialize_analysis_run(analysis_run)
+    payload["job_id"] = analysis_job.id if analysis_job else None
+    return payload
 
 
 @router.get("/analysis-runs/{analysis_run_id}", response_model=AnalysisRunSchema)
@@ -901,6 +1326,36 @@ def get_analysis_result(
     return build_analysis_result(db, run)
 
 
+@router.get("/analysis-runs/{analysis_run_id}/report")
+def get_analysis_report(
+    analysis_run_id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """Return the report only after the same dataset authorization check."""
+    run = db.get(AnalysisRunModel, analysis_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Analysis run not found")
+    require_dataset_access(db, session, run.dataset_id)
+    artifact = db.query(GovernedArtifactModel).filter_by(
+        run_id=run.id,
+        artifact_type="STEWARD_REPORT_MARKDOWN",
+    ).first()
+    return {
+        "analysis_run_id": run.id,
+        "dataset_id": run.dataset_id,
+        "dataset_version_id": run.dataset_version_id,
+        "artifact": {
+            "id": artifact.id,
+            "artifact_type": artifact.artifact_type,
+            "storage_locator": artifact.storage_locator,
+            "checksum": artifact.checksum,
+        } if artifact else None,
+        "markdown": run.report_markdown or "",
+        "status": "REGISTERED" if artifact else "NOT_AVAILABLE",
+    }
+
+
 @router.get("/analysis-runs/{analysis_run_id}/stream")
 async def stream_analysis_run(
     analysis_run_id: str,
@@ -915,6 +1370,8 @@ async def stream_analysis_run(
     if not run:
         raise HTTPException(status_code=404, detail="Analysis run not found")
     require_dataset_access(db, session, run.dataset_id)
+    # Do not pin one pool connection for the lifetime of the SSE stream.
+    db.close()
 
     async def events():
         last_signature = ""
@@ -962,24 +1419,24 @@ def delete_dataset(
     require_dataset_access(db, session, id, manage=True)
 
     from src.models.database import (
-        ColumnProfileModel,
-        ProfileModel,
-        SourceRowModel,
-        DatasetAccessModel,
-        JobModel,
-        SemanticContractModel,
-        RuleProposalModel,
-        RuleVersionModel,
-        RuleConfigurationModel,
-        RulesetVersionModel,
-        WorkflowRunModel,
-        WorkflowArtifactModel,
-        DqRunModel,
-        DqResultModel,
+        AnomalyFeedbackModel,
+        AnomalyHypothesisModel,
         AnomalyRunModel,
         AnomalySignalModel,
-        AnomalyHypothesisModel,
-        AnomalyFeedbackModel,
+        ColumnProfileModel,
+        DatasetAccessModel,
+        DqResultModel,
+        DqRunModel,
+        JobModel,
+        ProfileModel,
+        RuleConfigurationModel,
+        RuleProposalModel,
+        RulesetVersionModel,
+        RuleVersionModel,
+        SemanticContractModel,
+        SourceRowModel,
+        WorkflowArtifactModel,
+        WorkflowRunModel,
     )
 
     try:
@@ -1044,7 +1501,7 @@ def delete_dataset(
         # 8. Delete dataset
         db.delete(dataset)
         db.commit()
-    except Exception as exc:
+    except Exception:
         db.rollback()
         # Fallback raw query if needed
         db.execute(text("DELETE FROM datasets WHERE id = :id"), {"id": id})
@@ -1079,8 +1536,10 @@ def start_ingestion(
     session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
-    """
-    POST /api/v1/datasets/{id}/ingestions - Starts background ingestion and profiling job.
+    """Legacy taxi/dashboard ingestion endpoint.
+
+    Versioned arbitrary datasets use the durable ``INGEST_PROFILE`` reservation
+    created by ``/workspaces/{workspace_id}/datasets/import`` instead.
     """
     dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
     if not dataset:
@@ -1160,41 +1619,92 @@ def get_dataset_profile(
     require_dataset_access(db, session, id)
 
     profile = db.query(ProfileModel).filter(ProfileModel.dataset_id == id).first()
-    if not profile or dataset.status != "PROFILE_READY":
+    if profile and dataset.status == "PROFILE_READY":
+        cols = db.query(ColumnProfileModel).filter(ColumnProfileModel.profile_dataset_id == id).all()
+
+        columns_list = [
+            ColumnProfileSchema(
+                name=c.name,
+                data_type=c.data_type,
+                null_rate=c.null_rate,
+                distinct_count=c.distinct_count,
+                non_null_count=c.non_null_count,
+                negative_rate=c.negative_rate,
+                quantiles=json.loads(c.quantiles_json or "{}"),
+                out_of_domain_rate=c.out_of_domain_rate,
+                full_distinct_count=c.full_distinct_count,
+                uniqueness_rate=c.uniqueness_rate,
+                is_unique_full_table=c.is_unique_full_table,
+                min_value=c.min_value,
+                max_value=c.max_value,
+                sample_value=c.sample_value,
+            )
+            for c in cols
+        ]
+
+        return DatasetProfileSchema(
+            dataset_id=profile.dataset_id,
+            row_count=profile.row_count,
+            completeness_score=profile.completeness_score,
+            validity_score=profile.validity_score,
+            duplicate_rate=profile.duplicate_rate,
+            columns=columns_list,
+            cross_field_metrics=json.loads(profile.cross_field_metrics_json or "[]"),
+            evidence_keys=json.loads(profile.evidence_keys),
+            generated_at=profile.generated_at.isoformat(),
+        )
+
+    # Canonical versioned profiles are immutable snapshots rather than legacy
+    # ProfileModel rows. Adapt the aggregate snapshot to the existing
+    # dashboard contract so the UI does not make a second, domain-specific
+    # profiling request after a successful versioned import.
+    latest_version = (
+        db.query(DatasetVersionModel)
+        .filter_by(dataset_id=id, status="READY")
+        .order_by(DatasetVersionModel.version_number.desc())
+        .first()
+    )
+    version_profile = (
+        db.query(ProfileRunSnapshotModel)
+        .filter_by(dataset_version_id=latest_version.id, status="COMPLETED")
+        .order_by(ProfileRunSnapshotModel.completed_at.desc())
+        .first()
+        if latest_version
+        else None
+    )
+    if not version_profile or dataset.status != "PROFILE_READY":
         raise HTTPException(status_code=404, detail="Profile not generated or dataset not fully profiled yet")
 
-    cols = db.query(ColumnProfileModel).filter(ColumnProfileModel.profile_dataset_id == id).all()
-
+    metrics = json.loads(version_profile.metrics_json or "{}")
+    version_columns = metrics.get("columns") or json.loads(version_profile.schema_json or "[]")
     columns_list = [
         ColumnProfileSchema(
-            name=c.name,
-            data_type=c.data_type,
-            null_rate=c.null_rate,
-            distinct_count=c.distinct_count,
-            non_null_count=c.non_null_count,
-            negative_rate=c.negative_rate,
-            quantiles=json.loads(c.quantiles_json or "{}"),
-            out_of_domain_rate=c.out_of_domain_rate,
-            full_distinct_count=c.full_distinct_count,
-            uniqueness_rate=c.uniqueness_rate,
-            is_unique_full_table=c.is_unique_full_table,
-            min_value=c.min_value,
-            max_value=c.max_value,
-            sample_value=c.sample_value,
+            name=str(column.get("name")),
+            data_type=str(column.get("logical_type") or column.get("physical_type") or "string"),
+            null_rate=float(column.get("null_rate") or 0.0),
+            distinct_count=int(column.get("distinct_count") or 0),
+            non_null_count=int(column.get("non_null_count") or 0),
+            quantiles={},
+            full_distinct_count=int(column.get("distinct_count") or 0),
+            uniqueness_rate=float(column.get("uniqueness_rate") or 0.0),
+            is_unique_full_table=column.get("is_unique_full_table"),
+            sample_value="Aggregate profile only",
         )
-        for c in cols
+        for column in version_columns
+        if isinstance(column, dict) and column.get("name")
     ]
-
+    evidence_keys = ["profile.row_count", "profile.completeness_score", "profile.validity_score", "profile.duplicate_rate"]
+    evidence_keys.extend(f"profile.column.{column.name}.null_rate" for column in columns_list)
     return DatasetProfileSchema(
-        dataset_id=profile.dataset_id,
-        row_count=profile.row_count,
-        completeness_score=profile.completeness_score,
-        validity_score=profile.validity_score,
-        duplicate_rate=profile.duplicate_rate,
+        dataset_id=id,
+        row_count=version_profile.row_count,
+        completeness_score=float(version_profile.completeness_score or metrics.get("completeness_score") or 0.0),
+        validity_score=float(version_profile.validity_score or metrics.get("validity_score") or 0.0),
+        duplicate_rate=float(version_profile.duplicate_rate or metrics.get("duplicate_rate") or 0.0),
         columns=columns_list,
-        cross_field_metrics=json.loads(profile.cross_field_metrics_json or "[]"),
-        evidence_keys=json.loads(profile.evidence_keys),
-        generated_at=profile.generated_at.isoformat(),
+        cross_field_metrics=[],
+        evidence_keys=evidence_keys,
+        generated_at=(version_profile.completed_at or version_profile.created_at).isoformat(),
     )
 
 
@@ -1296,7 +1806,29 @@ def run_workflow_step(
         db.commit()
         raise HTTPException(status_code=409, detail={"code": "WORKFLOW_STATE", "message": str(exc)})
     except Exception:
-        job.status, job.error, job.message = "FAILED", "Workflow execution failed", "Workflow step failed"
+        # A failed flush leaves the SQLAlchemy session unusable until rollback.
+        # Persist a terminal job after recovery so clients never poll a stale
+        # RUNNING record when a workflow write fails.
+        db.rollback()
+        failed_job = db.get(JobModel, job.id)
+        if not failed_job:
+            failed_job = JobModel(
+                id=job.id,
+                type=job.type,
+                status="FAILED",
+                progress=0.0,
+                message="Workflow step failed",
+                error="Workflow execution failed",
+                idempotency_key=job.idempotency_key,
+                linked_entity=run.dataset_id,
+                correlation_id=run.id,
+                attempt_count=1,
+            )
+            db.add(failed_job)
+        else:
+            failed_job.status = "FAILED"
+            failed_job.error = "Workflow execution failed"
+            failed_job.message = "Workflow step failed"
         db.commit()
         raise
     return CreateJobResponse(job_id=job.id, status="PENDING")
@@ -1456,16 +1988,19 @@ def confirm_semantic_contract(
     return {"message": "Semantic contract confirmed successfully. Resumed proposals job.", "job_id": job.id}
 
 
-@router.get("/datasets/{id}/rows", response_model=DatasetRowsResponse)
+@router.get("/datasets/{id}/rows")
 def query_dataset_rows(
     id: str,
+    dataset_version_id: str | None = Query(None, max_length=64),
     vendor_id: str | None = None,
     payment_type: str | None = None,
     min_distance: float | None = None,
     max_distance: float | None = None,
     quality_status: str = Query("ALL", pattern="^(ALL|VALID|ISSUE)$"),
-    sort_by: str = Query("pickup_at", pattern="^(pickup_at|trip_distance|fare_amount|total_amount)$"),
+    sort_by: str = Query("pickup_at", min_length=0, max_length=128),
     sort_direction: str = Query("desc", pattern="^(asc|desc)$"),
+    filter_column: str | None = Query(None, max_length=128),
+    filter_value: str | None = Query(None, max_length=512),
     limit: int = Query(25, ge=1, le=100),
     offset: int = Query(0, ge=0),
     session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
@@ -1477,10 +2012,124 @@ def query_dataset_rows(
     dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
+
+    # Versioned uploads are served through the workspace authorization and
+    # schema-driven source adapter. The legacy taxi projection below remains
+    # available only for datasets without a canonical version artifact.
+    version_query = db.query(DatasetVersionModel).filter_by(dataset_id=id, status="READY")
+    if dataset_version_id:
+        version_query = version_query.filter(DatasetVersionModel.id == dataset_version_id)
+    latest_version = version_query.order_by(DatasetVersionModel.version_number.desc()).first()
+    governance = db.query(DatasetGovernanceModel).filter_by(dataset_id=id).first() if latest_version else None
+    account = db.query(UserAccountModel).filter_by(username=session.username).first() if latest_version else None
+    if latest_version and governance and account:
+        from src.services.data_access_service import AccessContext, get_data_explorer
+        try:
+            version_metadata = json.loads(latest_version.source_metadata_json or "{}")
+            version_columns = {str(item.get("name")) for item in version_metadata.get("schema", []) if isinstance(item, dict) and item.get("name")}
+            explorer = get_data_explorer(
+                db,
+                AccessContext(user_id=account.id, workspace_id=governance.workspace_id),
+                dataset_id=id,
+                dataset_version_id=latest_version.id,
+                include_rows=True,
+                filters={filter_column: filter_value} if filter_column and filter_value is not None else None,
+                sort_by=sort_by if sort_by in version_columns else None,
+                sort_direction=sort_direction,
+                limit=limit,
+                offset=offset,
+            )
+        except Exception as exc:
+            from src.services.data_access_service import AccessDeniedError, ResourceNotFoundError
+            if isinstance(exc, ResourceNotFoundError):
+                raise HTTPException(status_code=404, detail="Dataset not found") from exc
+            if isinstance(exc, AccessDeniedError):
+                raise HTTPException(status_code=403, detail="Rows access is not granted") from exc
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {
+            "dataset_id": id,
+            "dataset_version_id": latest_version.id,
+            "total": explorer["total_rows"],
+            "limit": limit,
+            "offset": offset,
+            "schema": explorer["dataset_version"].get("schema", []),
+            "rows": explorer["rows"],
+        }
+
+    # Only the explicitly legacy projection uses the old DatasetAccess table.
+    # A shared versioned dataset may be authorized solely through workspace
+    # grants and must not be blocked by this compatibility check.
     require_dataset_access(db, session, id)
 
     policy = get_dataset_rule_policy(id)
     allowed_payments = policy.governed_value_sets.get("payment_type", []) if policy else []
+    uploaded_path = None
+    for suffix in (".parquet", ".csv"):
+        candidate = Path("data/uploads") / f"{id}{suffix}"
+        if candidate.exists():
+            uploaded_path = candidate
+            break
+
+    if uploaded_path:
+        import pandas as pd
+        df = pd.read_parquet(uploaded_path) if uploaded_path.suffix.lower() == ".parquet" else pd.read_csv(uploaded_path)
+        schema = canonical_schema_manifest(df)
+        columns = [item["name"] for item in schema]
+        if filter_column:
+            if filter_column not in columns:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": "INVALID_DATASET_FILTER", "message": f"Unknown dataset column: {filter_column}"},
+                )
+            df = df[df[filter_column].astype(str) == str(filter_value or "")]
+        if sort_by and sort_by in columns:
+            df = df.sort_values(sort_by, ascending=sort_direction == "asc", kind="stable")
+        total = len(df)
+        if dataset.row_count == 0 and total > 0:
+            dataset.row_count = total
+            db.commit()
+
+        sub_df = df.iloc[offset : offset + limit]
+        def json_value(value: Any) -> Any:
+            if value is None:
+                return None
+            try:
+                if bool(pd.isna(value)):
+                    return None
+            except (TypeError, ValueError):
+                pass
+            if hasattr(value, "item"):
+                value = value.item()
+            if hasattr(value, "isoformat"):
+                return value.isoformat()
+            return value
+
+        rows_list = [
+            {column: json_value(row[column]) for column in columns}
+            for _, row in sub_df.iterrows()
+        ]
+        return DatasetRowsResponse(
+            dataset_id=id,
+            total=total,
+            limit=limit,
+            offset=offset,
+            rows=rows_list,
+            schema=schema,
+        )
+
+    # The Supabase source adapter is a compatibility path for the original
+    # demo dataset only. Generic imports without a local compatibility file
+    # must have a canonical version artifact instead of guessing a domain
+    # table name such as trips_canonical.
+    if dataset.manifest_version not in {"v1", "1.0.0"}:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "VERSIONED_SOURCE_REQUIRED",
+                "message": "This dataset has no queryable versioned source artifact.",
+            },
+        )
+
     source_url = _supabase_source_url()
     if source_url:
         source_engine = create_supabase_engine(source_url)
@@ -1507,47 +2156,7 @@ def query_dataset_rows(
             total=total,
             limit=limit,
             offset=offset,
-            rows=[DatasetRowSchema(**row) for row in rows],
-        )
-
-    uploaded_path = None
-    for suffix in (".parquet", ".csv"):
-        candidate = Path("data/uploads") / f"{id}{suffix}"
-        if candidate.exists():
-            uploaded_path = candidate
-            break
-
-    if uploaded_path:
-        import pandas as pd
-        df = pd.read_parquet(uploaded_path) if uploaded_path.suffix.lower() == ".parquet" else pd.read_csv(uploaded_path)
-        total = len(df)
-        if dataset.row_count == 0 and total > 0:
-            dataset.row_count = total
-            db.commit()
-
-        sub_df = df.iloc[offset : offset + limit]
-        rows_list = []
-        for idx, row in sub_df.iterrows():
-            r = row.to_dict()
-            rows_list.append(
-                DatasetRowSchema(
-                    source_row_id=str(r.get("source_row_id", r.get("id", idx + 1))),
-                    vendor_id=str(r.get("vendor_id")) if pd.notna(r.get("vendor_id")) else None,
-                    pickup_at=str(r.get("pickup_at")) if pd.notna(r.get("pickup_at")) else None,
-                    dropoff_at=str(r.get("dropoff_at")) if pd.notna(r.get("dropoff_at")) else None,
-                    passenger_count=int(r.get("passenger_count")) if pd.notna(r.get("passenger_count")) and str(r.get("passenger_count")).isdigit() else None,
-                    trip_distance=float(r.get("trip_distance")) if pd.notna(r.get("trip_distance")) else None,
-                    payment_type=str(r.get("payment_type")) if pd.notna(r.get("payment_type")) else None,
-                    fare_amount=float(r.get("fare_amount")) if pd.notna(r.get("fare_amount")) else None,
-                    total_amount=float(r.get("total_amount")) if pd.notna(r.get("total_amount")) else None,
-                )
-            )
-        return DatasetRowsResponse(
-            dataset_id=id,
-            total=total,
-            limit=limit,
-            offset=offset,
-            rows=rows_list,
+            rows=[dict(row) for row in rows],
         )
 
     query = db.query(SourceRowModel).filter(SourceRowModel.dataset_id == id)
@@ -1607,7 +2216,7 @@ def query_dataset_rows(
                 payment_type=row.payment_type,
                 fare_amount=row.fare_amount,
                 total_amount=row.total_amount,
-            )
+            ).model_dump()
             for row in rows
         ],
     )
@@ -1687,7 +2296,7 @@ def start_rule_proposals(
     dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
     if dataset.status != "PROFILE_READY":
         try:
-            from src.services.job_runner import _uploaded_dataset_path, _profile_uploaded_dataset
+            from src.services.job_runner import _profile_uploaded_dataset, _uploaded_dataset_path
             path = _uploaded_dataset_path(id)
             if path:
                 _profile_uploaded_dataset(db, id, path)
@@ -2538,7 +3147,14 @@ def list_audit_logs(
     """
     GET /api/v1/audit-logs - Returns paginated system logs.
     """
-    logs = db.query(AuditEventModel).order_by(AuditEventModel.created_at.desc()).offset(offset).limit(limit).all()
+    logs = (
+        db.query(AuditEventModel)
+        .filter(AuditEventModel.entity_type != "demo_quota")
+        .order_by(AuditEventModel.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
     session_ids = {log.session_id for log in logs if log.session_id}
     sessions = {}
     if session_ids:
@@ -2580,11 +3196,21 @@ def compatibility_trigger_job(
     request: SmokeCreateJobRequest,
     background_tasks: BackgroundTasks,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
+    """Legacy compatibility dispatcher for taxi/dashboard smoke tests.
+
+    Canonical versioned workflows are dispatched by their typed workflow
+    routes and ``src.services.job_dispatch``.
     """
-    POST /api/v1/jobs - Smoke test compatibility job dispatcher.
-    """
+    if request.type not in {"INGEST_PROFILE", "PROPOSE_RULES"}:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "VALIDATION_ERROR", "message": "Unsupported compatibility job type."},
+        )
+    target_dataset_id = request.linked_entity or "dataset-nyc-yellow-taxi-50k"
+    require_dataset_access(db, session, target_dataset_id, manage=True)
     collision_job_id = verify_idempotency(db, idempotency_key)
     if collision_job_id:
         raise HTTPException(
@@ -2609,9 +3235,21 @@ def compatibility_trigger_job(
     db.commit()
 
     if request.type == "INGEST_PROFILE":
-        background_tasks.add_task(run_ingest_profile, job_id, "dataset-nyc-yellow-taxi-50k", None, "SYSTEM")
+        background_tasks.add_task(
+            run_ingest_profile,
+            job_id,
+            target_dataset_id,
+            session.id,
+            session.role,
+        )
     elif request.type == "PROPOSE_RULES":
-        background_tasks.add_task(run_propose_rules, job_id, "dataset-nyc-yellow-taxi-50k", None, "SYSTEM")
+        background_tasks.add_task(
+            run_propose_rules,
+            job_id,
+            target_dataset_id,
+            session.id,
+            session.role,
+        )
 
     return {"job_id": job_id, "status": "PENDING"}
 
@@ -3035,11 +3673,11 @@ async def get_execution_run_results_endpoint(
 
 @dq_router.get(
     "/anomaly-runs/{id}/signals",
-    response_model=List[AnomalySignalDTO],
+    response_model=list[AnomalySignalDTO],
 )
 async def get_anomaly_signals_endpoint(
     id: str,
-) -> List[AnomalySignalDTO]:
+) -> list[AnomalySignalDTO]:
     """Fetches specialized signals for an anomaly run."""
     with Session(get_engine()) as session:
         signals = session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == id).all()
@@ -3072,11 +3710,11 @@ async def get_anomaly_signals_endpoint(
 
 @dq_router.get(
     "/anomaly-runs/{id}/hypotheses",
-    response_model=List[Dict[str, Any]],
+    response_model=list[dict[str, Any]],
 )
 async def get_anomaly_hypotheses_endpoint(
     id: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Fetches detailed hypotheses for an anomaly run."""
     with Session(get_engine()) as session:
         hyps = session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == id).all()
@@ -3109,7 +3747,7 @@ async def get_anomaly_hypotheses_endpoint(
 async def submit_anomaly_feedback_endpoint(
     id: str,
     body: AnomalyFeedbackRequest,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Submits steward feedback for an anomaly run."""
     with Session(get_engine()) as session:
         anom_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.id == id).first()
