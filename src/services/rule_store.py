@@ -1133,14 +1133,18 @@ def publish_approved_rules(run_id: str) -> int:
             clean_params = _extract_clean_parameters(p.rule_type, spec)
             params_str = json.dumps(clean_params, ensure_ascii=False)
 
-            table_name = spec.get("table_name") or (p.id.split(".")[0] if "." in p.id else "source_rows")
-            column_name = spec.get("column")
             proposed_source = (
                 session.query(ProposedRuleModel)
                 .filter(ProposedRuleModel.rule_id == p.id)
                 .order_by(ProposedRuleModel.created_at.desc())
                 .first()
             )
+            table_name = (
+                spec.get("table_name")
+                or (proposed_source.table_name if proposed_source and proposed_source.table_name != "source_rows" else None)
+                or (p.dataset_id if p.dataset_id else (p.id.split(".")[0] if "." in p.id else "source_rows"))
+            )
+            column_name = spec.get("column")
             dimension = proposed_source.dimension if proposed_source else "VALIDITY"
 
             active_rule = session.get(ActiveRuleModel, p.id)

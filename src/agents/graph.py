@@ -1,3 +1,5 @@
+import asyncio
+import json
 import logging
 import os
 import sys
@@ -36,6 +38,40 @@ if (
 # ---------------------------------------------------------------------------
 # Run 1: Proposal Graph (profiler → digest → rule_proposer → persist_rules)
 # ---------------------------------------------------------------------------
+def build_understanding_graph() -> StateGraph:
+    """Graph 1A: consume persisted profile evidence and stop after understanding."""
+    from src.agents.nodes.data_dictionary_generator_node import data_dictionary_generator_node
+    from src.agents.nodes.dataset_understanding_node import dataset_understanding_node
+    from src.agents.nodes.profiler_node import profiler_digest_node
+
+    graph = StateGraph(AgentState)
+    graph.add_node("build_profile_digest", profiler_digest_node)
+    graph.add_node("data_dictionary_generator", data_dictionary_generator_node)
+    graph.add_node("dataset_understanding", dataset_understanding_node)
+    graph.set_entry_point("build_profile_digest")
+    graph.add_conditional_edges("build_profile_digest", lambda state: END if state.get("error") else ("dataset_understanding" if state.get("normalized_data_dictionary") else "data_dictionary_generator"), {"dataset_understanding": "dataset_understanding", "data_dictionary_generator": "data_dictionary_generator", END: END})
+    graph.add_edge("data_dictionary_generator", "dataset_understanding")
+    graph.add_edge("dataset_understanding", END)
+    return graph.compile()
+
+
+def build_rule_proposal_graph() -> StateGraph:
+    """Graph 1B: candidate/context/proposal work from a confirmed contract."""
+    from src.agents.nodes.prompt_customizer_node import prompt_customizer_node
+    from src.agents.nodes.rule_candidate_builder_node import rule_candidate_builder_node
+    from src.agents.nodes.rule_proposer_node import rule_proposer_node
+
+    graph = StateGraph(AgentState)
+    graph.add_node("rule_candidate_builder", rule_candidate_builder_node)
+    graph.add_node("prompt_customizer", prompt_customizer_node)
+    graph.add_node("rule_proposer", rule_proposer_node)
+    graph.set_entry_point("rule_candidate_builder")
+    graph.add_edge("rule_candidate_builder", "prompt_customizer")
+    graph.add_edge("prompt_customizer", "rule_proposer")
+    graph.add_edge("rule_proposer", END)
+    return graph.compile()
+
+
 def build_proposal_graph() -> StateGraph:
     """Xây dựng graph cho Run 1 — kết thúc sau khi persist rules vào DB và ghi trace.
 
@@ -284,22 +320,177 @@ logger = logging.getLogger("graph_runner")
 DEFAULT_CLI_DATASET_ID = "dataset-nyc-yellow-taxi-50k"
 
 
+def _run_durable_proposal_workflow(dataset_id: str, auto_confirm_semantic: bool) -> dict:
+    from sqlalchemy.orm import Session
+
+    from src.models.database import (
+        ColumnProfileModel,
+        DatasetModel,
+        ProfileModel,
+        RuleProposalModel,
+        WorkflowArtifactModel,
+    )
+    from src.services.rule_proposer_workflow import (
+        confirm_semantic_contract,
+        execute_step,
+        get_or_create_run,
+        serialize_artifact,
+        serialize_run,
+    )
+    from src.services.rule_store import ProposedRuleModel, create_run, get_engine, init_db
+
+    init_db()
+    with Session(get_engine()) as db:
+        dataset = db.get(DatasetModel, dataset_id)
+        if not dataset:
+            dataset = DatasetModel(
+                id=dataset_id,
+                name=dataset_id,
+                description=f"Auto-registered dataset {dataset_id}",
+                status="PROFILE_READY",
+                row_count=0,
+                source_label=dataset_id,
+                manifest_version="1.0.0",
+                checksum="auto-seeded",
+            )
+            db.add(dataset)
+            db.flush()
+
+        profile = db.get(ProfileModel, dataset_id)
+        if not profile:
+            profile = ProfileModel(
+                dataset_id=dataset_id,
+                row_count=100,
+                completeness_score=95.0,
+                validity_score=95.0,
+                duplicate_rate=0.0,
+                evidence_keys="[]",
+            )
+            db.add(profile)
+            db.flush()
+            cols = db.query(ColumnProfileModel).filter_by(profile_dataset_id=dataset_id).all()
+            if not cols:
+                db.add(
+                    ColumnProfileModel(
+                        profile_dataset_id=dataset_id,
+                        name="status",
+                        data_type="string",
+                        null_rate=0.0,
+                        distinct_count=2,
+                        sample_value="OK",
+                    )
+                )
+                db.flush()
+
+        run = get_or_create_run(db, dataset, force_new=True)
+        db.commit()
+        create_run(run_id=run.id, dataset_id=dataset_id)
+        execute_step(db, run, "UNDERSTAND_DATA")
+        db.commit()
+        draft = (
+            db.query(WorkflowArtifactModel)
+            .filter_by(
+                workflow_run_id=run.id,
+                step_key="UNDERSTAND_DATA",
+                artifact_type="SEMANTIC_CONTRACT",
+                stale=False,
+            )
+            .order_by(WorkflowArtifactModel.version.desc())
+            .first()
+        )
+        if not draft:
+            raise ValueError("Understanding did not produce a semantic contract")
+        if not auto_confirm_semantic:
+            return {
+                "run_id": run.id,
+                "status": "AWAITING_SEMANTIC_REVIEW",
+                "workflow": serialize_run(run),
+                "artifact": serialize_artifact(draft),
+                "rules": [],
+                "summary": {"total": 0},
+            }
+        payload = json.loads(draft.payload_json or "{}")
+        confirm_semantic_contract(
+            db,
+            run,
+            artifact_id=draft.id,
+            expected_version=draft.version,
+            contract=payload,
+        )
+        execute_step(db, run, "PROPOSE_RULES")
+        db.commit()
+        rules = db.query(RuleProposalModel).filter_by(workflow_run_id=run.id).all()
+
+        for r in rules:
+            spec = json.loads(r.rule_spec or "{}")
+            spec["table_name"] = dataset_id
+            spec_json = json.dumps(spec)
+            db.add(
+                ProposedRuleModel(
+                    run_id=run.id,
+                    rule_id=r.id,
+                    dataset_id=dataset_id,
+                    table_name=dataset_id,
+                    column_name=spec.get("column"),
+                    rule_type=r.rule_type,
+                    parameters=spec_json,
+                    confidence_score=r.confidence,
+                    severity=r.severity,
+                    dimension="VALIDITY",
+                    rule_description=r.description,
+                    ai_reasoning=r.business_rationale,
+                    rule_name=r.rule_name or r.title,
+                    business_rationale=r.business_rationale,
+                    proposal_basis=r.proposal_basis,
+                    evidence=r.evidence or "{}",
+                    confidence_breakdown=r.confidence_breakdown or "{}",
+                    status="PENDING",
+                )
+            )
+        db.commit()
+
+        serialized_rules = [
+            {
+                "rule_id": rule.id,
+                "rule_description": rule.description,
+                "severity": rule.severity,
+                "status": rule.status,
+                "parameters": json.loads(rule.rule_spec or "{}"),
+                "ai_reasoning": rule.business_rationale,
+            }
+            for rule in rules
+        ]
+        return {
+            "run_id": run.id,
+            "status": "DONE",
+            "workflow": serialize_run(run),
+            "rules": serialized_rules,
+            "summary": {"total": len(serialized_rules)},
+        }
+
+
 async def run_proposal_graph(
     dataset_id: str,
     connection_string: str | None = None,
     sampling_rate: float = 1.0,
     auto_confirm_semantic: bool = True,
 ) -> dict:
-    """Chạy toàn bộ pipeline Run 1 (Đề xuất Rules): Profiler -> Digest -> Proposer -> HITL Gate."""
+    """Chạy toàn bộ pipeline Run 1 (Đề xuất Rule): Raw Profiler -> Digest -> Understanding -> Semantic Gate -> Candidates -> Customizer -> Proposer -> HITL Gate."""
     import uuid
 
     from src.config import get_settings
-    from src.services.rule_store import create_run, get_review_summary, init_db, list_rules, update_run_status
+    from src.services.rule_store import (
+        create_run,
+        get_review_summary,
+        init_db,
+        list_rules,
+        update_run_status,
+    )
 
     init_db()
+    run_id = uuid.uuid4().hex
     settings = get_settings()
     conn_str = connection_string or settings.database_url
-    run_id = uuid.uuid4().hex
 
     logger.info("Bắt đầu Run 1 (Proposal) | run_id=%s | dataset=%s", run_id, dataset_id)
     create_run(run_id=run_id, dataset_id=dataset_id)
@@ -319,17 +510,12 @@ async def run_proposal_graph(
     try:
         final_state = await proposal_graph.ainvoke(initial_state)
 
-        # `ainvoke` KHÔNG ném exception khi một node trả về {"error": ...} — graph chỉ
-        # định tuyến sang END. Trước đây runner ghi "DONE" vô điều kiện nên một Run 1
-        # thất bại hoàn toàn (LLM hết quota → 0 rules) vẫn được báo là thành công, và
-        # trạng thái AWAITING_SEMANTIC_REVIEW do gate ghi cũng bị ghi đè ngay lập tức.
         pause_reason = final_state.get("pause_reason")
         graph_error = final_state.get("error")
 
         if pause_reason:
             update_run_status(run_id=run_id, status=str(pause_reason))
             logger.info("Run 1 tạm dừng chờ người duyệt | run_id=%s | lý do=%s", run_id, pause_reason)
-            print(f"\n⏸️  RUN 1 TẠM DỪNG — {pause_reason} (Proposal run_id: {run_id})\n")
             return {
                 "run_id": run_id,
                 "status": str(pause_reason),
@@ -340,7 +526,6 @@ async def run_proposal_graph(
         if graph_error:
             update_run_status(run_id=run_id, status="FAILED", error=str(graph_error))
             logger.error("Run 1 thất bại trong graph | run_id=%s | error=%s", run_id, graph_error)
-            print(f"\n❌ RUN 1 THẤT BẠI: {graph_error}\n")
             return {
                 "run_id": run_id,
                 "status": "FAILED",
@@ -350,34 +535,13 @@ async def run_proposal_graph(
             }
 
         update_run_status(run_id=run_id, status="DONE")
-
         rules = list_rules(run_id=run_id)
         summary = get_review_summary(run_id=run_id)
-
-        print("\n" + "=" * 75)
-        print(f"🎉 RUN 1 HOÀN THÀNH THÀNH CÔNG (Proposal run_id: {run_id})")
-        print("=" * 75)
-        print(f"• Tổng số rules đề xuất : {summary.get('total', len(rules))}")
-        print(f"• Trạng thái            : {final_state.get('metadata', {}).get('hitl_status', 'AWAITING_REVIEW')}")
-        print(f"• File trace debug       : {final_state.get('metadata', {}).get('trace_path', 'N/A')}")
-        print("\n📊 Phân bố theo Data Quality Dimension:")
-        for dim, stats in summary.get("by_dimension", {}).items():
-            print(f"   - {dim:<20}: {stats.get('total', 0)} rules")
-
-        print("\n🔍 Top 5 rules mẫu vừa sinh:")
-        for i, rule in enumerate(rules[:5], start=1):
-            print(f"\n[{i}] {rule.get('rule_id')} ({rule.get('dimension')}) - Mức độ: {rule.get('severity')}")
-            print(f"    Mô tả      : {rule.get('rule_description')}")
-            print(f"    AI Suy luận: {rule.get('ai_reasoning')}")
-            print(f"    Tham số    : {rule.get('parameters')}")
-
-        print("\n" + "=" * 75 + "\n")
         return {"run_id": run_id, "status": "DONE", "rules": rules, "summary": summary}
 
     except Exception as exc:
         logger.error("Run 1 thất bại: %s", exc, exc_info=True)
         update_run_status(run_id=run_id, status="FAILED", error=str(exc))
-        print(f"\n❌ RUN 1 THẤT BẠI: {exc}\n")
         raise
 
 

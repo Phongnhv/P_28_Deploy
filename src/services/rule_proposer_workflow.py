@@ -109,6 +109,104 @@ def serialize_artifact(artifact: WorkflowArtifactModel) -> dict[str, Any]:
     }
 
 
+def _current_artifact(
+    db: Session, run_id: str, step_key: str, artifact_type: str
+) -> WorkflowArtifactModel | None:
+    return (
+        db.query(WorkflowArtifactModel)
+        .filter_by(workflow_run_id=run_id, step_key=step_key, artifact_type=artifact_type, stale=False)
+        .order_by(WorkflowArtifactModel.version.desc(), WorkflowArtifactModel.created_at.desc())
+        .first()
+    )
+
+
+def _dictionary_snapshot(semantic_payload: dict[str, Any]) -> dict[str, Any]:
+    """Build a durable dictionary payload from the profile-backed contract."""
+    columns = semantic_payload.get("columns") or []
+    return {
+        "table_name": semantic_payload.get("table_name") or semantic_payload.get("dataset_id"),
+        "description": semantic_payload.get("summary", ""),
+        "columns": [
+            {
+                "name": item.get("name"),
+                "description": item.get("description", ""),
+                "semantic_type": item.get("semantic_type", "unknown"),
+                "business_role": item.get("business_role", "unknown"),
+                "nullable_expected": item.get("nullable_expected", True),
+                "governance_notes": item.get("governance_notes", []),
+            }
+            for item in columns
+            if isinstance(item, dict) and item.get("name")
+        ],
+        "business_rules": semantic_payload.get("assumptions", []),
+        "source": "semantic_contract_projection",
+    }
+
+
+def _profile_snapshot(db: Session, dataset_id: str) -> dict[str, Any]:
+    profile = db.get(ProfileModel, dataset_id)
+    if not profile:
+        raise WorkflowError("A completed profile is required before understanding data.")
+    columns = db.query(ColumnProfileModel).filter_by(profile_dataset_id=dataset_id).all()
+    if not columns:
+        raise WorkflowError("The completed profile has no column profiles.")
+    return {
+        "dataset_id": dataset_id,
+        "row_count": profile.row_count,
+        "column_count": len(columns),
+        "duplicate_rate": profile.duplicate_rate,
+        "duplicate_count": round(profile.row_count * float(profile.duplicate_rate) / 100),
+        "completeness_score": profile.completeness_score,
+        "validity_score": profile.validity_score,
+        "evidence_keys": json.loads(profile.evidence_keys or "[]"),
+        "profile_generated_at": profile.generated_at.isoformat(),
+        "columns": [
+            {
+                "name": column.name,
+                "data_type": column.data_type,
+                "null_rate": column.null_rate,
+                "null_percentage": float(column.null_rate) * 100,
+                "distinct_count": column.distinct_count,
+                "full_distinct_count": column.full_distinct_count,
+                "non_null_count": column.non_null_count,
+                "uniqueness_rate": column.uniqueness_rate,
+                "is_unique_full_table": column.is_unique_full_table,
+                "quantiles": json.loads(column.quantiles_json) if column.quantiles_json else None,
+                "negative_rate": column.negative_rate,
+                "out_of_domain_rate": column.out_of_domain_rate,
+                "sample_value": column.sample_value,
+                "min_value": column.min_value,
+                "max_value": column.max_value,
+            }
+            for column in columns
+        ],
+    }
+
+
+def confirm_semantic_contract(db: Session, run: WorkflowRunModel, *, artifact_id: str, expected_version: int, contract: dict[str, Any], review_note: str | None = None) -> WorkflowArtifactModel:
+    draft = db.get(WorkflowArtifactModel, artifact_id)
+    current = _current_artifact(db, run.id, "UNDERSTAND_DATA", "SEMANTIC_CONTRACT")
+    if not draft or draft.workflow_run_id != run.id or not current or current.id != draft.id or draft.version != expected_version or draft.stale:
+        raise WorkflowError("The semantic contract version is no longer current.")
+    if str(json.loads(draft.payload_json or "{}").get("status", "DRAFT")).upper() != "DRAFT":
+        raise WorkflowError("Only the current draft semantic contract can be confirmed.")
+    if not isinstance(contract, dict) or not (contract.get("columns") or contract.get("tables")):
+        raise WorkflowError("The semantic contract must contain columns or tables.")
+    profile = _current_artifact(db, run.id, "UNDERSTAND_DATA", "PROFILE_SNAPSHOT")
+    dictionary = _current_artifact(db, run.id, "UNDERSTAND_DATA", "DATA_DICTIONARY")
+    if not profile or not dictionary:
+        raise WorkflowError("The source profile or data dictionary artifact is missing.")
+    draft.stale, draft.status = True, "SUPERSEDED"
+    payload = {**contract, "status": "CONFIRMED", "dataset_id": run.dataset_id, "source_profile_artifact_id": profile.id, "source_profile_version": profile.version, "source_dictionary_artifact_id": dictionary.id, "source_dictionary_version": dictionary.version, "review_note": review_note, "confirmed_at": utc_now().isoformat()}
+    confirmed = _add_artifact(db, run, "UNDERSTAND_DATA", "SEMANTIC_CONTRACT", payload, status="CONFIRMED")
+    steps = _decode_steps(run)
+    _step(steps, "PROPOSE_RULES")["status"] = "READY"
+    run.current_step = "PROPOSE_RULES"
+    run.revision += 1
+    _encode_steps(run, steps)
+    return confirmed
+
+
 def get_or_create_run(db: Session, dataset: DatasetModel, *, force_new: bool = False) -> WorkflowRunModel:
     run = (
         None
@@ -162,6 +260,11 @@ def _mark_downstream_stale(db: Session, run: WorkflowRunModel, from_key: str) ->
     _encode_steps(run, steps)
 
 
+def _mark_stage_artifacts_stale(db: Session, run: WorkflowRunModel, step_key: str) -> None:
+    for artifact in db.query(WorkflowArtifactModel).filter_by(workflow_run_id=run.id, step_key=step_key, stale=False):
+        artifact.stale = True
+
+
 def _add_artifact(
     db: Session,
     run: WorkflowRunModel,
@@ -170,14 +273,25 @@ def _add_artifact(
     payload: dict[str, Any],
     status: str = "VALIDATED",
 ) -> WorkflowArtifactModel:
-    previous = db.query(WorkflowArtifactModel).filter_by(workflow_run_id=run.id, step_key=step_key).count()
+    previous = db.query(WorkflowArtifactModel).filter_by(workflow_run_id=run.id, step_key=step_key, artifact_type=artifact_type).count()
+    dataset = db.get(DatasetModel, run.dataset_id)
+    version = previous + 1
+    payload = {
+        **payload,
+        "workflow_run_id": run.id,
+        "dataset_id": run.dataset_id,
+        "dataset_version_id": getattr(dataset, "manifest_version", None) or run.dataset_id,
+        "step_key": step_key,
+        "artifact_type": artifact_type,
+        "artifact_version": version,
+    }
     artifact = WorkflowArtifactModel(
         id=f"artifact-{uuid.uuid4().hex[:20]}",
         workflow_run_id=run.id,
         step_key=step_key,
         artifact_type=artifact_type,
         status=status,
-        version=previous + 1,
+        version=version,
         input_fingerprint=_fingerprint(payload),
         payload_json=json.dumps(payload, ensure_ascii=False),
     )
@@ -351,18 +465,37 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
     if run.current_step != step_key:
         raise WorkflowError("Complete the current workflow step before continuing.")
     steps = _decode_steps(run)
-    if _step(steps, step_key)["status"] not in {"READY", "FAILED", "COMPLETED"}:
+    if _step(steps, step_key)["status"] not in {"READY", "FAILED", "COMPLETED", "RUNNING"}:
         raise WorkflowError("This workflow step is not ready to run.")
-    _mark_downstream_stale(db, run, step_key)
     if step_key == "UPLOAD_PROFILE":
         raise WorkflowError(
             "Upload/profile runs through the dataset ingestion endpoint. Refresh this workflow when profiling completes."
         )
     if step_key == "UNDERSTAND_DATA":
-        _add_artifact(db, run, step_key, "SEMANTIC_CONTRACT", _agent_semantic_payload(db, run.dataset_id))
+        snapshot_payload = _profile_snapshot(db, run.dataset_id)
+        semantic = _agent_semantic_payload(db, run.dataset_id)
+        _mark_downstream_stale(db, run, step_key)
+        _mark_stage_artifacts_stale(db, run, step_key)
+        snapshot = _add_artifact(db, run, step_key, "PROFILE_SNAPSHOT", snapshot_payload)
+        dictionary = _add_artifact(db, run, step_key, "DATA_DICTIONARY", {"tables": {run.dataset_id: _dictionary_snapshot(semantic)}, "inferred": True}, status="DRAFT")
+        _add_artifact(db, run, step_key, "SEMANTIC_CONTRACT", {**semantic, "status": "DRAFT", "source_profile_artifact_id": snapshot.id, "source_dictionary_artifact_id": dictionary.id}, status="DRAFT")
         next_key = "PROPOSE_RULES"
     elif step_key == "PROPOSE_RULES":
-        proposals = generate_dashboard_proposals(db, run.dataset_id)
+        contract_artifact = _current_artifact(db, run.id, "UNDERSTAND_DATA", "SEMANTIC_CONTRACT")
+        profile_artifact = _current_artifact(db, run.id, "UNDERSTAND_DATA", "PROFILE_SNAPSHOT")
+        dictionary_artifact = _current_artifact(db, run.id, "UNDERSTAND_DATA", "DATA_DICTIONARY")
+        if not contract_artifact or not profile_artifact or not dictionary_artifact:
+            raise WorkflowError("Current understanding artifacts are missing or stale.")
+        contract = json.loads(contract_artifact.payload_json or "{}")
+        if contract_artifact.status != "CONFIRMED" or str(contract.get("status", "")).upper() != "CONFIRMED":
+            raise WorkflowError("Confirm the current semantic contract before proposing rules.")
+        if contract.get("source_profile_artifact_id") != profile_artifact.id or contract.get("source_dictionary_artifact_id") != dictionary_artifact.id:
+            raise WorkflowError("The confirmed contract references stale understanding artifacts.")
+        proposals = generate_dashboard_proposals(db, run.dataset_id, contract)
+        if not proposals:
+            raise WorkflowError("No usable rule proposals were produced.")
+        _mark_downstream_stale(db, run, step_key)
+        _mark_stage_artifacts_stale(db, run, step_key)
         for old in (
             db.query(RuleProposalModel)
             .filter_by(workflow_run_id=run.id)
@@ -403,11 +536,13 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
             run,
             step_key,
             "RULE_SET",
-            {"proposal_ids": proposal_ids, "proposal_count": len(proposal_ids)},
+            {"proposal_ids": proposal_ids, "proposal_count": len(proposal_ids), "source_semantic_contract_artifact_id": contract_artifact.id, "source_profile_artifact_id": profile_artifact.id, "source_dictionary_artifact_id": dictionary_artifact.id, "generated_at": utc_now().isoformat()},
             status="DRAFT",
         )
         next_key = "REVIEW_RULES"
     elif step_key == "PUBLISH_RULESET":
+        _mark_downstream_stale(db, run, step_key)
+        _mark_stage_artifacts_stale(db, run, step_key)
         _publish_ruleset(db, run)
         next_key = "RUN_CHECKS"
     else:
@@ -415,7 +550,7 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
     steps = _decode_steps(run)
     _complete(steps, step_key)
     following = _step(steps, next_key)
-    following["status"] = "WAITING_APPROVAL" if next_key == "REVIEW_RULES" else "READY"
+    following["status"] = "WAITING_APPROVAL" if next_key in {"PROPOSE_RULES", "REVIEW_RULES"} else "READY"
     if step_key == "PROPOSE_RULES":
         following["artifact_ids"] = [*following.get("artifact_ids", []), rule_set.id]
     # Understanding is a steward-visible checkpoint: preserve the semantic
@@ -424,6 +559,40 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
     run.current_step = step_key if step_key == "UNDERSTAND_DATA" else next_key
     run.revision += 1
     _encode_steps(run, steps)
+
+
+def run_workflow_stage_job(workflow_run_id: str, step_key: str, job_id: str) -> None:
+    """Execute a durable Graph 1 stage outside the HTTP request lifecycle."""
+    with Session(get_engine()) as db:
+        run = db.get(WorkflowRunModel, workflow_run_id)
+        job = db.get(JobModel, job_id)
+        if not run or not job:
+            return
+        try:
+            job.status = "RUNNING"
+            job.progress = 20.0
+            job.message = f"Running {step_key}"
+            db.commit()
+            execute_step(db, run, step_key)
+            job.status = "SUCCEEDED"
+            job.progress = 100.0
+            job.message = "Completed"
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            run = db.get(WorkflowRunModel, workflow_run_id)
+            job = db.get(JobModel, job_id)
+            if run:
+                steps = _decode_steps(run)
+                _step(steps, step_key)["status"] = "FAILED"
+                run.status = "ACTIVE"
+                _encode_steps(run, steps)
+            if job:
+                job.status = "FAILED"
+                job.progress = 100.0
+                job.message = "Workflow stage failed"
+                job.error = str(exc)[:2000]
+            db.commit()
 
 
 def queue_check_run(db: Session, run: WorkflowRunModel, job: JobModel) -> DqRunModel:
@@ -623,8 +792,8 @@ def navigate_forward(run: WorkflowRunModel) -> None:
     if index >= len(STEP_KEYS) - 1:
         raise WorkflowError("There is no later workflow stage.")
     target = _step(_decode_steps(run), STEP_KEYS[index + 1])
-    if target["status"] == "LOCKED":
-        raise WorkflowError("The next stage has not been produced yet.")
+    if target["status"] != "READY":
+        raise WorkflowError("The next stage is not ready. Confirm the required artifact first.")
     run.current_step = target["key"]
 
 

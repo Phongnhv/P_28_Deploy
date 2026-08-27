@@ -27,7 +27,15 @@ def rule_candidate_builder_node(state: AgentState) -> dict:
         available_columns = {col.get("name") for col in table_digest.get("columns", []) if col.get("name")}
 
         # 1. NOT_NULL & UNIQUE & RANGE & ACCEPTED_VALUES từ columns contract
-        for col_contract in table_contract.get("columns", []):
+        raw_columns = table_contract.get("columns", [])
+        if isinstance(raw_columns, dict):
+            columns_list = [{"name": k, **(v if isinstance(v, dict) else {})} for k, v in raw_columns.items()]
+        elif isinstance(raw_columns, list):
+            columns_list = [c if isinstance(c, dict) else {"name": str(c)} for c in raw_columns]
+        else:
+            columns_list = []
+
+        for col_contract in columns_list:
             col_name = col_contract.get("name")
             if not col_name:
                 continue

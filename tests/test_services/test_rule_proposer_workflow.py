@@ -20,9 +20,9 @@ from src.services.dashboard_agent_workflow import DashboardProposal
 from src.services.rule_proposer_workflow import (
     WorkflowError,
     complete_rule_review,
+    confirm_semantic_contract,
     execute_step,
     get_or_create_run,
-    navigate_forward,
     queue_check_run,
     rewind,
     run_analysis_report,
@@ -95,6 +95,28 @@ def _proposal() -> DashboardProposal:
     )
 
 
+def _confirm_current_contract(db: Session, run: WorkflowRunModel) -> None:
+    draft = (
+        db.query(WorkflowArtifactModel)
+        .filter_by(
+            workflow_run_id=run.id,
+            step_key="UNDERSTAND_DATA",
+            artifact_type="SEMANTIC_CONTRACT",
+            stale=False,
+        )
+        .order_by(WorkflowArtifactModel.version.desc())
+        .first()
+    )
+    assert draft is not None
+    confirm_semantic_contract(
+        db,
+        run,
+        artifact_id=draft.id,
+        expected_version=draft.version,
+        contract=json.loads(draft.payload_json),
+    )
+
+
 def test_back_navigation_preserves_artifacts_until_a_stage_is_rerun(monkeypatch):
     _seed_profile()
     monkeypatch.setattr("src.services.rule_proposer_workflow.generate_dashboard_proposals", lambda *_: [_proposal()])
@@ -102,7 +124,7 @@ def test_back_navigation_preserves_artifacts_until_a_stage_is_rerun(monkeypatch)
         dataset = db.get(DatasetModel, DATASET_ID)
         run = get_or_create_run(db, dataset)
         execute_step(db, run, "UNDERSTAND_DATA")
-        navigate_forward(run)
+        _confirm_current_contract(db, run)
         execute_step(db, run, "PROPOSE_RULES")
         rule_artifact = (
             db.query(WorkflowArtifactModel).filter_by(workflow_run_id=run.id, artifact_type="RULE_SET").one()
@@ -124,8 +146,8 @@ def test_understanding_requires_explicit_continue_before_rule_generation():
             next(step for step in json.loads(run.steps_json) if step["key"] == "UNDERSTAND_DATA")["status"]
             == "COMPLETED"
         )
-        assert next(step for step in json.loads(run.steps_json) if step["key"] == "PROPOSE_RULES")["status"] == "READY"
-        navigate_forward(run)
+        assert next(step for step in json.loads(run.steps_json) if step["key"] == "PROPOSE_RULES")["status"] == "WAITING_APPROVAL"
+        _confirm_current_contract(db, run)
         assert run.current_step == "PROPOSE_RULES"
 
 
@@ -136,7 +158,7 @@ def test_deleted_pending_rule_is_retained_as_stale_and_does_not_block_review(mon
         dataset = db.get(DatasetModel, DATASET_ID)
         run = get_or_create_run(db, dataset)
         execute_step(db, run, "UNDERSTAND_DATA")
-        navigate_forward(run)
+        _confirm_current_contract(db, run)
         execute_step(db, run, "PROPOSE_RULES")
         rule = db.query(RuleProposalModel).filter_by(workflow_run_id=run.id).one()
         rule.status = "STALE"  # equivalent to a steward removal through the API
@@ -155,7 +177,7 @@ def test_publish_creates_immutable_ruleset_and_queues_only_approved_versions(mon
         dataset = db.get(DatasetModel, DATASET_ID)
         run = get_or_create_run(db, dataset)
         execute_step(db, run, "UNDERSTAND_DATA")
-        navigate_forward(run)
+        _confirm_current_contract(db, run)
         execute_step(db, run, "PROPOSE_RULES")
         rule = db.query(RuleProposalModel).filter_by(workflow_run_id=run.id).one()
         rule.status = "APPROVED"
@@ -194,7 +216,7 @@ def test_mock_execution_and_analysis_complete_the_same_workflow(monkeypatch):
         dataset = db.get(DatasetModel, DATASET_ID)
         run = get_or_create_run(db, dataset)
         execute_step(db, run, "UNDERSTAND_DATA")
-        navigate_forward(run)
+        _confirm_current_contract(db, run)
         execute_step(db, run, "PROPOSE_RULES")
         rule = db.query(RuleProposalModel).filter_by(workflow_run_id=run.id).one()
         rule.status = "APPROVED"
@@ -245,7 +267,7 @@ def test_graph_2_result_is_visible_before_graph_3_is_started(monkeypatch):
         dataset = db.get(DatasetModel, DATASET_ID)
         run = get_or_create_run(db, dataset)
         execute_step(db, run, "UNDERSTAND_DATA")
-        navigate_forward(run)
+        _confirm_current_contract(db, run)
         execute_step(db, run, "PROPOSE_RULES")
         rule = db.query(RuleProposalModel).filter_by(workflow_run_id=run.id).one()
         rule.status = "APPROVED"

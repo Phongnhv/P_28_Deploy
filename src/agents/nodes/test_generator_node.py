@@ -51,14 +51,14 @@ def _build_row_predicate(
     """
     col = rule.get("column") or ""
     quoted_col = _quote_ident(col, dialect_name)
-    rule_type = rule.get("rule_type", "")
+    rule_type = (rule.get("rule_type") or "").upper()
     params = rule.get("effective_parameters") or rule.get("parameters") or {}
     binds: dict[str, Any] = {}
 
-    if rule_type == RuleType.NOT_NULL.value or rule_type == "NOT_NULL":
+    if rule_type in (RuleType.NOT_NULL.value, "NOT_NULL"):
         return f"{quoted_col} IS NULL", binds
 
-    if rule_type == RuleType.RANGE.value or rule_type == "RANGE":
+    if rule_type in (RuleType.RANGE.value, "RANGE"):
         conds = []
         if params.get("min") is not None:
             p_min = f"p_min_{rule_idx}"
@@ -72,7 +72,7 @@ def _build_row_predicate(
             return f"({quoted_col} IS NOT NULL AND ({' OR '.join(conds)}))", binds
         return "1=0", binds  # Không có param -> pass
 
-    if rule_type == RuleType.ACCEPTED_VALUES.value or rule_type == "ACCEPTED_VALUES":
+    if rule_type in (RuleType.ACCEPTED_VALUES.value, "ACCEPTED_VALUES"):
         accepted_vals = params.get("accepted_values") or []
         if not accepted_vals:
             return "1=0", binds
@@ -84,7 +84,7 @@ def _build_row_predicate(
         in_list = ", ".join(val_placeholders)
         return f"({quoted_col} IS NOT NULL AND {quoted_col} NOT IN ({in_list}))", binds
 
-    if rule_type == RuleType.REGEX_FORMAT.value or rule_type == "REGEX_FORMAT":
+    if rule_type in (RuleType.REGEX_FORMAT.value, "REGEX_FORMAT"):
         regex_pattern = params.get("regex") or ""
         p_regex = f"p_regex_{rule_idx}"
         binds[p_regex] = regex_pattern
@@ -147,8 +147,8 @@ def generate_tests_for_table(
         "CROSS_FIELD_COMPARISON",
     }
 
-    row_rules = [r for r in rules if r.get("rule_type") in row_level_types]
-    group_rules = [r for r in rules if r.get("rule_type") not in row_level_types]
+    row_rules = [r for r in rules if (r.get("rule_type") or "").upper() in row_level_types]
+    group_rules = [r for r in rules if (r.get("rule_type") or "").upper() not in row_level_types]
 
     # 1. Gom các row-level rules thành 1 batch query
     if row_rules:
@@ -158,7 +158,7 @@ def generate_tests_for_table(
 
         for idx, rule in enumerate(row_rules):
             alias = f"v_{idx}"
-            r_type = rule.get("rule_type")
+            r_type = (rule.get("rule_type") or "").upper()
             if r_type in (RuleType.NULL_RATE.value, "NULL_RATE"):
                 col = rule.get("column") or ""
                 quoted_col = _quote_ident(col, dialect_name)
@@ -194,7 +194,7 @@ def generate_tests_for_table(
 
     # 2. Xử lý các group/table-level rules riêng biệt
     for idx, rule in enumerate(group_rules):
-        r_type = rule.get("rule_type")
+        r_type = (rule.get("rule_type") or "").upper()
         col = rule.get("column") or ""
         quoted_col = _quote_ident(col, dialect_name)
         params = rule.get("effective_parameters") or rule.get("parameters") or {}

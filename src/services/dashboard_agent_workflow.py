@@ -402,7 +402,9 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
     )
 
 
-def generate_dashboard_proposals(db: Session, dataset_id: str) -> list[DashboardProposal]:
+def generate_dashboard_proposals(
+    db: Session, dataset_id: str, semantic_contract: dict[str, Any] | None = None
+) -> list[DashboardProposal]:
     """Return two to five validated proposals in the configured local agent mode."""
     evidence = build_proposal_evidence(db, dataset_id)
     settings = get_settings()
@@ -412,7 +414,11 @@ def generate_dashboard_proposals(db: Session, dataset_id: str) -> list[Dashboard
     if len(_build_dashboard_rule_candidates(evidence)) < 2:
         raise AgentWorkflowError("The aggregate profile has fewer than two evidence-backed dashboard candidates.")
 
-    raw_rules = _invoke_dashboard_proposal_graph(evidence)
+    raw_rules = (
+        _invoke_dashboard_proposal_graph(evidence, semantic_contract)
+        if semantic_contract is not None
+        else _invoke_dashboard_proposal_graph(evidence)
+    )
     proposals = _normalise_graph_rules(raw_rules, evidence)
     if not proposals:
         raise AgentWorkflowError("The proposal agent did not return enough valid, evidence-backed rules.")
@@ -422,17 +428,29 @@ def generate_dashboard_proposals(db: Session, dataset_id: str) -> list[Dashboard
     return proposals
 
 
-def _invoke_dashboard_proposal_graph(evidence: ProposalEvidence) -> list[dict[str, Any]]:
+def _invoke_dashboard_proposal_graph(
+    evidence: ProposalEvidence, semantic_contract: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
     """Run only the structured proposer node with the safe persisted-profile digest."""
     from src.agents.graph import build_dashboard_proposal_graph
 
     async def invoke() -> list[dict[str, Any]]:
         graph = build_dashboard_proposal_graph()
+        digest = evidence.to_agent_digest()
+        if semantic_contract:
+            tables = semantic_contract.get("tables") or {}
+            for table_name, table_digest in digest.items():
+                if isinstance(table_digest, dict):
+                    table_digest["confirmed_semantic_contract"] = tables.get(table_name, semantic_contract)
         result = await graph.ainvoke(
             {
                 "dataset_id": evidence.dataset_id,
                 "rule_run_id": f"dashboard-proposal-{uuid.uuid4().hex}",
-                "dataset_profile_digest": evidence.to_agent_digest(),
+                "dataset_profile_digest": digest,
+                "semantic_contract": semantic_contract or {},
+                "normalized_data_dictionary": {
+                    "tables": (semantic_contract or {}).get("tables", {})
+                },
                 "metadata": {
                     "workflow": "dashboard",
                     "evidence_source": "persisted_aggregate_profile",

@@ -80,14 +80,17 @@ from src.services.job_runner import (
 from src.services.rule_proposer_workflow import (
     WorkflowError,
     complete_rule_review,
-    execute_step,
     get_or_create_run,
     navigate_forward,
     queue_check_run,
     run_analysis_report,
     run_checks_and_prepare_analysis,
+    run_workflow_stage_job,
     serialize_artifact,
     serialize_run,
+)
+from src.services.rule_proposer_workflow import (
+    confirm_semantic_contract as confirm_workflow_semantic_contract,
 )
 from src.services.rule_proposer_workflow import (
     rewind as rewind_workflow,
@@ -106,6 +109,15 @@ from src.services.supabase_dataset import query_dataset_rows as query_supabase_d
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
+
+
+class SemanticContractConfirmInput(BaseModel):
+    artifact_id: str
+    expected_version: int
+    contract: dict[str, Any]
+    review_note: str | None = None
+
+
 router = APIRouter()
 dq_router = APIRouter(prefix="/dq", tags=["Data Quality"])
 
@@ -823,6 +835,20 @@ def run_workflow_step(
     collision = verify_idempotency(db, idempotency_key)
     if collision:
         return CreateJobResponse(job_id=collision, status="SUCCEEDED")
+    active_stage_job = (
+        db.query(JobModel)
+        .filter(
+            JobModel.correlation_id == run.id,
+            JobModel.type == ("UNDERSTAND_DATA" if step == "UNDERSTAND_DATA" else "PROPOSE_RULES"),
+            JobModel.status.in_(["PENDING", "RUNNING"]),
+        )
+        .first()
+    )
+    if active_stage_job:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "CONFLICT", "message": "This workflow stage already has an active execution"},
+        )
     job = JobModel(
         id=str(uuid.uuid4()),
         type="UNDERSTAND_DATA"
@@ -864,9 +890,16 @@ def run_workflow_step(
                 session.role,
             )
             return CreateJobResponse(job_id=job.id, status="PENDING")
-        execute_step(db, run, step)
-        job.status, job.progress, job.message = "SUCCEEDED", 100.0, "Completed"
+        steps = json.loads(run.steps_json or "[]")
+        current = next((item for item in steps if item.get("key") == step), None)
+        if not current or current.get("status") not in {"READY", "FAILED", "COMPLETED"}:
+            raise WorkflowError("This workflow step is not ready to run.")
+        current["status"] = "RUNNING"
+        run.steps_json = json.dumps(steps, ensure_ascii=False)
+        job.status, job.progress = "PENDING", 0.0
         db.commit()
+        background_tasks.add_task(run_workflow_stage_job, run.id, step, job.id)
+        return CreateJobResponse(job_id=job.id, status="PENDING")
     except WorkflowError as exc:
         job.status, job.error, job.message = "FAILED", str(exc), "Workflow step failed"
         db.commit()
@@ -921,6 +954,20 @@ def review_workflow_artifact(
     return serialize_artifact(reviewed)
 
 
+@router.post("/workflows/{workflow_run_id}/semantic-contract/confirm")
+def confirm_workflow_contract(workflow_run_id: str, body: SemanticContractConfirmInput, session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])), db: Session = Depends(get_db)):
+    run = db.get(WorkflowRunModel, workflow_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+    require_dataset_access(db, session, run.dataset_id, manage=True)
+    try:
+        artifact = confirm_workflow_semantic_contract(db, run, artifact_id=body.artifact_id, expected_version=body.expected_version, contract=body.contract, review_note=body.review_note)
+        db.commit()
+    except WorkflowError as exc:
+        raise HTTPException(status_code=409, detail={"code": "WORKFLOW_STATE", "message": str(exc)})
+    return {"workflow": serialize_run(run), "artifact": serialize_artifact(artifact)}
+
+
 @router.post("/workflows/{workflow_run_id}/advance")
 def advance_workflow_stage(
     workflow_run_id: str,
@@ -946,38 +993,18 @@ def get_semantic_contract(
     """
     GET /api/v1/datasets/{id}/semantic-contract - Returns the latest semantic contract draft or confirmed version.
     """
-    from pathlib import Path
-
     dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
     require_dataset_access(db, session, id)
 
-    # Find the latest PROPOSE_RULES job for this dataset
-    job = (
-        db.query(JobModel)
-        .filter(JobModel.linked_entity == id, JobModel.type == "PROPOSE_RULES")
-        .order_by(JobModel.created_at.desc())
-        .first()
-    )
-
-    if not job:
-        raise HTTPException(status_code=404, detail="No rule proposal job found for this dataset")
-
-    run_id = job.id
-    settings = get_settings()
-    semantic_dir = Path(settings.output_dir) / "semantic"
-    semantic_file = semantic_dir / f"debug_semantic_contract_{run_id}.json"
-
-    if not semantic_file.exists():
-        raise HTTPException(status_code=404, detail=f"Semantic Contract not generated yet for run {run_id}")
-
-    try:
-        with open(semantic_file, encoding="utf-8") as f:
-            data = json.load(f)
-        return data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read semantic contract: {str(e)}")
+    run = db.query(WorkflowRunModel).filter_by(dataset_id=id, status="ACTIVE").order_by(WorkflowRunModel.updated_at.desc()).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="No workflow run found for this dataset")
+    artifact = db.query(WorkflowArtifactModel).filter_by(workflow_run_id=run.id, step_key="UNDERSTAND_DATA", artifact_type="SEMANTIC_CONTRACT", stale=False).order_by(WorkflowArtifactModel.version.desc()).first()
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Semantic contract not generated yet")
+    return json.loads(artifact.payload_json or "{}")
 
 
 @router.post("/datasets/{id}/semantic-contract/confirm")
@@ -992,50 +1019,23 @@ def confirm_semantic_contract(
     POST /api/v1/datasets/{id}/semantic-contract/confirm - Allows Steward to confirm/update the semantic contract.
     Resumes rule proposal graph execution in background.
     """
-    from pathlib import Path
-
     dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
     require_dataset_access(db, session, id, manage=True)
 
-    # Find the latest PROPOSE_RULES job
-    job = (
-        db.query(JobModel)
-        .filter(JobModel.linked_entity == id, JobModel.type == "PROPOSE_RULES")
-        .order_by(JobModel.created_at.desc())
-        .first()
-    )
-
-    if not job:
-        raise HTTPException(status_code=404, detail="No rule proposal job found to confirm")
-
-    run_id = job.id
-    settings = get_settings()
-    semantic_dir = Path(settings.output_dir) / "semantic"
-    semantic_dir.mkdir(parents=True, exist_ok=True)
-    semantic_file = semantic_dir / f"debug_semantic_contract_{run_id}.json"
-
-    # Set status to confirmed in the payload
-    body["status"] = "confirmed"
-    body["dataset_id"] = id
-
+    run = db.query(WorkflowRunModel).filter_by(dataset_id=id, status="ACTIVE").order_by(WorkflowRunModel.updated_at.desc()).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="No workflow run found for this dataset")
+    artifact = db.query(WorkflowArtifactModel).filter_by(workflow_run_id=run.id, step_key="UNDERSTAND_DATA", artifact_type="SEMANTIC_CONTRACT", stale=False).order_by(WorkflowArtifactModel.version.desc()).first()
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Semantic contract not generated yet")
     try:
-        with open(semantic_file, "w", encoding="utf-8") as f:
-            json.dump(body, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save semantic contract: {str(e)}")
-
-    # Update job status back to PENDING to resume the job
-    job.status = "PENDING"
-    job.progress = 30.0
-    job.message = "Semantic contract confirmed. Resuming rule proposals generation..."
-    db.commit()
-
-    # Trigger background task to continue
-    background_tasks.add_task(run_propose_rules, job.id, id, session.id, session.role)
-
-    return {"message": "Semantic contract confirmed successfully. Resumed proposals job.", "job_id": job.id}
+        confirmed = confirm_workflow_semantic_contract(db, run, artifact_id=artifact.id, expected_version=artifact.version, contract=body)
+        db.commit()
+    except WorkflowError as exc:
+        raise HTTPException(status_code=409, detail={"code": "WORKFLOW_STATE", "message": str(exc)})
+    return {"message": "Semantic contract confirmed successfully.", "workflow": serialize_run(run), "artifact": serialize_artifact(confirmed)}
 
 
 @router.get("/datasets/{id}/rows", response_model=DatasetRowsResponse)

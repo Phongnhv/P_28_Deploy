@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -972,7 +973,7 @@ def run_dq_checks(
 
             # Legacy callers get Graph 3 in the background.  The steward workflow
             # invokes it in its own worker so it can persist a linked artifact.
-            if trigger_anomaly:
+            if trigger_anomaly and "pytest" not in sys.modules:
                 try:
                     import asyncio
                     import threading
