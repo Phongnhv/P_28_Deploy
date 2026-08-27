@@ -22,8 +22,12 @@ def test_db():
     # Override settings
     settings = get_settings()
     original_db_url = settings.database_url
+    original_supabase_url = getattr(settings, "supabase_database_url", None)
     original_agent_mode = settings.agent_mode
     settings.database_url = db_url
+    # Tests must never inherit a developer's real Supabase/LLM settings from
+    # .env; otherwise background jobs read cloud rows and call live models.
+    settings.supabase_database_url = None
     settings.agent_mode = "mock"
 
     # Create engine with StaticPool to share connection across threads/sessions
@@ -43,6 +47,7 @@ def test_db():
     # Restore original settings and engine
     rule_store._engine = original_engine
     settings.database_url = original_db_url
+    settings.supabase_database_url = original_supabase_url
     settings.agent_mode = original_agent_mode
     engine.dispose()
 

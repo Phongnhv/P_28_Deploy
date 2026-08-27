@@ -80,7 +80,6 @@ docs_kien-01033/
 output/
 output_pytest/
 scratch/
-/docs/
 
 
 # dbt generated artifacts
