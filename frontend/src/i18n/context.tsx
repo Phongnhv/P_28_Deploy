@@ -3,7 +3,7 @@ import { en } from "./locales/en";
 import { vi } from "./locales/vi";
 
 type Language = "en" | "vi";
-type Translations = typeof en;
+type Translations = Record<string, any>;
 
 interface I18nContextType {
   language: Language;
@@ -11,7 +11,10 @@ interface I18nContextType {
   t: (keyPath: string, params?: Record<string, string | number>) => string;
 }
 
-const translations: Record<Language, Translations> = { en, vi };
+// Locale files may be introduced incrementally. `t` falls back to English for
+// missing keys, so do not require the Vietnamese object to match English at
+// compile time.
+const translations: Record<Language, Record<string, unknown>> = { en, vi };
 
 const I18nContext = createContext<I18nContextType | undefined>(undefined);
 

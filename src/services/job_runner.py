@@ -15,10 +15,14 @@ from src.models.database import (
     AuditEventModel,
     ColumnProfileModel,
     DatasetModel,
+    DatasetVersionModel,
     DqResultModel,
     DqRunModel,
+    GovernanceAuditEventModel,
+    GovernedArtifactModel,
     JobModel,
     ProfileModel,
+    ProfileRunSnapshotModel,
     RuleConfigurationModel,
     RuleProposalModel,
     RuleVersionModel,
@@ -39,6 +43,12 @@ from src.services.supabase_dataset import (
 )
 from src.services.supabase_dataset import (
     profile_dataset as profile_supabase_dataset,
+)
+from src.services.versioned_dataset import (
+    materialize_source_artifact,
+    profile_frame,
+    read_verified_frame,
+    schema_hash,
 )
 from src.time_utils import utc_now
 
@@ -72,6 +82,19 @@ def _uploaded_dataset_path(dataset_id: str) -> Path | None:
 
 def _profile_uploaded_dataset(db: Session, dataset_id: str, path: Path) -> dict:
     """Profile an imported CSV/Parquet without exposing its source rows to agents."""
+    existing_profile = db.query(ProfileModel).filter_by(dataset_id=dataset_id).first()
+    if existing_profile:
+        dataset = db.get(DatasetModel, dataset_id)
+        if dataset and dataset.status != "PROFILE_READY":
+            dataset.status = "PROFILE_READY"
+            db.commit()
+        return {
+            "row_count": existing_profile.row_count,
+            "completeness_score": existing_profile.completeness_score,
+            "validity_score": existing_profile.validity_score,
+            "duplicate_rate": existing_profile.duplicate_rate,
+        }
+
     df = pd.read_parquet(path) if path.suffix.lower() == ".parquet" else pd.read_csv(path)
     if df.empty:
         raise ValueError("The imported dataset has no rows.")
@@ -81,8 +104,9 @@ def _profile_uploaded_dataset(db: Session, dataset_id: str, path: Path) -> dict:
     if any(not column for column in df.columns) or len(set(df.columns)) != len(df.columns):
         raise ValueError("Column names must be non-empty and unique.")
     row_count = int(len(df))
-    db.query(ColumnProfileModel).filter_by(profile_dataset_id=dataset_id).delete()
-    db.query(ProfileModel).filter_by(dataset_id=dataset_id).delete()
+    db.query(ColumnProfileModel).filter_by(profile_dataset_id=dataset_id).delete(synchronize_session=False)
+    db.query(ProfileModel).filter_by(dataset_id=dataset_id).delete(synchronize_session=False)
+    db.commit()
     columns = []
     total_nulls = 0
     for name in df.columns:
@@ -118,23 +142,34 @@ def _profile_uploaded_dataset(db: Session, dataset_id: str, path: Path) -> dict:
     completeness = (1.0 - _rate(total_nulls, row_count * len(df.columns))) * 100.0
     evidence_keys = ["profile.row_count", "profile.completeness_score", "profile.duplicate_rate"]
     evidence_keys.extend(f"profile.column.{column.name}.null_rate" for column in columns)
-    db.add(
-        ProfileModel(
-            dataset_id=dataset_id,
-            row_count=row_count,
-            completeness_score=round(completeness, 2),
-            validity_score=100.0,
-            duplicate_rate=round(duplicate_rate, 2),
-            cross_field_metrics_json="[]",
-            evidence_keys=json.dumps(evidence_keys),
-            generated_at=utc_now(),
+    try:
+        db.add(
+            ProfileModel(
+                dataset_id=dataset_id,
+                row_count=row_count,
+                completeness_score=round(completeness, 2),
+                validity_score=100.0,
+                duplicate_rate=round(duplicate_rate, 2),
+                cross_field_metrics_json="[]",
+                evidence_keys=json.dumps(evidence_keys),
+                generated_at=utc_now(),
+            )
         )
-    )
-    db.add_all(columns)
-    dataset = db.get(DatasetModel, dataset_id)
-    if dataset:
-        dataset.status, dataset.row_count, dataset.updated_at = "PROFILE_READY", row_count, utc_now()
-    db.commit()
+        db.add_all(columns)
+        dataset = db.get(DatasetModel, dataset_id)
+        if dataset:
+            dataset.status, dataset.row_count, dataset.updated_at = "PROFILE_READY", row_count, utc_now()
+        db.commit()
+    except Exception:
+        db.rollback()
+        existing = db.query(ProfileModel).filter_by(dataset_id=dataset_id).first()
+        if existing:
+            return {
+                "row_count": existing.row_count,
+                "completeness_score": existing.completeness_score,
+                "validity_score": existing.validity_score,
+                "duplicate_rate": existing.duplicate_rate,
+            }
     return {
         "row_count": row_count,
         "completeness_score": completeness,
@@ -155,9 +190,9 @@ def _profile_supabase_into_dashboard(db: Session, dataset_id: str) -> dict:
     finally:
         source_engine.dispose()
 
-    db.query(ColumnProfileModel).filter(ColumnProfileModel.profile_dataset_id == dataset_id).delete()
-    db.query(ProfileModel).filter(ProfileModel.dataset_id == dataset_id).delete()
-    db.flush()
+    db.query(ColumnProfileModel).filter(ColumnProfileModel.profile_dataset_id == dataset_id).delete(synchronize_session=False)
+    db.query(ProfileModel).filter(ProfileModel.dataset_id == dataset_id).delete(synchronize_session=False)
+    db.commit()
 
     columns = []
     evidence_keys = [
@@ -310,8 +345,123 @@ def add_audit_event(
     db.add(evt)
     db.commit()
 
+def _versioned_profile_run(
+    db: Session,
+    job: JobModel,
+    dataset_version_id: str,
+    *,
+    session_id: str | None,
+    actor_role: str,
+) -> str:
+    """Profile one verified immutable source artifact and never overwrite history."""
+    version = db.get(DatasetVersionModel, dataset_version_id)
+    if not version or version.status != "READY":
+        raise ValueError("Dataset version is not READY")
+    metadata = json.loads(version.source_metadata_json or "{}")
+    artifact_id = metadata.get("source_artifact_id")
+    artifact = db.query(GovernedArtifactModel).filter_by(
+        id=artifact_id,
+        workspace_id=version.workspace_id,
+        dataset_id=version.dataset_id,
+        dataset_version_id=version.id,
+        artifact_type="SOURCE_DATASET",
+    ).first() if artifact_id else None
+    if not artifact or artifact.checksum != version.checksum:
+        raise ValueError("READY dataset version has no matching SOURCE_DATASET artifact")
+    profile_id = f"profile-{version.id}"
+    existing = db.get(ProfileRunSnapshotModel, profile_id)
+    if existing and existing.status == "COMPLETED":
+        return profile_id
+    if existing is None:
+        existing = ProfileRunSnapshotModel(
+            id=profile_id,
+            workspace_id=version.workspace_id,
+            dataset_id=version.dataset_id,
+            dataset_version_id=version.id,
+            status="RUNNING",
+            triggered_by=version.created_by,
+            profiler_version="versioned-profiler-v1",
+        )
+        db.add(existing)
+    else:
+        existing.status = "RUNNING"
+    db.add(GovernanceAuditEventModel(
+        id=f"gaudit-{uuid.uuid4().hex}", workspace_id=version.workspace_id, actor_id=version.created_by,
+        actor_role=actor_role, action="PROFILE_STARTED", entity_type="profile_run", entity_id=profile_id,
+        dataset_id=version.dataset_id, dataset_version_id=version.id, run_id=job.id,
+        correlation_id=job.correlation_id or str(uuid.uuid4()), request_metadata_json="{}",
+        detail_json=json.dumps({"schema_hash": version.schema_hash}, ensure_ascii=False),
+        source="WORKER", occurred_at=utc_now(),
+    ))
+    db.commit()
+    source_ref = {
+        "bucket": metadata.get("bucket"),
+        "object_key": metadata.get("object_key") or artifact.storage_locator,
+        "checksum": version.checksum,
+        "size_bytes": int(metadata.get("size_bytes") or 0),
+        "format": metadata.get("format") or "csv",
+        "filename": metadata.get("filename") or "dataset.csv",
+        "storage_locator": artifact.storage_locator,
+        "version_id": metadata.get("version_id"),
+    }
+    path = None
+    temporary = source_ref["storage_locator"].startswith("object://")
+    try:
+        path = materialize_source_artifact(source_ref)
+        frame = read_verified_frame(path, checksum=version.checksum, size_bytes=source_ref["size_bytes"], schema=metadata.get("schema"))
+        metrics = profile_frame(frame, schema=metadata.get("schema"))
+        if int(metrics["row_count"]) != int(version.row_count) or schema_hash(metadata.get("schema") or []) != version.schema_hash:
+            raise ValueError("Profile evidence does not match the immutable version contract")
+        existing.row_count = version.row_count
+        existing.completeness_score = metrics.get("completeness_score")
+        existing.validity_score = metrics.get("validity_score")
+        existing.uniqueness_score = metrics.get("uniqueness_score")
+        existing.duplicate_rate = metrics.get("duplicate_rate")
+        existing.quality_score = metrics.get("quality_score")
+        existing.schema_json = json.dumps(metadata.get("schema") or [], ensure_ascii=False, sort_keys=True)
+        existing.metrics_json = json.dumps(metrics, ensure_ascii=False, default=str)
+        existing.sanitized_samples_json = "[]"
+        existing.status = "COMPLETED"
+        existing.completed_at = utc_now()
+        db.query(DatasetModel).filter_by(id=version.dataset_id).update({"status": "PROFILE_READY", "row_count": version.row_count, "updated_at": utc_now()})
+        db.add(GovernanceAuditEventModel(
+            id=f"gaudit-{uuid.uuid4().hex}", workspace_id=version.workspace_id, actor_id=version.created_by,
+            actor_role=actor_role, action="PROFILE_COMPLETED", entity_type="profile_run", entity_id=profile_id,
+            dataset_id=version.dataset_id, dataset_version_id=version.id, run_id=job.id,
+            correlation_id=job.correlation_id or str(uuid.uuid4()), request_metadata_json="{}",
+            detail_json=json.dumps({"row_count": version.row_count, "schema_hash": version.schema_hash}, ensure_ascii=False),
+            source="WORKER", occurred_at=utc_now(),
+        ))
+        db.commit()
+        return profile_id
+    except Exception as exc:
+        db.rollback()
+        failed = db.get(ProfileRunSnapshotModel, profile_id)
+        if failed:
+            failed.status = "FAILED"
+            failed.completed_at = utc_now()
+        db.add(GovernanceAuditEventModel(
+            id=f"gaudit-{uuid.uuid4().hex}", workspace_id=version.workspace_id, actor_id=version.created_by,
+            actor_role=actor_role, action="PROFILE_FAILED", entity_type="profile_run", entity_id=profile_id,
+            dataset_id=version.dataset_id, dataset_version_id=version.id, run_id=job.id,
+            correlation_id=job.correlation_id or str(uuid.uuid4()), request_metadata_json="{}",
+            detail_json=json.dumps({"error": str(exc)[:500]}, ensure_ascii=False),
+            source="WORKER", occurred_at=utc_now(),
+        ))
+        db.commit()
+        raise
+    finally:
+        if temporary and path is not None:
+            path.unlink(missing_ok=True)
 
-def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = None, actor_role: str = "STEWARD"):
+
+def run_ingest_profile(
+    job_id: str,
+    dataset_id: str,
+    session_id: str | None = None,
+    actor_role: str = "STEWARD",
+    dataset_version_id: str | None = None,
+):
     """
     Step 5: Background ingestion and profiling of NYC Yellow Taxi Parquet.
     """
@@ -327,6 +477,25 @@ def run_ingest_profile(job_id: str, dataset_id: str, session_id: str | None = No
         db.commit()
 
         try:
+            if dataset_version_id:
+                job.message = "Verifying immutable source artifact and creating versioned profile..."
+                db.commit()
+                try:
+                    profile_id = _versioned_profile_run(
+                        db, job, dataset_version_id, session_id=session_id, actor_role=actor_role
+                    )
+                except Exception as exc:
+                    job.status = "FAILED"
+                    job.error = str(exc)[:2000]
+                    job.message = "Versioned profile failed"
+                    db.commit()
+                    raise
+                job.status = "SUCCEEDED"
+                job.progress = 100.0
+                job.message = "Versioned profile completed"
+                job.linked_entity = dataset_version_id
+                db.commit()
+                return profile_id
             uploaded_path = _uploaded_dataset_path(dataset_id)
             if uploaded_path:
                 job.progress = 35.0
@@ -803,6 +972,75 @@ def compile_rule_to_sql(rule_type: str, spec: dict, columns_allowlist: set[str])
         raise ValueError(f"Unsupported rule template: {rule_type}")
 
 
+def execute_uploaded_rule(uploaded_path: Path, rule_type: str, spec: dict) -> tuple[int, list[str], int]:
+    """Execute a data quality rule on an uploaded CSV/Parquet dataset via pandas."""
+    df = pd.read_parquet(uploaded_path) if uploaded_path.suffix.lower() == ".parquet" else pd.read_csv(uploaded_path)
+    total_rows = len(df)
+
+    if "source_row_id" in df.columns:
+        row_ids = df["source_row_id"].astype(str).tolist()
+    else:
+        row_ids = [str(i + 1) for i in range(total_rows)]
+
+    failed_indices = []
+
+    if rule_type == "not_null":
+        col = spec.get("column", "")
+        if col in df.columns:
+            failed_indices = df.index[df[col].isna()].tolist()
+
+    elif rule_type == "numeric_range":
+        col = spec.get("column", "")
+        if col in df.columns:
+            series = pd.to_numeric(df[col], errors="coerce")
+            min_v = spec.get("min_value")
+            max_v = spec.get("max_value")
+            cond = pd.Series(False, index=df.index)
+            if min_v is not None:
+                cond = cond | (series < min_v)
+            if max_v is not None:
+                cond = cond | (series > max_v)
+            failed_indices = df.index[cond | series.isna()].tolist()
+
+    elif rule_type == "accepted_values":
+        col = spec.get("column", "")
+        allowed = [str(v) for v in spec.get("allowed_values", [])]
+        if col in df.columns:
+            series = df[col].astype(str)
+            failed_indices = df.index[df[col].notna() & (~series.isin(allowed))].tolist()
+
+    elif rule_type == "cross_field_comparison":
+        cols = spec.get("columns", [])
+        op = spec.get("operator", "")
+        if len(cols) == 2 and cols[0] in df.columns and cols[1] in df.columns:
+            s1 = pd.to_numeric(df[cols[0]], errors="coerce")
+            s2 = pd.to_numeric(df[cols[1]], errors="coerce")
+            if op == "<":
+                valid = s1 < s2
+            elif op == "<=":
+                valid = s1 <= s2
+            elif op == ">":
+                valid = s1 > s2
+            elif op == ">=":
+                valid = s1 >= s2
+            elif op == "==":
+                valid = s1 == s2
+            elif op == "!=":
+                valid = s1 != s2
+            else:
+                valid = pd.Series(True, index=df.index)
+            failed_indices = df.index[~valid].tolist()
+
+    elif rule_type == "duplicate_fingerprint":
+        cols = spec.get("fingerprint_columns", [])
+        valid_cols = [c for c in cols if c in df.columns]
+        if valid_cols:
+            failed_indices = df.index[df.duplicated(subset=valid_cols, keep=False)].tolist()
+
+    failed_row_ids = [row_ids[i] for i in failed_indices if i < len(row_ids)]
+    return total_rows, failed_row_ids, len(failed_row_ids)
+
+
 def run_dq_checks(
     job_id: str,
     run_id: str,
@@ -891,6 +1129,8 @@ def run_dq_checks(
             total_checked = 0
             total_failed = 0
 
+            uploaded_path = _uploaded_dataset_path(dataset_id)
+
             # Execute each rule
             for idx, rv in enumerate(rule_versions):
                 spec = json.loads(rv.rule_spec)
@@ -903,6 +1143,8 @@ def run_dq_checks(
                     total_rows = outcome.checked_count
                     failed_ids = outcome.failed_row_ids
                     failed_count = outcome.failed_count
+                elif uploaded_path is not None:
+                    total_rows, failed_ids, failed_count = execute_uploaded_rule(uploaded_path, rule_type, spec)
                 else:
                     sql_query = compile_rule_to_sql(rule_type, spec, columns_allowlist)
                     sql_clean = sql_query.strip().upper()
@@ -1014,10 +1256,27 @@ def run_dq_checks(
 
         except Exception as e:
             logger.error("DQ Checks failed: %s", str(e), exc_info=True)
-            dq_run.status = "FAILED"
-            job.status = "FAILED"
-            job.error = "Data quality run failed"
-            db.commit()
+            db.rollback()
+            try:
+                failed_job = db.query(JobModel).filter(JobModel.id == job_id).first()
+                failed_dq_run = db.query(DqRunModel).filter(DqRunModel.id == run_id).first()
+                if failed_dq_run:
+                    failed_dq_run.status = "FAILED"
+                if failed_job:
+                    failed_job.status = "FAILED"
+                    failed_job.error = str(e) or "Data quality run failed"
+                db.commit()
+                add_audit_event(
+                    db,
+                    session_id=session_id,
+                    actor_role=actor_role,
+                    action_code="JOB_FAILED",
+                    entity_type="job",
+                    entity_id=job_id,
+                    detail={"error": str(e)}
+                )
+            except Exception as inner_ex:
+                logger.error("Failed recording job error to DB: %s", str(inner_ex), exc_info=True)
             add_audit_event(
                 db,
                 session_id=session_id,

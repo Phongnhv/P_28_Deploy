@@ -28,7 +28,9 @@ class DetectorConfig:
     aggregation_min_independent_families: int = 2
 
 
-DETECTOR_CONFIGS: dict[str, DetectorConfig] = {"anomaly-v1": DetectorConfig()}
+DETECTOR_CONFIGS: dict[str, DetectorConfig] = {
+    "anomaly-v1": DetectorConfig()
+}
 
 
 def get_detector_config(version: str = "anomaly-v1") -> DetectorConfig:

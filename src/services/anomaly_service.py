@@ -18,6 +18,7 @@ from src.models.database import (
     DqRunModel,
     ProfileModel,
 )
+from src.services.rule_store import TestResultModel, TestRunModel
 
 logger = logging.getLogger(__name__)
 
@@ -87,12 +88,29 @@ def get_excluded_execution_run_ids(db: Session) -> set[str]:
 
 def detect_anomalies(db: Session, execution_run_id: str, detector_config_version: str = "anomaly-v1") -> dict[str, Any]:
     """Canonical function to calculate signals, aggregate decisions, and return anomaly outcomes."""
-    # 1. Load current run context
+    # Graph 2 writes the dashboard's durable execution evidence to
+    # ``test_runs`` / ``test_results``.  Older API flows use ``dq_runs`` /
+    # ``dq_results`` instead.  Graph 3 must consume either contract; otherwise
+    # a completed Graph 2 is incorrectly reported as "execution run not found".
     current_run = db.query(DqRunModel).filter(DqRunModel.id == execution_run_id).first()
+    uses_test_store = current_run is None
+    if current_run is None:
+        current_run = (
+            db.query(TestRunModel)
+            .filter(TestRunModel.test_run_id == execution_run_id)
+            .first()
+        )
     if not current_run:
         raise LookupError(f"Execution run {execution_run_id} not found")
 
-    current_results = db.query(DqResultModel).filter(DqResultModel.run_id == execution_run_id).all()
+    if uses_test_store:
+        current_results = (
+            db.query(TestResultModel)
+            .filter(TestResultModel.test_run_id == execution_run_id)
+            .all()
+        )
+    else:
+        current_results = db.query(DqResultModel).filter(DqResultModel.run_id == execution_run_id).all()
 
     # Get excluded execution runs (failed runs + TRUE_ANOMALY feedback)
     excluded_run_ids = get_excluded_execution_run_ids(db)
@@ -106,7 +124,28 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
     # Loại trừ: đợt chạy hiện tại, đợt chạy lỗi, và đợt đã được Steward gán TRUE_ANOMALY.
     history_by_rule: dict[str, list[float]] = {}
     rule_ids = [res.rule_id for res in current_results]
-    if rule_ids:
+    if rule_ids and uses_test_store:
+        history_rows = (
+            db.query(TestResultModel)
+            .join(TestRunModel, TestRunModel.test_run_id == TestResultModel.test_run_id)
+            .filter(
+                TestResultModel.rule_id.in_(rule_ids),
+                TestResultModel.test_run_id != execution_run_id,
+                TestRunModel.dataset_id == current_run.dataset_id,
+                TestRunModel.status == "DONE",
+            )
+            .order_by(TestRunModel.created_at.desc())
+            .all()
+        )
+        for row in history_rows:
+            if row.test_run_id in excluded_run_ids:
+                continue
+            bucket = history_by_rule.setdefault(row.rule_id, [])
+            if len(bucket) < _HISTORY_WINDOW:
+                bucket.append(
+                    row.violation_count / row.total_rows if row.total_rows > 0 else 0.0
+                )
+    elif rule_ids:
         history_rows = (
             db.query(DqResultModel)
             .join(DqRunModel, DqRunModel.id == DqResultModel.run_id)
@@ -129,8 +168,8 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
     # 2. Iterate through rules and run detectors
     for res in current_results:
         rule_id = res.rule_id
-        checked_count = res.checked_count
-        failed_count = res.failed_count
+        checked_count = res.total_rows if uses_test_store else res.checked_count
+        failed_count = res.violation_count if uses_test_store else res.failed_count
         current_rate = failed_count / checked_count if checked_count > 0 else 0.0
 
         history_rates = history_by_rule.get(rule_id, [])
@@ -190,33 +229,32 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
                 explanation_code = "Quy tắc kiểm thử ĐẠT."
 
         # Business rule override check
-        is_business_rule = (
-            res.rule_title.startswith("BUSINESS_")
-            or "invariant" in res.rule_title.lower()
-            or res.rule_id.endswith(".BUSINESS_RULE")
-        )
+        rule_title = str(getattr(res, "rule_title", ""))
+        is_business_rule = rule_title.startswith("BUSINESS_") or "invariant" in rule_title.lower() or res.rule_id.endswith(".BUSINESS_RULE")
         if is_business_rule and res.status in ("FAIL", "FAILED"):
             score = 1.0
             detector_name = "BUSINESS_INVARIANT_DETECTOR"
-            explanation_code = f"Vi phạm nghiêm trọng luật nghiệp vụ (Business Invariant): {res.rule_title}."
+            explanation_code = f"Vi phạm nghiêm trọng luật nghiệp vụ (Business Invariant): {rule_title}."
 
-        signals.append(
-            {
-                "signal_id": f"sig-{uuid.uuid4().hex[:12]}",
-                "family": "BUSINESS_RULE" if is_business_rule else "STATISTICAL",
-                "target_type": "RULE",
-                "target_id": rule_id,
-                "score": round(score, 4),
-                "reliability": round(reliability, 4),
-                "observed_value": str(observed_value),
-                "baseline": baseline_stats,
-                "sufficient_history": sufficient_history,
-                "detector_name": detector_name,
-                "detector_version": "1.0.0",
-                "explanation_code": explanation_code,
-                "evidence_refs": [f"dq_results.id={res.id}"],
-            }
-        )
+        signals.append({
+            "signal_id": f"sig-{uuid.uuid4().hex[:12]}",
+            "family": "BUSINESS_RULE" if is_business_rule else "STATISTICAL",
+            "target_type": "RULE",
+            "target_id": rule_id,
+            "score": round(score, 4),
+            "reliability": round(reliability, 4),
+            "observed_value": str(observed_value),
+            "baseline": baseline_stats,
+            "sufficient_history": sufficient_history,
+            "detector_name": detector_name,
+            "detector_version": "1.0.0",
+            "explanation_code": explanation_code,
+            "evidence_refs": [
+                f"dq_results.id={res.id}"
+                if not uses_test_store
+                else f"test_results.{res.test_run_id}:{res.rule_id}"
+            ]
+        })
 
     # 3. Table/Dataset Level Detectors (Volume & Freshness)
     # Fetch row count from profile
@@ -286,24 +324,28 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
 
     # Execution Health Check (failures in tests or runtime error)
     exec_errors = [res for res in current_results if res.status == "ERROR"]
-    if exec_errors or current_run.error_message:
-        signals.append(
-            {
-                "signal_id": f"sig-{uuid.uuid4().hex[:12]}",
-                "family": "EXECUTION",
-                "target_type": "DATASET",
-                "target_id": current_run.dataset_id,
-                "score": 1.0,
-                "reliability": 1.0,
-                "observed_value": "ERROR",
-                "baseline": {},
-                "sufficient_history": True,
-                "detector_name": "EXECUTION_HEALTH_DETECTOR",
-                "detector_version": "1.0.0",
-                "explanation_code": f"Phát hiện {len(exec_errors)} lỗi kiểm thử hệ thống hoặc lỗi thực thi chạy pipeline.",
-                "evidence_refs": [f"dq_results.id={e.id}" for e in exec_errors],
-            }
-        )
+    current_error = getattr(current_run, "error_message", None) or getattr(current_run, "error", None)
+    if exec_errors or current_error:
+        signals.append({
+            "signal_id": f"sig-{uuid.uuid4().hex[:12]}",
+            "family": "EXECUTION",
+            "target_type": "DATASET",
+            "target_id": current_run.dataset_id,
+            "score": 1.0,
+            "reliability": 1.0,
+            "observed_value": "ERROR",
+            "baseline": {},
+            "sufficient_history": True,
+            "detector_name": "EXECUTION_HEALTH_DETECTOR",
+            "detector_version": "1.0.0",
+            "explanation_code": f"Phát hiện {len(exec_errors)} lỗi kiểm thử hệ thống hoặc lỗi thực thi chạy pipeline.",
+            "evidence_refs": [
+                f"dq_results.id={e.id}"
+                if not uses_test_store
+                else f"test_results.{e.test_run_id}:{e.rule_id}"
+                for e in exec_errors
+            ]
+        })
 
     # 4. Deterministic Aggregation (Phase 3.6)
     # 4.1 Group signals by family

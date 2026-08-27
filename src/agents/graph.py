@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 from typing import Literal
+from collections.abc import Awaitable, Callable
 
 from dotenv import load_dotenv
 from langgraph.graph import END, StateGraph
@@ -101,6 +102,12 @@ def build_proposal_graph() -> StateGraph:
             return "rule_candidate_builder"
         return "raw_profiler"
 
+    def _route_after_rule_proposer(state: AgentState) -> str:
+        rules = state.get("proposed_rules") or []
+        if state.get("error") or not rules:
+            return END
+        return "hitl_gate"
+
     graph = StateGraph(AgentState)
 
     graph.add_node("raw_profiler", raw_profiler_node)
@@ -174,7 +181,11 @@ def build_proposal_graph() -> StateGraph:
         {"next": "rule_proposer", END: END},
     )
 
-    graph.add_edge("rule_proposer", "hitl_gate")
+    graph.add_conditional_edges(
+        "rule_proposer",
+        _route_after_rule_proposer,
+        {"hitl_gate": "hitl_gate", END: END},
+    )
     graph.add_edge("hitl_gate", END)
 
     return graph.compile()
@@ -183,16 +194,23 @@ def build_proposal_graph() -> StateGraph:
 def build_dashboard_proposal_graph() -> StateGraph:
     """Build the product-facing proposal graph.
 
-    The dashboard already persists an aggregate profile.  This entrypoint deliberately
-    starts at the structured proposer rather than running the legacy database-wide
-    profiler or the legacy HITL persistence node.  The caller validates and persists
-    the resulting typed proposals in the dashboard workflow models.
+    The dashboard already persists an aggregate profile and owns its HITL
+    checkpoints.  This subgraph therefore resumes Graph 1 after semantic review:
+    deterministic candidate construction -> prompt customization -> structured
+    proposal.  The caller validates and persists the typed proposals before the
+    steward review gate.
     """
+    from src.agents.nodes.prompt_customizer_node import prompt_customizer_node
+    from src.agents.nodes.rule_candidate_builder_node import rule_candidate_builder_node
     from src.agents.nodes.rule_proposer_node import rule_proposer_node
 
     graph = StateGraph(AgentState)
+    graph.add_node("rule_candidate_builder", rule_candidate_builder_node)
+    graph.add_node("prompt_customizer", prompt_customizer_node)
     graph.add_node("rule_proposer", rule_proposer_node)
-    graph.set_entry_point("rule_proposer")
+    graph.set_entry_point("rule_candidate_builder")
+    graph.add_edge("rule_candidate_builder", "prompt_customizer")
+    graph.add_edge("prompt_customizer", "rule_proposer")
     graph.add_edge("rule_proposer", END)
     return graph.compile()
 
@@ -222,7 +240,39 @@ async def _fail_dbt_validation_node(state: AgentState) -> dict:
     return {"error": error, "test_generation_errors": errors}
 
 
-def build_execution_graph() -> StateGraph:
+NodeObserver = Callable[[str, str, dict | None, Exception | None], Awaitable[None] | None]
+
+
+def _observed_node(
+    graph_name: str,
+    node_key: str,
+    node_fn: Callable[[dict], Awaitable[dict]],
+    observer: NodeObserver | None,
+):
+    if observer is None:
+        return node_fn
+
+    async def wrapped(state: dict) -> dict:
+        started = observer(graph_name, node_key, None, None)
+        if started is not None:
+            await started
+        try:
+            output = await node_fn(state)
+        except Exception as exc:
+            failed = observer(graph_name, node_key, None, exc)
+            if failed is not None:
+                await failed
+            raise
+        semantic_error = RuntimeError(str(output.get("error"))) if isinstance(output, dict) and output.get("error") else None
+        completed = observer(graph_name, node_key, output, semantic_error)
+        if completed is not None:
+            await completed
+        return output
+
+    return wrapped
+
+
+def build_execution_graph(observer: NodeObserver | None = None) -> StateGraph:
     """Xây dựng graph cho Run 2 (Execution Graph - Deterministic).
 
     Luồng:
@@ -235,11 +285,11 @@ def build_execution_graph() -> StateGraph:
 
     graph = StateGraph(AgentState)
 
-    graph.add_node("test_generator", test_generator_node)
-    graph.add_node("validate_dbt_project", validate_dbt_project_node)
-    graph.add_node("dbt_validation_failed", _fail_dbt_validation_node)
-    graph.add_node("test_runner", test_runner_node)
-    graph.add_node("persist_report", persist_report_node)
+    graph.add_node("test_generator", _observed_node("GRAPH2", "test_generator", test_generator_node, observer))
+    graph.add_node("validate_dbt_project", _observed_node("GRAPH2", "validate_dbt_project", validate_dbt_project_node, observer))
+    graph.add_node("dbt_validation_failed", _observed_node("GRAPH2", "dbt_validation_failed", _fail_dbt_validation_node, observer))
+    graph.add_node("test_runner", _observed_node("GRAPH2", "test_runner", test_runner_node, observer))
+    graph.add_node("persist_report", _observed_node("GRAPH2", "persist_report", persist_report_node, observer))
 
     graph.set_entry_point("test_generator")
 
@@ -264,13 +314,16 @@ def build_execution_graph() -> StateGraph:
 # Run 3: Anomaly Graph (Detector ➔ Hypothesis ➔ Persist)
 # ---------------------------------------------------------------------------
 
-
-def build_anomaly_graph(investigation_mode: Literal["deepagent", "legacy"] | None = None) -> StateGraph:
+def build_anomaly_graph(
+    investigation_mode: Literal["deepagent", "legacy"] | None = None,
+    observer: NodeObserver | None = None,
+) -> StateGraph:
     """Xây dựng graph cho Run 3 (Anomaly Analysis Graph).
 
     Args:
         investigation_mode: "deepagent" (Deep Agent + Tools + Skills) hoặc "legacy" (Steward Insights prompt cũ).
                            Nếu None, lấy từ config (settings.anomaly_investigation_mode).
+        observer: Optional NodeObserver callback for streaming execution metrics.
 
     Luồng:
       anomaly_detector ➔ hypothesis_agent ➔ persist_analysis ➔ report_writer ➔ END
@@ -294,10 +347,10 @@ def build_anomaly_graph(investigation_mode: Literal["deepagent", "legacy"] | Non
 
     graph = StateGraph(AnomalyGraphState)
 
-    graph.add_node("anomaly_detector", anomaly_detector_node)
-    graph.add_node("hypothesis_agent", hypothesis_agent)
-    graph.add_node("persist_analysis", persist_analysis_node)
-    graph.add_node("report_writer", report_writer_node)
+    graph.add_node("anomaly_detector", _observed_node("GRAPH3", "anomaly_detector", anomaly_detector_node, observer))
+    graph.add_node("hypothesis_agent", _observed_node("GRAPH3", "hypothesis_agent", hypothesis_agent, observer))
+    graph.add_node("persist_analysis", _observed_node("GRAPH3", "persist_analysis", persist_analysis_node, observer))
+    graph.add_node("report_writer", _observed_node("GRAPH3", "report_writer", report_writer_node, observer))
 
     graph.set_entry_point("anomaly_detector")
     graph.add_edge("anomaly_detector", "hypothesis_agent")

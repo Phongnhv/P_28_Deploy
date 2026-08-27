@@ -1,6 +1,10 @@
 # Bằng chứng Đánh giá (Eval Evidences)
 
-Tài liệu này lưu trữ các kết quả đánh giá chất lượng thực tế của Agent RidePulse DQ cho đợt nghiệm thu Gate 2 MVP.
+Tài liệu này lưu trữ các kết quả đánh giá chất lượng thực tế của DataPulse Agent
+cho đợt nghiệm thu Gate 2 MVP. Bảng E1–E5 bên dưới là bằng chứng lịch sử trên
+NYC Yellow Taxi; không nên hiểu đây là kết quả của mọi dataset hoặc là kết quả
+cloud mới nhất. Đường chạy hiện tại đã hỗ trợ upload CSV/Parquet generic theo
+dataset version, còn các run mới cần ghi ID, timestamp và environment riêng.
 
 ---
 

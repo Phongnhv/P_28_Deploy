@@ -14,6 +14,7 @@ env/
 
 # Environment variables
 .env
+real.env
 .env.local
 .env.production
 
@@ -47,6 +48,7 @@ logs/
 # Test coverage
 .pytest_cache/
 .pytest_tmp/
+.pytest_tmp_*/
 htmlcov/
 .coverage
 coverage.xml
@@ -93,5 +95,5 @@ dbt_project/models/generated_dq_tests.yml
 presentation/VIDEO_REHEARSAL.md
 /evalgate/
 /message.txt
-
 eval/
+

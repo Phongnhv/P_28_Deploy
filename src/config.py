@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     )
 
     # App
-    app_name: str = "AI20K Agent"
+    app_name: str = "DataPulse"
     app_env: Literal["development", "production", "test", "local"] = "development"
     app_port: int = Field(default=8000, ge=1, le=65535)
     app_host: str = "0.0.0.0"
@@ -30,14 +30,14 @@ class Settings(BaseSettings):
     mistral_api_key: str | None = os.getenv("MISTRAL_API_KEY")
     google_api_key: str | None = os.getenv("GOOGLE_API_KEY")
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    llm_request_timeout_seconds: int = Field(default=25, ge=5, le=120)
+    llm_request_timeout_seconds: int = Field(default=180, ge=5, le=180)
 
     # LLM provider selection
     llm_provider: Literal["openai", "anthropic", "mistral", "google"] = os.getenv("PROVIDER") or "openai"
 
     # Set model based on provider
     # model_name: str = os.getenv("MISTRAL_MODEL") or "mistral-medium-latest"
-    openai_model_name: str = os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
+    openai_model_name: str = os.getenv("OPENAI_MODEL") or "gpt-5.6-luna"
     anthropic_model_name: str = os.getenv("ANTHROPIC_MODEL") or "claude-opus-5"
     mistral_model_name: str = os.getenv("MISTRAL_MODEL") or "mistral-medium-latest"
     google_model_name: str = os.getenv("GOOGLE_MODEL") or "gemini-3.1-flash-lite"
@@ -46,16 +46,30 @@ class Settings(BaseSettings):
     agent_mode: Literal["mock", "graph"] = os.getenv("AGENT_MODE") or "mock"
     rule_proposer_concurrency: int = 10
     rule_proposer_max_retries: int = 2
+    rule_proposer_batch_size: int = Field(default=8, ge=1, le=20)
     debug_dump_table_digests: bool = False
     anomaly_investigation_mode: Literal["deepagent", "legacy"] = os.getenv("ANOMALY_INVESTIGATION_MODE") or "deepagent"
 
     # Database
-    database_url: str = Field(default="sqlite:///steward_local.db")
-    # Canonical source data can be separate from the local dashboard metadata
-    # store. In auto mode (the default), a PostgreSQL DATABASE_URL is treated as
-    # the Supabase execution surface; SQLite retains the local-MVP fallback.
+    # ``DATABASE_URL`` is the explicit control-plane database.  When it is not
+    # supplied, use the configured Supabase connection for both workflow
+    # metadata and execution instead of silently creating a local SQLite file.
+    # SQLite remains an intentional fallback only for tests or an unconfigured
+    # local checkout.
+    database_url: str = Field(
+        default_factory=lambda: (
+            os.getenv("DATABASE_URL")
+            or os.getenv("SUPABASE_DATABASE_URL")
+            or "sqlite:///steward_local.db"
+        )
+    )
+    # Canonical source data can be separate from the control-plane store when
+    # an explicit DATABASE_URL is used.
     supabase_database_url: str | None = os.getenv("SUPABASE_DATABASE_URL")
     dq_execution_backend: Literal["auto", "local", "supabase"] = os.getenv("DQ_EXECUTION_BACKEND") or "auto"
+    database_pool_size: int = Field(default=5, ge=1, le=20)
+    database_max_overflow: int = Field(default=5, ge=0, le=20)
+    database_pool_timeout_seconds: int = Field(default=30, ge=1, le=120)
 
     # Vector Store
     chroma_persist_dir: str = "./data/chroma"  # Change to .env later
@@ -64,7 +78,8 @@ class Settings(BaseSettings):
     output_dir: str = "./output"
     results_dir: str = "./output"  # Backwards-compatible alias
 
-    # Generated dbt artifacts (AWS S3 in production, MinIO locally)
+    # Generated dbt artifacts (GCS/Cloud Run, AWS S3, or MinIO locally)
+    object_storage_provider: Literal["s3", "gcs"] = "s3"
     object_storage_bucket: str = "ridepulse-dbt-artifacts"
     object_storage_prefix: str = "dbt-tests"
     object_storage_region: str = "us-east-1"

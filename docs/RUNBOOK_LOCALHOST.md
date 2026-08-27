@@ -1,14 +1,14 @@
 # Runbook: Localhost Development and Operations
 
-This runbook provides step-by-step guidance for setting up, running, testing, and managing the RidePulse DQ platform in a **localhost-only** environment.
+This runbook provides step-by-step guidance for setting up, running, testing, and managing the DataPulse platform in a **localhost-only** environment.
 
 ---
 
 ## 1. Scope and prerequisites
 
-This runbook is for the Gate 2 **local UI MVP**. It starts FastAPI, React/Vite and a
-fresh SQLite database on the developer machine. It does not require Docker,
-PostgreSQL, MinIO, cloud deployment, or an LLM API key.
+This runbook is for local UI and API verification. It starts FastAPI, React/Vite
+and a fresh SQLite database on the developer machine. It does not require
+Docker, PostgreSQL, MinIO or cloud deployment for the default deterministic mode.
 
 Install Python 3.12, Node.js 20+ and npm. From the repository root, install the
 Python and frontend dependencies once:
@@ -30,6 +30,7 @@ calls an LLM.
 $env:DATABASE_URL="sqlite:///ui_local_mvp.db"
 $env:SUPABASE_DATABASE_URL="postgresql://..." # optional: profile/run rules against Supabase canonical rows
 $env:DQ_EXECUTION_BACKEND="auto"
+$env:AGENT_MODE="mock" # use graph + OPENAI_API_KEY for the real agent path
 $env:FRONTEND_ORIGIN="http://localhost:5173,http://127.0.0.1:5173"
 .\.venv\Scripts\python.exe -m uvicorn src.main:app --host 127.0.0.1 --port 8000
 ```
@@ -57,6 +58,9 @@ Open `http://127.0.0.1:5173`. Seeded test accounts are:
 - `user` / `user`: read-only access.
 - `steward` / `steward`: profiling, proposal review and rule configuration.
 - `admin` / `admin`: create local users and grant/revoke dataset access.
+- `demo-steward` / `ridepulse-demo-2026`: judge-facing Steward account with a
+  bounded backend quota (40 mutations, 3 uploads, 3 profiling starts and 2
+  analysis starts per rolling 24-hour window).
 
 For a frontend-only demonstration, omit `VITE_USE_MOCK_API=false`; Vite then uses
 the in-memory adapter in `frontend/src/api/mockApi.ts`.
@@ -71,8 +75,11 @@ npm --prefix frontend run build
 ruff check src/api/routes.py src/models/database.py src/services/session_service.py src/services/rule_store.py tests/test_admin_config.py
 ```
 
-With `SUPABASE_DATABASE_URL` set, the dashboard metadata remains in local SQLite
-while profile and approved-rule execution use Supabase `trips_canonical`. Without
-it, SQLite is the intentional offline fallback. The UI MVP has no migration command:
-FastAPI creates its local SQLite schema and seeds the three accounts and default dataset when it starts. Delete
-`ui_local_mvp.db` only after stopping the API when a fresh test database is needed.
+With an explicit `DATABASE_URL`, that database stores control-plane metadata. The
+versioned upload path stores immutable source metadata and profiles against the
+selected workspace; production points both control-plane and execution settings
+at the same Supabase PostgreSQL target. Without remote settings, SQLite is the
+intentional local fallback. FastAPI creates the local schema and seeds the
+accounts, demo workspace membership when available, and default demo dataset on
+startup. Delete `ui_local_mvp.db` only after stopping the API when a fresh test
+database is needed.

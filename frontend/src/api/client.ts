@@ -29,6 +29,12 @@ import type {
   AgentArtifact,
   ArtifactReviewInput,
   LoopDecisionInput,
+  Graph1Run,
+  Graph1NodeExecution,
+  Graph1RuleDecision,
+  AnalysisRun,
+  AnalysisNodeExecution,
+  AnalysisResult,
 } from "../types";
 
 function resolveApiBaseUrl(configuredValue: string) {
@@ -47,7 +53,8 @@ function resolveApiBaseUrl(configuredValue: string) {
   return configured;
 }
 
-const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL ?? "");
+export const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL ?? "");
+const workspaceId = (import.meta.env.VITE_WORKSPACE_ID ?? "").trim();
 const csrfStorageKey = "ridepulse.csrf";
 let csrfToken = typeof window === "undefined" ? "" : window.sessionStorage.getItem(csrfStorageKey) ?? "";
 
@@ -147,9 +154,49 @@ export const realApiClient: ApiClient = {
     return request<Dataset[]>("/api/v1/datasets");
   },
   async importDataset(file) {
+    if (!workspaceId) {
+      throw new ApiError(503, "WORKSPACE_NOT_CONFIGURED", "VITE_WORKSPACE_ID is not configured for versioned dataset import.");
+    }
+    const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+    const checksum = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
     const body = new FormData();
     body.append("file", file);
-    return request<DatasetImportResponse>("/api/v1/datasets/import", { method: "POST", body });
+    body.append("dataset_name", file.name.replace(/\.[^.]+$/, ""));
+    body.append("client_sha256", checksum);
+    const payload = await request<{
+      dataset: { id: string; name: string; status?: Dataset["status"] };
+      version: { id: string; version_number: number; status: string; checksum: string; row_count: number };
+      job: { job_id: string; status: string };
+      profile_run_id?: string;
+    }>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/datasets/import`, {
+      method: "POST",
+      headers: { "Idempotency-Key": `ui-${checksum}` },
+      body,
+    });
+    return {
+      dataset: {
+        id: payload.dataset.id,
+        name: payload.dataset.name,
+        description: "Generic versioned CSV/Parquet dataset",
+        status: payload.dataset.status ?? "REGISTERED",
+        row_count: payload.version.row_count,
+        source_label: file.name,
+        manifest_version: "versioned-v1",
+        checksum: payload.version.checksum,
+        updated_at: new Date().toISOString(),
+        data_explorer_available: payload.version.status === "READY",
+        dataset_version_id: payload.version.id,
+        version_number: payload.version.version_number,
+        profile_run_id: payload.profile_run_id,
+      },
+      job: {
+        job_id: payload.job.job_id,
+        status: payload.job.status === "RUNNING" ? "RUNNING" : "PENDING",
+      },
+    } satisfies DatasetImportResponse;
+  },
+  async deleteDataset(id) {
+    await request<void>(`/api/v1/datasets/${id}`, { method: "DELETE" });
   },
   async startIngestion(datasetId, idempotencyKey) {
     return request<CreateJobResponse>(`/api/v1/datasets/${datasetId}/ingestions`, {
@@ -290,5 +337,53 @@ export const realApiClient: ApiClient = {
       method: "POST",
       body: JSON.stringify({ target_step: targetStep }),
     });
+  },
+  createGraph1Run(datasetId: string, datasetVersionId?: string, profileRunId?: string) {
+    const query = new URLSearchParams();
+    if (datasetVersionId) query.set("dataset_version_id", datasetVersionId);
+    if (profileRunId) query.set("profile_run_id", profileRunId);
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return request<Graph1Run>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/graph1-runs${suffix}`, {
+      method: "POST",
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+    });
+  },
+  getLatestGraph1Run(datasetId: string, datasetVersionId?: string) {
+    const query = datasetVersionId ? `?dataset_version_id=${encodeURIComponent(datasetVersionId)}` : "";
+    return request<Graph1Run | null>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/graph1-runs/latest${query}`);
+  },
+  getGraph1Run(runId: string) {
+    return request<Graph1Run>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}`);
+  },
+  listGraph1Nodes(runId: string) {
+    return request<Graph1NodeExecution[]>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}/nodes`);
+  },
+  confirmGraph1Semantic(runId: string, contract: Record<string, unknown>) {
+    return request<Graph1Run>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}/semantic-review`, {
+      method: "POST", body: JSON.stringify({ contract }),
+    });
+  },
+  reviewGraph1Rules(runId: string, decisions: Graph1RuleDecision[]) {
+    return request<Graph1Run>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}/rule-review`, {
+      method: "POST", body: JSON.stringify({ decisions }),
+    });
+  },
+  createAnalysisRun(graph1RunId: string, rerun = false) {
+    // The analysis launch is idempotent by Graph 1 run. Retry a dropped
+    // connection so a committed run can still be recovered by its key.
+    const query = rerun ? "?rerun=true" : "";
+    return requestWithTransientRetry<AnalysisRun>(`/api/v1/graph1-runs/${encodeURIComponent(graph1RunId)}/analysis-runs${query}`, {
+      method: "POST",
+      headers: { "Idempotency-Key": rerun ? `analysis-rerun-${graph1RunId}-${crypto.randomUUID()}` : `analysis-${graph1RunId}` },
+    });
+  },
+  getAnalysisRun(analysisRunId: string) {
+    return request<AnalysisRun>(`/api/v1/analysis-runs/${encodeURIComponent(analysisRunId)}`);
+  },
+  listAnalysisNodes(analysisRunId: string) {
+    return request<AnalysisNodeExecution[]>(`/api/v1/analysis-runs/${encodeURIComponent(analysisRunId)}/nodes`);
+  },
+  getAnalysisResult(analysisRunId: string) {
+    return request<AnalysisResult>(`/api/v1/analysis-runs/${encodeURIComponent(analysisRunId)}/result`);
   },
 };

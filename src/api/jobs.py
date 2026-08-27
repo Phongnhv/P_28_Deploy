@@ -1,9 +1,9 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from src.api.dependencies import verify_idempotency_key
 from src.services.gcp_run import dispatch_cloud_run_job
-from src.services.job_service import create_job
+from src.services.job_service import create_job, update_job_status
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["Jobs"])
 
@@ -16,7 +16,6 @@ class CreateJobRequest(BaseModel):
 @router.post("", status_code=202)
 def trigger_job(
     request: CreateJobRequest,
-    background_tasks: BackgroundTasks,
     idempotency_key: str = Depends(verify_idempotency_key),
     x_correlation_id: str | None = Header(None, alias="X-Correlation-ID"),
 ):
@@ -30,8 +29,11 @@ def trigger_job(
     if not created:
         raise HTTPException(status_code=409, detail="Idempotency key collision during creation")
 
-    # Dispatch non-blocking
-    background_tasks.add_task(dispatch_cloud_run_job, job.id, job.type)
+    # Dispatch after the durable row is committed.  The transport returns as
+    # soon as a local subprocess/Cloud Run execution is accepted; it does not
+    # run the workflow inside the API process.
+    if not dispatch_cloud_run_job(job.id, job.type):
+        update_job_status(job.id, "FAILED_RETRYABLE", "Worker dispatch failed; job is eligible for retry.")
 
     return {"job_id": job.id, "status": job.status, "message": "Job accepted"}
 

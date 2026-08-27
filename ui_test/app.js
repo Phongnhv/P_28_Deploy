@@ -1,4 +1,4 @@
-// RidePulse DQ - Interactive Application Logic
+// DataPulse - Interactive Application Logic
 
 let currentRole = 'steward';
 let currentScreen = 'screen-2';

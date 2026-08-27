@@ -12,6 +12,14 @@ exclude = [
 select = ["E", "F", "I", "N", "W", "UP"]
 ignore = ["E501"]
 
+[lint.per-file-ignores]
+# These modules intentionally finish environment/tracing bootstrap before
+# importing application modules so instrumentation is installed first.
+"src/agents/graph.py" = ["E402"]
+"src/main.py" = ["E402"]
+# Keep the persisted enum string behavior stable across existing database rows.
+"src/models/database.py" = ["UP042"]
+
 [format]
 quote-style = "double"
 indent-style = "space"

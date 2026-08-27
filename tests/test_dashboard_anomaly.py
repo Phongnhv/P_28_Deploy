@@ -56,3 +56,12 @@ def test_small_checks_do_not_raise_unreliable_anomaly(test_db):
         anomalies = detect_dashboard_anomalies(session, "small-current")
 
     assert anomalies == []
+
+
+def test_dq_result_gets_cloud_compatible_string_id(test_db):
+    with Session(test_db) as session:
+        _save_run(session, "id-contract", failed=0, checked=10)
+        result = session.query(DqResultModel).filter_by(run_id="id-contract").one()
+
+    assert isinstance(result.id, str)
+    assert len(result.id) == 36

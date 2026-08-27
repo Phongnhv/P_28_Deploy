@@ -36,15 +36,10 @@ async def hitl_gate_node(state: AgentState) -> dict:
     metadata: dict = state.get("metadata", {})
 
     if not proposed_rules:
-        logger.warning("hitl_gate_node: proposed_rules rỗng — không có gì để persist.")
-        return {
-            "metadata": {
-                **metadata,
-                "hitl_status": "AWAITING_REVIEW",
-                "rules_saved": 0,
-                "trace_path": None,
-            }
-        }
+        raise RuntimeError(
+            "hitl_gate_node refused to persist an empty proposal set; "
+            "rule_proposer must succeed before rule review."
+        )
 
     # 1. Persist vào DB — lỗi ở bước này PHẢI raise để mark run FAILED
     n_saved = await asyncio.to_thread(save_proposed_rules, run_id, dataset_id, proposed_rules)

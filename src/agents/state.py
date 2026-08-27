@@ -22,8 +22,14 @@ class AgentState(TypedDict, total=False):
     profiler_result: dict
     dataset_profile_digest: dict
 
-    # RidePulse DQ specific state fields
+    # DataPulse-specific state fields
     dataset_id: str
+    workspace_id: str
+    dataset_version_id: str
+    profile_run_id: str
+    rule_review_snapshot_id: str
+    source_checksum: str
+    graph2_status: str
     proposed_rules: list
     approved_rules: list
     execution_results: dict
@@ -103,4 +109,6 @@ class AnomalyGraphState(TypedDict, total=False):
     anomaly_status: str
     hypothesis_status: str
     metadata: dict
-    steward_report_path: str  # Đường dẫn file báo cáo MD cho Data Steward (Graph 3 output)
+    steward_report_path: str      # Đường dẫn file báo cáo MD cho Data Steward (Graph 3 output)
+    steward_report_markdown: str  # Nội dung Markdown để API/UI không phụ thuộc filesystem
+    report_source: str            # LLM | FALLBACK
