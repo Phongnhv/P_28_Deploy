@@ -37,9 +37,14 @@ import type {
   AnalysisResult,
 } from "../types";
 
-function resolveApiBaseUrl(configuredValue: string) {
-  const configured = configuredValue.replace(/\/$/, "");
-  if (!configured || typeof window === "undefined") return configured;
+function resolveApiBaseUrl(configuredValue?: string) {
+  const configured = (configuredValue || "").replace(/\/$/, "");
+  if (!configured) {
+    return typeof window !== "undefined" && window.location.port === "5173"
+      ? "http://localhost:8000"
+      : "";
+  }
+  if (typeof window === "undefined") return configured;
   try {
     const url = new URL(configured);
     const loopbackHosts = new Set(["localhost", "127.0.0.1"]);
@@ -53,7 +58,7 @@ function resolveApiBaseUrl(configuredValue: string) {
   return configured;
 }
 
-export const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL ?? "");
+export const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL);
 const workspaceId = (import.meta.env.VITE_WORKSPACE_ID ?? "").trim();
 const csrfStorageKey = "ridepulse.csrf";
 let csrfToken = typeof window === "undefined" ? "" : window.sessionStorage.getItem(csrfStorageKey) ?? "";
@@ -81,10 +86,6 @@ export function clearApiSession() {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  if (!apiBaseUrl) {
-    throw new ApiError(503, "API_NOT_CONFIGURED", "VITE_API_BASE_URL is not configured.");
-  }
-
   const method = options.method ?? "GET";
   const headers = new Headers(options.headers);
   headers.set("Accept", "application/json");
