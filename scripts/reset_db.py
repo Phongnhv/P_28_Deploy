@@ -2,6 +2,7 @@ import subprocess
 import sys
 import time
 
+
 def run_cmd(cmd, check=True):
     print(f"Executing: {cmd}")
     res = subprocess.run(cmd, shell=True)
@@ -10,7 +11,7 @@ def run_cmd(cmd, check=True):
         sys.exit(res.returncode)
 
 def main():
-    print("🚀 Bắt đầu quá trình Reset Database RidePulse...")
+    print("🚀 Bắt đầu quá trình Reset Database DataPulse...")
 
     # Bước 1: Clear database & storage volumes
     print("\n--- BƯỚC 1: Xóa DB & Volumes cũ ---")

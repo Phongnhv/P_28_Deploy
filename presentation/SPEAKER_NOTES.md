@@ -1,4 +1,4 @@
-# Kịch Bản Thuyết Trình (Speaker Notes) — RidePulse DQ Tech Deep Dive
+# Kịch Bản Thuyết Trình (Speaker Notes) — DataPulse Tech Deep Dive
 
 > **Đối tượng:** Senior AI Engineer / AI System Architect / Tech Lead  
 > **Thời lượng khuyến nghị:** 15 – 20 phút thuyết trình + 10 phút Q&A  
@@ -9,9 +9,9 @@
 ## Slide 1: Title & Executive Summary (Thời lượng: ~1.5 phút)
 
 ### Key Talking Points:
-- "Chào các anh em Senior AI Engineer. Hôm nay tôi muốn chia sẻ về kiến trúc hệ thống **RidePulse DQ** — một nền tảng Autonomous AI Data Quality & Anomaly Intelligence."
+- "Chào các anh em Senior AI Engineer. Hôm nay tôi muốn chia sẻ về kiến trúc hệ thống **DataPulse** — một nền tảng Autonomous AI Data Quality & Anomaly Intelligence."
 - "Trong thực tế dữ liệu dạng bảng (Tabular Data), đội Data Engineering thường mất hàng tuần để khảo sát, viết và bảo trì hàng trăm file test dbt thủ công. Nhưng khi đưa AI Agent vào giải quyết bài toán này, thách thức kỹ thuật lớn nhất không phải là 'prompt gì cho LLM', mà là: **Làm sao để Zero-PII Exposure (không lộ dữ liệu nhạy cảm)**, **Làm sao chống ảo giác tham số (Anti-hallucination)** và **Làm sao để mã thực thi là tất định và an toàn (Deterministic Execution Safety)**."
-- "Hệ thống RidePulse DQ giải quyết trọn vẹn bài toán này thông qua việc kết hợp StateGraph của LangGraph, dbt-core, và các thuật toán thống kê Robust."
+- "Hệ thống DataPulse giải quyết trọn vẹn bài toán này thông qua việc kết hợp StateGraph của LangGraph, dbt-core, và các thuật toán thống kê Robust."
 
 ---
 
@@ -29,7 +29,7 @@
 ## Slide 3: Dual dbt Layers Integration (Thời lượng: ~1.5 phút)
 
 ### Key Talking Points:
-- "Điểm đặc biệt của RidePulse DQ là sự tích hợp **2 lớp dbt Core** trong cùng một pipeline."
+- "Điểm đặc biệt của DataPulse là sự tích hợp **2 lớp dbt Core** trong cùng một pipeline."
 - "**Lớp 1 (Pre-profiling Transformation):** Chạy ngay sau khi ingest dữ liệu thô. Chuyển `trips_raw` thành `stg_trips` và `profile_input`, ép kiểu chuẩn hóa 21 cột để làm contract dữ liệu sạch cho Profiler Agent."
 - "**Lớp 2 (Post-HITL Dynamic Test Compiler):** Khi Data Steward duyệt rules trên UI, Agent sẽ biên dịch thành file dbt YAML `generated_dq_tests.yml` lưu lên MinIO S3 và thực thi các câu lệnh kiểm tra vi phạm."
 
@@ -59,7 +59,7 @@
 ### Key Talking Points:
 - "Đây là phần quan trọng nhất về AI Safety: **Parameter Provenance**."
 - "Trước đây, nhiều hệ thống AI hay bị ảo giác tham số: tự bịa ra min=0, max=500 hoặc tự parse regex từ đoạn văn do LLM sinh ra."
-- "Trong RidePulse DQ, mỗi tham số trong `ProposedRule` bắt buộc phải có `ParameterProvenance` chỉ rõ `source_ref` (ví dụ: `profile.profile_input.passenger_count.p95`). Nếu LLM không cung cấp được nguồn gốc, rule sẽ bị validator từ chối thẳng tay (`REJECTED_BY_VALIDATOR`)."
+- "Trong DataPulse, mỗi tham số trong `ProposedRule` bắt buộc phải có `ParameterProvenance` chỉ rõ `source_ref` (ví dụ: `profile.profile_input.passenger_count.p95`). Nếu LLM không cung cấp được nguồn gốc, rule sẽ bị validator từ chối thẳng tay (`REJECTED_BY_VALIDATOR`)."
 
 ---
 
@@ -111,7 +111,7 @@
 ## Slide 12: Key Takeaways & Q&A (Thời lượng: ~1.5 phút)
 
 ### Key Talking Points:
-- "Tóm lại 4 trụ cột kiến trúc cốt lõi của RidePulse DQ:"
+- "Tóm lại 4 trụ cột kiến trúc cốt lõi của DataPulse:"
   1. *Separation of Graphs:* Ranh giới trách nhiệm rõ ràng giữa AI suy luận và Mã thực thi.
   2. *Zero-PII & Guarded LLM:* Chỉ nén thống kê, neo chặt nguồn gốc tham số.
   3. *Dual dbt Layer & Deterministic Execution:* An toàn tuyệt đối ở tầng dữ liệu.

@@ -73,7 +73,7 @@ def create_report():
     p_sub = doc.add_paragraph()
     p_sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p_sub.paragraph_format.space_before = Pt(12)
-    r_sub = p_sub.add_run("DỰ ÁN: RidePulse DQ – Autonomous Data Quality & Anomaly Intelligence Platform\nMÔN HỌC: Product Development (P-028)")
+    r_sub = p_sub.add_run("DỰ ÁN: DataPulse – Autonomous Data Quality & Anomaly Intelligence Platform\nMÔN HỌC: Product Development (P-028)")
     r_sub.font.size = Pt(14)
     r_sub.font.italic = True
     r_sub.font.color.rgb = RGBColor(51, 65, 85)
@@ -91,7 +91,7 @@ def create_report():
     section = doc.sections[0]
     header = section.header
     hp = header.paragraphs[0]
-    hp.text = "RidePulse DQ — Báo cáo Công việc Thành viên C (UI/UX Lead)"
+    hp.text = "DataPulse — Báo cáo Công việc Thành viên C (UI/UX Lead)"
     hp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     hp.runs[0].font.size = Pt(9)
     hp.runs[0].font.color.rgb = RGBColor(148, 163, 184)
@@ -101,7 +101,7 @@ def create_report():
     
     p = doc.add_paragraph()
     p.add_run("Trong dự án ").font.size = Pt(11)
-    r_b = p.add_run("RidePulse DQ – Autonomous Data Quality & Anomaly Intelligence Platform")
+    r_b = p.add_run("DataPulse – Autonomous Data Quality & Anomaly Intelligence Platform")
     r_b.font.bold = True
     p.add_run(", ").font.size = Pt(11)
     r_role = p.add_run("Thành viên C")
