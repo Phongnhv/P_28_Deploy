@@ -37,7 +37,28 @@ import type {
   AnalysisResult,
 } from "../types";
 
-export const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+function resolveApiBaseUrl(configuredValue?: string) {
+  const configured = (configuredValue || "").replace(/\/$/, "");
+  if (!configured) {
+    return typeof window !== "undefined" && window.location.port === "5173"
+      ? "http://localhost:8000"
+      : "";
+  }
+  if (typeof window === "undefined") return configured;
+  try {
+    const url = new URL(configured);
+    const loopbackHosts = new Set(["localhost", "127.0.0.1"]);
+    if (loopbackHosts.has(url.hostname) && loopbackHosts.has(window.location.hostname)) {
+      url.hostname = window.location.hostname;
+      return url.toString().replace(/\/$/, "");
+    }
+  } catch {
+    return configured;
+  }
+  return configured;
+}
+
+export const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL);
 const workspaceId = (import.meta.env.VITE_WORKSPACE_ID ?? "").trim();
 const csrfStorageKey = "ridepulse.csrf";
 let csrfToken = typeof window === "undefined" ? "" : window.sessionStorage.getItem(csrfStorageKey) ?? "";
