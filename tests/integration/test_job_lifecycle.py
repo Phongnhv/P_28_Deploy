@@ -12,6 +12,7 @@ async def test_job_dispatch_and_idempotency():
         # Login first to satisfy authentication
         login_res = await client.post("/api/v1/session", json={"username": "steward", "password": "steward"})
         assert login_res.status_code == 200
+        csrf_token = login_res.json()["csrf_token"]
 
         ikey = "test-idem-key-12345"
         dataset_id = "dataset-nyc-yellow-taxi-50k"

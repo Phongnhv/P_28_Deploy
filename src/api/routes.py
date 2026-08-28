@@ -54,6 +54,7 @@ from src.models.database import (
     GovernedArtifactModel,
     Graph1NodeExecutionModel,
     Graph1RunModel,
+    GraphNodeRunModel,
     JobModel,
     ProfileModel,
     ProfileRunSnapshotModel,
