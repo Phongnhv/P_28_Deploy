@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import uuid
 from typing import Any
 
@@ -31,9 +32,21 @@ from src.models.database import (
     WorkflowArtifactModel,
     WorkflowRunModel,
 )
-from src.services.dashboard_agent_workflow import generate_dashboard_proposals
+from src.services.dashboard_agent_workflow import (
+    generate_dashboard_proposals,
+    generate_rule_proposals_via_graph_1b,
+)
+from src.services.node_telemetry import start_graph_run
 from src.services.rule_store import get_engine
 from src.time_utils import utc_now
+
+logger = logging.getLogger(__name__)
+
+# Graph 1A and 1B each run three nodes, two of which call an LLM.  The old
+# single-node shortcut needed 90s; three nodes need proportionally more headroom
+# before the workflow gives up on the agent.
+UNDERSTANDING_GRAPH_TIMEOUT_SECONDS = 180
+RULE_PROPOSAL_GRAPH_TIMEOUT_SECONDS = 240
 
 STEP_KEYS = (
     "UPLOAD_PROFILE",
@@ -342,8 +355,70 @@ def _semantic_payload(db: Session, dataset_id: str) -> dict[str, Any]:
     }
 
 
-def _agent_semantic_payload(db: Session, dataset_id: str) -> dict[str, Any]:
-    """Use the Dataset Understanding Agent over aggregate profile evidence.
+def _raw_profile_for_graph(db: Session, dataset_id: str, fallback: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild a raw-profile document from the persisted aggregate profile.
+
+    Graph 1A begins at ``build_profile_digest``, which expects the shape the
+    database-wide profiler emits (``table_metadata`` + ``columns``) rather than
+    the flattened contract shape this module works in.  Reconstructing it here
+    lets the wizard drive the documented three-node graph instead of calling the
+    understanding node on its own.
+
+    Only aggregate statistics are read -- counts, rates, quantile bounds.  No
+    source row ever enters this document, which is what keeps the digest handed
+    to the LLM free of real values.
+    """
+    columns_by_name = {
+        item.name: item for item in db.query(ColumnProfileModel).filter_by(profile_dataset_id=dataset_id).all()
+    }
+    total_rows = int(fallback["rows"] or 0)
+
+    columns: dict[str, Any] = {}
+    for column in fallback["columns"]:
+        name = column["name"]
+        stored = columns_by_name.get(name)
+        entry: dict[str, Any] = {
+            "type": stored.data_type if stored else "unknown",
+            "null_pct": float(column["null_rate"] or 0.0),
+            "distinct_in_sample": int(column["distinct_count"] or 0),
+        }
+        value_range = column.get("range")
+        if isinstance(value_range, list | tuple) and len(value_range) == 2:
+            entry["min"], entry["max"] = value_range[0], value_range[1]
+        if stored is not None:
+            if stored.full_distinct_count is not None:
+                entry["distinct_full_table"] = stored.full_distinct_count
+            if stored.is_unique_full_table is not None:
+                entry["is_unique_full_table"] = stored.is_unique_full_table
+            if stored.negative_rate is not None:
+                entry["negative_pct"] = stored.negative_rate
+            if stored.quantiles_json:
+                try:
+                    entry["percentiles"] = json.loads(stored.quantiles_json)
+                except (TypeError, ValueError):
+                    pass
+        # The contract's own semantic guess is the best categorical signal here;
+        # the raw profiler's cardinality measurement is not persisted.
+        if column.get("semantic_type") == "category":
+            entry["is_categorical"] = True
+        columns[name] = entry
+
+    return {
+        dataset_id: {
+            "table_metadata": {
+                "table_name": dataset_id,
+                "total_rows": total_rows,
+                "sampled_rows": total_rows,
+                "sampling_rate": 1.0,
+                "is_sampled": False,
+            },
+            "columns": columns,
+        }
+    }
+
+
+def _agent_semantic_payload(db: Session, dataset_id: str, *, workflow_run_id: str | None = None) -> dict[str, Any]:
+    """Run Graph 1A over aggregate profile evidence.
 
     No source rows are exposed to the model: the agent receives names, types,
     aggregate counts/rates and bounded value/range metadata only.
@@ -354,43 +429,24 @@ def _agent_semantic_payload(db: Session, dataset_id: str) -> dict[str, Any]:
         fallback["agent_mode"] = "deterministic-fallback"
         return fallback
 
-    profiles_by_name = {
-        item.name: item for item in db.query(ColumnProfileModel).filter_by(profile_dataset_id=dataset_id).all()
-    }
-    digest = {
-        "dataset": {
-            "table": dataset_id,
-            "rows": fallback["rows"],
-            "columns": [
-                {
-                    "name": column["name"],
-                    "type": profiles_by_name.get(column["name"]).data_type
-                    if column["name"] in profiles_by_name
-                    else "unknown",
-                    "role": column["semantic_type"],
-                    "null_pct": round(float(column["null_rate"]) * 100, 4),
-                    "range": column["range"],
-                    "distinct_count": column["distinct_count"],
-                }
-                for column in fallback["columns"]
-            ],
-        }
-    }
-    from src.agents.nodes.dataset_understanding_node import dataset_understanding_node
+    from src.agents.graph import build_understanding_graph
 
-    result = asyncio.run(
-        asyncio.wait_for(
-            dataset_understanding_node(
+    async def _invoke() -> dict[str, Any]:
+        start_graph_run(workflow_run_id=workflow_run_id, dataset_id=dataset_id)
+        graph = build_understanding_graph()
+        return await asyncio.wait_for(
+            graph.ainvoke(
                 {
                     "dataset_id": dataset_id,
-                    "dataset_profile_digest": digest,
-                    "normalized_data_dictionary": {},
+                    "dataset_profile": _raw_profile_for_graph(db, dataset_id, fallback),
+                    "target_tables": [dataset_id],
                     "metadata": {"domain_hint": "NYC Yellow Taxi trip operations"},
                 }
             ),
-            timeout=90,
+            timeout=UNDERSTANDING_GRAPH_TIMEOUT_SECONDS,
         )
-    )
+
+    result = asyncio.run(_invoke())
     if result.get("error") or not result.get("semantic_contract", {}).get("tables"):
         raise WorkflowError(
             f"Dataset Understanding Agent failed: {result.get('error', 'no semantic contract returned')}"
@@ -402,7 +458,7 @@ def _agent_semantic_payload(db: Session, dataset_id: str) -> dict[str, Any]:
         "columns": contract.get("columns", []),
         "relationships": contract.get("relationships", []),
         "assumptions": contract.get("business_assumptions", []),
-        "agent_mode": "openai-dataset-understanding-agent",
+        "agent_mode": "graph-1a-dataset-understanding",
     }
 
 
@@ -473,7 +529,7 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
         )
     if step_key == "UNDERSTAND_DATA":
         snapshot_payload = _profile_snapshot(db, run.dataset_id)
-        semantic = _agent_semantic_payload(db, run.dataset_id)
+        semantic = _agent_semantic_payload(db, run.dataset_id, workflow_run_id=run.id)
         _mark_downstream_stale(db, run, step_key)
         _mark_stage_artifacts_stale(db, run, step_key)
         snapshot = _add_artifact(db, run, step_key, "PROFILE_SNAPSHOT", snapshot_payload)
@@ -491,7 +547,18 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
             raise WorkflowError("Confirm the current semantic contract before proposing rules.")
         if contract.get("source_profile_artifact_id") != profile_artifact.id or contract.get("source_dictionary_artifact_id") != dictionary_artifact.id:
             raise WorkflowError("The confirmed contract references stale understanding artifacts.")
-        proposals = generate_dashboard_proposals(db, run.dataset_id, contract)
+        # Graph 1B is the documented path (candidates ➔ prompt ➔ proposer).  The
+        # single-node shortcut stays as a fallback so a Graph 1B failure degrades
+        # to the previous behaviour instead of blocking the steward.
+        try:
+            proposals = generate_rule_proposals_via_graph_1b(
+                db, run.dataset_id, contract, workflow_run_id=run.id
+            )
+        except Exception as exc:
+            logger.warning(
+                "Graph 1B failed for workflow %s, falling back to the single-node proposer: %s", run.id, exc
+            )
+            proposals = generate_dashboard_proposals(db, run.dataset_id, contract)
         if not proposals:
             raise WorkflowError("No usable rule proposals were produced.")
         _mark_downstream_stale(db, run, step_key)

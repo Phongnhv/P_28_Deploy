@@ -303,7 +303,17 @@ def init_db() -> None:
     # Seed default demo dataset if not present
     try:
         with Session(engine) as session:
-            ensure_default_users(session)
+            # The three demo accounts have passwords equal to their usernames, so
+            # seeding them wherever init_db() runs would put steward/steward on any
+            # public deployment. Restricted to the environments they exist for.
+            #
+            # A deployment that needs accounts creates them through
+            # POST /api/v1/admin/users, which is audited; this path is not.
+            app_env = get_settings().app_env
+            if app_env in {"local", "test", "development"}:
+                ensure_default_users(session)
+            else:
+                logger.info("Bỏ qua seed tài khoản demo: app_env=%s không phải môi trường cục bộ", app_env)
             demo_dataset = session.get(DatasetModel, "dataset-nyc-yellow-taxi-50k")
             if not demo_dataset:
                 demo_dataset = DatasetModel(

@@ -7,6 +7,10 @@ import type {
   DatasetProfile,
   DqRunCreateResponse,
   DqResult,
+  ActiveRule,
+  AnomalyFeedbackInput,
+  AnomalyHypothesis,
+  AnomalySignal,
   DqAnomaly,
   DatasetRowQuery,
   DatasetRowsResponse,
@@ -29,6 +33,11 @@ import type {
   AgentArtifact,
   ArtifactReviewInput,
   LoopDecisionInput,
+  GraphCatalog,
+  NodeRun,
+  NodeRunDetail,
+  NodeRunFilter,
+  StewardReport,
 } from "../types";
 
 function resolveApiBaseUrl(configuredValue: string) {
@@ -210,6 +219,28 @@ export const realApiClient: ApiClient = {
   getDqAnomalies(runId) {
     return request<DqAnomaly[]>(`/api/v1/dq-runs/${runId}/anomalies`);
   },
+  async getActiveRules(datasetId) {
+    const response = await request<{ total_rules: number; rules: ActiveRule[] }>(
+      `/api/v1/dq/active-rules?dataset_id=${encodeURIComponent(datasetId)}`,
+    );
+    return response.rules;
+  },
+  getAnomalySignals(runId) {
+    return request<AnomalySignal[]>(
+      `/api/v1/dq/anomaly-runs/${encodeURIComponent(runId)}/signals`,
+    );
+  },
+  getAnomalyHypotheses(runId) {
+    return request<AnomalyHypothesis[]>(
+      `/api/v1/dq/anomaly-runs/${encodeURIComponent(runId)}/hypotheses`,
+    );
+  },
+  async submitAnomalyFeedback(runId, input) {
+    await request<{ status: string }>(
+      `/api/v1/dq/anomaly-runs/${encodeURIComponent(runId)}/feedback`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  },
   getLatestDqRun(datasetId) {
     return request<DqRun | null>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/dq-runs/latest`);
   },
@@ -290,5 +321,26 @@ export const realApiClient: ApiClient = {
       method: "POST",
       body: JSON.stringify({ target_step: targetStep }),
     });
+  },
+  getGraphCatalog() {
+    return request<GraphCatalog>("/api/v1/graph/catalog");
+  },
+  listNodeRuns(filter: NodeRunFilter) {
+    const params = new URLSearchParams();
+    if (filter.workflowRunId) params.set("workflow_run_id", filter.workflowRunId);
+    if (filter.datasetId) params.set("dataset_id", filter.datasetId);
+    if (filter.dqRunId) params.set("dq_run_id", filter.dqRunId);
+    if (filter.anomalyRunId) params.set("anomaly_run_id", filter.anomalyRunId);
+    if (filter.graphKey) params.set("graph_key", filter.graphKey);
+    if (filter.graphRunId) params.set("graph_run_id", filter.graphRunId);
+    if (filter.limit) params.set("limit", String(filter.limit));
+    const query = params.toString();
+    return request<NodeRun[]>(`/api/v1/graph/node-runs${query ? `?${query}` : ""}`);
+  },
+  getNodeRun(nodeRunId: string) {
+    return request<NodeRunDetail>(`/api/v1/graph/node-runs/${encodeURIComponent(nodeRunId)}`);
+  },
+  getStewardReport(runId: string) {
+    return request<StewardReport>(`/api/v1/dq-runs/${encodeURIComponent(runId)}/steward-report`);
   },
 };

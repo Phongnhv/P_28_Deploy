@@ -12,6 +12,9 @@ async def test_job_dispatch_and_idempotency():
         # Login first to satisfy authentication
         login_res = await client.post("/api/v1/session", json={"username": "steward", "password": "steward"})
         assert login_res.status_code == 200
+        # POST /jobs now resolves a session, and the session dependency verifies CSRF
+        # on every mutating request -- without this header it stops at 422.
+        client.headers["X-CSRF-Token"] = login_res.json()["csrf_token"]
 
         ikey = "test-idem-key-12345"
 

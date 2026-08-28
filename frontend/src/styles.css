@@ -4447,3 +4447,1808 @@ button.step-nav-button:disabled {
 }
 
 
+
+/* ==========================================================================
+   Analytics (bước 5)
+
+   Trước đây bước 5 tô màu bằng mã hex viết thẳng trong TSX — 32 chỗ. Vì thế
+   nó là màn hình duy nhất vỡ khi bật chế độ tối: nền trắng cứng, chữ xám nhạt
+   trên nền tối. Toàn bộ đã chuyển sang token, và ba token biểu đồ dưới đây có
+   biến thể riêng cho nền tối vì --red/--amber gốc quá sẫm khi đặt trên nền đó.
+   ========================================================================== */
+
+:root {
+  --chart-pass: #2f6f4e;
+  --chart-fail: #b94d4d;
+  --chart-warn: #a56824;
+  --chart-grid: #e1e7f0;
+  --chart-axis: #657188;
+}
+
+:root[data-theme="dark"] {
+  --chart-pass: #5fbe87;
+  --chart-fail: #e0796a;
+  --chart-warn: #d6a54a;
+  --chart-grid: #273858;
+  --chart-axis: #93a2c0;
+}
+
+.analytics-page {
+  display: grid;
+  gap: 24px;
+}
+
+.analytics-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+}
+
+.analytics-metric {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+
+.analytics-metric .label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.analytics-metric .value {
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.analytics-metric .value.good { color: var(--chart-pass); }
+.analytics-metric .value.bad { color: var(--chart-fail); }
+.analytics-metric .value.warn { color: var(--chart-warn); }
+.analytics-metric .value.none { color: var(--muted); }
+
+.analytics-metric .hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+.analytics-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 24px;
+}
+
+.analytics-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+
+.analytics-card h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 16px;
+  color: var(--ink);
+}
+
+.analytics-chart-frame { height: 220px; }
+
+.analytics-empty {
+  display: grid;
+  place-items: center;
+  height: 200px;
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+  padding: 0 16px;
+}
+
+.analytics-table-scroll { overflow-x: auto; }
+
+.analytics-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 14px;
+}
+
+.analytics-table th {
+  padding: 10px;
+  border-bottom: 2px solid var(--border);
+  color: var(--ink-soft);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.analytics-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink);
+}
+
+.analytics-table td.muted { color: var(--muted); font-variant-numeric: tabular-nums; }
+.analytics-table tbody tr:last-child td { border-bottom: none; }
+
+.analytics-table .empty-cell {
+  padding: 18px;
+  text-align: center;
+  color: var(--muted);
+}
+
+/* Recharts nhận className và đưa thẳng xuống thuộc tính SVG, nên tô màu ở đây
+   giữ được biểu đồ đồng bộ với chủ đề mà không cần đọc biến bằng JavaScript. */
+.chart-fill-pass { fill: var(--chart-pass); }
+.chart-fill-fail { fill: var(--chart-fail); }
+.chart-fill-warn { fill: var(--chart-warn); }
+.chart-line-accent { stroke: var(--accent); }
+.chart-grid-line { stroke: var(--chart-grid); }
+
+/* Trục biểu đồ lấy màu qua currentColor để đổi theo chủ đề cùng phần còn lại. */
+.chart-axis { color: var(--chart-axis); font-size: 12px; }
+
+/* --------------------------------------------------------------------------
+   Lớp thay cho màu viết thẳng trong App.tsx
+
+   Bốn chỗ trước đây tô màu bằng mã hex ngay trong JSX nên giữ nguyên màu sáng
+   khi bật chế độ tối: nút xoá, cột độ tin cậy, và chấm màu của thẻ chỉ số.
+   -------------------------------------------------------------------------- */
+
+.button.ghost.danger {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+}
+
+.button.ghost.danger:hover {
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+
+.confidence-value { font-weight: 600; }
+.confidence-value.high { color: var(--chart-pass); }
+.confidence-value.low { color: var(--chart-warn); }
+
+.stat-card { position: relative; overflow: hidden; }
+
+.stat-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.stat-card .stat-label {
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--accent);
+}
+
+.stat-dot.green { background: var(--chart-pass); }
+.stat-dot.blue { background: var(--accent); }
+.stat-dot.amber { background: var(--chart-warn); }
+.stat-dot.violet { background: var(--accent-deep); }
+
+.stat-card .stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  margin: 8px 0 4px;
+  display: block;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-card .stat-detail {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ==========================================================================
+   Lý do đằng sau một đề xuất luật
+
+   Backend vẫn trả về lý do nghiệp vụ, nguồn gốc từng tham số, giả định và phân
+   rã độ tin cậy; thẻ đề xuất trước đây chỉ hiện tiêu đề, mô tả và một con số
+   phần trăm. Khối này đưa phần "vì sao" ra màn hình, mặc định thu gọn để hàng
+   đợi duyệt vẫn quét nhanh được.
+   ========================================================================== */
+
+.rationale {
+  border-top: 1px solid var(--border);
+  margin-top: 14px;
+  padding-top: 12px;
+}
+
+.rationale-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.rationale-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-deep);
+}
+
+.rationale-toggle:hover { text-decoration: underline; }
+
+.rationale-caret {
+  font-size: 10px;
+  color: var(--muted);
+  width: 10px;
+  display: inline-block;
+}
+
+.rationale-model {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin-left: auto;
+}
+
+.rationale-absent {
+  border-top: 1px solid var(--border);
+  margin: 14px 0 0;
+  padding-top: 12px;
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Huy hiệu nguồn gốc: nhìn là biết đề xuất dựa vào đâu mà không cần mở khối. */
+.basis-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.basis-badge.schema_constraint { border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--accent-deep); background: var(--accent-soft); }
+.basis-badge.data_profile { border-color: color-mix(in srgb, var(--chart-pass) 40%, transparent); color: var(--chart-pass); background: color-mix(in srgb, var(--chart-pass) 12%, transparent); }
+.basis-badge.data_dictionary { border-color: color-mix(in srgb, var(--chart-warn) 40%, transparent); color: var(--chart-warn); background: color-mix(in srgb, var(--chart-warn) 12%, transparent); }
+.basis-badge.historical_rule { border-color: color-mix(in srgb, var(--accent-deep) 40%, transparent); color: var(--accent-deep); background: var(--accent-soft); }
+.basis-badge.policy { border-color: color-mix(in srgb, var(--red) 40%, transparent); color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
+
+.rationale-body {
+  display: grid;
+  gap: 18px;
+  margin-top: 14px;
+  padding: 16px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.rationale-block h4 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.rationale-block p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink);
+  max-width: 68ch;
+}
+
+.rationale-note {
+  margin-top: 10px !important;
+  font-size: 12px !important;
+  color: var(--muted) !important;
+  font-style: italic;
+}
+
+.rationale-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 5px;
+}
+
+.rationale-list li {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+/* Phân rã độ tin cậy: ba thanh cho phép người duyệt tự kiểm chứng con số tổng. */
+.confidence-bars { display: grid; gap: 8px; }
+
+.confidence-bar {
+  display: grid;
+  grid-template-columns: minmax(120px, 170px) 1fr 42px;
+  align-items: center;
+  gap: 10px;
+}
+
+.cb-label { font-size: 12px; color: var(--ink-soft); }
+
+.cb-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+  display: block;
+}
+
+.cb-track > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.cb-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 34rem) {
+  .confidence-bar { grid-template-columns: 1fr 42px; }
+  .cb-label { grid-column: 1 / -1; }
+}
+
+.rationale-table-scroll { overflow-x: auto; }
+
+.rationale-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.rationale-table th {
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.rationale-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink);
+  vertical-align: top;
+  line-height: 1.5;
+}
+
+.rationale-table tbody tr:last-child td { border-bottom: none; }
+.rationale-table code { font-size: 12px; }
+
+/* Cột hợp đồng ngữ nghĩa mà agent suy luận kém chắc chắn. Đây là chốt chặn HITL
+   đầu tiên: mọi luật sinh ra sau đều dựa trên hợp đồng này, nên chỗ agent lưỡng
+   lự là chỗ người duyệt cần nhìn trước. */
+.schema-row.uncertain {
+  border-left: 3px solid var(--chart-warn);
+  padding-left: 9px;
+  background: color-mix(in srgb, var(--chart-warn) 7%, transparent);
+}
+
+.schema-row small.low { color: var(--chart-warn); font-weight: 600; }
+.needs-review { color: var(--chart-warn); }
+
+.schema-hint {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+  max-width: 66ch;
+}
+
+/* ==========================================================================
+   Điều tra nguyên nhân gốc (Graph 3)
+
+   DeepAgent sinh giả thuyết kèm bằng chứng hai chiều, kiểm tra khuyến nghị và
+   giới hạn tự khai — toàn bộ nằm sẵn trong `anomaly_hypotheses` nhưng ba
+   endpoint /dq/anomaly-runs/* chưa từng được giao diện gọi. Khối này đưa chúng
+   ra màn hình.
+   ========================================================================== */
+
+.investigation-panel { margin-top: 28px; }
+
+.investigation-note {
+  margin: 0;
+  padding: 18px 0 4px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 68ch;
+}
+
+.investigation-note.error { color: var(--red); }
+
+.hypothesis-list { display: grid; gap: 16px; margin-top: 16px; }
+
+.hypothesis {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+  padding: 18px 20px;
+}
+
+.hypothesis-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.hypothesis-type {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent-deep);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+/* Cờ đường lui là tín hiệu độ tin cậy thấp, nên phải nhìn thấy ngay cạnh nhãn
+   phân loại chứ không giấu trong phần chi tiết. */
+.hypothesis-fallback {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--chart-warn);
+  background: color-mix(in srgb, var(--chart-warn) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--chart-warn) 40%, transparent);
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+
+.hypothesis-confidence {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.hc-track {
+  width: 96px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+  display: block;
+}
+
+.hc-track > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.hypothesis-confidence strong {
+  font-size: 13px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  min-width: 38px;
+  text-align: right;
+}
+
+.hypothesis-summary {
+  margin: 0 0 16px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--ink);
+  max-width: 74ch;
+}
+
+.hypothesis-evidence {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.he-block {
+  border-left: 3px solid var(--chart-pass);
+  padding-left: 12px;
+}
+
+/* Bằng chứng phản bác dùng màu cảnh báo để phân biệt bằng hình dạng lẫn màu —
+   không chỉ dựa vào màu, vì người mù màu vẫn phải đọc được tiêu đề. */
+.he-block.against { border-left-color: var(--chart-warn); }
+
+.he-block h5 {
+  margin: 0 0 7px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.he-block ul {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 4px;
+}
+
+.he-block li {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.he-empty { margin: 0; font-size: 12.5px; color: var(--muted); font-style: italic; }
+
+.hypothesis-actions-block {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+  margin-bottom: 12px;
+}
+
+.hypothesis-actions-block h5 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.hypothesis-actions-block ol {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 5px;
+}
+
+.hypothesis-actions-block li {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.hypothesis-limits {
+  margin: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+  font-style: italic;
+  max-width: 74ch;
+}
+
+/* Vòng phản hồi: nối vào POST /dq/anomaly-runs/{id}/feedback để đo chất lượng
+   agent theo thời gian. Endpoint đã tồn tại từ trước, chỉ chưa có gì gọi. */
+.feedback-bar {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.feedback-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.feedback-buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.feedback-buttons .button { font-size: 12.5px; padding: 6px 12px; }
+
+.feedback-sent {
+  margin-left: auto;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--chart-pass);
+}
+
+/* ID dòng trượt: tách rời để đọc và sao chép từng cái, thay vì một dải dính liền. */
+.failed-ids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.failed-ids.empty { color: var(--muted); }
+
+.failed-ids code {
+  font-size: 11.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.failed-ids-more {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent-deep);
+}
+
+.failed-ids-more:hover { text-decoration: underline; }
+
+/* ==========================================================================
+   Tiến độ duyệt & bộ luật đang chạy
+
+   Thanh tiến độ cũ chỉ có một màu cho "đã quyết định", nên không phân biệt được
+   duyệt với từ chối — hai kết quả rất khác nhau. Bản này tách ba đoạn và kèm
+   nhãn chữ, để không phải chỉ dựa vào màu.
+   ========================================================================== */
+
+.review-summary {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 16px 18px;
+  margin-bottom: 18px;
+}
+
+.rs-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.rs-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.rs-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.rs-track {
+  display: flex;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--border);
+}
+
+.rs-track > span { display: block; height: 100%; }
+.rs-approved { background: var(--chart-pass); }
+.rs-rejected { background: var(--chart-fail); }
+
+.rs-legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  flex-wrap: wrap;
+}
+
+.rs-legend .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.rs-legend .dot.approved { background: var(--chart-pass); }
+.rs-legend .dot.rejected { background: var(--chart-fail); }
+.rs-legend .dot.pending { background: var(--border); }
+
+.rs-edited { color: var(--muted); font-style: italic; }
+
+.rs-percent {
+  margin-left: auto;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.active-rules-panel { margin-top: 28px; }
+.active-rules-scroll { overflow-x: auto; margin-top: 14px; }
+
+.active-rules-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.active-rules-table th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.active-rules-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink);
+  vertical-align: middle;
+}
+
+.active-rules-table td.muted { color: var(--muted); }
+.active-rules-table tbody tr:last-child td { border-bottom: none; }
+
+/* Hàng đợi duyệt độc lập ở bước 3: hiện bất cứ khi nào dataset đã có đề xuất,
+   không chờ workflow đi đúng tới chặng REVIEW_RULES. */
+.standalone-review {
+  margin-top: 32px;
+  border-top: 1px solid var(--border);
+  padding-top: 24px;
+}
+
+.standalone-review .proposal-list {
+  display: grid;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+/* ==========================================================================
+   HIỂN THỊ NODE CỦA ĐỒ THỊ AGENT
+
+   Ba màu phân loại node bám theo quy ước đã dùng trong analyze_ete.md: node
+   LLM xanh dương, node tất định xanh lá, chốt HITL vàng hổ phách. Giữ nguyên
+   bảng màu đó khiến sơ đồ trên giao diện đọc được cùng một cách với sơ đồ
+   trong tài liệu, không phải học lại lần nữa.
+
+   Các token dưới đây có biến thể nền tối riêng vì sắc xanh lá và hổ phách gốc
+   quá sẫm khi đặt trên nền tối.
+   ========================================================================== */
+
+:root {
+  --graph-llm: #2563eb;
+  --graph-llm-soft: #eaf1ff;
+  --graph-deterministic: #2f6f4e;
+  --graph-deterministic-soft: #e8f4ed;
+  --graph-gate: #a56824;
+  --graph-gate-soft: #fdf1de;
+  --graph-idle: #9aa6bd;
+  --graph-idle-soft: #f2f5fa;
+  --graph-failed: #b94d4d;
+}
+
+:root[data-theme="dark"] {
+  --graph-llm: #60a5fa;
+  --graph-llm-soft: #1d3158;
+  --graph-deterministic: #5fbe87;
+  --graph-deterministic-soft: #16341f;
+  --graph-gate: #d6a54a;
+  --graph-gate-soft: #3a2c12;
+  --graph-idle: #6d7c99;
+  --graph-idle-soft: #1a2947;
+  --graph-failed: #e0796a;
+}
+
+/* --- Khối gấp/mở nhúng trong từng bước wizard --------------------------- */
+
+.graph-stage-panel {
+  margin-top: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.graph-stage-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--surface-muted);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  color: var(--ink);
+  text-align: left;
+}
+
+.graph-stage-toggle:hover {
+  background: var(--accent-soft);
+}
+
+.graph-stage-toggle-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.graph-stage-live {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.graph-stage-live::before {
+  content: "\25CF";
+  margin-right: 4px;
+  animation: graph-pulse 1.4s ease-in-out infinite;
+}
+
+.graph-stage-failed {
+  color: var(--graph-failed);
+  font-weight: 600;
+}
+
+.graph-stage-chevron {
+  color: var(--muted);
+}
+
+.graph-stage-body {
+  padding: 18px 16px;
+  display: grid;
+  gap: 22px;
+}
+
+.graph-stage-graph {
+  display: grid;
+  gap: 14px;
+}
+
+@keyframes graph-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* --- Chuỗi node ---------------------------------------------------------- */
+
+.graph-flow-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.graph-flow-head h3 {
+  margin: 4px 0 2px;
+  font-size: 16px;
+}
+
+.graph-flow-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  max-width: 62ch;
+}
+
+.graph-flow-stats {
+  display: flex;
+  gap: 20px;
+}
+
+.graph-flow-stats div {
+  display: grid;
+  gap: 2px;
+  text-align: right;
+}
+
+.graph-flow-stats strong {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.graph-flow-stats span {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.graph-flow-failed strong {
+  color: var(--graph-failed);
+}
+
+/* Sơ đồ có thể rộng hơn khung; cuộn trong chính nó để thân trang không bao
+   giờ cuộn ngang. */
+.graph-flow-track {
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+.graph-flow-item {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.graph-flow-arrow {
+  position: relative;
+  flex: 0 0 auto;
+  width: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.graph-flow-arrow-line {
+  width: 100%;
+  height: 2px;
+  background: var(--border);
+  position: relative;
+}
+
+.graph-flow-arrow-line::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  border-left: 6px solid var(--border);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+}
+
+.graph-flow-arrow-label {
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  background: var(--surface);
+  padding: 0 4px;
+}
+
+/* --- Thẻ node ------------------------------------------------------------ */
+
+.graph-node-card {
+  width: 208px;
+  min-height: 152px;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--graph-idle);
+  background: var(--surface);
+  cursor: pointer;
+  text-align: left;
+  color: var(--ink);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.graph-node-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+}
+
+.graph-node-card.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.graph-node-card.kind-llm { border-left-color: var(--graph-llm); }
+.graph-node-card.kind-deterministic { border-left-color: var(--graph-deterministic); }
+.graph-node-card.kind-gate { border-left-color: var(--graph-gate); }
+
+/* Node chưa chạy phải trông "chưa tới lượt", không phải "hỏng". */
+.graph-node-card.state-idle {
+  background: var(--graph-idle-soft);
+  opacity: 0.72;
+}
+
+.graph-node-card.state-failed {
+  border-color: var(--graph-failed);
+}
+
+.graph-node-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.graph-node-kind {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+
+.graph-node-kind.kind-llm {
+  color: var(--graph-llm);
+  background: var(--graph-llm-soft);
+}
+
+.graph-node-kind.kind-deterministic {
+  color: var(--graph-deterministic);
+  background: var(--graph-deterministic-soft);
+}
+
+.graph-node-kind.kind-gate {
+  color: var(--graph-gate);
+  background: var(--graph-gate-soft);
+}
+
+.graph-node-status {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.graph-node-status.state-succeeded { color: var(--graph-deterministic); }
+.graph-node-status.state-failed { color: var(--graph-failed); }
+.graph-node-status.state-running {
+  color: var(--accent);
+  animation: graph-pulse 1.4s ease-in-out infinite;
+}
+.graph-node-status.state-skipped { color: var(--muted); }
+
+.graph-node-name {
+  font-size: 13.5px;
+  line-height: 1.3;
+}
+
+.graph-node-id {
+  font-size: 10.5px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.graph-node-purpose {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+
+.graph-node-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+
+.graph-node-duration {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.graph-node-duration.muted {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.graph-node-model {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+}
+
+/* --- Thanh thời lượng ---------------------------------------------------- */
+
+.graph-timeline {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--surface-muted);
+}
+
+.graph-timeline-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.graph-timeline-total {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.graph-timeline-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.graph-timeline-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(140px, 210px) 1fr 72px;
+  align-items: center;
+  gap: 12px;
+  background: none;
+  border: 0;
+  padding: 3px 0;
+  cursor: pointer;
+  color: inherit;
+  text-align: left;
+}
+
+.graph-timeline-row:disabled {
+  cursor: default;
+}
+
+.graph-timeline-row:hover:not(:disabled) .graph-timeline-label code {
+  color: var(--accent);
+}
+
+.graph-timeline-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.graph-timeline-label code {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-timeline-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.graph-timeline-dot.kind-llm { background: var(--graph-llm); }
+.graph-timeline-dot.kind-deterministic { background: var(--graph-deterministic); }
+.graph-timeline-dot.kind-gate { background: var(--graph-gate); }
+
+.graph-timeline-bar-track {
+  height: 9px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.graph-timeline-bar {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.graph-timeline-bar.kind-llm { background: var(--graph-llm); }
+.graph-timeline-bar.kind-deterministic { background: var(--graph-deterministic); }
+.graph-timeline-bar.kind-gate { background: var(--graph-gate); }
+.graph-timeline-bar.state-failed { background: var(--graph-failed); }
+
+.graph-timeline-value {
+  font-size: 11px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+}
+
+/* --- Panel chi tiết trượt ra --------------------------------------------- */
+
+.graph-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgb(10 18 34 / 42%);
+  z-index: 60;
+}
+
+.graph-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(520px, 100vw);
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  z-index: 61;
+  display: flex;
+  flex-direction: column;
+}
+
+.graph-drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.graph-drawer-head h3 {
+  margin: 8px 0 3px;
+  font-size: 17px;
+}
+
+.graph-drawer-head code {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.graph-drawer-close {
+  background: none;
+  border: 0;
+  font-size: 17px;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 4px;
+}
+
+.graph-drawer-close:hover {
+  color: var(--ink);
+}
+
+.graph-drawer-body {
+  padding: 18px 20px 28px;
+  overflow-y: auto;
+  display: grid;
+  gap: 20px;
+  align-content: start;
+}
+
+.graph-drawer-body p {
+  margin: 5px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+
+.graph-drawer-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.graph-drawer-metrics div {
+  display: grid;
+  gap: 3px;
+}
+
+.graph-drawer-metrics span {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.graph-drawer-metrics strong {
+  font-size: 14px;
+}
+
+.graph-drawer-metrics strong.state-succeeded { color: var(--graph-deterministic); }
+.graph-drawer-metrics strong.state-failed { color: var(--graph-failed); }
+.graph-drawer-metrics strong.state-running { color: var(--accent); }
+
+.graph-drawer-empty {
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--graph-idle-soft);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.graph-drawer-error pre {
+  margin: 6px 0 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--surface-muted);
+  border-left: 3px solid var(--graph-failed);
+  color: var(--graph-failed);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+.graph-drawer-error-text {
+  font-size: 12.5px;
+  color: var(--graph-failed);
+}
+
+.graph-drawer-loading {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.graph-drawer-contract {
+  display: grid;
+  gap: 14px;
+}
+
+.graph-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.graph-chip-row code {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+}
+
+.graph-drawer-privacy {
+  font-size: 11.5px !important;
+  color: var(--muted) !important;
+  font-style: italic;
+}
+
+.graph-summary-panes {
+  display: grid;
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.graph-summary-panes h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.graph-summary-object {
+  margin: 0;
+  display: grid;
+  gap: 3px;
+  font-size: 11.5px;
+}
+
+.graph-summary-object.depth-1,
+.graph-summary-object.depth-2,
+.graph-summary-object.depth-3 {
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+
+.graph-summary-entry {
+  display: grid;
+  grid-template-columns: minmax(90px, 34%) 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.graph-summary-entry dt {
+  color: var(--muted);
+  word-break: break-word;
+}
+
+.graph-summary-entry dd {
+  margin: 0;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.graph-summary-scalar {
+  color: var(--ink-soft);
+}
+
+.graph-summary-null {
+  color: var(--muted);
+}
+
+.graph-summary-list {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 2px;
+}
+
+.graph-drawer-source code {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--ink-soft);
+  word-break: break-all;
+}
+
+/* --- Trang Graph Observatory --------------------------------------------- */
+
+.graph-observatory {
+  display: grid;
+  gap: 22px;
+}
+
+.graph-observatory-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.graph-observatory-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+}
+
+.graph-observatory-metrics article {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  display: grid;
+  gap: 4px;
+  align-content: start;
+}
+
+.graph-observatory-metrics strong {
+  font-size: 26px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.graph-observatory-metrics small {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.graph-metric-danger strong {
+  color: var(--graph-failed);
+}
+
+.graph-observatory-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.graph-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.graph-filter:hover {
+  border-color: var(--accent);
+}
+
+.graph-filter.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.graph-filter-count {
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--ink-soft);
+}
+
+.graph-filter.active .graph-filter-count {
+  background: rgb(255 255 255 / 24%);
+  color: var(--on-accent);
+}
+
+.graph-observatory-list {
+  display: grid;
+  gap: 20px;
+}
+
+.graph-observatory-card {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  display: grid;
+  gap: 16px;
+}
+
+/* --- Báo cáo Steward (đầu ra Graph 3) ------------------------------------ */
+
+.steward-report-panel {
+  margin-bottom: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.steward-report-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  flex-wrap: wrap;
+}
+
+.steward-report-head strong {
+  display: block;
+  margin: 5px 0 3px;
+  font-size: 15px;
+}
+
+.steward-report-head p {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.steward-report-empty {
+  padding: 0 18px 16px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.steward-report-body {
+  border-top: 1px solid var(--border);
+}
+
+.steward-report-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 18px;
+  background: var(--surface-muted);
+  font-size: 11.5px;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+
+.steward-report-content {
+  margin: 0;
+  padding: 18px;
+  max-height: 460px;
+  overflow: auto;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--ink-soft);
+}
+
+@media (max-width: 720px) {
+  .graph-drawer {
+    width: 100vw;
+  }
+
+  .graph-timeline-row {
+    grid-template-columns: minmax(96px, 40%) 1fr 60px;
+  }
+
+  .graph-flow-stats {
+    gap: 14px;
+  }
+}
+
+/* ==========================================================================
+   POPUP XEM NHANH DỮ LIỆU
+
+   Trước đây Data Explorer thay thế cả trang ở bước 1, nên bấm vào là mất luôn
+   ngữ cảnh đang đọc. Xem dữ liệu trông ra sao là một cái liếc, không phải một
+   điểm đến — nên nó thành modal.
+   ========================================================================== */
+
+.explorer-dialog-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgb(10 18 34 / 46%);
+  z-index: 70;
+}
+
+.explorer-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(1100px, calc(100vw - 40px));
+  max-height: calc(100vh - 64px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  z-index: 71;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.explorer-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.explorer-dialog-head h3 {
+  margin: 6px 0 4px;
+  font-size: 18px;
+}
+
+.explorer-dialog-head p {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.explorer-dialog-close {
+  background: none;
+  border: 0;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 6px;
+  border-radius: 8px;
+}
+
+.explorer-dialog-close:hover {
+  color: var(--ink);
+  background: var(--surface-muted);
+}
+
+.explorer-dialog-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.explorer-dialog-state {
+  padding: 40px 22px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.explorer-dialog-state.error {
+  color: var(--graph-failed);
+}
+
+/* Bảng rộng hơn khung thì cuộn trong chính nó, thân trang không cuộn ngang. */
+.explorer-dialog-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.explorer-dialog-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.explorer-dialog-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-muted);
+  text-align: left;
+  padding: 10px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.explorer-dialog-table tbody td {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.explorer-dialog-table tbody tr:nth-child(even) {
+  background: var(--surface-muted);
+}
+
+.explorer-dialog-table .numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.explorer-dialog-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 22px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-muted);
+  font-size: 12px;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 720px) {
+  .explorer-dialog {
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 24px);
+  }
+
+  .explorer-dialog-head,
+  .explorer-dialog-foot {
+    padding: 14px 16px;
+  }
+}

@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,7 @@ from src.models.database import (
     DatasetModel,
     DqResultModel,
     DqRunModel,
+    GraphNodeRunModel,
     JobModel,
     ProfileModel,
     RuleConfigurationModel,
@@ -2085,6 +2087,107 @@ def list_audit_logs(
 
 
 # ---------------------------------------------------------------------------
+# Graph observability
+#
+# The wizard shows a step running and then an artifact appearing.  Everything in
+# between -- which nodes ran, in what order, how long each took, which one failed
+# -- had no route out of the backend.  These four endpoints are that route.
+# ---------------------------------------------------------------------------
+@router.get("/graph/catalog", tags=["Graph"])
+def get_graph_catalog(
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+):
+    """Static topology of every graph, so the UI can draw one before it runs."""
+    from src.agents.graph_catalog import get_catalog
+
+    return get_catalog()
+
+
+@router.get("/graph/node-runs", tags=["Graph"])
+def list_graph_node_runs(
+    workflow_run_id: str | None = None,
+    dataset_id: str | None = None,
+    dq_run_id: str | None = None,
+    anomaly_run_id: str | None = None,
+    graph_key: str | None = None,
+    graph_run_id: str | None = None,
+    limit: int = 200,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """Node executions, newest run first, filtered by whichever context is known."""
+    from src.services.node_telemetry import serialize_node_run
+
+    query = db.query(GraphNodeRunModel)
+    if workflow_run_id:
+        query = query.filter(GraphNodeRunModel.workflow_run_id == workflow_run_id)
+    if dataset_id:
+        query = query.filter(GraphNodeRunModel.dataset_id == dataset_id)
+    if dq_run_id:
+        query = query.filter(GraphNodeRunModel.dq_run_id == dq_run_id)
+    if anomaly_run_id:
+        query = query.filter(GraphNodeRunModel.anomaly_run_id == anomaly_run_id)
+    if graph_key:
+        query = query.filter(GraphNodeRunModel.graph_key == graph_key)
+    if graph_run_id:
+        query = query.filter(GraphNodeRunModel.graph_run_id == graph_run_id)
+
+    rows = (
+        query.order_by(GraphNodeRunModel.started_at.desc(), GraphNodeRunModel.sequence.desc())
+        .limit(max(1, min(limit, 1000)))
+        .all()
+    )
+    return [serialize_node_run(row) for row in rows]
+
+
+@router.get("/graph/node-runs/{node_run_id}", tags=["Graph"])
+def get_graph_node_run(
+    node_run_id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """One node execution including its redacted input/output summaries."""
+    from src.services.node_telemetry import serialize_node_run
+
+    row = db.get(GraphNodeRunModel, node_run_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404, detail={"code": "NOT_FOUND", "message": "Node run not found"}
+        )
+    return serialize_node_run(row, include_payload=True)
+
+
+@router.get("/dq-runs/{run_id}/steward-report", tags=["Graph"])
+def get_steward_report(
+    run_id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """Serve the Markdown report written by ``report_writer_node``.
+
+    Graph 3's last node writes a steward report to ``output/steward_reports/``
+    and nothing ever read it back, so the report never reached a user.  Files are
+    matched on the execution-run id embedded in the filename; the newest wins.
+    """
+    settings = get_settings()
+    base_dir = getattr(settings, "output_dir", None) or "./output"
+    report_dir = Path(base_dir) / "steward_reports"
+    matches = sorted(report_dir.glob(f"steward_report_*_{run_id}.md")) if report_dir.exists() else []
+    if not matches:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "NOT_FOUND", "message": "No steward report has been written for this run"},
+        )
+    newest = matches[-1]
+    return {
+        "run_id": run_id,
+        "filename": newest.name,
+        "generated_at": datetime.fromtimestamp(newest.stat().st_mtime, tz=UTC).isoformat(),
+        "content": newest.read_text(encoding="utf-8"),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Agent Chat & Status Routes
 # ---------------------------------------------------------------------------
 @router.get("/status")
@@ -2100,7 +2203,14 @@ class SmokeCreateJobRequest(BaseModel):
     linked_entity: str | None = None
 
 
-@router.post("/jobs", status_code=202)
+@router.post(
+    "/jobs",
+    status_code=202,
+    # Being a smoke-test convenience does not make it harmless: this dispatches the
+    # same INGEST_PROFILE work as the audited endpoint, and without a session it
+    # accepted anonymous requests with 202 on a public URL.
+    dependencies=[Depends(require_role(["STEWARD", "ADMIN"]))],
+)
 def compatibility_trigger_job(
     request: SmokeCreateJobRequest,
     background_tasks: BackgroundTasks,
@@ -2256,6 +2366,9 @@ async def get_test_run_results(
 @dq_router.post(
     "/runs/{run_id}/publish",
     response_model=PublishRulesResponse,
+    # Publishing puts rules into the active ruleset, where they compile and run.
+    # Safety rule 3 makes that a steward decision, not a reader's.
+    dependencies=[Depends(require_role(["STEWARD", "ADMIN"]))],
 )
 async def publish_run_rules(run_id: str) -> PublishRulesResponse:
     """Xuất bản (Publish/Merge) các rules đã APPROVED từ proposal run vào Active Ruleset chính thức."""
@@ -2293,6 +2406,7 @@ async def list_active_rules(
 
 @dq_router.patch(
     "/active-rules/{rule_id}/deactivate",
+    dependencies=[Depends(require_role(["STEWARD", "ADMIN"]))],
 )
 async def deactivate_active_rule(rule_id: str) -> dict:
     """Vô hiệu hoá một active rule."""
@@ -2378,6 +2492,7 @@ async def list_proposal_rules(
 @dq_router.patch(
     "/runs/{run_id}/rules/{rule_id}",
     response_model=RuleReviewResponse,
+    dependencies=[Depends(require_role(["STEWARD", "ADMIN"]))],
 )
 async def review_proposal_rule(
     run_id: str,
@@ -2408,6 +2523,7 @@ async def review_proposal_rule(
 @dq_router.post(
     "/runs/{run_id}/rules/bulk-review",
     response_model=BulkReviewResponse,
+    dependencies=[Depends(require_role(["STEWARD", "ADMIN"]))],
 )
 async def bulk_review_proposal_rules(
     run_id: str,
@@ -2474,6 +2590,7 @@ async def get_run_approved_rules(run_id: str) -> ApprovedRulesResponse:
 @dq_router.post(
     "/rule-runs/{proposal_run_id}/publish",
     response_model=PublishRulesetResponse,
+    dependencies=[Depends(require_role(["STEWARD", "ADMIN"]))],
 )
 async def publish_ruleset_endpoint(
     proposal_run_id: str,

@@ -428,6 +428,99 @@ def generate_dashboard_proposals(
     return proposals
 
 
+def generate_rule_proposals_via_graph_1b(
+    db: Session,
+    dataset_id: str,
+    semantic_contract: dict[str, Any],
+    *,
+    workflow_run_id: str | None = None,
+) -> list[DashboardProposal]:
+    """Return proposals produced by the full Graph 1B (three nodes).
+
+    ``generate_dashboard_proposals`` runs a single-node shortcut, so
+    ``rule_candidate_builder`` and ``prompt_customizer`` -- both documented parts
+    of Run 1 -- never executed from the wizard.  This entrypoint drives the real
+    graph while reusing the same validation, normalisation and policy-completion
+    pipeline, so the proposals it returns are indistinguishable in shape.
+
+    Raises ``AgentWorkflowError`` like its sibling; the caller decides whether to
+    fall back to the shortcut.
+    """
+    evidence = build_proposal_evidence(db, dataset_id)
+    if get_settings().agent_mode == "mock":
+        return _mock_proposals(evidence)
+
+    if len(_build_dashboard_rule_candidates(evidence)) < 2:
+        raise AgentWorkflowError("The aggregate profile has fewer than two evidence-backed dashboard candidates.")
+
+    raw_rules = _invoke_rule_proposal_graph(evidence, semantic_contract, workflow_run_id=workflow_run_id)
+    proposals = _normalise_graph_rules(raw_rules, evidence)
+    if not proposals:
+        raise AgentWorkflowError("Graph 1B did not return enough valid, evidence-backed rules.")
+    proposals = _complete_with_policy_candidates(proposals, evidence)
+    if not 2 <= len(proposals) <= 5:
+        raise AgentWorkflowError("Graph 1B could not form a valid dashboard rule set.")
+    return proposals
+
+
+def _table_keyed_contract(semantic_contract: dict[str, Any], dataset_id: str) -> dict[str, Any]:
+    """Return the contract in the ``{"tables": {name: contract}}`` shape nodes expect.
+
+    The workflow stores a *flattened* contract in its artifact -- columns and
+    assumptions at the top level, no table key -- because the wizard only ever
+    handles one dataset.  ``rule_candidate_builder`` and ``prompt_customizer``
+    both iterate ``contract["tables"]`` and return empty when it is missing, so
+    passing the artifact payload through unchanged makes them no-ops that still
+    report success.  Re-wrapping here is what makes them do real work.
+    """
+    if isinstance(semantic_contract.get("tables"), dict) and semantic_contract["tables"]:
+        return semantic_contract
+    return {**semantic_contract, "tables": {dataset_id: semantic_contract}}
+
+
+def _invoke_rule_proposal_graph(
+    evidence: ProposalEvidence,
+    semantic_contract: dict[str, Any],
+    *,
+    workflow_run_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Run Graph 1B: rule_candidate_builder ➔ prompt_customizer ➔ rule_proposer."""
+    from src.agents.graph import build_rule_proposal_graph
+    from src.services.node_telemetry import start_graph_run
+
+    contract = _table_keyed_contract(semantic_contract, evidence.dataset_id)
+
+    async def invoke() -> list[dict[str, Any]]:
+        start_graph_run(workflow_run_id=workflow_run_id, dataset_id=evidence.dataset_id)
+        graph = build_rule_proposal_graph()
+        digest = evidence.to_agent_digest()
+        tables = contract["tables"]
+        for table_name, table_digest in digest.items():
+            if isinstance(table_digest, dict):
+                table_digest["confirmed_semantic_contract"] = tables.get(table_name, semantic_contract)
+        result = await graph.ainvoke(
+            {
+                "dataset_id": evidence.dataset_id,
+                "rule_run_id": f"graph1b-proposal-{uuid.uuid4().hex}",
+                "dataset_profile_digest": digest,
+                "semantic_contract": contract,
+                "normalized_data_dictionary": {"tables": tables},
+                "target_tables": [evidence.dataset_id],
+                "metadata": {
+                    "workflow": "graph_1b",
+                    "evidence_source": "persisted_aggregate_profile",
+                    "max_retries": 0,
+                },
+            }
+        )
+        errors = result.get("rule_proposal_errors", [])
+        if errors:
+            raise AgentWorkflowError("Graph 1B could not produce a valid structured response.")
+        return result.get("proposed_rules", [])
+
+    return _run_coroutine_safely(invoke())
+
+
 def _invoke_dashboard_proposal_graph(
     evidence: ProposalEvidence, semantic_contract: dict[str, Any] | None = None
 ) -> list[dict[str, Any]]:

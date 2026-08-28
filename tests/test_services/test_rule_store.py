@@ -115,7 +115,12 @@ def test_publish_approved_rules_workflow():
 
 def test_publish_api_endpoints():
     """Kiểm tra các REST API endpoints mới cho Active Rules và Publish."""
+    # Publish and deactivate now require a STEWARD session, so sign in first.
     client = TestClient(app)
+    login = client.post("/api/v1/session", json={"username": "steward", "password": "steward"})
+    assert login.status_code == 200
+    client.headers["X-CSRF-Token"] = login.json()["csrf_token"]
+
     run_id = f"api_prop_{uuid.uuid4().hex[:8]}"
     dataset_id = "yellow_tripdata"
 

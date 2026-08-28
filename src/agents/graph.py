@@ -8,7 +8,9 @@ from typing import Literal
 from dotenv import load_dotenv
 from langgraph.graph import END, StateGraph
 
+from src.agents.graph_catalog import DETERMINISTIC, GATE, LLM
 from src.agents.state import AgentState
+from src.services.node_telemetry import instrument, start_graph_run
 
 load_dotenv()
 
@@ -45,9 +47,18 @@ def build_understanding_graph() -> StateGraph:
     from src.agents.nodes.profiler_node import profiler_digest_node
 
     graph = StateGraph(AgentState)
-    graph.add_node("build_profile_digest", profiler_digest_node)
-    graph.add_node("data_dictionary_generator", data_dictionary_generator_node)
-    graph.add_node("dataset_understanding", dataset_understanding_node)
+    graph.add_node(
+        "build_profile_digest",
+        instrument("G1A", "build_profile_digest", DETERMINISTIC)(profiler_digest_node),
+    )
+    graph.add_node(
+        "data_dictionary_generator",
+        instrument("G1A", "data_dictionary_generator", LLM)(data_dictionary_generator_node),
+    )
+    graph.add_node(
+        "dataset_understanding",
+        instrument("G1A", "dataset_understanding", LLM)(dataset_understanding_node),
+    )
     graph.set_entry_point("build_profile_digest")
     graph.add_conditional_edges("build_profile_digest", lambda state: END if state.get("error") else ("dataset_understanding" if state.get("normalized_data_dictionary") else "data_dictionary_generator"), {"dataset_understanding": "dataset_understanding", "data_dictionary_generator": "data_dictionary_generator", END: END})
     graph.add_edge("data_dictionary_generator", "dataset_understanding")
@@ -62,9 +73,15 @@ def build_rule_proposal_graph() -> StateGraph:
     from src.agents.nodes.rule_proposer_node import rule_proposer_node
 
     graph = StateGraph(AgentState)
-    graph.add_node("rule_candidate_builder", rule_candidate_builder_node)
-    graph.add_node("prompt_customizer", prompt_customizer_node)
-    graph.add_node("rule_proposer", rule_proposer_node)
+    graph.add_node(
+        "rule_candidate_builder",
+        instrument("G1B", "rule_candidate_builder", DETERMINISTIC)(rule_candidate_builder_node),
+    )
+    graph.add_node(
+        "prompt_customizer",
+        instrument("G1B", "prompt_customizer", LLM)(prompt_customizer_node),
+    )
+    graph.add_node("rule_proposer", instrument("G1B", "rule_proposer", LLM)(rule_proposer_node))
     graph.set_entry_point("rule_candidate_builder")
     graph.add_edge("rule_candidate_builder", "prompt_customizer")
     graph.add_edge("prompt_customizer", "rule_proposer")
@@ -103,15 +120,27 @@ def build_proposal_graph() -> StateGraph:
 
     graph = StateGraph(AgentState)
 
-    graph.add_node("raw_profiler", raw_profiler_node)
-    graph.add_node("profiler_digest", profiler_digest_node)
-    graph.add_node("dataset_understanding", dataset_understanding_node)
-    graph.add_node("data_dictionary_generator", data_dictionary_generator_node)
-    graph.add_node("hitl_semantic_gate", hitl_semantic_gate_node)
-    graph.add_node("rule_candidate_builder", rule_candidate_builder_node)
-    graph.add_node("prompt_customizer", prompt_customizer_node)
-    graph.add_node("rule_proposer", rule_proposer_node)
-    graph.add_node("hitl_gate", hitl_gate_node)
+    graph.add_node("raw_profiler", instrument("G1_FULL", "raw_profiler", DETERMINISTIC)(raw_profiler_node))
+    graph.add_node("profiler_digest", instrument("G1_FULL", "profiler_digest", DETERMINISTIC)(profiler_digest_node))
+    graph.add_node(
+        "dataset_understanding",
+        instrument("G1_FULL", "dataset_understanding", LLM)(dataset_understanding_node),
+    )
+    graph.add_node(
+        "data_dictionary_generator",
+        instrument("G1_FULL", "data_dictionary_generator", LLM)(data_dictionary_generator_node),
+    )
+    graph.add_node(
+        "hitl_semantic_gate",
+        instrument("G1_FULL", "hitl_semantic_gate", GATE)(hitl_semantic_gate_node),
+    )
+    graph.add_node(
+        "rule_candidate_builder",
+        instrument("G1_FULL", "rule_candidate_builder", DETERMINISTIC)(rule_candidate_builder_node),
+    )
+    graph.add_node("prompt_customizer", instrument("G1_FULL", "prompt_customizer", LLM)(prompt_customizer_node))
+    graph.add_node("rule_proposer", instrument("G1_FULL", "rule_proposer", LLM)(rule_proposer_node))
+    graph.add_node("hitl_gate", instrument("G1_FULL", "hitl_gate", GATE)(hitl_gate_node))
 
     # Entry point động
     graph.set_conditional_entry_point(
@@ -191,7 +220,7 @@ def build_dashboard_proposal_graph() -> StateGraph:
     from src.agents.nodes.rule_proposer_node import rule_proposer_node
 
     graph = StateGraph(AgentState)
-    graph.add_node("rule_proposer", rule_proposer_node)
+    graph.add_node("rule_proposer", instrument("G_DASHBOARD", "rule_proposer", LLM)(rule_proposer_node))
     graph.set_entry_point("rule_proposer")
     graph.add_edge("rule_proposer", END)
     return graph.compile()
@@ -235,11 +264,17 @@ def build_execution_graph() -> StateGraph:
 
     graph = StateGraph(AgentState)
 
-    graph.add_node("test_generator", test_generator_node)
-    graph.add_node("validate_dbt_project", validate_dbt_project_node)
-    graph.add_node("dbt_validation_failed", _fail_dbt_validation_node)
-    graph.add_node("test_runner", test_runner_node)
-    graph.add_node("persist_report", persist_report_node)
+    graph.add_node("test_generator", instrument("G2", "test_generator", DETERMINISTIC)(test_generator_node))
+    graph.add_node(
+        "validate_dbt_project",
+        instrument("G2", "validate_dbt_project", DETERMINISTIC)(validate_dbt_project_node),
+    )
+    graph.add_node(
+        "dbt_validation_failed",
+        instrument("G2", "dbt_validation_failed", DETERMINISTIC)(_fail_dbt_validation_node),
+    )
+    graph.add_node("test_runner", instrument("G2", "test_runner", DETERMINISTIC)(test_runner_node))
+    graph.add_node("persist_report", instrument("G2", "persist_report", DETERMINISTIC)(persist_report_node))
 
     graph.set_entry_point("test_generator")
 
@@ -294,10 +329,10 @@ def build_anomaly_graph(investigation_mode: Literal["deepagent", "legacy"] | Non
 
     graph = StateGraph(AnomalyGraphState)
 
-    graph.add_node("anomaly_detector", anomaly_detector_node)
-    graph.add_node("hypothesis_agent", hypothesis_agent)
-    graph.add_node("persist_analysis", persist_analysis_node)
-    graph.add_node("report_writer", report_writer_node)
+    graph.add_node("anomaly_detector", instrument("G3", "anomaly_detector", DETERMINISTIC)(anomaly_detector_node))
+    graph.add_node("hypothesis_agent", instrument("G3", "hypothesis_agent", LLM)(hypothesis_agent))
+    graph.add_node("persist_analysis", instrument("G3", "persist_analysis", DETERMINISTIC)(persist_analysis_node))
+    graph.add_node("report_writer", instrument("G3", "report_writer", LLM)(report_writer_node))
 
     graph.set_entry_point("anomaly_detector")
     graph.add_edge("anomaly_detector", "hypothesis_agent")
@@ -576,6 +611,7 @@ async def run_execution_graph(
     logger.info("Bắt đầu Run 2 (Execution) | test_run_id=%s | rules_count=%d", test_run_id, len(rules_to_test))
 
     execution_graph = build_execution_graph()
+    start_graph_run(dataset_id=dataset_id, dq_run_id=test_run_id)
     initial_state = {
         "dataset_id": dataset_id,
         "test_run_id": test_run_id,
@@ -666,6 +702,7 @@ async def run_anomaly_graph(
     anomaly_run_id = f"anom-{uuid.uuid4().hex[:12]}"
 
     anomaly_graph = build_anomaly_graph(investigation_mode=active_mode)
+    start_graph_run(dataset_id=dataset_id, dq_run_id=execution_run_id, anomaly_run_id=anomaly_run_id)
     initial_state = {
         "anomaly_run_id": anomaly_run_id,
         "execution_run_id": execution_run_id,

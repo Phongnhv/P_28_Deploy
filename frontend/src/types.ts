@@ -148,6 +148,39 @@ export interface RuleSpec {
   fingerprint_columns?: string[];
 }
 
+/** Nguồn gốc của một đề xuất. Khớp `ProposalBasis` ở src/models/rule_schemas.py. */
+export type ProposalBasis =
+  | "SCHEMA_CONSTRAINT"
+  | "DATA_PROFILE"
+  | "DATA_DICTIONARY"
+  | "HISTORICAL_RULE"
+  | "POLICY"
+  | "MIXED";
+
+/**
+ * Vì sao một tham số cụ thể mang giá trị đó — ví dụ `min=0` đến từ phân vị 1%
+ * của hồ sơ dữ liệu, hay từ ràng buộc schema. Khớp `ParameterProvenance`.
+ */
+export interface ParameterProvenance {
+  parameter_name: string;
+  source_type: Exclude<ProposalBasis, "MIXED">;
+  source_ref: string;
+  derivation_method: string;
+}
+
+/**
+ * Phân rã độ tin cậy thành ba thành phần kèm lời giải thích. Backend ràng buộc
+ * `overall` không lệch quá 0.25 so với trung bình ba thành phần, nên hiển thị
+ * cả bốn cho phép người duyệt tự kiểm chứng con số tổng.
+ */
+export interface ConfidenceBreakdown {
+  overall: number;
+  evidence_strength: number;
+  business_support: number;
+  sample_representativeness: number;
+  explanation: string;
+}
+
 export interface RuleProposal {
   id: string;
   dataset_id: string;
@@ -163,11 +196,11 @@ export interface RuleProposal {
   model_name: string;
   rule_name?: string;
   business_rationale?: string;
-  proposal_basis?: "SCHEMA_CONSTRAINT" | "DATA_PROFILE" | "DATA_DICTIONARY" | "HISTORICAL_RULE" | "POLICY" | "MIXED";
+  proposal_basis?: ProposalBasis;
   evidence?: Record<string, unknown>;
-  parameter_provenance?: Array<Record<string, unknown>>;
+  parameter_provenance?: ParameterProvenance[];
   assumptions?: string[];
-  confidence_breakdown?: Record<string, unknown>;
+  confidence_breakdown?: ConfidenceBreakdown;
   created_at: string;
   updated_at: string;
   source?: "AGENT" | "MANUAL";
@@ -341,6 +374,76 @@ export interface LoopDecisionInput {
   comment?: string;
 }
 
+/**
+ * Một luật đang canh dữ liệu thật, sau khi được duyệt và xuất bản.
+ *
+ * Khác với `RuleProposal` — đề xuất chỉ là ứng viên, còn đây là thứ đang chạy.
+ * Khớp `ActiveRuleResponse` ở src/models/schemas.py.
+ */
+export interface ActiveRule {
+  rule_id: string;
+  dataset_id: string;
+  table_name: string;
+  column?: string | null;
+  rule_type: string;
+  parameters: Record<string, unknown>;
+  severity: string;
+  dimension: string;
+  rule_description: string;
+  status: string;
+  last_run_id?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+/** Một tín hiệu bất thường do bộ phát hiện thống kê sinh ra. Khớp `AnomalySignalDTO`. */
+export interface AnomalySignal {
+  signal_id: string;
+  family: string;
+  target_type: string;
+  target_id: string;
+  score: number;
+  reliability: number;
+  observed_value?: string | null;
+  baseline?: Record<string, unknown> | null;
+  explanation_code: string;
+  evidence_refs: string[];
+}
+
+/**
+ * Giả thuyết nguyên nhân gốc do DeepAgent điều tra sinh ra.
+ *
+ * Điểm đáng chú ý là `contradicting_signal_ids`: agent được yêu cầu nêu cả bằng
+ * chứng phản bác chính giả thuyết của mình, nên người đọc thấy được lập luận hai
+ * chiều thay vì chỉ phần ủng hộ.
+ */
+export interface AnomalyHypothesis {
+  id: string;
+  hypothesis_type: string;
+  summary: string;
+  confidence: number;
+  supporting_signal_ids: string[];
+  contradicting_signal_ids: string[];
+  evidence_refs: string[];
+  recommended_checks: string[];
+  missing_evidence?: string | null;
+  limitations?: string | null;
+  fallback_used: boolean;
+}
+
+/** Nhãn phản hồi của Steward. Khớp `AnomalyFeedbackEnum` ở models/database.py. */
+export type AnomalyFeedbackLabel =
+  | "TRUE_ANOMALY"
+  | "FALSE_POSITIVE"
+  | "EXPECTED_CHANGE"
+  | "RULE_MISCONFIGURATION"
+  | "UNKNOWN";
+
+export interface AnomalyFeedbackInput {
+  feedback_label: AnomalyFeedbackLabel;
+  comment?: string;
+}
+
 export interface ApiClient {
   createSession(username: string, password: string): Promise<SessionResponse>;
   deleteSession(): Promise<void>;
@@ -360,6 +463,12 @@ export interface ApiClient {
   getDqRun(runId: string): Promise<DqRun>;
   getDqResults(runId: string): Promise<DqResult[]>;
   getDqAnomalies(runId: string): Promise<DqAnomaly[]>;
+  /** Backend nhận được cả anomaly_run_id lẫn execution_run_id, nên truyền run id là đủ. */
+  /** Bộ luật đang hoạt động của một dataset — thứ đang thật sự canh dữ liệu. */
+  getActiveRules(datasetId: string): Promise<ActiveRule[]>;
+  getAnomalySignals(runId: string): Promise<AnomalySignal[]>;
+  getAnomalyHypotheses(runId: string): Promise<AnomalyHypothesis[]>;
+  submitAnomalyFeedback(runId: string, input: AnomalyFeedbackInput): Promise<void>;
   getLatestDqRun(datasetId: string): Promise<DqRun | null>;
   getQualityTrends(datasetId: string): Promise<QualityTrendPoint[]>;
   queryDatasetRows(datasetId: string, query: DatasetRowQuery): Promise<DatasetRowsResponse>;
@@ -378,4 +487,105 @@ export interface ApiClient {
   reviewArtifact(artifactId: string, input: ArtifactReviewInput): Promise<AgentArtifact>;
   continueLoop(workflowRunId: string, input: LoopDecisionInput): Promise<WorkflowRun>;
   rewindWorkflow(workflowRunId: string, targetStep: WorkflowStepKey): Promise<WorkflowRun>;
+  getGraphCatalog(): Promise<GraphCatalog>;
+  listNodeRuns(filter: NodeRunFilter): Promise<NodeRun[]>;
+  getNodeRun(nodeRunId: string): Promise<NodeRunDetail>;
+  getStewardReport(runId: string): Promise<StewardReport>;
+}
+
+/* ---------------------------------------------------------------------------
+ * Graph observability
+ *
+ * The catalog is the static topology (what a graph *is*); node runs are the
+ * telemetry (what actually happened). The UI needs both: it draws the graph
+ * from the catalog even when nothing has run, then overlays run state.
+ * ------------------------------------------------------------------------- */
+
+export type GraphKey = "G1A" | "G1B" | "G1_FULL" | "G_DASHBOARD" | "G2" | "G3";
+export type NodeKind = "LLM" | "DETERMINISTIC" | "GATE";
+export type NodeRunStatus = "RUNNING" | "SUCCEEDED" | "FAILED" | "SKIPPED";
+
+export interface GraphNodeSpec {
+  name: string;
+  label_en: string;
+  label_vi: string;
+  kind: NodeKind;
+  purpose_en: string;
+  purpose_vi: string;
+  inputs: string[];
+  outputs: string[];
+  db_tables: string[];
+  source: string;
+}
+
+export interface GraphEdgeSpec {
+  from: string;
+  to: string;
+  condition?: string;
+}
+
+export interface GraphSpec {
+  key: GraphKey;
+  builder: string;
+  label_en: string;
+  label_vi: string;
+  run_en: string;
+  run_vi: string;
+  summary_en: string;
+  summary_vi: string;
+  nodes: GraphNodeSpec[];
+  edges: GraphEdgeSpec[];
+}
+
+export interface GraphCatalog {
+  graphs: GraphSpec[];
+  step_graphs: Partial<Record<WorkflowStepKey, GraphKey[]>>;
+  totals: {
+    graphs: number;
+    nodes: number;
+    llm_nodes: number;
+    deterministic_nodes: number;
+    gate_nodes: number;
+  };
+}
+
+export interface NodeRun {
+  id: string;
+  graph_run_id: string;
+  graph_key: GraphKey;
+  node_name: string;
+  node_kind: NodeKind;
+  sequence: number;
+  status: NodeRunStatus;
+  started_at: string | null;
+  completed_at: string | null;
+  duration_ms: number;
+  error_message: string | null;
+  model_name: string | null;
+  workflow_run_id: string | null;
+  dataset_id: string | null;
+  dq_run_id: string | null;
+  anomaly_run_id: string | null;
+}
+
+export interface NodeRunDetail extends NodeRun {
+  input_summary: Record<string, unknown>;
+  output_summary: Record<string, unknown>;
+}
+
+export interface NodeRunFilter {
+  workflowRunId?: string;
+  datasetId?: string;
+  dqRunId?: string;
+  anomalyRunId?: string;
+  graphKey?: GraphKey;
+  graphRunId?: string;
+  limit?: number;
+}
+
+export interface StewardReport {
+  run_id: string;
+  filename: string;
+  generated_at: string;
+  content: string;
 }

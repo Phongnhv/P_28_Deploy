@@ -1,11 +1,34 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+/**
+ * Giao diện của toàn bộ wizard 5 bước nằm trong chính file này.
+ *
+ * Bước 1 dùng `DatasetsPage`, bước 2 `OverviewPage`, bước 3 `WorkflowPage`,
+ * bước 4 `RunsPage` — tất cả khai báo bên dưới. Chỉ bước 5 tách ra thành
+ * `components/wizard/Step5Analytics.tsx` vì nó dựng biểu đồ recharts.
+ *
+ * Từng có bốn file `Step1..Step4` trong `components/wizard/` trông y hệt các
+ * trang này nhưng không nơi nào import; chúng đã bị xoá ngày 28/08/2026. Nếu
+ * cần sửa một bước, sửa ở đây — đừng tạo lại file song song, vì không có gì
+ * nhắc người sau rằng bản kia mới là bản chạy thật.
+ *
+ * Màu sắc lấy qua `var(--…)` khai báo trong `styles.css`; mã hex viết thẳng sẽ
+ * không đổi theo chế độ tối.
+ */
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { api, isMockMode, workflowApi } from "./api";
 import { ApiError, clearApiSession } from "./api/client";
 import ThemeControl from "./ThemeControl";
 import LanguageToggle from "./LanguageToggle";
 import { useI18n } from "./i18n/context";
-import { Step5Analytics } from "./components/wizard/Step5Analytics";
+import { Graph2Analytics, Graph3Analytics } from "./components/wizard/WizardAnalytics";
+import { DataExplorerDialog } from "./components/wizard/DataExplorerDialog";
+import { GraphStagePanel } from "./components/graph/GraphStagePanel";
+import { GraphObservatoryPage } from "./components/graph/GraphObservatoryPage";
+import { StewardReportPanel } from "./components/graph/StewardReportPanel";
 import type {
+  ActiveRule,
+  AnomalyFeedbackLabel,
+  AnomalyHypothesis,
+  AnomalySignal,
   AuditLog,
   CreateJobResponse,
   Dataset,
@@ -20,6 +43,7 @@ import type {
   DatasetAccessLevel,
   Job,
   ManualRuleInput,
+  ProposalBasis,
   RuleProposal,
   RuleConfiguration,
   RuleConfigurationInput,
@@ -35,6 +59,8 @@ import type {
   WorkflowRun,
   WorkflowStep,
   WorkflowStepKey,
+  GraphCatalog,
+  NodeRun,
 } from "./types";
 
 type View =
@@ -46,7 +72,8 @@ type View =
   | "visualization"
   | "data"
   | "audit"
-  | "admin";
+  | "admin"
+  | "graphs";
 
 const sleep = (duration: number) =>
   new Promise((resolve) => window.setTimeout(resolve, duration));
@@ -315,13 +342,8 @@ function DatasetsPage({
   onImportDataset,
   onSelectDataset,
   onDeleteDataset,
-  onStartUnderstand,
   canOperate,
   importing,
-  busy,
-  workflow,
-  artifacts,
-  profile,
 }: {
   datasets: Dataset[];
   dataset?: Dataset;
@@ -329,35 +351,16 @@ function DatasetsPage({
   onImportDataset: (file: File) => void;
   onSelectDataset: (datasetId: string) => void;
   onDeleteDataset?: (datasetId: string) => void;
-  onStartUnderstand: (datasetId: string) => void;
   canOperate: boolean;
   importing: boolean;
-  busy: boolean;
-  workflow: WorkflowRun | null;
-  artifacts: AgentArtifact[];
-  profile: DatasetProfile | null;
 }) {
-  const activeArtifact = workflow && dataset && workflow.dataset_id === dataset.id
-    ? workflowArtifactForStep(workflow, artifacts, "UNDERSTAND_DATA")
-    : undefined;
-
-  const payload = activeArtifact?.payload && typeof activeArtifact.payload === "object"
-    ? (activeArtifact.payload as Record<string, unknown>)
-    : null;
-
-  const contractColumns = payload && Array.isArray(payload.columns)
-    ? (payload.columns.filter((column): column is Record<string, unknown> =>
-        Boolean(column && typeof column === "object"),
-      ))
-    : [];
-
   return (
     <div className="datasets-page">
       <div className="page-heading datasets-heading">
         <div>
           <span className="eyebrow">STEP 1 · DATASET PREPARATION</span>
-          <h1>Select Dataset & Understand Data</h1>
-          <p>Choose or upload a dataset, then run the AI Agent to perform initial data understanding.</p>
+          <h1>Select or import a dataset</h1>
+          <p>Choose or upload a dataset, preview its rows, then continue to Graph 1A.</p>
         </div>
       </div>
 
@@ -410,11 +413,10 @@ function DatasetsPage({
                       onOpenExplorer(item.id);
                     }}
                   >
-                    View data →
+                    Data Explorer
                   </button>
                   <button
-                    className="button ghost"
-                    style={{ color: "#dc2626", borderColor: "#fca5a5" }}
+                    className="button ghost danger"
                     onClick={(e) => {
                       e.stopPropagation();
                       onDeleteDataset?.(item.id);
@@ -437,9 +439,54 @@ function DatasetsPage({
         </div>
       )}
 
-      {/* Understand Data Agent Output Card */}
+    </div>
+  );
+}
+
+/**
+ * Graph 1A's output: the semantic contract the agent inferred.
+ *
+ * This used to sit at the bottom of the dataset catalogue, which put a step-2
+ * artifact on the step-1 screen. It lives beside the Graph 1A node view now, so
+ * the run and the thing the run produced are on the same page.
+ */
+function SemanticContractPanel({
+  workflow,
+  artifacts,
+  dataset,
+  profile,
+  canOperate,
+  busy,
+  onStartUnderstand,
+}: {
+  workflow: WorkflowRun | null;
+  artifacts: AgentArtifact[];
+  dataset?: Dataset;
+  profile: DatasetProfile | null;
+  canOperate: boolean;
+  busy: boolean;
+  onStartUnderstand: (datasetId: string) => void;
+}) {
+  const activeArtifact = workflow && dataset && workflow.dataset_id === dataset.id
+    ? workflowArtifactForStep(workflow, artifacts, "UNDERSTAND_DATA")
+    : undefined;
+
+  const payload = activeArtifact?.payload && typeof activeArtifact.payload === "object"
+    ? (activeArtifact.payload as Record<string, unknown>)
+    : null;
+
+  const contractColumns = payload && Array.isArray(payload.columns)
+    ? (payload.columns.filter((column): column is Record<string, unknown> =>
+        Boolean(column && typeof column === "object"),
+      ))
+    : [];
+
+  if (!dataset) return null;
+
+  return (
+    <div className="datasets-page">
       {dataset && (
-        <section className="panel" style={{ marginTop: "24px", padding: "24px" }}>
+        <section className="panel" style={{ padding: "24px" }}>
           <div className="panel-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
               <span className="eyebrow">AGENT CAPABILITY</span>
@@ -512,7 +559,7 @@ function DatasetsPage({
                             <td style={{ padding: "10px 12px" }}><span className="status-pill info">{String(col.semantic_type ?? "unknown")}</span></td>
                             <td style={{ padding: "10px 12px" }}>{col.nullable ? "Yes" : "No"}</td>
                             <td style={{ padding: "10px 12px" }}>
-                              <span style={{ fontWeight: 600, color: (Number(col.confidence ?? 0) >= 0.8) ? "#16a34a" : "#d97706" }}>
+                              <span className={`confidence-value ${Number(col.confidence ?? 0) >= 0.8 ? "high" : "low"}`}>
                                 {typeof col.confidence === "number" ? `${(col.confidence * 100).toFixed(0)}%` : "N/A"}
                               </span>
                             </td>
@@ -573,6 +620,7 @@ function WorkflowPage({
   onSelectDataset,
   onUploadPreview,
   onBackToDatasetSelection,
+  graphPanel,
 }: {
   dataset?: Dataset;
   profile: DatasetProfile | null;
@@ -598,6 +646,8 @@ function WorkflowPage({
   onSelectDataset: (datasetId: string) => void;
   onUploadPreview: (file: File) => void;
   onBackToDatasetSelection: () => void;
+  /** Graph 1B node detail, wired by App so this page stays presentational. */
+  graphPanel?: ReactNode;
 }) {
   const [ruleDatasetId, setRuleDatasetId] = useState(dataset?.id ?? "");
   useEffect(() => {
@@ -773,6 +823,10 @@ function WorkflowPage({
             Boolean(column && typeof column === "object"),
           )
         : [];
+      const lowConfidenceColumns = contractColumns.filter(
+        (column) =>
+          typeof column.confidence === "number" && column.confidence < 0.8,
+      ).length;
       return (
         <div className="understanding-holder">
           <div className="understanding-summary">
@@ -828,20 +882,41 @@ function WorkflowPage({
                 <span className="eyebrow">INFERRED SCHEMA</span>
                 <h3>Semantic columns</h3>
               </div>
-              <span className="muted">{contractColumns.length} mapped</span>
+              <span className="muted">
+                {contractColumns.length} mapped
+                {lowConfidenceColumns > 0 && (
+                  <> · <strong className="needs-review">{lowConfidenceColumns} cần xem lại</strong></>
+                )}
+              </span>
             </div>
+            {lowConfidenceColumns > 0 && (
+              <p className="schema-hint">
+                Cột được đánh dấu là nơi agent suy luận kém chắc chắn nhất — duyệt
+                từ đó trước, vì mọi luật sinh ra sau này đều dựa trên hợp đồng này.
+              </p>
+            )}
             <div className="schema-list">
-              {contractColumns.map((column) => (
-                <div className="schema-row" key={String(column.name)}>
-                  <strong>{String(column.name ?? "Unnamed column")}</strong>
-                  <span>{String(column.semantic_type ?? "unknown")}</span>
-                  <small>
-                    {typeof column.confidence === "number"
-                      ? `${Math.round(column.confidence * 100)}% confidence`
-                      : "No confidence score"}
-                  </small>
-                </div>
-              ))}
+              {contractColumns.map((column) => {
+                // Ngưỡng 0.8 trùng với ngưỡng dùng ở bảng độ tin cậy bước 1, để
+                // "kém chắc chắn" mang cùng một nghĩa ở mọi màn hình.
+                const score =
+                  typeof column.confidence === "number" ? column.confidence : null;
+                const uncertain = score !== null && score < 0.8;
+                return (
+                  <div
+                    className={`schema-row${uncertain ? " uncertain" : ""}`}
+                    key={String(column.name)}
+                  >
+                    <strong>{String(column.name ?? "Unnamed column")}</strong>
+                    <span>{String(column.semantic_type ?? "unknown")}</span>
+                    <small className={uncertain ? "low" : undefined}>
+                      {score === null
+                        ? "Không có điểm tin cậy"
+                        : `${Math.round(score * 100)}% tin cậy`}
+                    </small>
+                  </div>
+                );
+              })}
             </div>
           </div>
           <div className="understanding-section">
@@ -1168,6 +1243,7 @@ function WorkflowPage({
               title={`Running ${workflowStepLabels[workflow.current_step].label}`}
             />
           )}
+          {graphPanel}
           {currentPhaseIndex === 3 ? (
             <div className="execution-mini-steps" aria-label="Publish and monitor mini-steps">
               {executionSteps.map((step) => {
@@ -1286,7 +1362,7 @@ function WorkflowPage({
 }
 
 function App() {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [authenticated, setAuthenticated] = useState(
     () =>
       sessionStorage.getItem("ridepulse.auth") === "true" &&
@@ -1304,6 +1380,7 @@ function App() {
   const [view, setView] = useState<View>("overview");
   const [wizardStep, setWizardStep] = useState<number>(1);
   const [showAdmin, setShowAdmin] = useState<boolean>(false);
+  const [showGraphs, setShowGraphs] = useState<boolean>(false);
   const [showDataExplorer, setShowDataExplorer] = useState<boolean>(false);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(
@@ -1338,7 +1415,17 @@ function App() {
   const [editingProposal, setEditingProposal] = useState<RuleProposal | null>(
     null,
   );
+  // Thẻ cấu hình nào đang mở trong hàng đợi duyệt ở bước 3. RulesPage giữ state
+  // riêng cho bản của nó; hàng đợi độc lập cần state riêng ở cấp này.
+  const [expandedConfiguration, setExpandedConfiguration] = useState<string | null>(
+    null,
+  );
   const [manualRuleOpen, setManualRuleOpen] = useState(false);
+  // Graph observability. The catalog is static topology fetched once; node runs
+  // are telemetry refreshed alongside the workspace and while a graph is live.
+  const [graphCatalog, setGraphCatalog] = useState<GraphCatalog | null>(null);
+  const [nodeRuns, setNodeRuns] = useState<NodeRun[]>([]);
+  const [graphLoading, setGraphLoading] = useState(false);
 
   const dataset = useMemo(
     () => datasets.find((item) => item.id === selectedDatasetId) ?? datasets[0],
@@ -1421,6 +1508,55 @@ function App() {
       setLoading(false);
     }
   }, []);
+
+  const refreshNodeRuns = useCallback(async () => {
+    if (!selectedDatasetId) return;
+    setGraphLoading(true);
+    try {
+      // Filtering by dataset covers every graph the wizard drives: Graph 1A/1B
+      // carry the dataset directly, Graph 2/3 inherit it from the run.
+      setNodeRuns(await api.listNodeRuns({ datasetId: selectedDatasetId, limit: 500 }));
+    } catch {
+      // Telemetry is supporting detail; a failure here must not blank the page.
+      setNodeRuns([]);
+    } finally {
+      setGraphLoading(false);
+    }
+  }, [selectedDatasetId]);
+
+  const loadNodeDetail = useCallback((nodeRunId: string) => api.getNodeRun(nodeRunId), []);
+  const loadStewardReport = useCallback((runId: string) => api.getStewardReport(runId), []);
+
+  // Topology never changes at runtime, so fetch it once per session.
+  useEffect(() => {
+    if (!authenticated || graphCatalog) return;
+    let cancelled = false;
+    api
+      .getGraphCatalog()
+      .then((catalog) => {
+        if (!cancelled) setGraphCatalog(catalog);
+      })
+      .catch(() => {
+        if (!cancelled) setGraphCatalog(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authenticated, graphCatalog]);
+
+  useEffect(() => {
+    if (!authenticated || !selectedDatasetId) return;
+    void refreshNodeRuns();
+  }, [authenticated, selectedDatasetId, refreshNodeRuns]);
+
+  // While a node is mid-flight the graph view is the one place a user watches
+  // for progress, so poll until nothing is running any more.
+  useEffect(() => {
+    const running = nodeRuns.some((run) => run.status === "RUNNING");
+    if (!running && !activeJob) return;
+    const timer = window.setInterval(() => void refreshNodeRuns(), 4000);
+    return () => window.clearInterval(timer);
+  }, [nodeRuns, activeJob, refreshNodeRuns]);
 
   const refreshAdmin = useCallback(async () => {
     if (!dataset || !canAdmin) return;
@@ -1924,6 +2060,16 @@ function App() {
             <span className="role-badge">{role}</span>
             <LanguageToggle />
             <ThemeControl />
+            <button
+              type="button"
+              className={`button secondary ${showGraphs ? "active" : ""}`}
+              onClick={() => {
+                setShowGraphs(!showGraphs);
+                setShowAdmin(false);
+              }}
+            >
+              ⛓ {t("app.graphObservatory")}
+            </button>
             {canAdmin && (
               <button
                 type="button"
@@ -1946,7 +2092,7 @@ function App() {
           </div>
         </header>
 
-        {!showAdmin && (
+        {!showAdmin && !showGraphs && (
           <div className="wizard-header-container">
             <nav className="wizard-stepper" aria-label="Wizard Steps">
               {[
@@ -2058,7 +2204,17 @@ function App() {
             />
           )}
 
-          {showAdmin && canAdmin ? (
+          {showGraphs ? (
+            <GraphObservatoryPage
+              catalog={graphCatalog}
+              runs={nodeRuns}
+              language={language}
+              loading={graphLoading}
+              onRefresh={() => void refreshNodeRuns()}
+              onBack={() => setShowGraphs(false)}
+              loadNodeDetail={loadNodeDetail}
+            />
+          ) : showAdmin && canAdmin ? (
             <AdminPage
               users={adminUsers}
               access={datasetAccess}
@@ -2070,75 +2226,85 @@ function App() {
             />
           ) : (
             <>
-              {/* STEP 1: Dataset Preparation */}
+              {/* STEP 1: Dataset preparation — import, profile, preview.
+                  Everything about the dataset itself lives here so the four
+                  graph steps that follow each hold exactly one graph. */}
               {wizardStep === 1 && (
                 <div>
-                  <div style={{ marginBottom: "16px", display: "flex", justifyContent: "flex-end" }}>
-                    {dataset && (
-                      <button
-                        className="button secondary"
-                        onClick={() => setShowDataExplorer(!showDataExplorer)}
-                      >
-                        {showDataExplorer ? "← Catalog view" : "Data Explorer →"}
-                      </button>
-                    )}
-                  </div>
-                  {showDataExplorer && dataset ? (
-                    <DataExplorerPage dataset={dataset} />
-                  ) : (
-                    <DatasetsPage
-                      datasets={datasets}
-                      dataset={dataset}
-                      onOpenExplorer={(datasetId) => {
-                        if (datasetId !== dataset?.id) void selectDataset(datasetId);
-                        setShowDataExplorer(true);
-                      }}
-                      onImportDataset={(file) => void importDataset(file)}
-                      onSelectDataset={(id) => void selectDataset(id)}
-                      onDeleteDataset={(id) => void deleteDataset(id)}
-                      onStartUnderstand={(id) => {
-                        if (id !== dataset?.id) void selectDataset(id);
-                        void startWorkflowStep("UNDERSTAND_DATA", true);
-                      }}
-                      canOperate={canOperate}
-                      importing={Boolean(activeJob)}
-                      busy={workflowActionBusy}
-                      workflow={workflow}
-                      artifacts={workflowArtifacts}
-                      profile={profile}
-                    />
-                  )}
-                </div>
-              )}
-
-              {/* STEP 2: Quality Profiling */}
-              {wizardStep === 2 && (
-                <div>
-                  <OverviewPage
-                    dataset={dataset}
+                  <DatasetsPage
                     datasets={datasets}
-                    profile={profile}
-                    datasetProfiles={datasetProfiles}
-                    qualityTrends={qualityTrends}
-                    proposals={proposals}
-                    approvedRules={approvedRules.length}
-                    loading={loading}
-                    busy={Boolean(activeJob)}
-                    canOperate={canOperate}
-                    onStartAnalysis={() => void startAnalysis()}
-                    onRequestProposals={() => void requestProposals()}
-                    onNavigate={(v) => {
-                      if (v === "datasets") setWizardStep(1);
-                      if (v === "rules") setWizardStep(3);
+                    dataset={dataset}
+                    onOpenExplorer={(datasetId) => {
+                      if (datasetId !== dataset?.id) void selectDataset(datasetId);
+                      setShowDataExplorer(true);
                     }}
+                    onImportDataset={(file) => void importDataset(file)}
                     onSelectDataset={(id) => void selectDataset(id)}
+                    onDeleteDataset={(id) => void deleteDataset(id)}
+                    canOperate={canOperate}
+                    importing={Boolean(activeJob)}
                   />
+                  <div style={{ marginTop: "32px" }}>
+                    <OverviewPage
+                      dataset={dataset}
+                      datasets={datasets}
+                      profile={profile}
+                      datasetProfiles={datasetProfiles}
+                      qualityTrends={qualityTrends}
+                      proposals={proposals}
+                      approvedRules={approvedRules.length}
+                      loading={loading}
+                      busy={Boolean(activeJob)}
+                      canOperate={canOperate}
+                      onStartAnalysis={() => void startAnalysis()}
+                      onRequestProposals={() => void requestProposals()}
+                      onNavigate={(v) => {
+                        if (v === "datasets") setWizardStep(1);
+                        if (v === "rules") setWizardStep(3);
+                      }}
+                      onSelectDataset={(id) => void selectDataset(id)}
+                    />
+                  </div>
                   <div style={{ marginTop: "32px" }}>
                     <VisualizationPage
                       profile={profile}
                       results={dqResults}
                       anomalies={dqAnomalies}
                       trends={qualityTrends}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 2: Graph 1A — dataset understanding */}
+              {wizardStep === 2 && (
+                <div>
+                  <div className="page-heading">
+                    <div>
+                      <span className="eyebrow">RUN 1 · {t("wizard.step2Title").toUpperCase()}</span>
+                      <h1>{t("wizard.step2Title")}</h1>
+                      <p>{t("wizard.step2Desc")}</p>
+                    </div>
+                  </div>
+                  <GraphStagePanel
+                    catalog={graphCatalog}
+                    runs={nodeRuns}
+                    graphKeys={["G1A"]}
+                    language={language}
+                    loadNodeDetail={loadNodeDetail}
+                  />
+                  <div style={{ marginTop: "24px" }}>
+                    <SemanticContractPanel
+                      workflow={workflow}
+                      artifacts={workflowArtifacts}
+                      dataset={dataset}
+                      profile={profile}
+                      canOperate={canOperate}
+                      busy={workflowActionBusy || Boolean(activeJob)}
+                      onStartUnderstand={(id) => {
+                        if (id !== dataset?.id) void selectDataset(id);
+                        void startWorkflowStep("UNDERSTAND_DATA", true);
+                      }}
                     />
                   </div>
                 </div>
@@ -2178,11 +2344,68 @@ function App() {
                     onSelectDataset={(id) => void selectDataset(id)}
                     onUploadPreview={(file) => void importDataset(file)}
                     onBackToDatasetSelection={() => setWizardStep(1)}
+                    graphPanel={
+                      <GraphStagePanel
+                        catalog={graphCatalog}
+                        runs={nodeRuns}
+                        graphKeys={["G1B"]}
+                        language={language}
+                        loadNodeDetail={loadNodeDetail}
+                      />
+                    }
                   />
+                  {/* Hàng đợi duyệt trước đây chỉ hiện khi workflow đi đúng tới
+                      chặng REVIEW_RULES. Dataset có thể đã có sẵn đề xuất từ lần
+                      chạy trước mà workflow lại chưa khởi tạo — khi đó người dùng
+                      mở bước 3 và thấy màn hình trống, dù luật vẫn nằm trong DB.
+                      Có đề xuất thì hiện, không phụ thuộc trạng thái workflow. */}
+                  {proposals.length > 0 && (
+                    <section className="standalone-review">
+                      <div className="panel-heading">
+                        <div>
+                          <span className="eyebrow">HÀNG ĐỢI DUYỆT</span>
+                          <h3>Đề xuất luật của agent</h3>
+                        </div>
+                        <span className="panel-caption">
+                          {proposals.length} đề xuất cho {dataset?.name ?? "dataset này"}
+                        </span>
+                      </div>
+                      <ReviewSummaryPanel proposals={proposals} />
+                      <div className="proposal-list">
+                        {proposals.map((proposal) => (
+                          <ProposalCard
+                            key={proposal.id}
+                            proposal={proposal}
+                            canOperate={canOperate}
+                            configuration={ruleConfigurations.find(
+                              (item) => item.rule_id === proposal.id,
+                            )}
+                            configurationExpanded={
+                              expandedConfiguration === proposal.id
+                            }
+                            onToggleConfiguration={() =>
+                              setExpandedConfiguration(
+                                expandedConfiguration === proposal.id
+                                  ? null
+                                  : proposal.id,
+                              )
+                            }
+                            onSaveConfiguration={(input) =>
+                              void saveRuleConfiguration(proposal.id, input)
+                            }
+                            onApprove={() => void reviewProposal(proposal.id, "approve")}
+                            onReject={() => void reviewProposal(proposal.id, "reject")}
+                            onEdit={() => setEditingProposal(proposal)}
+                            onDelete={() => void deleteProposal(proposal.id)}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  )}
                 </div>
               )}
 
-              {/* STEP 4: Execution & Monitoring */}
+              {/* STEP 4: Graph 2 — deterministic execution */}
               {wizardStep === 4 && (
                 <div>
                   <RunsPage
@@ -2193,21 +2416,83 @@ function App() {
                     busy={Boolean(activeJob)}
                     canOperate={canOperate}
                     onRun={() => void runApprovedRules()}
+                    graphPanel={
+                      <GraphStagePanel
+                        catalog={graphCatalog}
+                        runs={nodeRuns}
+                        graphKeys={["G2"]}
+                        language={language}
+                        loadNodeDetail={loadNodeDetail}
+                      />
+                    }
                   />
+                  {activeRun && (
+                    <div style={{ marginTop: "32px" }}>
+                      <Graph2Analytics results={dqResults} trends={qualityTrends} />
+                    </div>
+                  )}
+                  {dataset && <ActiveRulesPanel datasetId={dataset.id} />}
                   <div style={{ marginTop: "32px" }}>
                     <AuditPage logs={auditLogs} />
                   </div>
                 </div>
               )}
 
-              {/* STEP 5: Analytics Dashboard */}
+              {/* STEP 5: Graph 3 — anomaly detection and root cause */}
               {wizardStep === 5 && (
-                <Step5Analytics
-                  results={dqResults}
-                  anomalies={dqAnomalies}
-                  onBack={() => setWizardStep(4)}
-                  onStartNewRun={() => setWizardStep(1)}
-                />
+                <div>
+                  <div className="page-heading">
+                    <div>
+                      <span className="eyebrow">RUN 3 · {t("wizard.step5Title").toUpperCase()}</span>
+                      <h1>{t("wizard.step5Title")}</h1>
+                      <p>{t("wizard.step5Desc")}</p>
+                    </div>
+                    <button className="button secondary" onClick={() => setWizardStep(1)}>
+                      {t("wizard.startNewRun")}
+                    </button>
+                  </div>
+                  <GraphStagePanel
+                    catalog={graphCatalog}
+                    runs={nodeRuns}
+                    graphKeys={["G3"]}
+                    language={language}
+                    loadNodeDetail={loadNodeDetail}
+                  />
+                  {activeRun ? (
+                    <>
+                      <div style={{ marginTop: "24px" }}>
+                        <StewardReportPanel
+                          runId={activeRun.id}
+                          language={language}
+                          loadReport={loadStewardReport}
+                        />
+                      </div>
+                      <div style={{ marginTop: "24px" }}>
+                        <AnomalyInvestigationPanel runId={activeRun.id} canOperate={canOperate} />
+                      </div>
+                      <div style={{ marginTop: "32px" }}>
+                        <Graph3Analytics anomalies={dqAnomalies} />
+                      </div>
+                    </>
+                  ) : (
+                    /* Graph 3 only has anything to say once Graph 2 has run.
+                       Say that plainly instead of showing an empty screen. */
+                    <section className="panel investigation-panel" style={{ marginTop: "24px" }}>
+                      <div className="panel-heading">
+                        <div>
+                          <span className="eyebrow">ĐIỀU TRA NGUYÊN NHÂN GỐC</span>
+                          <h3>Giả thuyết từ agent</h3>
+                        </div>
+                      </div>
+                      <p className="investigation-note">
+                        Chạy bộ luật đã duyệt ở bước 4 để agent phân tích kết quả.
+                        Sau khi chạy, khu vực này hiện các giả thuyết nguyên nhân
+                        gốc kèm bằng chứng ủng hộ, bằng chứng phản bác và những
+                        kiểm tra được khuyến nghị.
+                      </p>
+                    </section>
+                  )}
+                </div>
               )}
 
               {/* Wizard Bottom Nav Controls */}
@@ -2238,6 +2523,16 @@ function App() {
           )}
         </div>
       </main>
+      {showDataExplorer && dataset && (
+        <DataExplorerDialog
+          dataset={dataset}
+          language={language}
+          loadRows={(datasetId, limit) =>
+            api.queryDatasetRows(datasetId, { limit, offset: 0, quality_status: "ALL" })
+          }
+          onClose={() => setShowDataExplorer(false)}
+        />
+      )}
       {editingProposal && (
         <EditDialog
           proposal={editingProposal}
@@ -2297,22 +2592,10 @@ function OverviewPage({
       : null;
     return { dataset: item, profile: itemProfile, score };
   });
-  const profiledRows = qualityRows.filter((row) => row.score !== null);
-  const averageQuality = profiledRows.length
-    ? profiledRows.reduce((sum, row) => sum + (row.score ?? 0), 0) /
-      profiledRows.length
-    : null;
-  const averageCompleteness = profiledRows.length
-    ? profiledRows.reduce((sum, row) => sum + (row.profile?.completeness_score ?? 0), 0) / profiledRows.length
-    : null;
-  const averageDuplicateRate = profiledRows.length
-    ? profiledRows.reduce((sum, row) => sum + (row.profile?.duplicate_rate ?? 0), 0) / profiledRows.length
-    : null;
+  // Catalogue-wide averages used to feed the KPI row. That row now describes the
+  // selected dataset instead, and the remaining consumers are the two panels
+  // below -- so only the figures those panels read are still computed here.
   const attentionCount = qualityRows.filter((row) => row.score !== null && row.score < 85).length;
-  const totalRows = datasets.reduce((sum, item) => sum + item.row_count, 0);
-  const profileReadyCount = datasets.filter(
-    (item) => item.status === "PROFILE_READY",
-  ).length;
   const statusRows = [
     {
       label: "Profile ready",
@@ -2349,18 +2632,33 @@ function OverviewPage({
         </section>
       </>
     );
+  // Step 2 reports on the dataset chosen in step 1, so the heading and the KPI row
+  // below describe that one dataset. The catalogue-wide aggregates computed above
+  // are still used, but only by the two panels further down, where comparing
+  // datasets is the point.
+  const selectedProfile = datasetProfiles[dataset.id] ?? profile;
+  const selectedColumns = selectedProfile?.columns ?? [];
+  const nullColumnCount = selectedColumns.filter(
+    (column) => column.null_rate > 0,
+  ).length;
   return (
     <>
       <div className="page-heading overview-heading">
         <div>
-          <span className="eyebrow">QUALITY COMMAND CENTER</span>
-          <h1>Dataset quality overview</h1>
+          <span className="eyebrow">QUALITY PROFILE</span>
+          <h1>{dataset.name}</h1>
           <p>
-            Compare quality signals across the catalog before opening an
-            individual pipeline.
+            {dataset.source_label} ·{" "}
+            {selectedProfile
+              ? `Profiled ${new Date(selectedProfile.generated_at).toLocaleString()}`
+              : "No aggregate profile yet — run Understand dataset in step 1"}
           </p>
         </div>
         <div className="heading-actions">
+          <StatusPill
+            label={dataset.status.replaceAll("_", " ")}
+            tone={dataset.status === "PROFILE_READY" ? "success" : "info"}
+          />
           <button
             className="button ghost"
             onClick={() => onNavigate("datasets")}
@@ -2377,46 +2675,56 @@ function OverviewPage({
       </div>
       <section className="stat-grid overview-kpis">
         <StatCard
-          label="Datasets"
-          value={`${datasets.length}`}
-          detail="Registered in workspace"
-          tone="green"
-        />
-        <StatCard
-          label="Profile ready"
-          value={`${profileReadyCount}/${datasets.length}`}
-          detail="Datasets with aggregate profile"
+          label="Rows"
+          value={(selectedProfile?.row_count ?? dataset.row_count).toLocaleString()}
+          detail={selectedProfile ? "Counted during profiling" : "Declared at registration"}
           tone="blue"
         />
         <StatCard
-          label="Rows tracked"
-          value={totalRows.toLocaleString()}
-          detail="Across registered datasets"
-          tone="amber"
-        />
-        <StatCard
-          label="Average quality"
-          value={
-            averageQuality === null ? "—" : `${averageQuality.toFixed(1)}%`
-          }
-          detail={
-            profiledRows.length
-              ? `${profiledRows.length} profiled dataset${profiledRows.length === 1 ? "" : "s"}`
-              : "Awaiting profile data"
-          }
+          label="Columns"
+          value={selectedColumns.length ? `${selectedColumns.length}` : "—"}
+          detail={selectedColumns.length ? "Fields profiled" : "Awaiting profile data"}
           tone="violet"
         />
         <StatCard
           label="Completeness"
-          value={averageCompleteness === null ? "—" : `${averageCompleteness.toFixed(1)}%`}
-          detail="Average across profiles"
-          tone="blue"
+          value={
+            selectedProfile ? `${selectedProfile.completeness_score.toFixed(1)}%` : "—"
+          }
+          detail={
+            selectedProfile
+              ? `${nullColumnCount} column${nullColumnCount === 1 ? "" : "s"} contain nulls`
+              : "Awaiting profile data"
+          }
+          tone={
+            selectedProfile && selectedProfile.completeness_score < 95 ? "amber" : "green"
+          }
+        />
+        <StatCard
+          label="Validity"
+          value={selectedProfile ? `${selectedProfile.validity_score.toFixed(1)}%` : "—"}
+          detail={selectedProfile ? "Values matching their declared type" : "Awaiting profile data"}
+          tone={selectedProfile && selectedProfile.validity_score < 95 ? "amber" : "green"}
         />
         <StatCard
           label="Duplicate rate"
-          value={averageDuplicateRate === null ? "—" : `${averageDuplicateRate.toFixed(2)}%`}
-          detail={attentionCount ? `${attentionCount} dataset${attentionCount === 1 ? "" : "s"} need attention` : "No quality alerts"}
-          tone={attentionCount ? "amber" : "green"}
+          value={selectedProfile ? `${selectedProfile.duplicate_rate.toFixed(2)}%` : "—"}
+          detail={
+            selectedProfile && selectedProfile.duplicate_rate > 0
+              ? "Repeated rows detected"
+              : "No duplicate rows detected"
+          }
+          tone={selectedProfile && selectedProfile.duplicate_rate > 0 ? "amber" : "green"}
+        />
+        <StatCard
+          label="Rules proposed"
+          value={`${proposalCount}`}
+          detail={
+            approvedRules
+              ? `${approvedRules} approved rule${approvedRules === 1 ? "" : "s"} active`
+              : "Awaiting review in step 3"
+          }
+          tone={proposalCount ? "amber" : "blue"}
         />
       </section>
       <section className="overview-grid">
@@ -2639,23 +2947,16 @@ function StatCard({
   detail: string;
   tone: string;
 }) {
-  const toneColor =
-    tone === "green"
-      ? "#10b981"
-      : tone === "blue"
-        ? "#3b82f6"
-        : tone === "amber"
-          ? "#f59e0b"
-          : "#8b5cf6";
-
+  // Chấm màu lấy từ token theo `tone` trong styles.css thay vì mã hex tại chỗ,
+  // để nó đổi cùng chủ đề như phần còn lại của thẻ.
   return (
-    <div className={`stat-card ${tone}`} style={{ position: "relative", overflow: "hidden" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span className="stat-label" style={{ fontWeight: 600, fontSize: "11px", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</span>
-        <span className="status-dot" style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: toneColor, display: "inline-block" }} />
+    <div className={`stat-card ${tone}`}>
+      <div className="stat-card-top">
+        <span className="stat-label">{label}</span>
+        <span className={`stat-dot ${tone}`} />
       </div>
-      <strong style={{ fontSize: "24px", fontWeight: 700, margin: "8px 0 4px 0", display: "block", color: "var(--ink)", letterSpacing: "-0.02em" }}>{value}</strong>
-      <span className="stat-detail" style={{ fontSize: "12px", color: "var(--muted)" }}>{detail}</span>
+      <strong className="stat-value">{value}</strong>
+      <span className="stat-detail">{detail}</span>
     </div>
   );
 }
@@ -2771,27 +3072,7 @@ function RulesPage({
         </section>
       ) : (
         <>
-          <div className="review-summary">
-            <div>
-              <span className="eyebrow">REVIEW QUEUE</span>
-              <strong>{pending.length} awaiting decision</strong>
-            </div>
-            <div className="review-progress">
-              <span
-                style={{
-                  width: `${proposals.length ? ((proposals.length - pending.length) / proposals.length) * 100 : 0}%`,
-                }}
-              />
-            </div>
-            <span>
-              {approved.length} approved ·{" "}
-              {
-                proposals.filter((proposal) => proposal.status === "REJECTED")
-                  .length
-              }{" "}
-              rejected
-            </span>
-          </div>
+          <ReviewSummaryPanel proposals={proposals} />
           <div className="proposal-list">
             {proposals.map((proposal) => (
               <ProposalCard
@@ -2895,6 +3176,7 @@ function ProposalCard({
           <code key={ref}>{ref}</code>
         ))}
       </div>
+      <ProposalRationale proposal={proposal} />
       {(editable || proposal.status === "REJECTED") && canOperate && (
         <div className="proposal-actions">
           {canReject && (
@@ -2935,6 +3217,154 @@ function ProposalCard({
         />
       )}
     </article>
+  );
+}
+
+const BASIS_LABEL: Record<ProposalBasis, string> = {
+  SCHEMA_CONSTRAINT: "Ràng buộc schema",
+  DATA_PROFILE: "Hồ sơ dữ liệu",
+  DATA_DICTIONARY: "Từ điển dữ liệu",
+  HISTORICAL_RULE: "Luật đã dùng trước đây",
+  POLICY: "Chính sách quản trị",
+  MIXED: "Nhiều nguồn",
+};
+
+/**
+ * Phần "vì sao" của một đề xuất luật.
+ *
+ * Backend vẫn luôn trả về lý do nghiệp vụ, nguồn gốc từng tham số, các giả định
+ * và phân rã độ tin cậy — nhưng thẻ đề xuất chỉ hiển thị tiêu đề, mô tả và một
+ * con số phần trăm trần trụi. Steward vì thế phải duyệt bằng cảm tính, đúng thứ
+ * mà chốt chặn HITL sinh ra để ngăn.
+ *
+ * Mặc định thu gọn: hàng đợi duyệt thường dài, và người đọc chỉ cần mở ra ở
+ * những luật họ phân vân.
+ */
+function ProposalRationale({ proposal }: { proposal: RuleProposal }) {
+  const [open, setOpen] = useState(false);
+
+  const provenance = proposal.parameter_provenance ?? [];
+  const assumptions = proposal.assumptions ?? [];
+  const breakdown = proposal.confidence_breakdown;
+  const hasDetail =
+    Boolean(proposal.business_rationale) ||
+    provenance.length > 0 ||
+    assumptions.length > 0 ||
+    Boolean(breakdown);
+
+  if (!hasDetail) {
+    // Không bịa ra chỗ trống trông như đã có nội dung: nói thẳng là agent không
+    // kèm lý do, vì đó cũng là một tín hiệu để người duyệt cân nhắc.
+    return (
+      <p className="rationale-absent">
+        Đề xuất này không kèm lý do chi tiết
+        {proposal.model_name ? ` (${proposal.model_name})` : ""}.
+      </p>
+    );
+  }
+
+  return (
+    <div className="rationale">
+      <div className="rationale-head">
+        <button
+          type="button"
+          className="rationale-toggle"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+        >
+          <span className="rationale-caret">{open ? "▾" : "▸"}</span>
+          Vì sao có luật này
+        </button>
+        {proposal.proposal_basis && (
+          <span className={`basis-badge ${proposal.proposal_basis.toLowerCase()}`}>
+            {BASIS_LABEL[proposal.proposal_basis]}
+          </span>
+        )}
+        {proposal.model_name && (
+          <span className="rationale-model">{proposal.model_name}</span>
+        )}
+      </div>
+
+      {open && (
+        <div className="rationale-body">
+          {proposal.business_rationale && (
+            <section className="rationale-block">
+              <h4>Lý do nghiệp vụ</h4>
+              <p>{proposal.business_rationale}</p>
+            </section>
+          )}
+
+          {breakdown && (
+            <section className="rationale-block">
+              <h4>Độ tin cậy đến từ đâu</h4>
+              <div className="confidence-bars">
+                {(
+                  [
+                    ["Sức mạnh bằng chứng", breakdown.evidence_strength],
+                    ["Ủng hộ từ nghiệp vụ", breakdown.business_support],
+                    ["Tính đại diện của mẫu", breakdown.sample_representativeness],
+                  ] as const
+                ).map(([label, value]) => (
+                  <div className="confidence-bar" key={label}>
+                    <span className="cb-label">{label}</span>
+                    <span className="cb-track">
+                      <span style={{ width: `${Math.round(value * 100)}%` }} />
+                    </span>
+                    <span className="cb-value">{Math.round(value * 100)}%</span>
+                  </div>
+                ))}
+              </div>
+              {breakdown.explanation && (
+                <p className="rationale-note">{breakdown.explanation}</p>
+              )}
+            </section>
+          )}
+
+          {provenance.length > 0 && (
+            <section className="rationale-block">
+              <h4>Tham số lấy từ đâu</h4>
+              <div className="rationale-table-scroll">
+                <table className="rationale-table">
+                  <thead>
+                    <tr>
+                      <th>Tham số</th>
+                      <th>Nguồn</th>
+                      <th>Tham chiếu</th>
+                      <th>Cách suy ra</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {provenance.map((item) => (
+                      <tr key={`${item.parameter_name}-${item.source_ref}`}>
+                        <td>
+                          <code>{item.parameter_name}</code>
+                        </td>
+                        <td>{BASIS_LABEL[item.source_type]}</td>
+                        <td>
+                          <code>{item.source_ref}</code>
+                        </td>
+                        <td>{item.derivation_method}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          {assumptions.length > 0 && (
+            <section className="rationale-block">
+              <h4>Agent đã giả định</h4>
+              <ul className="rationale-list">
+                {assumptions.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -3054,6 +3484,422 @@ function RuleConfigurationControl({
   );
 }
 
+/**
+ * Bộ luật đang canh dữ liệu thật.
+ *
+ * Trước đây `/dq/active-rules` chưa từng được gọi, nên người dùng duyệt luật ở
+ * bước 3 mà không có chỗ nào xác nhận luật nào đã thực sự được xuất bản và đang
+ * chạy. Đề xuất và luật đang hoạt động là hai thứ khác nhau.
+ */
+function ActiveRulesPanel({ datasetId }: { datasetId: string }) {
+  const [rules, setRules] = useState<ActiveRule[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    api
+      .getActiveRules(datasetId)
+      .then((next) => {
+        if (!cancelled) setRules(next);
+      })
+      .catch((cause: unknown) => {
+        if (cancelled) return;
+        setError(
+          cause instanceof ApiError
+            ? cause.message
+            : "Không tải được bộ luật đang hoạt động.",
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [datasetId]);
+
+  const active = rules.filter((rule) => rule.status === "ACTIVE");
+
+  return (
+    <section className="panel active-rules-panel">
+      <div className="panel-heading">
+        <div>
+          <span className="eyebrow">BỘ LUẬT ĐANG CHẠY</span>
+          <h3>Active ruleset</h3>
+        </div>
+        <span className="panel-caption">
+          {active.length} đang hoạt động
+          {rules.length !== active.length && ` · ${rules.length - active.length} đã tắt`}
+        </span>
+      </div>
+      {loading ? (
+        <p className="investigation-note">Đang tải…</p>
+      ) : error ? (
+        <p className="investigation-note error">{error}</p>
+      ) : rules.length === 0 ? (
+        <p className="investigation-note">
+          Chưa có luật nào được xuất bản. Duyệt và xuất bản ở bước 3 để luật bắt
+          đầu canh dữ liệu.
+        </p>
+      ) : (
+        <div className="active-rules-scroll">
+          <table className="active-rules-table">
+            <thead>
+              <tr>
+                <th>Luật</th>
+                <th>Cột</th>
+                <th>Loại</th>
+                <th>Chiều</th>
+                <th>Mức</th>
+                <th>Trạng thái</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rules.map((rule) => (
+                <tr key={rule.rule_id}>
+                  <td>{rule.rule_description || rule.rule_id}</td>
+                  <td>{rule.column ? <code>{rule.column}</code> : "—"}</td>
+                  <td>{rule.rule_type.replaceAll("_", " ")}</td>
+                  <td className="muted">{rule.dimension}</td>
+                  <td>
+                    <span className={`severity ${rule.severity.toLowerCase()}`}>
+                      {rule.severity}
+                    </span>
+                  </td>
+                  <td>
+                    <StatusPill
+                      label={rule.status}
+                      tone={rule.status === "ACTIVE" ? "success" : "neutral"}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Tổng kết tiến độ duyệt luật.
+ *
+ * Tính tại chỗ từ mảng `proposals` mà giao diện đã tải sẵn, thay vì gọi
+ * `/dq/runs/{run_id}/review-summary`: endpoint đó nhận `run_id` của lần sinh
+ * luật, còn giao diện chỉ giữ `workflow_run_id` — hai định danh khác nhau. Đếm
+ * tại chỗ cho cùng con số mà không phải đoán ánh xạ ID.
+ */
+function ReviewSummaryPanel({ proposals }: { proposals: RuleProposal[] }) {
+  const summary = useMemo(() => {
+    const counts = { total: proposals.length, pending: 0, approved: 0, rejected: 0, edited: 0 };
+    for (const proposal of proposals) {
+      if (proposal.status === "APPROVED") counts.approved += 1;
+      else if (proposal.status === "REJECTED") counts.rejected += 1;
+      else if (proposal.status === "EDITED") {
+        counts.edited += 1;
+        counts.pending += 1;
+      } else counts.pending += 1;
+    }
+    return counts;
+  }, [proposals]);
+
+  if (summary.total === 0) return null;
+
+  const reviewed = summary.approved + summary.rejected;
+  const percent = Math.round((reviewed / summary.total) * 100);
+
+  return (
+    <section className="review-summary">
+      <div className="rs-head">
+        <span className="rs-title">Tiến độ duyệt</span>
+        <span className="rs-count">
+          {reviewed}/{summary.total} đã quyết định
+        </span>
+      </div>
+      <div className="rs-track">
+        <span className="rs-approved" style={{ width: `${(summary.approved / summary.total) * 100}%` }} />
+        <span className="rs-rejected" style={{ width: `${(summary.rejected / summary.total) * 100}%` }} />
+      </div>
+      <div className="rs-legend">
+        <span><b className="dot approved" />{summary.approved} duyệt</span>
+        <span><b className="dot rejected" />{summary.rejected} từ chối</span>
+        <span><b className="dot pending" />{summary.pending} chờ</span>
+        {summary.edited > 0 && <span className="rs-edited">{summary.edited} đã sửa tham số</span>}
+        <span className="rs-percent">{percent}%</span>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Danh sách ID dòng trượt.
+ *
+ * Trước đây là `ids.join(", ")` — một dải ID dính liền, không đọc được và không
+ * sao chép chọn lọc được. Runner cố ý chỉ trả ID chứ không trả giá trị thật
+ * (quy tắc an toàn: không để dữ liệu thô rời khỏi ranh giới), nên việc cần làm
+ * là trình bày ID cho dễ dùng, không phải hiển thị thêm dữ liệu.
+ */
+function FailedRowIds({ ids }: { ids: string[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const LIMIT = 5;
+
+  if (ids.length === 0) return <span className="failed-ids empty">—</span>;
+
+  const shown = expanded ? ids : ids.slice(0, LIMIT);
+  const hidden = ids.length - shown.length;
+
+  return (
+    <span className="failed-ids">
+      {shown.map((id) => (
+        <code key={id} title={id}>
+          {id}
+        </code>
+      ))}
+      {hidden > 0 && (
+        <button
+          type="button"
+          className="failed-ids-more"
+          onClick={() => setExpanded(true)}
+        >
+          +{hidden} nữa
+        </button>
+      )}
+      {expanded && ids.length > LIMIT && (
+        <button
+          type="button"
+          className="failed-ids-more"
+          onClick={() => setExpanded(false)}
+        >
+          thu gọn
+        </button>
+      )}
+    </span>
+  );
+}
+
+const FEEDBACK_CHOICES: Array<{ label: AnomalyFeedbackLabel; text: string }> = [
+  { label: "TRUE_ANOMALY", text: "Đúng là bất thường" },
+  { label: "FALSE_POSITIVE", text: "Báo nhầm" },
+  { label: "EXPECTED_CHANGE", text: "Thay đổi đã biết trước" },
+  { label: "RULE_MISCONFIGURATION", text: "Luật cấu hình sai" },
+];
+
+const HYPOTHESIS_LABEL: Record<string, string> = {
+  SYSTEM_BUG: "Lỗi hệ thống",
+  SCHEMA_CHANGE: "Thay đổi schema",
+  UPSTREAM_DATA_DRIFT: "Dữ liệu nguồn trôi",
+  ML_MODEL_DRIFT: "Mô hình trôi",
+  OUTLIER: "Giá trị ngoại lai",
+  DATA_QUALITY_VIOLATION: "Vi phạm quy tắc chất lượng",
+  UNKNOWN: "Chưa xác định",
+};
+
+/**
+ * Kết quả điều tra nguyên nhân gốc của Graph 3.
+ *
+ * DeepAgent đã sinh ra giả thuyết, bằng chứng hai chiều và các kiểm tra khuyến
+ * nghị từ trước, lưu đầy đủ trong `anomaly_hypotheses` — nhưng ba endpoint
+ * `/dq/anomaly-runs/*` chưa từng được giao diện gọi, nên toàn bộ phần suy luận
+ * này vô hình với người dùng. Đây là phần khác biệt nhất của sản phẩm so với
+ * một công cụ chạy dbt thông thường.
+ */
+function AnomalyInvestigationPanel({
+  runId,
+  canOperate,
+}: {
+  runId: string;
+  canOperate: boolean;
+}) {
+  const [signals, setSignals] = useState<AnomalySignal[]>([]);
+  const [hypotheses, setHypotheses] = useState<AnomalyHypothesis[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [sent, setSent] = useState<AnomalyFeedbackLabel | null>(null);
+  const [sending, setSending] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setSent(null);
+    Promise.all([api.getAnomalySignals(runId), api.getAnomalyHypotheses(runId)])
+      .then(([nextSignals, nextHypotheses]) => {
+        if (cancelled) return;
+        setSignals(nextSignals);
+        setHypotheses(nextHypotheses);
+      })
+      .catch((cause: unknown) => {
+        if (cancelled) return;
+        setError(
+          cause instanceof ApiError
+            ? cause.message
+            : "Không tải được kết quả điều tra.",
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runId]);
+
+  const signalById = useMemo(
+    () => new Map(signals.map((signal) => [signal.signal_id, signal])),
+    [signals],
+  );
+
+  const describeSignal = (signalId: string) => {
+    const signal = signalById.get(signalId);
+    if (!signal) return signalId;
+    const score = signal.score.toFixed(2);
+    return `${signal.explanation_code} · ${signal.target_id} (điểm ${score})`;
+  };
+
+  const sendFeedback = async (label: AnomalyFeedbackLabel) => {
+    setSending(true);
+    try {
+      await api.submitAnomalyFeedback(runId, { feedback_label: label });
+      setSent(label);
+    } catch (cause) {
+      setError(
+        cause instanceof ApiError ? cause.message : "Không gửi được phản hồi.",
+      );
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <section className="panel investigation-panel">
+      <div className="panel-heading">
+        <div>
+          <span className="eyebrow">ĐIỀU TRA NGUYÊN NHÂN GỐC</span>
+          <h3>Giả thuyết từ agent</h3>
+        </div>
+        <span className="panel-caption">
+          {signals.length} tín hiệu · {hypotheses.length} giả thuyết
+        </span>
+      </div>
+
+      {loading ? (
+        <p className="investigation-note">Đang tải kết quả điều tra…</p>
+      ) : error ? (
+        <p className="investigation-note error">{error}</p>
+      ) : hypotheses.length === 0 ? (
+        <p className="investigation-note">
+          Chưa có giả thuyết nào cho lần chạy này. Agent điều tra chỉ chạy khi bộ
+          phát hiện thống kê tìm thấy tín hiệu bất thường.
+        </p>
+      ) : (
+        <div className="hypothesis-list">
+          {hypotheses.map((hypothesis) => (
+            <article className="hypothesis" key={hypothesis.id}>
+              <div className="hypothesis-top">
+                <span className="hypothesis-type">
+                  {HYPOTHESIS_LABEL[hypothesis.hypothesis_type] ??
+                    hypothesis.hypothesis_type.replaceAll("_", " ")}
+                </span>
+                {hypothesis.fallback_used && (
+                  <span className="hypothesis-fallback" title="Agent phải dùng đường lui, độ tin cậy thấp hơn bình thường">
+                    đường lui
+                  </span>
+                )}
+                <span className="hypothesis-confidence">
+                  <span className="hc-track">
+                    <span style={{ width: `${Math.round(hypothesis.confidence * 100)}%` }} />
+                  </span>
+                  <strong>{Math.round(hypothesis.confidence * 100)}%</strong>
+                </span>
+              </div>
+
+              <p className="hypothesis-summary">{hypothesis.summary}</p>
+
+              <div className="hypothesis-evidence">
+                <div className="he-block">
+                  <h5>Bằng chứng ủng hộ</h5>
+                  {hypothesis.supporting_signal_ids.length === 0 ? (
+                    <p className="he-empty">Không có</p>
+                  ) : (
+                    <ul>
+                      {hypothesis.supporting_signal_ids.map((id) => (
+                        <li key={id}>{describeSignal(id)}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div className="he-block against">
+                  <h5>Bằng chứng phản bác</h5>
+                  {hypothesis.contradicting_signal_ids.length === 0 ? (
+                    <p className="he-empty">Không có</p>
+                  ) : (
+                    <ul>
+                      {hypothesis.contradicting_signal_ids.map((id) => (
+                        <li key={id}>{describeSignal(id)}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+
+              {hypothesis.recommended_checks.length > 0 && (
+                <div className="hypothesis-actions-block">
+                  <h5>Nên kiểm tra tiếp</h5>
+                  <ol>
+                    {hypothesis.recommended_checks.map((check) => (
+                      <li key={check}>{check}</li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+
+              {(hypothesis.limitations || hypothesis.missing_evidence) && (
+                <p className="hypothesis-limits">
+                  {hypothesis.limitations}
+                  {hypothesis.limitations && hypothesis.missing_evidence ? " " : ""}
+                  {hypothesis.missing_evidence
+                    ? `Còn thiếu: ${hypothesis.missing_evidence}`
+                    : ""}
+                </p>
+              )}
+            </article>
+          ))}
+
+          {canOperate && (
+            <div className="feedback-bar">
+              <span className="feedback-label">Kết luận của bạn về lần điều tra này</span>
+              {sent ? (
+                <span className="feedback-sent">
+                  Đã ghi nhận:{" "}
+                  {FEEDBACK_CHOICES.find((choice) => choice.label === sent)?.text ?? sent}
+                </span>
+              ) : (
+                <div className="feedback-buttons">
+                  {FEEDBACK_CHOICES.map((choice) => (
+                    <button
+                      key={choice.label}
+                      type="button"
+                      className="button secondary"
+                      disabled={sending}
+                      onClick={() => void sendFeedback(choice.label)}
+                    >
+                      {choice.text}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function RunsPage({
   activeRun,
   results,
@@ -3062,6 +3908,7 @@ function RunsPage({
   busy,
   canOperate,
   onRun,
+  graphPanel,
 }: {
   activeRun: DqRun | null;
   results: DqResult[];
@@ -3070,6 +3917,8 @@ function RunsPage({
   busy: boolean;
   canOperate: boolean;
   onRun: () => void;
+  /** Graph 2 node detail, wired by App. */
+  graphPanel?: ReactNode;
 }) {
   return (
     <>
@@ -3110,6 +3959,7 @@ function RunsPage({
         </section>
       ) : (
         <>
+          {graphPanel}
           <div className="run-hero">
             <div>
               <span className="eyebrow">LATEST RUN</span>
@@ -3253,11 +4103,7 @@ function RunsPage({
                     >
                       {result.failed_count.toLocaleString()}
                     </strong>
-                    <code>
-                      {result.failed_row_ids.length
-                        ? result.failed_row_ids.join(", ")
-                        : "—"}
-                    </code>
+                    <FailedRowIds ids={result.failed_row_ids} />
                   </div>
                 ))}
               </div>
@@ -3267,6 +4113,8 @@ function RunsPage({
               </div>
             )}
           </div>
+          {/* The root-cause panel used to live here, but it renders Graph 3's
+              output while this page is Graph 2's. It now sits in step 5. */}
         </>
       )}
     </>
@@ -3759,372 +4607,6 @@ function rowHasQualityIssue(row: DatasetRow) {
       row.pickup_at && row.dropoff_at && row.pickup_at > row.dropoff_at,
     ) ||
     !row.vendor_id
-  );
-}
-
-function DataExplorerPage({ dataset }: { dataset?: Dataset }) {
-  const [query, setQuery] = useState<DatasetRowQuery>({
-    quality_status: "ALL",
-    sort_by: "pickup_at",
-    sort_direction: "desc",
-    limit: 25,
-    offset: 0,
-  });
-  const [response, setResponse] = useState<DatasetRowsResponse | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [queryError, setQueryError] = useState("");
-  const [filtersOpen, setFiltersOpen] = useState(false);
-
-  const loadRows = useCallback(
-    async (nextQuery: DatasetRowQuery) => {
-      if (!dataset) return;
-      setBusy(true);
-      setQueryError("");
-      try {
-        setResponse(await api.queryDatasetRows(dataset.id, nextQuery));
-        setQuery(nextQuery);
-      } catch (requestError) {
-        setQueryError(
-          getErrorMessage(requestError, "Unable to query dataset rows."),
-        );
-      } finally {
-        setBusy(false);
-      }
-    },
-    [dataset],
-  );
-
-  useEffect(() => {
-    if (dataset) void loadRows(query);
-  }, [dataset, loadRows]);
-  const page = response ? Math.floor(response.offset / response.limit) + 1 : 1;
-  const pageCount = response
-    ? Math.max(1, Math.ceil(response.total / response.limit))
-    : 1;
-  const updateFilter = (
-    key: keyof DatasetRowQuery,
-    value: string | number | undefined,
-  ) => setQuery((current) => ({ ...current, [key]: value, offset: 0 }));
-  const activeFilterCount = [
-    query.quality_status !== "ALL",
-    Boolean(query.vendor_id),
-    Boolean(query.payment_type),
-    query.min_distance !== undefined,
-    query.max_distance !== undefined,
-    query.sort_by !== "pickup_at",
-  ].filter(Boolean).length;
-  const filterSummary = [
-    query.quality_status === "ALL"
-      ? "All rows"
-      : query.quality_status === "ISSUE"
-        ? "Issues only"
-        : "Valid only",
-    query.vendor_id ? `Vendor: ${query.vendor_id}` : "Any vendor",
-    query.payment_type ? `Payment: ${query.payment_type}` : "Any payment",
-  ].join(" · ");
-
-  return (
-    <>
-      <div className="page-heading data-explorer-heading">
-        <div>
-          <span className="eyebrow">BOUNDED READ ACCESS</span>
-          <h1>Data explorer</h1>
-          <p>
-            Inspect a safe field projection with server-side filters and
-            pagination.
-          </p>
-        </div>
-        <span className="data-count">
-          {response?.total.toLocaleString() ?? "—"}
-          <small>matching rows</small>
-        </span>
-      </div>
-      <section
-        className={`panel filter-panel ${filtersOpen ? "is-open" : "is-collapsed"}`}
-      >
-        <div className="filter-toolbar">
-          <div className="filter-toolbar-copy">
-            <span className="eyebrow">QUERY CONTROLS</span>
-            <button
-              type="button"
-              className="filter-toggle"
-              aria-expanded={filtersOpen}
-              aria-controls="data-explorer-filters"
-              onClick={() => setFiltersOpen((open) => !open)}
-            >
-              <span className="filter-toggle-icon" aria-hidden="true">
-                {filtersOpen ? "−" : "+"}
-              </span>
-              <span>{filtersOpen ? "Hide filters" : "Filter rows"}</span>
-            </button>
-            {!filtersOpen && (
-              <span className="filter-summary">{filterSummary}</span>
-            )}
-          </div>
-          <div className="filter-toolbar-state">
-            <span
-              className={
-                activeFilterCount
-                  ? "filter-active-count"
-                  : "filter-default-state"
-              }
-            >
-              {activeFilterCount
-                ? `${activeFilterCount} active`
-                : "Default view"}
-            </span>
-            <span>Read-only</span>
-          </div>
-        </div>
-        {filtersOpen && (
-          <form
-            id="data-explorer-filters"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void loadRows({ ...query, offset: 0 });
-            }}
-          >
-            <label>
-              Quality
-              <select
-                value={query.quality_status}
-                onChange={(event) =>
-                  updateFilter("quality_status", event.target.value)
-                }
-              >
-                <option value="ALL">All rows</option>
-                <option value="ISSUE">Issues only</option>
-                <option value="VALID">Valid only</option>
-              </select>
-            </label>
-            <label>
-              Vendor
-              <select
-                value={query.vendor_id ?? ""}
-                onChange={(event) =>
-                  updateFilter("vendor_id", event.target.value || undefined)
-                }
-              >
-                <option value="">Any vendor</option>
-                <option>Curb Mobility, LLC</option>
-                <option>Creative Mobile Technologies, LLC</option>
-                <option>Unknown Vendor</option>
-              </select>
-            </label>
-            <label>
-              Payment
-              <select
-                value={query.payment_type ?? ""}
-                onChange={(event) =>
-                  updateFilter("payment_type", event.target.value || undefined)
-                }
-              >
-                <option value="">Any payment</option>
-                <option>Flex Fare trip</option>
-                <option>Credit card</option>
-                <option>Cash</option>
-                <option>No charge</option>
-                <option>Dispute</option>
-                <option>Invalid Payment (Dispute/Test)</option>
-              </select>
-            </label>
-            <label>
-              Min distance
-              <input
-                type="number"
-                step="0.1"
-                value={query.min_distance ?? ""}
-                onChange={(event) =>
-                  updateFilter(
-                    "min_distance",
-                    event.target.value === ""
-                      ? undefined
-                      : Number(event.target.value),
-                  )
-                }
-                placeholder="No minimum"
-              />
-            </label>
-            <label>
-              Max distance
-              <input
-                type="number"
-                step="0.1"
-                value={query.max_distance ?? ""}
-                onChange={(event) =>
-                  updateFilter(
-                    "max_distance",
-                    event.target.value === ""
-                      ? undefined
-                      : Number(event.target.value),
-                  )
-                }
-                placeholder="No maximum"
-              />
-            </label>
-            <label>
-              Sort by
-              <select
-                value={query.sort_by}
-                onChange={(event) =>
-                  updateFilter("sort_by", event.target.value)
-                }
-              >
-                <option value="pickup_at">Pickup time</option>
-                <option value="trip_distance">Distance</option>
-                <option value="fare_amount">Fare</option>
-                <option value="total_amount">Total</option>
-              </select>
-            </label>
-            <button className="button primary filter-apply" disabled={busy}>
-              {busy ? "Querying…" : "Apply filters"}
-            </button>
-          </form>
-        )}
-        {filtersOpen && (
-          <div className="filter-note">
-            Read-only · up to 100 rows
-          </div>
-        )}
-      </section>
-      {queryError && (
-        <div className="alert error">
-          <strong>Query failed</strong>
-          <span>{queryError}</span>
-        </div>
-      )}
-      <section className="panel data-panel">
-        <div className="panel-heading">
-          <div>
-            <span className="eyebrow">QUERY RESULT</span>
-            <h3>Dataset rows</h3>
-          </div>
-          <span className="panel-caption">
-            page {page} / {pageCount}
-          </span>
-        </div>
-        {busy && !response ? (
-          <div className="data-skeleton">
-            Loading bounded dataset projection…
-          </div>
-        ) : response?.rows.length ? (
-          <div className="data-table-wrap">
-            <table className="data-table">
-              <colgroup>
-                <col className="data-col-status" />
-                <col className="data-col-row-id" />
-                <col className="data-col-pickup" />
-                <col className="data-col-vendor" />
-                <col className="data-col-payment" />
-                <col className="data-col-number" />
-                <col className="data-col-number" />
-                <col className="data-col-number" />
-              </colgroup>
-              <thead>
-                <tr>
-                  <th>Status</th>
-                  <th>Row ID</th>
-                  <th>Pickup</th>
-                  <th>Vendor</th>
-                  <th>Payment</th>
-                  <th>Distance</th>
-                  <th>Fare</th>
-                  <th>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {response.rows.map((row) => {
-                  const issue = rowHasQualityIssue(row);
-                  return (
-                    <tr key={row.source_row_id}>
-                      <td>
-                        <StatusPill
-                          label={issue ? "ISSUE" : "VALID"}
-                          tone={issue ? "warning" : "success"}
-                        />
-                      </td>
-                      <td>
-                        <code>{row.source_row_id}</code>
-                      </td>
-                      <td
-                        title={
-                          row.pickup_at
-                            ? new Date(row.pickup_at).toLocaleString()
-                            : undefined
-                        }
-                      >
-                        {row.pickup_at
-                          ? new Date(row.pickup_at).toLocaleString()
-                          : "—"}
-                      </td>
-                      <td title={row.vendor_id}>{row.vendor_id ?? "—"}</td>
-                      <td title={row.payment_type}>
-                        {row.payment_type ?? "—"}
-                      </td>
-                      <td
-                        className={
-                          (row.trip_distance ?? 0) < 0 ? "metric-warn" : ""
-                        }
-                      >
-                        {row.trip_distance?.toFixed(2) ?? "—"}
-                      </td>
-                      <td
-                        className={
-                          (row.fare_amount ?? 0) < 0 ? "metric-warn" : ""
-                        }
-                      >
-                        {row.fare_amount?.toFixed(2) ?? "—"}
-                      </td>
-                      <td>{row.total_amount?.toFixed(2) ?? "—"}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="table-empty">No rows match the current filters.</div>
-        )}
-        <div className="pagination">
-          <button
-            className="button ghost"
-            disabled={!response || response.offset === 0 || busy}
-            onClick={() =>
-              void loadRows({
-                ...query,
-                offset: Math.max(
-                  0,
-                  (response?.offset ?? 0) - (response?.limit ?? 25),
-                ),
-              })
-            }
-          >
-            ← Previous
-          </button>
-          <span>
-            {response
-              ? `${response.offset + 1}–${Math.min(response.offset + response.limit, response.total)} of ${response.total.toLocaleString()}`
-              : "No result"}
-          </span>
-          <button
-            className="button ghost"
-            disabled={
-              !response ||
-              response.offset + response.limit >= response.total ||
-              busy
-            }
-            onClick={() =>
-              void loadRows({
-                ...query,
-                offset: (response?.offset ?? 0) + (response?.limit ?? 25),
-              })
-            }
-          >
-            Next →
-          </button>
-        </div>
-      </section>
-    </>
   );
 }
 
