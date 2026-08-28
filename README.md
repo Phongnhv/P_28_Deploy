@@ -1,171 +1,328 @@
-# RidePulse DQ - AI Data Quality Agent
+# DataPulse
 
-## 1. Project Overview
-RidePulse DQ là một hệ thống AI Agent chuyên trách đánh giá và kiểm soát chất lượng dữ liệu (Data Quality) tự động. Hệ thống có khả năng tự động phân tích dữ liệu (profiling), đề xuất các luật kiểm tra (Data Quality Rules) thông qua suy luận của LLM, và thực thi các bộ test sinh ra một cách độc lập để phát hiện các điểm dị thường (anomalies) trong dữ liệu.
+DataPulse là nền tảng Data Quality dùng AI để tiếp nhận dataset CSV/Parquet, tạo phiên bản dữ liệu bất biến, profiling schema, đề xuất rule có Human-in-the-loop, thực thi kiểm thử và tạo báo cáo phân tích bất thường cho Data Steward.
 
-## 2. Architecture & Data Flow
+Ứng dụng hỗ trợ dataset tổng quát; đường chạy versioned không phụ thuộc schema taxi. Một số tên kỹ thuật `ridepulse-*` vẫn được giữ cho cloud resource, database role và browser storage key nhằm tương thích với deployment hiện tại.
+
+## Tính năng chính
+
+- Đăng nhập theo vai trò `USER`, `STEWARD`, `ADMIN`.
+- Upload CSV/Parquet với checksum, idempotency và immutable dataset versions.
+- Lưu source artifact trên MinIO khi chạy local hoặc Google Cloud Storage khi deploy.
+- Profiling schema, row count, completeness, uniqueness và duplicate rate.
+- Graph 1: profiling, semantic understanding, review gate và đề xuất rule.
+- Data Steward duyệt, từ chối hoặc chỉnh sửa rule trước khi chạy.
+- Graph 2: sinh test, validate, thực thi rule và lưu kết quả.
+- Graph 3: phát hiện anomaly, tạo hypothesis khi đủ bằng chứng và sinh báo cáo Markdown.
+- Durable jobs cho import, Graph 1 continuation và Graph 2/3.
+- Khôi phục run/report sau khi reload trình duyệt.
+- Dataset lineage, governed artifacts và audit events trên PostgreSQL/Supabase.
+- Tài khoản demo Steward được điền sẵn cho giám khảo và có quota ghi phía backend.
+
+## Kiến trúc
 
 ```mermaid
-graph TD
-    subgraph Client_Layer["Client / UI Layer"]
-        UI[React / Vite Web App]
-        CLI[CLI Runner]
-    end
-
-    subgraph Backend_Layer["Backend / API Layer"]
-        API[FastAPI Gateway]
-        Worker[Local Worker API]
-    end
-
-    subgraph Agent_Layer["Agent Logic & Orchestration"]
-        LG[LangGraph StateGraph]
-        Run1[Proposal Graph: Profiler, Proposer, HITL]
-        Run2[Execution Graph: Test Gen, Validate, Runner, Anomaly]
-        LG --> Run1
-        LG --> Run2
-    end
-
-    subgraph LLM_Layer["External AI & LLMs"]
-        LLM[OpenAI / Anthropic / Google GenAI / MistralAI]
-    end
-
-    subgraph Data_Layer["Data & Storage Layer"]
-        DB[(PostgreSQL / SQLite)]
-        VectorDB[(ChromaDB)]
-        MinIO[(MinIO Object Storage)]
-    end
-
-    UI -- "HTTP/REST" --> API
-    CLI -- "Execute" --> LG
-    API --> LG
-    Run1 -- "Predict / Repair" --> LLM
-    Run2 -- "Predict / Repair" --> LLM
-    LG -- "Query / Persist" --> DB
-    LG -- "Similarity / Store" --> VectorDB
-    Worker -- "Access" --> DB
+flowchart LR
+    User[Data Steward / Admin] --> FE[React + Vite frontend]
+    FE -->|REST, session cookie, CSRF| API[FastAPI API]
+    API -->|persist durable job| DB[(Supabase PostgreSQL)]
+    API -->|dispatch job ID| Worker[DataPulse worker]
+    Worker --> G1[Graph 1<br/>Profile + Semantic + Rules]
+    Worker --> G23[Graph 2/3<br/>Tests + Anomaly + Report]
+    G1 --> LLM[OpenAI]
+    G23 --> LLM
+    Worker <--> DB
+    Worker <--> Storage[(GCS / MinIO)]
+    FE -->|poll / SSE| API
 ```
 
-### Data Flow
-- **Flow 1 (Proposal):** `User/CLI -> Backend -> Proposal Graph (LangGraph) -> Profiler -> LLM (Propose Rules) -> HITL Gate -> PostgreSQL -> User`
-- **Flow 2 (Execution):** `User/CLI -> Backend -> Execution Graph (LangGraph) -> Generate Tests via LLM -> Validate SQL -> Run on Data -> Detect Anomalies -> Save Report -> User`
+Xem thiết kế chi tiết, data flow, deployment và trust boundaries tại [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## 3. Tech Stack
-- **Frontend / UI:** React, Vite, TypeScript
-- **Backend / API Gateway:** FastAPI, Uvicorn, Python 3.11+
-- **Agent Framework:** LangChain, LangGraph
-- **AI / LLMs:** OpenAI, Anthropic, MistralAI, Google GenAI
-- **Database & Storage:** PostgreSQL, SQLite (Dev), MinIO, SQLAlchemy, Alembic
-- **Vector Database:** ChromaDB
-- **Infrastructure:** Docker, Docker Compose
+## Công nghệ
 
-## 4. Environment Variables
+| Lớp | Công nghệ |
+|---|---|
+| Frontend | React, TypeScript, Vite, Recharts |
+| API | FastAPI, Pydantic, SQLAlchemy |
+| Agent orchestration | LangGraph, LangChain |
+| AI provider | OpenAI; adapter cho Anthropic, Mistral và Google |
+| Database | PostgreSQL/Supabase; SQLite cho test/local compatibility |
+| Data execution | pandas, dbt Core, dbt-postgres |
+| Object storage | Google Cloud Storage; MinIO khi chạy Docker local |
+| Deployment | Vercel, Google Cloud Run, Cloud Run Job, Artifact Registry |
+| Testing | pytest, Ruff, TypeScript build, browser E2E |
 
-Hệ thống yêu cầu các biến môi trường sau. Tạo file `.env` bằng cách sao chép từ `.env.example` và điền đầy đủ giá trị.
+## Cấu trúc repository
 
-### LLM Configuration
+```text
+.
+├── frontend/                 React/Vite application
+├── src/
+│   ├── agents/              LangGraph graphs, states và nodes
+│   ├── api/                 FastAPI routes và dependencies
+│   ├── models/              ORM và API schemas
+│   └── services/            Dataset, jobs, rules, analysis và storage
+├── scripts/migrations/      Ordered PostgreSQL migrations
+├── dbt_project/             dbt project và generated test integration
+├── tests/                   Unit, contract và integration tests
+├── docs/                    Contract và runbook còn hiệu lực
+├── Dockerfile               Image dùng chung cho API và worker
+├── docker-compose.yml       PostgreSQL + MinIO + API + local worker
+└── ARCHITECTURE.md          Kiến trúc hệ thống và deployment
+```
 
-| Variable | Required | Description | Example / Placeholder |
-|---|---|---|---|
-| `OPENAI_API_KEY` | ✅ (nếu dùng OpenAI) | API Key cho OpenAI LLMs | `sk-your-openai-api-key-here` |
-| `ANTHROPIC_API_KEY` | ⚪ (nếu dùng Anthropic) | API Key cho Claude | `sk-ant-your-key-here` |
-| `MISTRAL_API_KEY` | ⚪ (nếu dùng Mistral) | API Key cho MistralAI | `your-mistral-key-here` |
-| `GOOGLE_API_KEY` | ⚪ (nếu dùng Google) | API Key cho Google GenAI | `your-google-key-here` |
-| `PROVIDER` | ⚪ | LLM provider đang dùng (`openai`/`anthropic`/`mistral`/`google`) | `openai` |
-| `AGENT_MODE` | ⚪ | Chế độ chạy agent (`mock` để test, `graph` để chạy thật) | `graph` |
+## Yêu cầu
 
-### Database & Storage
+- Python 3.11 trở lên.
+- Node.js 20 trở lên.
+- Docker Desktop nếu chạy stack local đầy đủ.
+- PostgreSQL/Supabase cho production-like mode.
+- OpenAI API key nếu chạy agent thật.
+- GCS credentials hoặc Application Default Credentials khi dùng GCS local.
 
-| Variable | Required | Description | Example / Placeholder |
-|---|---|---|---|
-| `DATABASE_URL` | ✅ | Kết nối Database chính (PostgreSQL hoặc SQLite) | `sqlite:///steward_local.db` |
-| `RUNNER_DATABASE_URL` | ⚪ | Kết nối DB cho Worker (tách biệt quyền truy cập) | `sqlite:///steward_local.db` |
-| `SUPABASE_DATABASE_URL` | ⚪ | URL Supabase DB (môi trường production) | `postgresql://user:pass@db.supabase.co:5432/postgres` |
-| `DQ_EXECUTION_BACKEND` | ⚪ | Backend thực thi DQ (`auto`/`local`/`supabase`) | `auto` |
-| `MINIO_URL` | ⚪ | Endpoint MinIO Object Storage | `http://localhost:9000` |
-| `MINIO_ACCESS_KEY` | ⚪ | Access key cho MinIO | `minioadmin` |
-| `MINIO_SECRET_KEY` | ⚪ | Secret key cho MinIO | `miniopassword` |
+## Cấu hình môi trường
 
-### App & Networking
+Sao chép `.env.example` thành `.env`, sau đó điền giá trị phù hợp. Không commit `.env`.
 
-| Variable | Required | Description | Example / Placeholder |
-|---|---|---|---|
-| `APP_ENV` | ✅ | Môi trường triển khai (`local`/`development`/`production`) | `local` |
-| `FRONTEND_ORIGIN` | ✅ | Danh sách domain cho phép CORS (phân tách bằng dấu phẩy) | `http://localhost:3000,http://localhost:5173` |
-| `LOCAL_WORKER_URL` | ⚪ | URL của Local Worker API (thay thế Cloud Run khi phát triển) | `http://localhost:8001/run` |
+### Backend production-like
 
-### Observability & Logging
+| Biến | Ý nghĩa |
+|---|---|
+| `APP_ENV` | `local`, `development`, `test` hoặc `production` |
+| `DATABASE_URL` | Control-plane database chứa jobs, runs và metadata |
+| `SUPABASE_DATABASE_URL` | Dataset execution database; bản deploy hiện tại phải cùng target với `DATABASE_URL` |
+| `PROVIDER` | LLM provider, deployment mặc định dùng `openai` |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `OPENAI_MODEL` | Model OpenAI được sử dụng |
+| `AGENT_MODE` | Đặt `graph` để chạy workflow thật |
+| `DQ_EXECUTION_BACKEND` | `supabase`, `local` hoặc `auto` |
+| `FRONTEND_ORIGIN` | Danh sách origin được phép gọi API |
+| `OBJECT_STORAGE_PROVIDER` | `gcs` hoặc `s3`; MinIO dùng API tương thích S3 |
+| `OBJECT_STORAGE_BUCKET` | Bucket chứa source, dbt và report artifacts |
 
-| Variable | Required | Description | Example / Placeholder |
-|---|---|---|---|
-| `LANGCHAIN_API_KEY` | ⚪ | Key LangSmith tracing | `ls-your-langsmith-key-here` |
-| `LANGCHAIN_TRACING_V2` | ⚪ | Bật LangSmith tracing | `true` |
-| `LANGCHAIN_PROJECT` | ⚪ | Tên project trên LangSmith | `ridepulse-dq` |
-| `AI_LOG_SERVER` | ⚪ | Server nhận AI hook logs (do instructor cung cấp) | `https://ai-logs.example.com/api/ingest` |
-| `AI_LOG_API_KEY` | ⚪ | API key cho AI log server | `your-ai-log-key-here` |
-| `AI_LOG_DIR` | ⚪ | Thư mục lưu log file cục bộ | `.ai-log` |
+Production hiện chạy `PROVIDER=openai`, `AGENT_MODE=graph` và
+`DQ_EXECUTION_BACKEND=supabase`. Khi không đặt `OPENAI_MODEL`, adapter OpenAI
+dùng mặc định `gpt-5.6-luna`.
 
-> [!CAUTION]
-> **Tuyệt đối không commit file `.env` hoặc để lộ bất kỳ token/key thực nào lên git.**
+Production yêu cầu ba demo-account secret độc lập:
 
-## 5. Setup & Installation Guide
+```text
+DEMO_USER_PASSWORD
+DEMO_STEWARD_PASSWORD
+DEMO_ADMIN_PASSWORD
+```
 
-### Backend & Agent
-1. **Clone repository và vào thư mục dự án:**
-   ```bash
-   git clone <repo_url>
-   cd <project_dir>
-   ```
-2. **Thiết lập môi trường Python:**
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # Trên Windows: venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
-3. **Cấu hình môi trường:**
-   Tạo file `.env` từ `.env.example`:
-   ```bash
-   cp .env.example .env
-   ```
-   Cập nhật `OPENAI_API_KEY` và các biến cần thiết khác.
-4. **Khởi chạy hạ tầng qua Docker Compose:**
-   ```bash
-   docker-compose up -d db minio
-   ```
-5. **Chạy FastAPI Server (Development):**
-   ```bash
-   uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
-   ```
-   *(Hoặc có thể chạy bằng Docker Compose đầy đủ: `docker-compose up --build`)*
+Ngoài ba tài khoản nội bộ trên, hệ thống seed tài khoản công khai dành cho
+giám khảo: `demo-steward` / `ridepulse-demo-2026`. Đây không phải secret và bị
+giới hạn trong rolling window 24 giờ: 40 mutation API, 3 upload, 3 lần bắt đầu
+profiling và 2 lần bắt đầu analysis. Quota được ghi trong `audit_events`, nên
+dùng nhiều tab hoặc máy khác vẫn dùng chung hạn mức. Có thể đổi mật khẩu demo
+bằng `DEMO_STEWARD_DEMO_PASSWORD`, đồng thời phải cập nhật
+`VITE_DEMO_STEWARD_PASSWORD` cho frontend.
+
+Local có thể dùng username làm password cho database mới; production fail-fast nếu thiếu secret.
 
 ### Frontend
-1. **Vào thư mục frontend và cài đặt dependencies:**
-   ```bash
-   cd frontend
-   npm install  # hoặc pnpm install
-   ```
-2. **Khởi chạy ứng dụng Frontend:**
-   ```bash
-   npm run dev
-   ```
 
-## 6. Sample Queries / Test Scenarios
+Tạo `frontend/.env.local`:
 
-Dưới đây là các kịch bản chạy Agent chính thông qua CLI script (`src/main.py`), thể hiện rõ luồng xử lý Agent tự động:
+```env
+VITE_USE_MOCK_API=false
+VITE_API_BASE_URL=http://127.0.0.1:8000
+VITE_WORKSPACE_ID=ws-browser
+```
 
-- **Kịch bản 1: Đề xuất luật Data Quality (Run 1 - Proposal)**
-  ```bash
-  python src/main.py 1
-  ```
-  *Luồng xử lý ngầm:* Kích hoạt `Proposal Graph`. Hệ thống sẽ lấy dữ liệu (`yellow_tripdata`), thực hiện profiling bằng Tool, đẩy metadata thu thập được sang LLM để tự động sinh ra các luật kiểm tra (Data Quality Rules) tối ưu nhất, sau đó lưu vào PostgreSQL và chờ con người phê duyệt (Human-in-the-loop).
+Không đặt backend secret trong biến `VITE_*` vì chúng được bundle vào trình duyệt.
+`VITE_WORKSPACE_ID` là workspace logic của ứng dụng (production mặc định
+`ws-browser`), không phải browser ID hay ID của từng máy người dùng.
 
-- **Kịch bản 2: Thực thi kiểm thử tự động (Run 2 - Execution)**
-  ```bash
-  python src/main.py 2
-  ```
-  *Luồng xử lý ngầm:* Kích hoạt `Execution Graph`. Agent truy xuất các luật đã được duyệt từ DB, dùng LLM sinh mã SQL test (nếu sinh SQL lỗi hệ thống sẽ tự đưa vào *LLM Repair Node* để sửa lỗi), chạy SQL trực tiếp trên dataset, dùng LLM dò tìm và đánh giá các điểm dị thường (Anomaly Detector), cuối cùng lưu kết quả và xuất báo cáo.
+## Chạy nhanh bằng Docker
 
-- **Kịch bản 3: Chạy toàn bộ (End-to-End Pipeline)**
-  ```bash
-  python src/main.py all
-  ```
-  *Luồng xử lý ngầm:* Tự động kết hợp Run 1, giả lập thao tác phê duyệt (Approve) toàn bộ rules từ AI đề xuất, tiếp tục tự động đẩy vào Run 2 để sinh SQL, thực thi kiểm thử và xuất báo cáo kết quả cuối cùng.
+Với database local mới hoàn toàn và không có dữ liệu cần giữ, chạy trình khởi tạo sau. Lệnh này gọi `docker compose down -v`, vì vậy **sẽ xóa volume PostgreSQL/MinIO local hiện có**:
+
+```bash
+python scripts/reset_db.py
+```
+
+Với database local đã được migrate, chỉ cần khởi động hoặc build lại stack:
+
+```bash
+docker compose up --build
+```
+
+| Service | URL/port |
+|---|---|
+| PostgreSQL | `localhost:5432` |
+| MinIO API | `http://localhost:9000` |
+| MinIO Console | `http://localhost:9001` |
+| FastAPI | `http://localhost:8000` |
+| Local worker API | `http://localhost:8001` |
+
+Chạy frontend ở terminal khác:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Mở `http://127.0.0.1:5173`.
+
+## Chạy thủ công
+
+### Backend
+
+```bash
+python -m venv .venv
+```
+
+Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python -m uvicorn src.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+macOS/Linux:
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+python -m uvicorn src.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+### Local worker
+
+```bash
+python -m uvicorn src.local_worker_api:app --host 127.0.0.1 --port 8001
+```
+
+Local worker nhận durable job ID rồi spawn `python -m src.worker` trong process riêng.
+
+## Database migrations
+
+Migration nằm trong `scripts/migrations/` và phải chạy theo thứ tự được xác định bởi contract; không chạy mù theo tên file vì `008_rollback_split_schemas.sql` là rollback và `009`/`010` có phạm vi riêng.
+
+- `scripts/reset_db.py` chỉ dành cho database Docker local có thể xóa hoàn toàn.
+- Không dùng `reset_db.py` với database cloud hoặc database local chứa dữ liệu cần giữ.
+- Kiểm tra schema trước khi chạy migration.
+- Production chỉ áp dụng migration additive đã review.
+- Sao lưu hoặc giữ database/revision cũ để rollback.
+
+Tài liệu liên quan:
+
+- [Data model](docs/DATA_MODEL.md)
+- [Supabase dataset contract](docs/SUPABASE_DATASET_CONTRACT.md)
+- [Schema split report](docs/SCHEMA_SPLIT_REPORT.md)
+
+## Workflow E2E
+
+```text
+Login
+→ Upload CSV/Parquet
+→ Immutable dataset version
+→ Profiling
+→ Graph 1 semantic review
+→ Review/approve rules
+→ Graph 2 test execution
+→ Graph 3 anomaly analysis
+→ Governed Markdown report
+→ Reload/rerun history
+```
+
+Durable job types:
+
+```text
+INGEST_PROFILE
+GRAPH1_EXECUTION
+GRAPH1_CONTINUATION
+ANALYSIS_GRAPH2_GRAPH3
+```
+
+## Kiểm thử
+
+Backend:
+
+```bash
+python -m ruff check src tests
+python -m pytest -q
+```
+
+Frontend:
+
+```bash
+cd frontend
+npm run build
+```
+
+Docker image:
+
+```bash
+docker build -t datapulse:local .
+docker run --rm datapulse:local python -c "import src.main; import src.worker"
+```
+
+Browser E2E phải xác nhận:
+
+- `VITE_USE_MOCK_API=false`.
+- Network request đi tới API thật.
+- Upload trùng không tạo HTTP 500 hoặc orphan object.
+- Semantic review dispatch continuation thành công.
+- Graph 2 không phát sinh lỗi ép kiểu cross-field.
+- Report tồn tại sau reload.
+
+## Deployment
+
+```mermaid
+flowchart LR
+    Browser --> Vercel[DataPulse frontend<br/>Vercel]
+    Vercel --> API[Cloud Run service<br/>ridepulse-api]
+    API --> Job[Cloud Run Job<br/>ridepulse-worker]
+    API <--> Supabase[(Supabase PostgreSQL)]
+    Job <--> Supabase
+    Job <--> GCS[(Google Cloud Storage)]
+    Job --> OpenAI[OpenAI API]
+```
+
+Cloud resource vẫn dùng tên legacy `ridepulse-*` để tránh downtime do đổi tên tài nguyên. Đổi tên sản phẩm sang DataPulse không yêu cầu đổi URL, bucket hoặc service account.
+
+Trình tự deploy:
+
+1. Chạy regression và build image theo commit SHA.
+2. Push image lên Artifact Registry.
+3. Tạo/update Cloud Run Job worker bằng image digest đó.
+4. Deploy Cloud Run API bằng cùng image digest.
+5. Kiểm tra `/api/v1/status` và worker dispatch.
+6. Deploy frontend Vercel với mock tắt.
+7. Chạy cloud smoke dataset nhỏ, sau đó full E2E.
+8. Giữ revision, image và secret version cũ để rollback.
+
+## Security
+
+- Secret được lưu trong Secret Manager hoặc `.env` local, không nằm trong Git.
+- Session cookie production dùng `Secure` và cross-site configuration phù hợp.
+- Request thay đổi trạng thái yêu cầu CSRF token.
+- Dataset version và profile run tạo lineage bất biến.
+- Source/report artifact được gắn với dataset version và run.
+- Raw/sample rows phải được giới hạn và kiểm soát quyền.
+- Audit events không chứa secret hoặc raw PII.
+
+## Tài liệu
+
+- [Architecture](ARCHITECTURE.md)
+- [API contract](docs/API_CONTRACT.md)
+- [Product specification](docs/PRODUCT_SPEC.md)
+- [Data model](docs/DATA_MODEL.md)
+- [Local runbook](docs/RUNBOOK_LOCALHOST.md)
+- [Supabase dataset contract](docs/SUPABASE_DATASET_CONTRACT.md)
+- [Anomaly detection](docs/anomaly_detection_mechanism.md)
+- [Evaluation evidence](docs/EVAL_EVIDENCES.md)
+
+## Production endpoints
+
+- Frontend: `https://c3-app-028.vercel.app`
+- Backend: `https://ridepulse-api-gbnhdahaya-as.a.run.app`
+- Health: `GET /api/v1/status`
+
+Các URL có thể thay đổi theo revision hoặc custom domain; luôn kiểm tra cấu hình deployment trước khi E2E.

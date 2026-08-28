@@ -1,33 +1,39 @@
-# RidePulse DQ — Gate 2 product specification
+# DataPulse — Gate 2 product specification
 
-> **Status:** Proposed. The codebase remains a starter template.
+> **Status:** Implemented Gate 2 MVP. This document describes the current
+> versioned workflow; historical planning documents are not normative.
 >
 > **Canonical Gate 2 plan:** [gate2-mvp/README.md](./gate2-mvp/README.md)
 
 ## Product objective
 
-RidePulse DQ helps a Data Steward inspect a registered mobility dataset, receive
-evidence-grounded data-quality rule proposals from a real LLM, review those proposals,
-and run only approved rules. Gate 2 is a public, end-to-end **course-project simulation
-of production practices**. It is not a production launch.
+DataPulse helps a Data Steward upload a CSV/Parquet dataset, inspect its immutable
+version and profile, receive evidence-grounded data-quality rule proposals, review
+those proposals, and run only approved rules. The versioned path supports generic
+datasets and is not limited to the NYC Yellow Taxi fixture. Gate 2 is a public,
+end-to-end course-project simulation of production practices.
 
 ## Primary user journey
 
-1. Steward signs in through a shared demo access gate on the public Vercel URL.
-2. Steward starts analysis of the registered 50k NYC Yellow Taxi artifact.
-3. Cloud Run Job ingests it, runs dbt transform/tests, and persists aggregate profile.
-4. Steward requests rule proposals; OpenAI receives aggregate evidence only.
-5. Steward approves, edits or rejects each proposal with an audit event.
-6. Steward runs approved rules and reads persisted DQ results.
+1. Steward signs in through the prefilled, quota-bounded demo account on the public Vercel URL.
+2. Steward uploads a CSV/Parquet file into the configured workspace.
+3. The API creates an immutable dataset version and durable profiling job.
+4. Graph 1 profiles the version, derives semantic evidence, pauses for review,
+   and proposes typed rules; OpenAI receives aggregate evidence only when
+   `AGENT_MODE=graph` is enabled.
+5. Steward confirms semantics and approves, edits or rejects each rule.
+6. Graph 2 executes approved rules; Graph 3 detects signals, writes hypotheses
+   when evidence is sufficient, and persists the Steward report.
 
 ## Must-have scope
 
 - Vercel React/Vite UI, Google Cloud Run API and Cloud Run Job.
-- Supabase PostgreSQL plus private Storage artifact; no Chicago source.
+- Supabase PostgreSQL plus private object-storage artifacts; uploaded versions
+  are generic and dataset-scoped.
 - dbt Core as a fixed transformation/test stage.
 - OpenAI structured proposal, human-in-the-loop review and five typed rule templates.
-- Safe read-only runner, job persistence, basic access/quota, tests, 10+ merged PRs,
-  five manual real-LLM cases, architecture diagram and video.
+- Safe read-only runner, durable job persistence, workspace authorization,
+  bounded demo access/quota, tests, architecture evidence and browser E2E.
 
 ## Explicitly outside Gate 2
 
@@ -42,7 +48,12 @@ of production practices**. It is not a production launch.
 3. Only an approved typed rule can compile and run.
 4. The runner uses a separate read-only credential and bounded result IDs.
 5. All state transitions and executions create an audit record.
-6. Public errors and logs do not expose secrets, raw rows or internal traces.
+6. Public errors and logs do not expose backend secrets, raw rows or internal traces.
+
+The judge-facing credential is intentionally public and is not a security secret:
+`demo-steward` / `ridepulse-demo-2026`. The backend limits this account to 40
+write mutations, 3 uploads, 3 profiling starts and 2 analysis starts per rolling
+24-hour window; read-only polling is not charged.
 
 The release criteria, hosting details, API paths, data entities, team work and test
 evidence are defined in the linked Gate 2 documents and companion contracts.

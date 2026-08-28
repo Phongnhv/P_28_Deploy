@@ -1,13 +1,16 @@
 import logging
+import os
 import secrets
 import uuid
+from collections import defaultdict, deque
 from datetime import timedelta
 from hashlib import pbkdf2_hmac
+from time import monotonic
 
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
-from src.models.database import SessionModel, UserAccountModel
+from src.models.database import SessionModel, UserAccountModel, WorkspaceMembershipModel, WorkspaceModel
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -15,10 +18,19 @@ logger = logging.getLogger(__name__)
 SESSION_COOKIE_NAME = "session_id"
 SESSION_DURATION_HOURS = 8
 DEFAULT_USERS = (
-    ("user", "User", "user", "USER"),
-    ("steward", "Steward", "steward", "STEWARD"),
-    ("admin", "Admin", "admin", "ADMIN"),
+    ("user", "User", "USER", "DEMO_USER_PASSWORD"),
+    ("steward", "Steward", "STEWARD", "DEMO_STEWARD_PASSWORD"),
+    ("admin", "Admin", "ADMIN", "DEMO_ADMIN_PASSWORD"),
 )
+DEMO_STEWARD_USERNAME = "demo-steward"
+DEMO_STEWARD_DISPLAY_NAME = "Demo Steward"
+# This credential is intentionally public in the frontend for judge access.
+# It is protected by the backend quota guard in ``demo_quota.py``.
+DEMO_STEWARD_PUBLIC_PASSWORD = "ridepulse-demo-2026"
+DEMO_STEWARD_WORKSPACE_ID = (os.getenv("DEMO_WORKSPACE_ID") or "ws-browser").strip()
+LOGIN_WINDOW_SECONDS = 15 * 60
+MAX_LOGIN_ATTEMPTS = 5
+_login_attempts: dict[str, deque[float]] = defaultdict(deque)
 
 
 def hash_password(password: str, salt: bytes | None = None) -> str:
@@ -39,9 +51,17 @@ def verify_password(password: str, encoded: str) -> bool:
 
 
 def ensure_default_users(db: Session) -> None:
-    """Seed only the three documented local accounts when the database is empty."""
-    for username, display_name, password, role in DEFAULT_USERS:
-        if not db.query(UserAccountModel).filter(UserAccountModel.username == username).first():
+    """Seed demo accounts from secrets, never from production source defaults."""
+    production = os.getenv("APP_ENV") == "production"
+    for username, display_name, role, password_env in DEFAULT_USERS:
+        # Secret Manager values supplied through stdin commonly retain a final
+        # newline; it is not part of the intended password.
+        configured_password = (os.getenv(password_env) or "").strip()
+        if production and not configured_password:
+            raise RuntimeError(f"{password_env} must be configured in production")
+        password = configured_password or username
+        account = db.query(UserAccountModel).filter(UserAccountModel.username == username).first()
+        if not account:
             db.add(
                 UserAccountModel(
                     id=f"user-{username}",
@@ -53,17 +73,102 @@ def ensure_default_users(db: Session) -> None:
                     created_by="system-seed",
                 )
             )
+        elif not production and account.created_by == "system-seed" and configured_password:
+            # A local process may point at the shared production database. If
+            # its demo password env vars are absent, never replace an existing
+            # production hash with the development username fallback.
+            account.password_hash = hash_password(configured_password)
     db.commit()
 
 
-def create_user_session(username: str, password: str, db: Session) -> SessionModel:
+def ensure_demo_steward(db: Session) -> None:
+    """Seed the bounded, judge-facing Steward account and its workspace seat."""
+    configured_password = (os.getenv("DEMO_STEWARD_DEMO_PASSWORD") or "").strip()
+    password = configured_password or DEMO_STEWARD_PUBLIC_PASSWORD
+    account = db.query(UserAccountModel).filter(UserAccountModel.username == DEMO_STEWARD_USERNAME).first()
+    if not account:
+        account = UserAccountModel(
+            id=f"user-{DEMO_STEWARD_USERNAME}",
+            username=DEMO_STEWARD_USERNAME,
+            display_name=DEMO_STEWARD_DISPLAY_NAME,
+            password_hash=hash_password(password),
+            role="STEWARD",
+            status="ACTIVE",
+            created_by="system-seed-demo",
+        )
+        db.add(account)
+        db.flush()
+    elif account.created_by == "system-seed-demo" and configured_password:
+        account.password_hash = hash_password(configured_password)
+
+    db.commit()
+    try:
+        workspace = db.get(WorkspaceModel, DEMO_STEWARD_WORKSPACE_ID)
+        if workspace:
+            membership = db.query(WorkspaceMembershipModel).filter_by(
+                workspace_id=DEMO_STEWARD_WORKSPACE_ID,
+                user_id=account.id,
+            ).first()
+            if not membership:
+                db.add(
+                    WorkspaceMembershipModel(
+                        id=f"wm-{DEMO_STEWARD_USERNAME}-{DEMO_STEWARD_WORKSPACE_ID}",
+                        workspace_id=DEMO_STEWARD_WORKSPACE_ID,
+                        user_id=account.id,
+                        role="STEWARD",
+                        status="ACTIVE",
+                    )
+                )
+            elif membership.status != "ACTIVE" or membership.role not in {"STEWARD", "ADMIN"}:
+                membership.role = "STEWARD"
+                membership.status = "ACTIVE"
+        db.commit()
+    except Exception:
+        # The account remains usable for the legacy routes even if an older
+        # database has not received the workspace tables yet.
+        db.rollback()
+        logger.warning("Demo Steward workspace membership could not be seeded", exc_info=True)
+
+
+def _login_attempt_key(request: Request, username: str) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+    client_host = forwarded_for or (request.client.host if request.client else "unknown")
+    return f"{client_host}:{username}"
+
+
+def _enforce_login_rate_limit(key: str) -> None:
+    now = monotonic()
+    attempts = _login_attempts[key]
+    while attempts and now - attempts[0] >= LOGIN_WINDOW_SECONDS:
+        attempts.popleft()
+    if len(attempts) >= MAX_LOGIN_ATTEMPTS:
+        raise HTTPException(status_code=429, detail={"code": "LOGIN_RATE_LIMITED", "message": "Too many sign-in attempts. Try again later."})
+
+
+def _record_failed_login(key: str) -> None:
+    _login_attempts[key].append(monotonic())
+
+
+def create_user_session(request: Request, username: str, password: str, db: Session) -> SessionModel:
     """Authenticate an active persisted account and create its cookie session."""
     normalized_username = username.strip().lower()
+    attempt_key = _login_attempt_key(request, normalized_username)
+    _enforce_login_rate_limit(attempt_key)
     account = db.query(UserAccountModel).filter(UserAccountModel.username == normalized_username).first()
     if not account or account.status != "ACTIVE" or not verify_password(password, account.password_hash):
+        _record_failed_login(attempt_key)
         raise HTTPException(status_code=401, detail={"code": "UNAUTHORIZED", "message": "Invalid username or password"})
 
-    db.query(SessionModel).filter(SessionModel.username == normalized_username).delete()
+    _login_attempts.pop(attempt_key, None)
+
+    # A user may have the workspace open in multiple tabs/devices.  Creating
+    # a new session must not revoke those still-valid sessions, otherwise a
+    # login in one tab makes another tab briefly render and then bounce back
+    # to the login screen on its next authenticated request.  Expired rows are
+    # safe to prune here and keep the session table bounded during sign-in.
+    db.query(SessionModel).filter(
+        SessionModel.expires_at < utc_now(),
+    ).delete(synchronize_session=False)
     session = SessionModel(
         id=str(uuid.uuid4()),
         username=normalized_username,

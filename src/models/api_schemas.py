@@ -1,4 +1,4 @@
-"""API Request/Response Pydantic DTO schemas for RidePulse DQ REST Endpoints."""
+"""API request/response Pydantic DTO schemas for DataPulse REST endpoints."""
 
 from __future__ import annotations
 

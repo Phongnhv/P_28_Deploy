@@ -1,5 +1,5 @@
 {
-  "name": "ridepulse-dq-frontend",
+  "name": "datapulse-frontend",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -12,7 +12,9 @@
     "lucide-react": "^1.33.0",
     "react": "latest",
     "react-dom": "latest",
-    "recharts": "^3.10.1"
+    "react-markdown": "^10.1.0",
+    "recharts": "^3.10.1",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@types/react": "latest",

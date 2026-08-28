@@ -1,8 +1,8 @@
-# RidePulse DQ — API contract
+# DataPulse — API contract
 
-> **Status:** The local MVP implements the dashboard endpoints below with FastAPI,
-> SQLite and a fixed server-side NYC artifact. The dashboard contract is the only
-> product-facing API. Proposal generation is routed through a dashboard-to-agent
+> **Status:** The current implementation exposes a versioned, workspace-scoped
+> FastAPI API. Local tests may use SQLite; production uses Supabase PostgreSQL and
+> Cloud Run worker dispatch. Proposal generation is routed through a dashboard-to-agent
 > adapter: `AGENT_MODE=mock` supplies deterministic local fixtures; `AGENT_MODE=graph`
 > invokes the structured LangGraph proposer with persisted aggregate evidence only.
 
@@ -10,14 +10,14 @@
 
 - Product API base is `/api/v1`; `/health` is liveness and `/ready` is hosted readiness.
 - JSON errors use `{ "code": "STABLE_CODE", "message": "safe message", "request_id": "uuid" }`.
-- State-changing calls require the demo session and CSRF header. Browser never submits
+- State-changing calls require an authenticated session and CSRF header. Browser never submits
   a filesystem path, URL, artifact content, SQL text or LLM prompt.
 - The agent receives only allow-listed aggregate profile evidence. It cannot receive
   raw rows, sample values, source identifiers, connection strings or browser text.
   The allow-list includes full-table negative rates, numeric quantiles, governed-domain
   violation rates, configured cross-field violation rates and verified uniqueness
   aggregates. Metric definitions and the live eval record are documented in
-  [AGENT_IMPROVEMENTS_AND_EVAL.md](./AGENT_IMPROVEMENTS_AND_EVAL.md).
+  [EVAL_EVIDENCES_E1_E5.md](./EVAL_EVIDENCES_E1_E5.md).
   For `AGENT_MODE=graph`, the backend first creates a small deterministic candidate
   set (required identifier, evidence-backed non-negative measure, governed enum and
   pickup/dropoff ordering when present). The model returns one steward-facing explanation
@@ -26,16 +26,28 @@
   model omits a candidate but returns at least one valid candidate, a deterministic policy
   fallback completes only the already verified missing candidate(s).
 - Create-work endpoints return `202` with `{ "job_id": "uuid", "status": "PENDING" }`.
-- Poll `GET /api/v1/jobs/{job_id}`; active duplicate work returns `409`, quota `429`,
+- Poll `GET /api/v1/jobs/{job_id}` or the relevant run endpoint; active duplicate work returns `409`, quota `429`,
   invalid input `422` and missing/unauthenticated session `401`.
 
-## Implemented local endpoints
+## Implemented product endpoints
 
 | Method | Path | Request boundary | Success |
 |---|---|---|---|
 | POST | `/api/v1/session` | Shared password | Secure session + CSRF token |
 | DELETE | `/api/v1/session` | Current session | `204` |
 | GET | `/api/v1/datasets` | None | Registered dataset list/readiness |
+| POST | `/api/v1/workspaces/{workspace_id}/datasets/import` | Multipart CSV/Parquet + idempotency key | Immutable dataset version + profile job |
+| GET | `/api/v1/workspaces/{workspace_id}/datasets` | Workspace membership | Accessible dataset list |
+| GET | `/api/v1/workspaces/{workspace_id}/datasets/{dataset_id}/versions` | Workspace membership | Version history |
+| GET | `/api/v1/workspaces/{workspace_id}/datasets/{dataset_id}/versions/{version_id}/explorer` | Dataset access | Bounded explorer data |
+| POST | `/api/v1/datasets/{dataset_id}/graph1-runs` | Completed versioned profile + idempotency key | Graph 1 job/run |
+| GET | `/api/v1/graph1-runs/{run_id}` | Current session | Durable Graph 1 status |
+| GET | `/api/v1/graph1-runs/{run_id}/nodes` | Current session | Node status and safe outputs |
+| POST | `/api/v1/graph1-runs/{run_id}/semantic-review` | Steward decision | Graph 1 continuation job |
+| POST | `/api/v1/graph1-runs/{run_id}/rule-review` | Steward decisions | Approved rule snapshot + continuation |
+| POST | `/api/v1/graph1-runs/{run_id}/analysis-runs` | Completed Graph 1 + approved rules | Graph 2/3 analysis run |
+| GET | `/api/v1/analysis-runs/{analysis_run_id}/result` | Current session | Persisted DQ/anomaly result |
+| GET | `/api/v1/analysis-runs/{analysis_run_id}/report` | Current session | Governed Steward report |
 | POST | `/api/v1/datasets/{dataset_id}/ingestions` | Idempotency key | Ingest/profile `job_id` |
 | GET | `/api/v1/jobs/{job_id}` | Current session | Status, safe progress and retry guidance |
 | GET | `/api/v1/datasets/{dataset_id}/profile` | Completed dataset | Aggregate profile only |
@@ -52,6 +64,16 @@
 | GET/POST/PATCH | `/api/v1/admin/users` and `/{username}` | Admin session | Local account directory and provisioning |
 | GET/PUT/DELETE | `/api/v1/admin/datasets/{dataset_id}/access` | Admin session | Read/manage dataset grants |
 | GET | `/health`, `/ready` | None | Liveness/readiness |
+
+The dashboard uses the workspace-scoped import and Graph 1/2/3 endpoints above.
+The older dataset/ingestion, workflow and `/api/v1/dq/*` routes remain for
+compatibility and are not the canonical generic-upload path.
+
+For the public judge account, authenticated write requests are reserved against
+a rolling 24-hour quota: 40 mutations total, 3 uploads, 3 profiling starts and
+2 analysis starts. `GET`, `HEAD` and `OPTIONS` polling does not consume quota.
+When a limit is reached, the API returns `429` with code `DEMO_QUOTA_EXCEEDED`
+and a `Retry-After` header.
 
 ## State rules
 

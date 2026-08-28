@@ -429,28 +429,51 @@ def _agent_semantic_payload(db: Session, dataset_id: str, *, workflow_run_id: st
         fallback["agent_mode"] = "deterministic-fallback"
         return fallback
 
-    from src.agents.graph import build_understanding_graph
+    profiles_by_name = {
+        item.name: item for item in db.query(ColumnProfileModel).filter_by(profile_dataset_id=dataset_id).all()
+    }
+    digest = {
+        "dataset": {
+            "table": dataset_id,
+            "rows": fallback["rows"],
+            "columns": [
+                {
+                    "name": column["name"],
+                    "type": profiles_by_name.get(column["name"]).data_type
+                    if column["name"] in profiles_by_name
+                    else "unknown",
+                    "role": column["semantic_type"],
+                    "null_pct": round(float(column["null_rate"]) * 100, 4),
+                    "range": column["range"],
+                    "distinct_count": column["distinct_count"],
+                }
+                for column in fallback["columns"]
+            ],
+        }
+    }
+    from src.agents.nodes.dataset_understanding_node import dataset_understanding_node
 
-    async def _invoke() -> dict[str, Any]:
-        start_graph_run(workflow_run_id=workflow_run_id, dataset_id=dataset_id)
-        graph = build_understanding_graph()
-        return await asyncio.wait_for(
-            graph.ainvoke(
+    result = asyncio.run(
+        asyncio.wait_for(
+            dataset_understanding_node(
                 {
                     "dataset_id": dataset_id,
-                    "dataset_profile": _raw_profile_for_graph(db, dataset_id, fallback),
-                    "target_tables": [dataset_id],
+                    "dataset_profile_digest": digest,
+                    "normalized_data_dictionary": {},
                     "metadata": {"domain_hint": "NYC Yellow Taxi trip operations"},
                 }
             ),
-            timeout=UNDERSTANDING_GRAPH_TIMEOUT_SECONDS,
+            timeout=90,
         )
-
-    result = asyncio.run(_invoke())
+    )
     if result.get("error") or not result.get("semantic_contract", {}).get("tables"):
-        raise WorkflowError(
-            f"Dataset Understanding Agent failed: {result.get('error', 'no semantic contract returned')}"
+        fallback["summary"] = (
+            "Profile-backed semantic contract. The language-model enrichment "
+            "was unavailable, so only deterministic aggregate evidence is shown."
         )
+        fallback["agent_mode"] = "deterministic-fallback"
+        fallback["fallback_reason"] = "agent_provider_unavailable"
+        return fallback
     contract = next(iter(result["semantic_contract"]["tables"].values()))
     return {
         **fallback,
@@ -572,7 +595,7 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
             old.status = "STALE"
         proposal_ids = []
         for proposal in proposals:
-            proposal_id = f"wf-{run.id[-8:]}-{proposal.id}"[:64]
+            proposal_id = f"wf-{run.id[-8:]}-{uuid.uuid4().hex[:20]}"
             db.add(
                 RuleProposalModel(
                     id=proposal_id,

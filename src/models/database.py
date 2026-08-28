@@ -1,7 +1,8 @@
 import enum
+import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from src.time_utils import utc_now
@@ -129,7 +130,10 @@ class JobModel(Base):
     type: Mapped[str] = mapped_column(String(64), nullable=False)  # INGEST_PROFILE, PROPOSE_RULES, RUN_DQ
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING", index=True)
     progress: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    message: Mapped[str | None] = mapped_column(Text)
+    # The deployed Supabase schema enforces NOT NULL.  Keep the ORM contract in
+    # sync so every job creator (including Graph 1/2 compatibility jobs) gets
+    # a safe value even when it does not provide a more specific message.
+    message: Mapped[str] = mapped_column(Text, nullable=False, default="Queued")
     error: Mapped[str | None] = mapped_column(Text)
     idempotency_key: Mapped[str] = mapped_column(String(256), unique=True, index=True, nullable=False)
     linked_entity: Mapped[str | None] = mapped_column(String(256))
@@ -181,7 +185,9 @@ class ColumnProfileModel(Base):
 class RuleProposalModel(Base):
     __tablename__ = "rule_proposals"
 
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # Canonical IDs include table/column/rule semantics and can be much longer
+    # than UUID-sized legacy IDs (for example cross-field comparisons).
+    id: Mapped[str] = mapped_column(String(512), primary_key=True)
     dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
     # Proposal batches belong to a concrete steward workflow.  Keeping this nullable
     # preserves legacy dashboard rows while new workflow rows remain isolated.
@@ -247,12 +253,100 @@ class WorkflowArtifactModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
 
 
+class Graph1RunModel(Base):
+    """Durable execution state for the canonical nine-node proposal graph."""
+
+    __tablename__ = "graph1_runs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    workspace_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=True, index=True)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=True, index=True)
+    profile_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("profile_runs.id"), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="PENDING", index=True)
+    current_node: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(256), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False, unique=True, index=True)
+    state_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class Graph1NodeExecutionModel(Base):
+    """Latest observable output for one node in a Graph 1 run."""
+
+    __tablename__ = "graph1_node_executions"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), ForeignKey("graph1_runs.id"), nullable=False, index=True)
+    node_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="PENDING")
+    output_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class AnalysisRunModel(Base):
+    """Durable orchestration state for Graph 2, Graph 3, and the steward report."""
+
+    __tablename__ = "analysis_runs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    graph1_run_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("graph1_runs.id"), nullable=False, index=True
+    )
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    workspace_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=True, index=True)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=True, index=True)
+    profile_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("profile_runs.id"), nullable=True, index=True)
+    rule_review_snapshot_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("rule_review_snapshots.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING", index=True)
+    phase: Mapped[str] = mapped_column(String(32), nullable=False, default="PREPARING")
+    current_node: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    test_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    anomaly_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    report_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    report_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    report_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(256), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AnalysisNodeExecutionModel(Base):
+    """Latest observable status and safe output summary for one analysis node."""
+
+    __tablename__ = "analysis_node_executions"
+
+    id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), ForeignKey("analysis_runs.id"), nullable=False, index=True)
+    graph_name: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    node_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
+    output_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+
+
 class RuleVersionModel(Base):
     __tablename__ = "rule_versions"
 
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    rule_proposal_id: Mapped[str] = mapped_column(String(64), ForeignKey("rule_proposals.id"), nullable=False)
+    id: Mapped[str] = mapped_column(String(640), primary_key=True)
+    rule_proposal_id: Mapped[str] = mapped_column(String(512), ForeignKey("rule_proposals.id"), nullable=False)
     dataset_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=True, index=True)
     rule_spec: Mapped[str] = mapped_column(Text, nullable=False)  # JSON
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="APPROVED")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -262,7 +356,11 @@ class RuleVersionModel(Base):
 class RuleConfigurationModel(Base):
     __tablename__ = "rule_configurations"
 
-    rule_proposal_id: Mapped[str] = mapped_column(String(64), ForeignKey("rule_proposals.id"), primary_key=True)
+    # Keep the public/domain attribute while mapping to the legacy physical
+    # primary-key name used by the original Supabase schema.
+    rule_proposal_id: Mapped[str] = mapped_column(
+        "rule_id", String(512), ForeignKey("rule_proposals.id"), primary_key=True
+    )
     execution_status: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE")
     schedule_frequency: Mapped[str] = mapped_column(String(16), nullable=False, default="MANUAL")
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")
@@ -282,6 +380,11 @@ class DqRunModel(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     job_id: Mapped[str] = mapped_column(String(64), ForeignKey("jobs.id"), nullable=False)
     dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False)
+    workspace_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=True, index=True)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=True, index=True)
+    profile_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("profile_runs.id"), nullable=True, index=True)
+    rule_review_snapshot_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("rule_review_snapshots.id"), nullable=True)
+    source_checksum: Mapped[str | None] = mapped_column(String(256), nullable=True)
     rule_ids: Mapped[str] = mapped_column(Text, nullable=False)  # JSON
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
     total_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -322,9 +425,14 @@ class SemanticContractModel(Base):
 class DqResultModel(Base):
     __tablename__ = "dq_results"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # The deployed Supabase schema stores this key as VARCHAR(36) without a
+    # server-side default.  Always generate it in the application so inserts
+    # work against both fresh SQLite databases and the legacy cloud schema.
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
     run_id: Mapped[str] = mapped_column(String(64), ForeignKey("dq_runs.id"), nullable=False)
-    rule_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    rule_id: Mapped[str] = mapped_column(String(512), nullable=False)
     rule_title: Mapped[str] = mapped_column(String(256), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)  # PASS, FAIL, ERROR, SKIPPED, RESULT_MISMATCH
     checked_count: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -358,7 +466,7 @@ class RulesetVersionModel(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
     dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    proposal_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("rule_proposals.id"), nullable=True)
+    proposal_run_id: Mapped[str | None] = mapped_column(String(512), ForeignKey("rule_proposals.id"), nullable=True)
     # New dashboard rulesets are owned by a workflow batch, not one legacy proposal row.
     workflow_run_id: Mapped[str | None] = mapped_column(
         String(64), ForeignKey("workflow_runs.id"), nullable=True, index=True
@@ -443,44 +551,239 @@ class AnomalyFeedbackModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
 
 
-class GraphNodeRunModel(Base):
-    """One execution of one LangGraph node.
+# ---------------------------------------------------------------------------
+# Workspace-scoped data access contract (v2)
+# ---------------------------------------------------------------------------
 
-    The graph builders in ``src/agents/graph.py`` wrap every node so a row lands
-    here on entry and is completed on exit.  This is the only place node-level
-    timing and failure detail is durable: LangGraph itself keeps nothing once
-    ``ainvoke`` returns, and workflow artifacts are recorded per *step*, which is
-    coarser than a node.
 
-    ``input_summary_json`` / ``output_summary_json`` hold a redacted summary
-    produced by ``src.services.node_telemetry.summarize`` -- key names, counts
-    and short scalars only.  Raw source rows must never reach this table: the
-    platform's central privacy claim is that row values stay out of the agent
-    tier, and a telemetry table is exactly the sort of place that claim quietly
-    breaks.
-    """
-
-    __tablename__ = "graph_node_runs"
+class WorkspaceModel(Base):
+    __tablename__ = "workspaces"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    graph_run_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    graph_key: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    node_name: Mapped[str] = mapped_column(String(64), nullable=False)
-    node_kind: Mapped[str] = mapped_column(String(32), nullable=False)  # LLM, DETERMINISTIC, GATE
-    sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="RUNNING")
-    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    input_summary_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
-    output_summary_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
-    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    model_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    created_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
-    # Correlation back to the business context the run belongs to.  All optional:
-    # a graph may be driven from the CLI with no workflow or job attached.
-    workflow_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    dataset_id: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
-    dq_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    anomaly_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+
+class WorkspaceMembershipModel(Base):
+    __tablename__ = "workspace_memberships"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "user_id", name="uq_workspace_membership_user"),
+        Index("ix_workspace_membership_user_status", "user_id", "workspace_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="USER")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class DataGroupModel(Base):
+    __tablename__ = "data_groups"
+    __table_args__ = (UniqueConstraint("workspace_id", "name", name="uq_data_group_name"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class DataGroupMembershipModel(Base):
+    __tablename__ = "data_group_memberships"
+    __table_args__ = (
+        UniqueConstraint("group_id", "user_id", name="uq_data_group_membership_user"),
+        Index("ix_data_group_membership_user_status", "user_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    group_id: Mapped[str] = mapped_column(String(64), ForeignKey("data_groups.id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class DatasetGovernanceModel(Base):
+    """Workspace and ownership sidecar for the legacy logical datasets table."""
+
+    __tablename__ = "dataset_governance"
+    __table_args__ = (
+        Index("ix_dataset_governance_workspace_owner", "workspace_id", "owner_user_id"),
+    )
+
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    owner_user_id: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="PRIVATE")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class DatasetStewardModel(Base):
+    __tablename__ = "dataset_stewards"
+    __table_args__ = (UniqueConstraint("dataset_id", "user_id", name="uq_dataset_steward_user"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    assigned_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DatasetVersionModel(Base):
+    __tablename__ = "dataset_versions"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "version_number", name="uq_dataset_version_number"),
+        Index("ix_dataset_version_history", "dataset_id", "created_at"),
+        Index("ix_dataset_version_workspace", "workspace_id", "dataset_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="READY")
+    checksum: Mapped[str] = mapped_column(String(256), nullable=False)
+    schema_hash: Mapped[str] = mapped_column(String(256), nullable=False)
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    source_metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class DatasetGrantModel(Base):
+    __tablename__ = "dataset_grants"
+    __table_args__ = (
+        Index(
+            "ix_dataset_grant_principal",
+            "workspace_id",
+            "grantee_type",
+            "grantee_id",
+            "permission",
+        ),
+        Index("ix_dataset_grant_resource", "dataset_id", "dataset_version_id", "revoked_at"),
+        Index("ix_dataset_grant_set", "grant_set_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    grant_set_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"))
+    grantee_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    grantee_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    permission: Mapped[str] = mapped_column(String(32), nullable=False)
+    granted_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+
+
+class ProfileRunSnapshotModel(Base):
+    __tablename__ = "profile_runs"
+    __table_args__ = (
+        Index("ix_profile_run_version_history", "dataset_version_id", "completed_at"),
+        Index("ix_profile_run_dataset_history", "workspace_id", "dataset_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False)
+    dataset_version_id: Mapped[str] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
+    triggered_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    profiler_version: Mapped[str] = mapped_column(String(64), nullable=False, default="local-v1")
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completeness_score: Mapped[float | None] = mapped_column(Float)
+    validity_score: Mapped[float | None] = mapped_column(Float)
+    uniqueness_score: Mapped[float | None] = mapped_column(Float)
+    duplicate_rate: Mapped[float | None] = mapped_column(Float)
+    quality_score: Mapped[float | None] = mapped_column(Float)
+    schema_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    metrics_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    sanitized_samples_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RuleReviewSnapshotModel(Base):
+    __tablename__ = "rule_review_snapshots"
+    __table_args__ = (Index("ix_rule_review_version_status", "dataset_version_id", "status"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False)
+    dataset_version_id: Mapped[str] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=False)
+    profile_run_id: Mapped[str] = mapped_column(String(64), ForeignKey("profile_runs.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class AnalysisSummaryModel(Base):
+    __tablename__ = "analysis_summaries"
+    __table_args__ = (Index("ix_analysis_summary_version_history", "dataset_version_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False)
+    dataset_version_id: Mapped[str] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=False)
+    profile_run_id: Mapped[str] = mapped_column(String(64), ForeignKey("profile_runs.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
+    tests_passed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tests_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    anomaly_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    report_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GovernedArtifactModel(Base):
+    __tablename__ = "governed_artifacts"
+    __table_args__ = (Index("ix_governed_artifact_version", "dataset_version_id", "artifact_type"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False)
+    dataset_version_id: Mapped[str] = mapped_column(String(64), ForeignKey("dataset_versions.id"), nullable=False)
+    run_id: Mapped[str | None] = mapped_column(String(64))
+    artifact_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_locator: Mapped[str] = mapped_column(Text, nullable=False)
+    checksum: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), ForeignKey("user_accounts.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class GovernanceAuditEventModel(Base):
+    __tablename__ = "governance_audit_events"
+    __table_args__ = (
+        Index("ix_governance_audit_workspace_time", "workspace_id", "occurred_at"),
+        Index("ix_governance_audit_dataset_time", "dataset_id", "occurred_at"),
+        Index("ix_governance_audit_actor_time", "actor_id", "occurred_at"),
+        Index("ix_governance_audit_action_time", "action", "occurred_at"),
+        Index("ix_governance_audit_run_time", "run_id", "occurred_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=False)
+    actor_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("user_accounts.id"))
+    actor_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    action: Mapped[str] = mapped_column(String(128), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    entity_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    dataset_id: Mapped[str | None] = mapped_column(String(256), ForeignKey("datasets.id"))
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("dataset_versions.id"))
+    run_id: Mapped[str | None] = mapped_column(String(64))
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    detail_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="API")
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)

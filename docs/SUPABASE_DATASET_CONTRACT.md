@@ -1,4 +1,10 @@
-# Supabase dataset contract and MVP rule execution
+# Supabase dataset contract and compatibility execution
+
+> **Scope note:** `trips_raw`/`trips_canonical` is the legacy taxi-oriented
+> compatibility adapter. The current browser upload path is generic and
+> versioned: it stores the verified CSV/Parquet artifact in object storage and
+> executes rules through `src/services/versioned_dataset.py`. Do not use this
+> document to describe the canonical arbitrary-upload path.
 
 ## Decision
 
@@ -38,7 +44,7 @@ profile validity and rule execution now read the same policy file.
 
 ## Connection and execution plan
 
-The MVP flow is:
+The legacy taxi-compatible flow is:
 
 1. Ingest source records once into `trips_raw`; never clean them in place.
 2. Read typed fields through `trips_canonical`.
@@ -91,8 +97,11 @@ invalid rows, but automatic imputation or deletion should remain out of the MVP.
 
 ## Current boundary
 
-The direct Supabase adapter and CLI prove the canonical contract and live rule
-execution. The existing local UI/API still uses the SQLite `source_rows` model.
-Switching the dashboard API to Supabase should be a separate adapter change so
-local test mode remains deterministic and ORM table creation is never run against
-the managed Supabase database.
+The direct Supabase adapter and CLI prove the taxi-compatible contract and live
+rule execution. The canonical browser flow instead uses
+`/api/v1/workspaces/{workspace_id}/datasets/import`, immutable
+`dataset_versions`, verified object artifacts and the versioned source adapter.
+When that flow has a `dataset_version_id`, Graph 2 deliberately does not fall
+back to `public.trips_canonical`; it reads the selected artifact and validates
+its checksum/schema before executing approved rules. Legacy routes remain for
+backward compatibility and local regression coverage.

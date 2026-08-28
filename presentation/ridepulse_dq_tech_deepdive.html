@@ -1,0 +1,1272 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DataPulse — System Architecture Deep Dive</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Chart.js for data visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0a0e17;
+            --bg-secondary: #111827;
+            --bg-card: rgba(17, 24, 39, 0.75);
+            --border-color: rgba(56, 189, 248, 0.2);
+            --border-hover: rgba(56, 189, 248, 0.5);
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --accent-cyan: #38bdf8;
+            --accent-blue: #3b82f6;
+            --accent-indigo: #818cf8;
+            --accent-purple: #c084fc;
+            --accent-emerald: #34d399;
+            --accent-rose: #fb7185;
+            --accent-amber: #fbbf24;
+            --code-bg: #030712;
+            --gradient-title: linear-gradient(135deg, #38bdf8 0%, #818cf8 50%, #c084fc 100%);
+            --gradient-card: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.01) 100%);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-main);
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+            display: flex;
+            flex-direction: column;
+            user-select: none;
+        }
+
+        /* Top Progress Bar */
+        #progress-bar {
+            height: 3px;
+            background: var(--gradient-title);
+            width: 0%;
+            transition: width 0.3s ease;
+            z-index: 1000;
+        }
+
+        /* Header Navigation */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 32px;
+            background: rgba(10, 14, 23, 0.85);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            z-index: 100;
+        }
+
+        .brand-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 1.05rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .brand-logo .badge {
+            background: rgba(56, 189, 248, 0.15);
+            color: var(--accent-cyan);
+            border: 1px solid var(--border-color);
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-size: 0.72rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+        }
+
+        .deck-controls {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .slide-counter {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            background: rgba(255, 255, 255, 0.05);
+            padding: 4px 12px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .btn-ctrl {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-main);
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-ctrl:hover {
+            background: rgba(56, 189, 248, 0.15);
+            border-color: var(--accent-cyan);
+            color: var(--accent-cyan);
+        }
+
+        /* Presentation Container */
+        #presentation {
+            position: relative;
+            flex: 1;
+            width: 100%;
+            height: calc(100vh - 58px);
+        }
+
+        .slide {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            padding: 36px 64px 48px;
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(12px) scale(0.99);
+            transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .slide.active {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0) scale(1);
+        }
+
+        /* Slide Typography */
+        .slide-tag {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--accent-cyan);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 8px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .slide-tag::before {
+            content: "";
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-cyan);
+            box-shadow: 0 0 10px var(--accent-cyan);
+        }
+
+        .slide-title {
+            font-size: 2.2rem;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            margin-bottom: 24px;
+            background: var(--gradient-title);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            line-height: 1.2;
+        }
+
+        .slide-subtitle {
+            font-size: 1.1rem;
+            color: var(--text-muted);
+            margin-top: -16px;
+            margin-bottom: 28px;
+            line-height: 1.5;
+            max-width: 900px;
+        }
+
+        /* Grid Layouts */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 24px;
+            flex: 1;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            flex: 1;
+        }
+
+        .grid-4 {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            flex: 1;
+        }
+
+        .grid-1-2 {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 24px;
+            flex: 1;
+        }
+
+        .grid-2-1 {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 24px;
+            flex: 1;
+        }
+
+        /* Glassmorphism Cards */
+        .card {
+            background: var(--bg-card);
+            background-image: var(--gradient-card);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 14px;
+            padding: 22px;
+            backdrop-filter: blur(16px);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            transition: all 0.25s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card:hover {
+            border-color: var(--border-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+        }
+
+        .card.highlight {
+            border-color: rgba(56, 189, 248, 0.4);
+            background: linear-gradient(135deg, rgba(56, 189, 248, 0.08) 0%, rgba(129, 140, 248, 0.04) 100%);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 6px;
+        }
+
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-body {
+            font-size: 0.92rem;
+            color: #d1d5db;
+            line-height: 1.6;
+            flex: 1;
+        }
+
+        .card-body ul {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .card-body li {
+            position: relative;
+            padding-left: 20px;
+        }
+
+        .card-body li::before {
+            content: "▹";
+            position: absolute;
+            left: 0;
+            color: var(--accent-cyan);
+            font-weight: bold;
+        }
+
+        /* Badges & Tags */
+        .pill {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .pill.cyan { background: rgba(56, 189, 248, 0.15); color: var(--accent-cyan); border: 1px solid rgba(56, 189, 248, 0.3); }
+        .pill.purple { background: rgba(192, 132, 252, 0.15); color: var(--accent-purple); border: 1px solid rgba(192, 132, 252, 0.3); }
+        .pill.emerald { background: rgba(52, 211, 153, 0.15); color: var(--accent-emerald); border: 1px solid rgba(52, 211, 153, 0.3); }
+        .pill.rose { background: rgba(251, 113, 133, 0.15); color: var(--accent-rose); border: 1px solid rgba(251, 113, 133, 0.3); }
+        .pill.amber { background: rgba(251, 191, 36, 0.15); color: var(--accent-amber); border: 1px solid rgba(251, 191, 36, 0.3); }
+
+        /* Code Blocks */
+        pre {
+            background: var(--code-bg);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            padding: 14px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.82rem;
+            line-height: 1.5;
+            color: #e5e7eb;
+            overflow-x: auto;
+        }
+
+        code {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .code-keyword { color: #c084fc; font-weight: 600; }
+        .code-func { color: #38bdf8; }
+        .code-str { color: #34d399; }
+        .code-num { color: #fbbf24; }
+        .code-comment { color: #6b7280; font-style: italic; }
+
+        /* Flow Diagram visual nodes */
+        .flow-container {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            height: 100%;
+            justify-content: space-around;
+        }
+
+        .flow-step {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 12px 18px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            transition: all 0.2s ease;
+        }
+
+        .flow-step:hover {
+            border-color: var(--accent-cyan);
+            background: rgba(56, 189, 248, 0.05);
+        }
+
+        .flow-number {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: var(--accent-cyan);
+            color: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.8rem;
+            font-family: 'JetBrains Mono', monospace;
+            flex-shrink: 0;
+        }
+
+        .flow-content h4 {
+            font-size: 0.95rem;
+            color: #fff;
+            margin-bottom: 2px;
+        }
+
+        .flow-content p {
+            font-size: 0.82rem;
+            color: var(--text-muted);
+        }
+
+        /* Metric callout */
+        .metric-box {
+            text-align: center;
+            padding: 18px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            border-radius: 12px;
+        }
+
+        .metric-value {
+            font-size: 2.4rem;
+            font-weight: 800;
+            font-family: 'JetBrains Mono', monospace;
+            background: var(--gradient-title);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 4px;
+        }
+
+        .metric-label {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* Keyboard Hints Footer */
+        footer {
+            position: fixed;
+            bottom: 12px;
+            right: 32px;
+            font-size: 0.75rem;
+            color: #6b7280;
+            font-family: 'JetBrains Mono', monospace;
+            display: flex;
+            gap: 16px;
+            z-index: 100;
+        }
+
+        .key-hint {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .kbd {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            color: #d1d5db;
+        }
+    </style>
+</head>
+<body>
+    <div id="progress-bar"></div>
+
+    <header>
+        <div class="brand-logo">
+            <span style="color: var(--accent-cyan); font-size: 1.3rem;">⚡</span>
+            <span>DataPulse</span>
+            <span class="badge">ARCH-DEEP-DIVE</span>
+        </div>
+        <div class="deck-controls">
+            <span class="slide-counter" id="slide-num">01 / 12</span>
+            <button class="btn-ctrl" onclick="prevSlide()" title="Phím mũi tên Trái">❮ Trước</button>
+            <button class="btn-ctrl" onclick="nextSlide()" title="Phím mũi tên Phải / Space">Tiếp ❯</button>
+            <button class="btn-ctrl" onclick="toggleFullScreen()" title="Phím F">⛶ Fullscreen</button>
+        </div>
+    </header>
+
+    <main id="presentation">
+        <!-- ========================================== -->
+        <!-- SLIDE 1: Title & Executive Summary -->
+        <!-- ========================================== -->
+        <section class="slide active" id="slide-1">
+            <div class="slide-tag">Executive Architectural Overview</div>
+            <h1 class="slide-title">DataPulse — Autonomous AI Data Quality & Anomaly Intelligence</h1>
+            <p class="slide-subtitle">
+                Giải pháp AI Agent tự động hóa khảo sát dữ liệu, đề xuất quy tắc chất lượng (DQ Rules), biên dịch dbt/SQL có kiểm soát và chẩn đoán dị thường kết hợp Thống kê & LLM Reasoning.
+            </p>
+
+            <div class="grid-3" style="margin-top: 10px;">
+                <div class="card highlight">
+                    <div class="card-header">
+                        <span class="card-title">🚨 Vấn đề Thực tiễn</span>
+                        <span class="pill rose">PAIN POINT</span>
+                    </div>
+                    <div class="card-body">
+                        <ul>
+                            <li>Data Engineers mất hàng tuần viết và duy trì hàng trăm test dbt thủ công.</li>
+                            <li>Dữ liệu vận hành (taxi, e-commerce, telco) xuất hiện giá trị âm, rỗng, sai định dạng.</li>
+                            <li>Thiếu cơ chế tự động phát hiện phân vùng mất mát hoặc trôi dạt phân phối (data drift).</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card highlight">
+                    <div class="card-header">
+                        <span class="card-title">💡 Giải pháp DataPulse</span>
+                        <span class="pill cyan">AI AGENTIC</span>
+                    </div>
+                    <div class="card-body">
+                        <ul>
+                            <li><strong>Zero-PII Profiling:</strong> Trích xuất thống kê nén tổng hợp, không gửi raw data sang LLM.</li>
+                            <li><strong>Guarded Rule Proposer:</strong> Ép kiểu Pydantic Structured Output, neo nguồn gốc tham số.</li>
+                            <li><strong>Dual dbt Layer:</strong> Tách biệt lớp tiền xử lý chuẩn hóa và lớp thực thi kiểm thử.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card highlight">
+                    <div class="card-header">
+                        <span class="card-title">⚙️ Core Tech Stack</span>
+                        <span class="pill purple">SYSTEM SPECS</span>
+                    </div>
+                    <div class="card-body">
+                        <ul>
+                            <li><strong>Agent Framework:</strong> LangGraph (StateGraph 3 tầng).</li>
+                            <li><strong>Backend & API:</strong> FastAPI, Uvicorn, SQLAlchemy.</li>
+                            <li><strong>Data Engine:</strong> dbt-core, PostgreSQL 15, MinIO (S3).</li>
+                            <li><strong>Observability:</strong> Phoenix OpenTelemetry, LangSmith.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- SLIDE 2: High-Level Architecture & 3-Graph Separation -->
+        <!-- ========================================== -->
+        <section class="slide" id="slide-2">
+            <div class="slide-tag">System Architecture</div>
+            <h2 class="slide-title">Kiến Trúc 3 LangGraph — Ranh Giới Lỗi Độc Lập</h2>
+            <p class="slide-subtitle">
+                Tách biệt ranh giới trách nhiệm (Separation of Concerns) giúp hệ thống không bao giờ bị gián đoạn thực thi dữ liệu dù LLM gặp sự cố timeout hay quota.
+            </p>
+
+            <div class="grid-3">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">🔵 Run 1: Proposal Graph</span>
+                        <span class="pill cyan">9 NODES</span>
+                    </div>
+                    <div class="card-body">
+                        <ul>
+                            <li><strong>Profiler & Digest Tool:</strong> Quét thống kê nén, tính quantiles & distinct.</li>
+                            <li><strong>Semantic Understanding:</strong> Xác định vai trò cột (metric, ID, timestamp).</li>
+                            <li><strong>Candidate Builder:</strong> Sinh checklist ứng viên rule tất định.</li>
+                            <li><strong>Guarded Proposer:</strong> Gọi LLM sinh tối đa 5 rules Pydantic/bảng.</li>
+                            <li><strong>HITL Gate:</strong> Lưu `rule_proposals` chờ Steward duyệt.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">🟢 Run 2: Execution Graph</span>
+                        <span class="pill emerald">DETERMINISTIC</span>
+                    </div>
+                    <div class="card-body">
+                        <ul>
+                            <li><strong>Test Generator:</strong> Biên dịch rule đã duyệt thành SQL và dbt YAML.</li>
+                            <li><strong>Artifact Validation:</strong> Kiểm tra cú pháp, lưu dbt config lên MinIO.</li>
+                            <li><strong>Read-Only Runner:</strong> Chạy SQL qua role DB bị giới hạn timeout.</li>
+                            <li><strong>Capped Sample Extractor:</strong> Lấy tối đa 20 ID vi phạm làm bằng chứng.</li>
+                            <li><strong>Persist Summary:</strong> Lưu kết quả vào `dq_runs` và `dq_results`.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">🟣 Run 3: Anomaly Graph</span>
+                        <span class="pill purple">HYBRID INTELLIGENCE</span>
+                    </div>
+                    <div class="card-body">
+                        <ul>
+                            <li><strong>Statistical Detectors:</strong> Robust Z-Score (Median/MAD), EWMA, Volume Drift.</li>
+                            <li><strong>Decision Aggregator:</strong> Tổng hợp score trọng số (NORMAL / WATCH / ANOMALY).</li>
+                            <li><strong>Hypothesis Agent (LLM):</strong> Chẩn đoán nguyên nhân gốc rễ (Root-Cause).</li>
+                            <li><strong>Steward Report:</strong> Xuất báo cáo Markdown + Khuyến nghị khắc phục.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- SLIDE 3: Dual dbt Layers Integration -->
+        <!-- ========================================== -->
+        <section class="slide" id="slide-3">
+            <div class="slide-tag">Data Engineering Integration</div>
+            <h2 class="slide-title">Tích Hợp Hai Lớp dbt Core (Dual dbt Layers)</h2>
+            <p class="slide-subtitle">
+                Đột phá kiến trúc: dbt Core không chỉ làm nhiệm vụ transformation truyền thống mà còn được Agent biên dịch động sau khi có phê duyệt của con người.
+            </p>
+
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">🔵 Lớp 1: Pre-Profiling Transformation</span>
+                        <span class="pill cyan">BASELINE CONTRACT</span>
+                    </div>
+                    <div class="card-body">
+                        <p style="margin-bottom: 12px;"><strong>Vị trí:</strong> Ngay sau khi Ingest thô $\rightarrow$ Trước khi Profiler Agent quét.</p>
+                        <ul>
+                            <li><code>models/staging/stg_trips.sql</code>: Chuẩn hóa và ép kiểu 21 cột (timestamp, float, integer).</li>
+                            <li><code>models/analytics/profile_input.sql</code>: View hợp đồng chuẩn hóa cung cấp dữ liệu sạch cho Agent.</li>
+                            <li><code>schema.yml</code>: Chạy data contract tests cơ bản (not_null, unique).</li>
+                        </ul>
+                        <pre style="margin-top: 12px;"><code><span class="code-comment">-- stg_trips.sql</span>
+<span class="code-keyword">SELECT</span>
+    <span class="code-func">CAST</span>(vendor_id <span class="code-keyword">AS</span> TEXT),
+    <span class="code-func">CAST</span>(pickup_at <span class="code-keyword">AS</span> TIMESTAMP),
+    <span class="code-func">CAST</span>(fare_amount <span class="code-keyword">AS</span> NUMERIC)
+<span class="code-keyword">FROM</span> public.trips_raw;</code></pre>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">🟢 Lớp 2: Post-HITL Test Compiler & Execution</span>
+                        <span class="pill emerald">DYNAMIC ARTIFACTS</span>
+                    </div>
+                    <div class="card-body">
+                        <p style="margin-bottom: 12px;"><strong>Vị trí:</strong> Sau khi Data Steward bấm <code>APPROVE</code> trên giao diện UI.</p>
+                        <ul>
+                            <li><strong>Compiler Node:</strong> Biên dịch rule đã duyệt thành file dbt test YAML (<code>generated_dq_tests.yml</code>) và Parameterized SQL queries.</li>
+                            <li><strong>MinIO Artifact Store:</strong> Quản lý version các bộ test artifacts bất biến theo từng run ID.</li>
+                            <li><strong>Execution Runner:</strong> Chạy kiểm thử vi phạm, ghi kết quả pass/fail và sample IDs.</li>
+                        </ul>
+                        <pre style="margin-top: 12px;"><code><span class="code-comment"># generated_dq_tests.yml</span>
+<span class="code-keyword">version:</span> 2
+<span class="code-keyword">models:</span>
+  - <span class="code-str">name:</span> profile_input
+    <span class="code-keyword">columns:</span>
+      - <span class="code-str">name:</span> fare_amount
+        <span class="code-keyword">tests:</span>
+          - <span class="code-func">dbt_expectations.expect_column_values_to_be_between:</span>
+              <span class="code-keyword">min_value:</span> <span class="code-num">0.0</span></code></pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- SLIDE 4: Zero-PII Profiling & Aggregate Digesting -->
+        <!-- ========================================== -->
+        <section class="slide" id="slide-4">
+            <div class="slide-tag">Governance & Data Security</div>
+            <h2 class="slide-title">Zero-PII Exposure: Nén Hồ Sơ Dữ Liệu Tổng Hợp</h2>
+            <p class="slide-subtitle">
+                Đảm bảo an toàn bảo mật cấp doanh nghiệp: LLM không bao giờ được cấp quyền truy cập dòng dữ liệu thô (raw rows) hay thông tin nhạy cảm.
+            </p>
+
+            <div class="grid-2-1">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">🔍 Cơ Chế Trích Xuất & Nén Thống Kê</span>
+                        <span class="pill cyan">PROFILE DIGEST</span>
+                    </div>
+                    <div class="card-body">
+                        <p>Công cụ <code>db_profiler_tool.py</code> quét trực tiếp trong database engine và chỉ xuất ra các số liệu thống kê nén:</p>
+                        <pre><code>{
+  <span class="code-str">"table_name"</span>: <span class="code-str">"profile_input"</span>,
+  <span class="code-str">"row_count"</span>: <span class="code-num">50000</span>,
+  <span class="code-str">"columns"</span>: [
+    {
+      <span class="code-str">"name"</span>: <span class="code-str">"fare_amount"</span>,
+      <span class="code-str">"role"</span>: <span class="code-str">"numeric"</span>,
+      <span class="code-str">"null_rate"</span>: <span class="code-num">0.0</span>,
+      <span class="code-str">"min"</span>: <span class="code-num">-52.0</span>, <span class="code-comment">// Phát hiện lỗi giá trị âm!</span>
+      <span class="code-str">"max"</span>: <span class="code-num">350.0</span>,
+      <span class="code-str">"quantiles"</span>: { <span class="code-str">"p05"</span>: <span class="code-num">4.5</span>, <span class="code-str">"p50"</span>: <span class="code-num">12.0</span>, <span class="code-str">"p95"</span>: <span class="code-num">45.0</span> },
+      <span class="code-str">"signals"</span>: [<span class="code-str">"has_negative_values"</span>, <span class="code-str">"no_nulls"</span>]
+    }
+  ]
+}</code></pre>
+                    </div>
+                </div>
+
+                <div class="card highlight">
+                    <div class="card-header">
+                        <span class="card-title">🛡️ Lợi Ích Cốt Lõi</span>
+                        <span class="pill emerald">SECURITY</span>
+                    </div>
+                    <div class="card-body">
+                        <ul>
+                            <li><strong>Không rò rỉ PII:</strong> Tên, địa chỉ, số điện thoại, thẻ tín dụng bị triệt tiêu hoàn toàn.</li>
+                            <li><strong>Tiết kiệm Token Context:</strong> Nén bảng 50,000 dòng thành 1 file JSON &lt; 2KB.</li>
+                            <li><strong>Khả năng scale cao:</strong> Xử lý bảng hàng chục triệu dòng với chi phí LLM không đổi.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- SLIDE 5: Graph 1 Deep Dive: Semantic Contract & Proposer -->
+        <!-- ========================================== -->
+        <section class="slide" id="slide-5">
+            <div class="slide-tag">LangGraph State Machine</div>
+            <h2 class="slide-title">Graph 1 Deep Dive: Semantic Contract & Guarded Proposer</h2>
+            <p class="slide-subtitle">
+                Quy trình 9 nodes của Proposal Graph kết hợp suy luận ngữ nghĩa nghiệp vụ và cơ chế sinh ứng viên tất định.
+            </p>
+
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">🔄 Chuỗi Xử Lý 9 Nodes LangGraph</span>
+                        <span class="pill cyan">WORKFLOW</span>
+                    </div>
+                    <div class="flow-container">
+                        <div class="flow-step">
+                            <div class="flow-number">1</div>
+                            <div class="flow-content">
+                                <h4>raw_profiler & profiler_digest</h4>
+                                <p>Quét DB & trích xuất thống kê nén đa chiều.</p>
+                            </div>
+                        </div>
+                        <div class="flow-step">
+                            <div class="flow-number">2</div>
+                            <div class="flow-content">
+                                <h4>dataset_understanding & semantic_gate</h4>
+                                <p>LLM suy luận vai trò cột $\rightarrow$ Chốt chặn duyệt Semantic Contract.</p>
+                            </div>
+                        </div>
+                        <div class="flow-step">
+                            <div class="flow-number">3</div>
+                            <div class="flow-content">
+                                <h4>rule_candidate_builder (Deterministic)</h4>
+                                <p>Thuật toán deterministic tạo checklist ứng viên từ evidence.</p>
+                            </div>
+                        </div>
+                        <div class="flow-step">
+                            <div class="flow-number">4</div>
+                            <div class="flow-content">
+                                <h4>rule_proposer (Guarded LLM) & hitl_gate</h4>
+                                <p>OpenAI GPT-4o-mini sinh tối đa 5 rules Pydantic $\rightarrow$ Lưu DB.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">📜 Pydantic Structured Output Model</span>
+                        <span class="pill purple">STRICT SCHEMA</span>
+                    </div>
+                    <div class="card-body">
+                        <pre><code><span class="code-keyword">class</span> <span class="code-func">ProposedRule</span>(BaseModel):
+    model_config = ConfigDict(extra=<span class="code-str">"forbid"</span>)
+
+    candidate_id: str
+    column: str | None
+    rule_type: RuleType  <span class="code-comment"># NOT_NULL, RANGE, ACCEPTED_VALUES...</span>
+    parameters: RuleParameters  <span class="code-comment"># Closed parameter bag</span>
+    rule_name: str
+    business_rationale: str
+    parameter_provenance: list[ParameterProvenance]
+    assumptions: list[str]
+    confidence: RuleConfidence
+    severity: Severity  <span class="code-comment"># CRITICAL, HIGH, MEDIUM, LOW</span>
+    dimension: DataQualityDimension</code></pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- SLIDE 6: Anti-Hallucination & Parameter Provenance -->
+        <!-- ========================================== -->
+        <section class="slide" id="slide-6">
+            <div class="slide-tag">AI Safety & Guardrails</div>
+            <h2 class="slide-title">Chống Ảo Giác Tham Số (Parameter Provenance)</h2>
+            <p class="slide-subtitle">
+                Giải quyết rủi ro lớn nhất của LLM trong Data Quality: Tuyệt đối không cho phép AI tự suy diễn hay "bịa" ra các ngưỡng kiểm tra không có chứng cứ.
+            </p>
+
+            <div class="grid-2">
+                <div class="card highlight">
+                    <div class="card-header">
+                        <span class="card-title">❌ Cơ Chế Cũ (Rủi Ro Ảo Giác)</span>
+                        <span class="pill rose">VULNERABLE</span>
+                    </div>
+                    <div class="card-body">
+                        <ul>
+                            <li>LLM sinh đoạn văn tự do rồi hệ thống parse regex để tìm số.</li>
+                            <li>Tự động default giá trị: <code>ROW_COUNT = 50000</code>, <code>RANGE min = 0</code> khi thiếu thông tin.</li>
+                            <li>Tự suy đoán tên cột cross-field không tồn tại trong schema.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card highlight">
+                    <div class="card-header">
+                        <span class="card-title">✅ Cơ Chế Mới (Parameter Provenance)</span>
+                        <span class="pill emerald">PROVEN ANCHOR</span>
+                    </div>
+                    <div class="card-body">
+                        <ul>
+                            <li><strong>Bắt buộc neo nguồn gốc:</strong> Mỗi tham số (ví dụ: <code>max: 6</code>) phải liên kết trực tiếp với <code>source_ref: "profile.profile_input.passenger_count.p95"</code>.</li>
+                            <li><strong>Extra Forbid:</strong> Pydantic từ chối mọi trường lạ hoặc payload không tuân thủ.</li>
+                            <li><strong>Missing Parameter:</strong> Bị validator từ chối (<code>REJECTED_BY_VALIDATOR</code>), không tự default.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-top: 18px;">
+                <div class="card-header">
+                    <span class="card-title">🔍 Cấu Trúc Khai Báo Parameter Provenance Chuẩn</span>
+                    <span class="pill cyan">JSON CONTRACT</span>
+                </div>
+                <div class="card-body">
+                    <pre><code>{
+  <span class="code-str">"parameter_name"</span>: <span class="code-str">"max"</span>,
+  <span class="code-str">"source_type"</span>: <span class="code-str">"DATA_PROFILE"</span>,
+  <span class="code-str">"source_ref"</span>: <span class="code-str">"profile.profile_input.passenger_count.quantiles.p95"</span>,
+  <span class="code-str">"derivation_method"</span>: <span class="code-str">"Upper bound capped at observed 95th percentile with domain headroom."</span>
+}</code></pre>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- SLIDE 7: Human-in-the-Loop (HITL) & Versioning -->
+        <!-- ========================================== -->
+        <section class="slide" id="slide-7">
+            <div class="slide-tag">Human Governance</div>
+            <h2 class="slide-title">Human-in-the-Loop (HITL) & Immutable Ruleset Versioning</h2>
+            <p class="slide-subtitle">
+                Đảm bảo quyền quyết định tối thượng thuộc về Data Steward trước khi đưa bất kỳ quy tắc nào vào môi trường kiểm thử production.
+            </p>
+
+            <div class="grid-3">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">1. Review UI</span>
+                        <span class="pill cyan">STEWARD ACTIONS</span>
+                    </div>
+                    <div class="card-body">
+                        <ul>
+                            <li><strong>APPROVE:</strong> Chấp thuận rule do AI đề xuất.</li>
+                            <li><strong>EDIT:</strong> Sửa lại tham số (ví dụ: đổi max từ 6 thành 7) $\rightarrow$ Ghi nhận bản sửa.</li>
+                            <li><strong>REJECT:</strong> Từ chối rule không phù hợp kèm lý do.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">2. Batch Locking</span>
+                        <span class="pill amber">CONSISTENCY</span>
+                    </div>
+                    <div class="card-body">
+                        <ul>
+                            <li>Không kích hoạt test run đơn lẻ sau từng click duyệt của Steward.</li>
+                            <li>Khóa toàn bộ đợt review thành một **Review Batch** nhất quán trước khi chuyển sang bước tiếp theo.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">3. Ruleset Versioning</span>
+                        <span class="pill purple">IMMUTABLE</span>
+                    </div>
+                    <div class="card-body">
+                        <ul>
+                            <li>Tạo <code>RulesetVersionModel</code> bất biến có mã băm SHA-256 (<code>ruleset_hash</code>).</li>
+                            <li>Lưu vết kiểm toán (Audit Trail) ai duyệt, duyệt lúc nào trong bảng <code>audit_events</code>.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- SLIDE 8: Graph 2: Deterministic Execution -->
+        <!-- ========================================== -->
+        <section class="slide" id="slide-8">
+            <div class="slide-tag">Execution Safety</div>
+            <h2 class="slide-title">Graph 2 Deep Dive: Deterministic SQL & Read-Only Runner</h2>
+            <p class="slide-subtitle">
+                Mã thực thi kiểm thử được biên dịch hoàn toàn tất định bằng Template Engine, loại bỏ hoàn toàn việc để LLM tự viết SQL thực thi trực tiếp trên database.
+            </p>
+
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">🛡️ 4 Lớp Bảo Vệ Thực Thi (Execution Guardrails)</span>
+                        <span class="pill emerald">SECURITY GATES</span>
+                    </div>
+                    <div class="card-body">
+                        <ul>
+                            <li><strong>SELECT-Only Validator:</strong> Chặn triệt để các câu lệnh phá hoại (<code>DROP</code>, <code>DELETE</code>, <code>UPDATE</code>, <code>INSERT</code>).</li>
+                            <li><strong>Read-Only Database Role:</strong> Kết nối qua <code>RUNNER_DATABASE_URL</code> bị cô lập hoàn toàn quyền ghi.</li>
+                            <li><strong>Statement Timeout:</strong> Giới hạn thời gian truy vấn tối đa (tránh treo DB khi bảng hàng chục triệu dòng).</li>
+                            <li><strong>Capped Failure Samples:</strong> Giới hạn lấy tối đa 20 sample ID của các bản ghi vi phạm để phân tích.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">⚡ Biên Dịch Parameterized SQL</span>
+                        <span class="pill cyan">TEMPLATE ENGINE</span>
+                    </div>
+                    <div class="card-body">
+                        <pre><code><span class="code-comment">-- Biên dịch từ Rule RANGE [0.0, 500.0]</span>
+<span class="code-keyword">SELECT</span>
+    source_row_id <span class="code-keyword">AS</span> failure_id
+<span class="code-keyword">FROM</span> analytics.profile_input
+<span class="code-keyword">WHERE</span>
+    fare_amount <span class="code-keyword">IS NOT NULL</span>
+    <span class="code-keyword">AND</span> (fare_amount &lt; :min_val <span class="code-keyword">OR</span> fare_amount &gt; :max_val)
+<span class="code-keyword">LIMIT</span> <span class="code-num">20</span>;
+
+<span class="code-comment">-- Bind Parameters:</span>
+<span class="code-comment">-- :min_val = 0.0, :max_val = 500.0</span></code></pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- SLIDE 9: Graph 3: Statistical Anomaly Engine -->
+        <!-- ========================================== -->
+        <section class="slide" id="slide-9">
+            <div class="slide-tag">Statistical Intelligence</div>
+            <h2 class="slide-title">Graph 3 Deep Dive: Statistical Anomaly Engine (Median / MAD)</h2>
+            <p class="slide-subtitle">
+                Phát hiện dị thường chuỗi thời gian dựa trên Thống kê Robust, không phụ thuộc vào LLM để đưa ra quyết định cảnh báo.
+            </p>
+
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">📐 Công Thức Robust Z-Score (Median / MAD)</span>
+                        <span class="pill purple">FORMULA</span>
+                    </div>
+                    <div class="card-body">
+                        <div style="background: rgba(0,0,0,0.4); padding: 14px; border-radius: 8px; font-family: 'JetBrains Mono'; font-size: 0.95rem; color: var(--accent-cyan); text-align: center; margin-bottom: 12px;">
+                            Robust Z = 0.6745 × (Current - Median) / MAD
+                        </div>
+                        <ul>
+                            <li><strong>Kháng Outlier:</strong> Sử dụng Median và Median Absolute Deviation (MAD) thay vì Mean/Std truyền thống.</li>
+                            <li><strong>Xử lý $MAD = 0$:</strong> Khi toàn bộ lịch sử đều có 0% vi phạm, tự động chuyển sang thang đo dự phòng (Fallback Scale).</li>
+                            <li><strong>Cửa sổ trượt 30 runs:</strong> Loại trừ các run thất bại và run đã được gán nhãn <code>TRUE_ANOMALY</code>.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">📈 Trực Quan Hóa Anomaly Decision</span>
+                        <span class="pill cyan">CHART.JS</span>
+                    </div>
+                    <div class="card-body" style="height: 220px; position: relative;">
+                        <canvas id="anomalyChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- SLIDE 10: Root-Cause Hypothesis Agent -->
+        <!-- ========================================== -->
+        <section class="slide" id="slide-10">
+            <div class="slide-tag">LLM Root-Cause Reasoning</div>
+            <h2 class="slide-title">Root-Cause Hypothesis Agent & Actionable Insights</h2>
+            <p class="slide-subtitle">
+                Tận dụng thế mạnh thực sự của LLM: Không dùng AI để đoán số, mà dùng AI để **suy luận ngữ cảnh và chẩn đoán nguyên nhân gốc rễ**.
+            </p>
+
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">🧩 Taxonomy Phân Loại Giả Thuyết (Hypotheses)</span>
+                        <span class="pill cyan">CLASSIFICATION</span>
+                    </div>
+                    <div class="card-body">
+                        <ul>
+                            <li><code>PARTIAL_INGESTION</code>: Thiếu file hoặc đường truyền gián đoạn.</li>
+                            <li><code>LATE_OR_MISSING_PARTITION</code>: Dữ liệu bị delay theo khung giờ.</li>
+                            <li><code>SCHEMA_BREAKING_CHANGE</code>: Cột bị đổi kiểu hoặc xóa.</li>
+                            <li><code>UPSTREAM_TRANSFORMATION_CHANGE</code>: Đổi logic POS/ETL.</li>
+                            <li><code>DOMAIN_DISTRIBUTION_SHIFT</code>: Thay đổi thói quen người dùng thực tế.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">📋 Báo Cáo Chẩn Đoán & Khuyến Nghị Thực Tế</span>
+                        <span class="pill emerald">OUTPUT</span>
+                    </div>
+                    <div class="card-body">
+                        <pre><code>{
+  <span class="code-str">"hypothesis_type"</span>: <span class="code-str">"UPSTREAM_TRANSFORMATION_CHANGE"</span>,
+  <span class="code-str">"summary"</span>: <span class="code-str">"Khả năng cao hệ thống POS vừa cập nhật phần mềm ghi nhận cước phí gây ra giá trị âm."</span>,
+  <span class="code-str">"confidence"</span>: <span class="code-num">0.85</span>,
+  <span class="code-str">"recommended_checks"</span>: [
+    <span class="code-str">"Kiểm tra release log của cổng thanh toán ngày 2026-08-20."</span>,
+    <span class="code-str">"Đối soát các giao diện refund/void transactions."</span>
+  ]
+}</code></pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- SLIDE 11: Production Engineering & EvalGate -->
+        <!-- ========================================== -->
+        <section class="slide" id="slide-11">
+            <div class="slide-tag">MLOps & Evaluation</div>
+            <h2 class="slide-title">Production Engineering & EvalGate 6 Gates Benchmark</h2>
+            <p class="slide-subtitle">
+                Hệ thống đánh giá toàn diện đảm bảo độ tin cậy của Agent, chất lượng dữ liệu và độ an toàn bảo mật trước khi release.
+            </p>
+
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">📊 EvalGate 6 Gates Benchmark</span>
+                        <span class="pill purple">RADAR CHART</span>
+                    </div>
+                    <div class="card-body" style="height: 220px; position: relative;">
+                        <canvas id="evalgateChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">🏢 Production Infrastructure Specs</span>
+                        <span class="pill cyan">OPERATIONS</span>
+                    </div>
+                    <div class="card-body">
+                        <ul>
+                            <li><strong>Containerization:</strong> Docker + Docker Compose 4 services (db, minio, api, worker).</li>
+                            <li><strong>Target Cloud:</strong> Google Cloud Run (Serverless stateless scale).</li>
+                            <li><strong>Security:</strong> Session Cookie HttpOnly, CSRF Token, RBAC (User, Steward, Admin).</li>
+                            <li><strong>Telemetry:</strong> Phoenix OpenTelemetry span tracing & LangSmith integration.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- SLIDE 12: Key Takeaways & Conclusion -->
+        <!-- ========================================== -->
+        <section class="slide" id="slide-12">
+            <div class="slide-tag">Summary</div>
+            <h2 class="slide-title">Key Architectural Takeaways</h2>
+            <p class="slide-subtitle">
+                Bốn trụ cột thiết kế tạo nên một hệ thống Autonomous AI Data Quality an toàn và chuẩn mực doanh nghiệp.
+            </p>
+
+            <div class="grid-4" style="margin-bottom: 24px;">
+                <div class="metric-box">
+                    <div class="metric-value">3</div>
+                    <div class="metric-label">Separated Graphs</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-value">0%</div>
+                    <div class="metric-label">PII Exposure</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-value">100%</div>
+                    <div class="metric-label">Deterministic SQL</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-value">6</div>
+                    <div class="metric-label">EvalGate Gates</div>
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <div class="card highlight">
+                    <div class="card-header">
+                        <span class="card-title">🎯 Tóm Tắt 4 Trụ Cột Thiết Kế</span>
+                        <span class="pill cyan">ARCH PRINCIPLES</span>
+                    </div>
+                    <div class="card-body">
+                        <ul>
+                            <li><strong>Separation of Graphs:</strong> Cách ly hoàn toàn tầng suy luận AI và tầng thực thi kiểm thử dữ liệu.</li>
+                            <li><strong>Zero-PII & Guarded LLM:</strong> Nén thống kê tổng hợp, neo chặt nguồn gốc tham số.</li>
+                            <li><strong>Dual dbt Layer:</strong> Tận dụng dbt cho cả tiền xử lý chuẩn hóa và biên dịch kiểm thử.</li>
+                            <li><strong>Hybrid Anomaly Intelligence:</strong> Thống kê Robust phát hiện + LLM chẩn đoán nguyên nhân.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card highlight">
+                    <div class="card-header">
+                        <span class="card-title">💬 Q&A & Technical Discussion</span>
+                        <span class="pill emerald">READY FOR QUESTIONS</span>
+                    </div>
+                    <div class="card-body" style="display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
+                        <span style="font-size: 2.5rem; margin-bottom: 10px;">🚀</span>
+                        <h4 style="color: var(--text-main); font-size: 1.2rem; margin-bottom: 8px;">Cảm ơn các Senior AI Engineers!</h4>
+                        <p style="color: var(--text-muted); font-size: 0.9rem;">Sẵn sàng thảo luận chuyên sâu về StateGraph, Parameter Provenance và Robust Z-Score.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <span class="key-hint"><span class="kbd">◀</span> / <span class="kbd">▶</span> hoặc <span class="kbd">Space</span> để chuyển slide</span>
+        <span class="key-hint"><span class="kbd">F</span> Toàn màn hình</span>
+    </footer>
+
+    <script>
+        let currentSlide = 1;
+        const totalSlides = 12;
+
+        function updateSlideUI() {
+            document.querySelectorAll('.slide').forEach((slide, idx) => {
+                if (idx + 1 === currentSlide) {
+                    slide.classList.add('active');
+                } else {
+                    slide.classList.remove('active');
+                }
+            });
+
+            document.getElementById('slide-num').textContent = 
+                `${currentSlide.toString().padStart(2, '0')} / ${totalSlides.toString().padStart(2, '0')}`;
+            
+            const progress = ((currentSlide - 1) / (totalSlides - 1)) * 100;
+            document.getElementById('progress-bar').style.width = `${progress}%`;
+
+            // Trigger chart animations on specific slides
+            if (currentSlide === 9) initAnomalyChart();
+            if (currentSlide === 11) initEvalGateChart();
+        }
+
+        function nextSlide() {
+            if (currentSlide < totalSlides) {
+                currentSlide++;
+                updateSlideUI();
+            }
+        }
+
+        function prevSlide() {
+            if (currentSlide > 1) {
+                currentSlide--;
+                updateSlideUI();
+            }
+        }
+
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(() => {});
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        }
+
+        // Keyboard controls
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+                nextSlide();
+            } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+                prevSlide();
+            } else if (e.key === 'Home') {
+                currentSlide = 1;
+                updateSlideUI();
+            } else if (e.key === 'End') {
+                currentSlide = totalSlides;
+                updateSlideUI();
+            } else if (e.key === 'f' || e.key === 'F') {
+                toggleFullScreen();
+            }
+        });
+
+        // Initialize Charts
+        let anomalyChartInstance = null;
+        function initAnomalyChart() {
+            if (anomalyChartInstance) return;
+            const ctx = document.getElementById('anomalyChart');
+            if (!ctx) return;
+
+            anomalyChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ['Run 1', 'Run 5', 'Run 10', 'Run 15', 'Run 20', 'Run 25', 'Run 28', 'Run 29 (Spike)', 'Run 30'],
+                    datasets: [
+                        {
+                            label: 'Violation Rate (%)',
+                            data: [0.2, 0.18, 0.22, 0.19, 0.21, 0.20, 0.23, 4.85, 0.21],
+                            borderColor: '#38bdf8',
+                            backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                            fill: true,
+                            tension: 0.3,
+                            pointBackgroundColor: '#38bdf8',
+                            pointRadius: 4
+                        },
+                        {
+                            label: 'Robust Z-Score Threshold (> 3.0)',
+                            data: [3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0],
+                            borderColor: '#fb7185',
+                            borderDash: [5, 5],
+                            pointRadius: 0,
+                            fill: false
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { labels: { color: '#9ca3af', font: { family: 'Inter', size: 11 } } }
+                    },
+                    scales: {
+                        x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#9ca3af', font: { size: 10 } } },
+                        y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#9ca3af', font: { size: 10 } } }
+                    }
+                }
+            });
+        }
+
+        let evalgateChartInstance = null;
+        function initEvalGateChart() {
+            if (evalgateChartInstance) return;
+            const ctx = document.getElementById('evalgateChart');
+            if (!ctx) return;
+
+            evalgateChartInstance = new Chart(ctx, {
+                type: 'radar',
+                data: {
+                    labels: ['Gate 1: AI Quality', 'Gate 2: Security', 'Gate 3: Reliability', 'Gate 4: Governance', 'Gate 5: Performance', 'Gate 6: DQ Compliance'],
+                    datasets: [{
+                        label: 'DataPulse Score (100 Max)',
+                        data: [95, 98, 92, 96, 90, 97],
+                        backgroundColor: 'rgba(129, 140, 248, 0.25)',
+                        borderColor: '#818cf8',
+                        pointBackgroundColor: '#38bdf8',
+                        pointBorderColor: '#fff',
+                        pointHoverBackgroundColor: '#fff',
+                        pointHoverBorderColor: '#818cf8'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { labels: { color: '#9ca3af', font: { family: 'Inter', size: 11 } } }
+                    },
+                    scales: {
+                        r: {
+                            angleLines: { color: 'rgba(255,255,255,0.1)' },
+                            grid: { color: 'rgba(255,255,255,0.08)' },
+                            pointLabels: { color: '#d1d5db', font: { family: 'Inter', size: 11, weight: '600' } },
+                            ticks: { display: false, min: 50, max: 100 }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Run on start
+        updateSlideUI();
+    </script>
+</body>
+</html>

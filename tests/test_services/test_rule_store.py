@@ -4,10 +4,12 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import Session
 
 import src.services.rule_store as rule_store_module
 from src.main import app
+from src.models.database import DqResultModel, JobModel, RuleConfigurationModel, RuleProposalModel, RuleVersionModel
 from src.services.rule_store import (
     create_run,
     deactivate_rule,
@@ -16,6 +18,7 @@ from src.services.rule_store import (
     publish_approved_rules,
     review_rule,
     save_proposed_rules,
+    should_seed_legacy_demo_dataset,
 )
 
 
@@ -40,6 +43,11 @@ def test_publish_approved_rules_workflow():
     dataset_id = "yellow_tripdata"
 
     create_run(run_id, dataset_id)
+
+    with Session(rule_store_module.get_engine()) as session:
+        job = session.get(JobModel, run_id)
+        assert job is not None
+        assert job.message == "Queued for rule proposal generation"
 
     mock_rules = [
         {
@@ -113,6 +121,27 @@ def test_publish_approved_rules_workflow():
     assert active_after_deact[0]["rule_id"] == "yellow_tripdata.fare_amount.RANGE"
 
 
+def test_canonical_rule_identifiers_are_not_uuid_limited():
+    assert RuleProposalModel.__table__.c.id.type.length == 512
+    assert RuleVersionModel.__table__.c.rule_proposal_id.type.length == 512
+    assert RuleVersionModel.__table__.c.id.type.length == 640
+    assert RuleConfigurationModel.__table__.c.rule_id.type.length == 512
+    assert DqResultModel.__table__.c.rule_id.type.length == 512
+
+
+def test_legacy_demo_dataset_is_not_seeded_in_production_by_default(monkeypatch):
+    monkeypatch.delenv("SEED_LEGACY_DEMO_DATASET", raising=False)
+    assert should_seed_legacy_demo_dataset("production") is False
+    assert should_seed_legacy_demo_dataset("test") is True
+
+
+def test_legacy_demo_dataset_requires_explicit_production_opt_in(monkeypatch):
+    monkeypatch.setenv("SEED_LEGACY_DEMO_DATASET", "true")
+    assert should_seed_legacy_demo_dataset("production") is True
+    monkeypatch.setenv("SEED_LEGACY_DEMO_DATASET", "false")
+    assert should_seed_legacy_demo_dataset("development") is False
+
+
 def test_publish_api_endpoints():
     """Kiểm tra các REST API endpoints mới cho Active Rules và Publish."""
     # Publish and deactivate now require a STEWARD session, so sign in first.
@@ -163,3 +192,45 @@ def test_publish_api_endpoints():
 
     active_res_after = client.get("/api/v1/dq/active-rules")
     assert active_res_after.json()["total_rules"] == 0
+
+
+def test_sqlite_migration_renames_legacy_rule_configuration_key():
+    """Existing local databases must match the Supabase ``rule_id`` contract."""
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE rule_proposals (id VARCHAR(64) PRIMARY KEY)"))
+        connection.execute(text("INSERT INTO rule_proposals (id) VALUES ('proposal-1')"))
+        connection.execute(
+            text(
+                """
+                CREATE TABLE rule_configurations (
+                    rule_proposal_id VARCHAR(64) NOT NULL PRIMARY KEY,
+                    execution_status VARCHAR(16) NOT NULL,
+                    schedule_frequency VARCHAR(16) NOT NULL,
+                    timezone VARCHAR(64) NOT NULL,
+                    last_run_at DATETIME,
+                    next_run_at DATETIME,
+                    model_name VARCHAR(128) NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO rule_configurations VALUES
+                ('proposal-1', 'ACTIVE', 'MANUAL', 'UTC', NULL, NULL,
+                 'legacy-model', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """
+            )
+        )
+
+    rule_store_module._migrate_local_workflow_columns(engine)
+
+    columns = {column["name"] for column in inspect(engine).get_columns("rule_configurations")}
+    assert "rule_id" in columns
+    assert "rule_proposal_id" not in columns
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT rule_id FROM rule_configurations")).scalar_one() == "proposal-1"

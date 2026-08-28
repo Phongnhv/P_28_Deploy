@@ -1,44 +1,69 @@
-# RidePulse DQ — Gate 2 data model
+# DataPulse — current data model
 
-> **Status:** Proposed schema. It becomes current behavior only through reviewed
-> SQLAlchemy/Alembic migrations.
+> This document describes the SQLAlchemy model and the versioned workflow
+> currently used by the application. Ordered SQL migrations in
+> `scripts/migrations/` remain the release mechanism for an existing Supabase
+> database.
 
 ## Core entities
 
 | Entity | Purpose | Essential fields |
 |---|---|---|
-| `datasets` | One registered artifact | ID, manifest version, checksum, artifact key, readiness |
-| `jobs` | Common async lifecycle | ID, type, status, idempotency key, lease, attempt, correlation ID, safe error |
-| `trips_raw` | Immutable 50k source-shaped rows | `source_row_id`, dataset ID, fixed typed columns |
-| `dataset_profiles` / `column_profiles` | Persisted aggregate evidence | dataset/version, aggregate JSON, stable evidence keys |
-| `rule_proposals` | Agent output awaiting review | typed spec, evidence refs, status, model metadata |
-| `dq_rules` | Immutable approved rule version | proposal origin, typed spec, compiled version/state |
-| `dq_runs` / `dq_results` | Executions and bounded outcomes | run ID, rule ID, counts, status, at most 20 IDs |
-| `sessions` / `rate_limit_events` | Demo access and cost control | opaque session, expiry, action/time counters |
-| `audit_logs` | Append-only observable history | actor, action, entity, before/after metadata, timestamp |
+| `user_accounts` / `sessions` | Authentication and role context | username, role, status, opaque session, expiry, CSRF token |
+| `workspaces` / `workspace_memberships` | Tenant boundary | workspace, user, role, active status |
+| `datasets` | Logical dataset catalog | ID, name, status, checksum and source metadata |
+| `dataset_versions` | Immutable uploaded snapshots | workspace, dataset, version, checksum, schema hash, row count, artifact metadata |
+| `dataset_governance` / `dataset_grants` | Dataset authorization | owner, visibility, version scope, permission, expiry/revocation |
+| `profile_runs` | Version-scoped profiling snapshot | schema, aggregate metrics, sanitized samples, status and completion time |
+| `graph1_runs` / `graph1_node_executions` | Durable profiling/semantic/rule workflow | version/profile context, current node, status, safe node output |
+| `rule_proposals` / `rule_review_snapshots` | Typed rules awaiting steward review | rule spec, evidence refs, status, approved version context |
+| `analysis_runs` / `analysis_node_executions` | Durable Graph 2/3 execution | model metadata, node status, latency and errors |
+| `dq_runs` / `dq_results` | Rule execution outcomes | run, rule, pass/fail/error, bounded failed-row IDs |
+| `analysis_summaries` / `governed_artifacts` | Persisted dashboard/report outputs | version, summary JSON, report locator and checksum |
+| `jobs` | Shared async lifecycle | type, status, idempotency key, lease, attempts and safe error |
+| `audit_events` / `governance_audit_events` | Operational and governance trail | actor, action, entity, workspace, correlation and timestamp |
 
-All primary keys are UUIDs; timestamps are UTC. `source_row_id` is deterministic from
-the approved source and sample row position, and remains unique even when business
-fingerprints are deliberately duplicated.
+Source CSV/Parquet content is stored as a versioned object artifact. The
+application does not overwrite another dataset's source rows during profiling
+or rule execution. Compatibility tables and routes may remain for older local
+or taxi-oriented runs, but they are not the canonical generic-upload model.
 
-## States and links
+## Workflow links
 
 ```text
-dataset → jobs(INGEST_PROFILE) → profile → jobs(PROPOSE_RULES) → proposals
-                                                    ↓ review
-                                                dq_rules → jobs(RUN_DQ) → dq_results
+workspace
+  → dataset → dataset_version → profile_run
+                         → graph1_run → semantic/rule review
+                                      → analysis_run (Graph 2 + Graph 3)
+                                      → analysis_summary + governed report
 ```
 
-`jobs` owns the shared asynchronous status:
-`PENDING → RUNNING → SUCCEEDED | FAILED_RETRYABLE | FAILED`. `dq_runs` holds the
-business execution record linked to its job; it does not invent a second job state.
+`jobs` stores the transport/lifecycle record for durable work. A job may link to
+an ingestion, Graph 1 or analysis run; the domain run stores the version-scoped
+business state and node outputs.
 
-## Roles and schemas
+## Roles and data boundaries
 
-- `migration` role changes schema only during controlled release.
-- `app` role writes application state and raw ingestion records.
-- `dbt` role reads raw data and writes only the `analytics` transform schema.
-- `runner` role is read-only for explicitly allow-listed DQ query tables.
+- `USER` can read data granted to the user.
+- `STEWARD` can profile datasets, review typed rules and run approved checks.
+- `ADMIN` provisions users and manages dataset access.
+- The public `demo-steward` account has the Steward role and a bounded backend
+  write quota for judge demonstrations.
 
-Raw rows, private artifact object keys, credentials and full failed-row values never
-enter LLM payloads or public API responses.
+The agent receives an allow-listed aggregate profile and semantic contract, not
+raw rows, private object keys, credentials or arbitrary browser prompts. DQ
+results expose counts and bounded identifiers rather than complete failed-row
+values. Public API responses use the session/workspace authorization context
+before returning profiles, versions, rules, results or reports.
+
+## Persistence and deployment
+
+Production `DATABASE_URL` and `SUPABASE_DATABASE_URL` point to the same Supabase
+PostgreSQL target so API and Cloud Run worker observe one durable state. Local
+tests may use SQLite. Source, dbt and report artifacts use the configured object
+storage adapter (GCS in production, MinIO/S3-compatible storage locally).
+
+Demo quota reservations are stored as `audit_events` with a dedicated internal
+entity type and are excluded from the user-facing audit-log list. The reservation
+is written before expensive upload/profiling/analysis work, which prevents failed
+retries from bypassing the public demo budget.

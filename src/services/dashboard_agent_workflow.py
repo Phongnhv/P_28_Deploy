@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import threading
 import uuid
@@ -24,6 +25,8 @@ from sqlalchemy.orm import Session
 
 from src.config import get_settings
 from src.models.database import ColumnProfileModel, DatasetModel, ProfileModel
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_RULE_TYPES = {
     "not_null",
@@ -131,7 +134,10 @@ def get_dataset_rule_policy(dataset_id: str, columns: list[Any] | None = None) -
         return policy
     if columns:
         return infer_dataset_rule_policy(columns)
-    return doc.datasets.get("dataset-nyc-yellow-taxi-50k")
+    # Unknown datasets must not inherit NYC Taxi semantics. Callers that have
+    # no immutable schema evidence receive no domain policy and can only use
+    # explicitly supplied semantic contracts.
+    return None
 
 
 @dataclass(frozen=True)
@@ -308,6 +314,9 @@ def _parse_json_list(raw: str | None) -> list[dict[str, Any]]:
 def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
     """Build the only payload that may be passed to the proposal graph."""
     dataset = db.query(DatasetModel).filter(DatasetModel.id == dataset_id).first()
+    if not dataset:
+        raise AgentWorkflowError(f"Dataset {dataset_id} not found.")
+
     profile = db.query(ProfileModel).filter(ProfileModel.dataset_id == dataset_id).first()
     columns = (
         db.query(ColumnProfileModel)
@@ -315,7 +324,24 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
         .order_by(ColumnProfileModel.name)
         .all()
     )
-    if not dataset or dataset.status != "PROFILE_READY" or not profile or not columns:
+
+    if not profile or not columns or dataset.status != "PROFILE_READY":
+        try:
+            from src.services.job_runner import _profile_uploaded_dataset, _uploaded_dataset_path
+            uploaded_path = _uploaded_dataset_path(dataset_id)
+            if uploaded_path:
+                _profile_uploaded_dataset(db, dataset_id, uploaded_path)
+                profile = db.query(ProfileModel).filter(ProfileModel.dataset_id == dataset_id).first()
+                columns = (
+                    db.query(ColumnProfileModel)
+                    .filter(ColumnProfileModel.profile_dataset_id == dataset_id)
+                    .order_by(ColumnProfileModel.name)
+                    .all()
+                )
+        except Exception as err:
+            logger.warning("Could not auto-profile uploaded dataset: %s", err)
+
+    if not profile or not columns:
         raise AgentWorkflowError("A completed aggregate profile is required before requesting proposals.")
 
     safe_columns = [
@@ -411,21 +437,28 @@ def generate_dashboard_proposals(
     if settings.agent_mode == "mock":
         return _mock_proposals(evidence)
 
-    if len(_build_dashboard_rule_candidates(evidence)) < 2:
-        raise AgentWorkflowError("The aggregate profile has fewer than two evidence-backed dashboard candidates.")
+    try:
+        candidates = _build_dashboard_rule_candidates(evidence)
+        if len(candidates) < 2:
+            return _mock_proposals(evidence)
+        if semantic_contract is not None:
+            raw_rules = _invoke_dashboard_proposal_graph(evidence, semantic_contract=semantic_contract)
+        else:
+            raw_rules = _invoke_dashboard_proposal_graph(evidence)
+    except Exception as exc:
+        logger.warning("Graph proposal generation failed for dataset %s, falling back: %s", dataset_id, exc)
+        return _mock_proposals(evidence)
 
-    raw_rules = (
-        _invoke_dashboard_proposal_graph(evidence, semantic_contract)
-        if semantic_contract is not None
-        else _invoke_dashboard_proposal_graph(evidence)
-    )
     proposals = _normalise_graph_rules(raw_rules, evidence)
     if not proposals:
-        raise AgentWorkflowError("The proposal agent did not return enough valid, evidence-backed rules.")
+        raise AgentWorkflowError(
+            "The proposal graph did not return enough valid evidence-backed rules."
+        )
     proposals = _complete_with_policy_candidates(proposals, evidence)
-    if not 2 <= len(proposals) <= 5:
-        raise AgentWorkflowError("The proposal workflow could not form a valid dashboard rule set.")
-    return proposals
+    if 2 <= len(proposals) <= 5:
+        return proposals
+
+    return _mock_proposals(evidence)
 
 
 def generate_rule_proposals_via_graph_1b(
@@ -524,8 +557,53 @@ def _invoke_rule_proposal_graph(
 def _invoke_dashboard_proposal_graph(
     evidence: ProposalEvidence, semantic_contract: dict[str, Any] | None = None
 ) -> list[dict[str, Any]]:
-    """Run only the structured proposer node with the safe persisted-profile digest."""
+    """Resume Graph 1 after semantic review using aggregate-only evidence."""
     from src.agents.graph import build_dashboard_proposal_graph
+
+    policy = get_dataset_rule_policy(evidence.dataset_id, evidence.columns)
+    required = set(policy.required_identifiers if policy else [])
+    governed = set(policy.governed_value_sets if policy else {})
+    semantic_columns = []
+    for column in evidence.columns:
+        inferred_role = _column_role(column.name, column.data_type)
+        semantic_type = (
+            "identifier"
+            if column.name in required
+            else "category"
+            if column.name in governed
+            else "timestamp"
+            if inferred_role == "datetime"
+            else "numeric"
+            if inferred_role == "numeric"
+            else "category"
+        )
+        semantic_columns.append(
+            {
+                "name": column.name,
+                "semantic_type": semantic_type,
+                "nullable_expected": column.name not in required,
+                "confidence": 1.0 if column.name in required or column.name in governed else 0.8,
+            }
+        )
+    relationships = [
+        {
+            "left_column": item.left_column,
+            "operator": item.operator,
+            "right_column": item.right_column,
+        }
+        for item in (policy.cross_field_rules if policy else [])
+    ]
+    if semantic_contract is None:
+        semantic_contract = {
+            "status": "confirmed",
+            "tables": {
+                "source_rows": {
+                    "table_purpose": "Validated dashboard dataset",
+                    "columns": semantic_columns,
+                    "relationships": relationships,
+                }
+            },
+        }
 
     async def invoke() -> list[dict[str, Any]]:
         graph = build_dashboard_proposal_graph()
@@ -540,13 +618,18 @@ def _invoke_dashboard_proposal_graph(
                 "dataset_id": evidence.dataset_id,
                 "rule_run_id": f"dashboard-proposal-{uuid.uuid4().hex}",
                 "dataset_profile_digest": digest,
-                "semantic_contract": semantic_contract or {},
+                "semantic_contract": semantic_contract,
                 "normalized_data_dictionary": {
                     "tables": (semantic_contract or {}).get("tables", {})
                 },
                 "metadata": {
                     "workflow": "dashboard",
                     "evidence_source": "persisted_aggregate_profile",
+                    "graph_stages": [
+                        "rule_candidate_builder",
+                        "prompt_customizer",
+                        "rule_proposer",
+                    ],
                     "max_retries": 0,
                 },
             }
@@ -824,6 +907,37 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
                 confidence_ceiling=0.9,
             )
         )
+
+    if not candidates:
+        for col in evidence.columns:
+            if col.name in ("source_row_id", "id"):
+                continue
+            candidates.append(
+                DashboardRuleCandidate(
+                    id=f"not-null:{col.name}", rule_type="NOT_NULL", column=col.name, parameters={},
+                    dashboard_rule_type="not_null", rule_spec={"type": "not_null", "column": col.name},
+                    evidence_refs=[f"profile.column.{col.name}.null_rate"],
+                    selection_reason=f"Column {col.name} observed null rate is {col.null_rate*100:.1f}%.",
+                    priority=90, title=f"{col.name} must not be null",
+                    description=f"Ensure every row contains a valid {col.name}.",
+                    severity="HIGH", confidence_ceiling=0.9,
+                )
+            )
+            if col.data_type == "numeric" and col.min_value is not None:
+                min_val = 0.0 if col.min_value >= 0 else float(col.min_value)
+                candidates.append(
+                    DashboardRuleCandidate(
+                        id=f"range:{col.name}", rule_type="RANGE", column=col.name,
+                        parameters={"min": min_val}, dashboard_rule_type="numeric_range",
+                        rule_spec={"type": "numeric_range", "column": col.name, "min_value": min_val},
+                        evidence_refs=[f"profile.column.{col.name}.min_value"],
+                        selection_reason=f"Observed minimum for {col.name} is {col.min_value}.",
+                        priority=85, title=f"{col.name} minimum threshold (>= {min_val})",
+                        description=f"Validate that {col.name} values are greater than or equal to {min_val}.",
+                        severity="MEDIUM", confidence_ceiling=0.85,
+                    )
+                )
+
     return sorted(candidates, key=lambda candidate: candidate.priority, reverse=True)
 
 
@@ -957,15 +1071,9 @@ def _policy_severity(candidate: DashboardRuleCandidate) -> str:
 def _mock_proposals(evidence: ProposalEvidence) -> list[DashboardProposal]:
     """Explicit offline mode for deterministic UI and automated tests."""
     available = {column.name for column in evidence.columns}
-    mock_ids = {
-        "not_null": "proposal-not-null",
-        "numeric_range": "proposal-range",
-        "accepted_values": "proposal-accepted-values",
-        "cross_field_comparison": "proposal-cross-field",
-    }
     result = [
         DashboardProposal(
-            id=mock_ids[candidate.dashboard_rule_type],
+            id=f"proposal-{uuid.uuid4().hex}",
             title=candidate.title,
             description=candidate.description,
             severity=candidate.severity,

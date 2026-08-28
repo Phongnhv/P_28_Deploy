@@ -16,7 +16,7 @@ def dispatch_cloud_run_job(job_id: str, job_type: str) -> bool:
     env = os.getenv("APP_ENV", "production")
 
     # 1. Local Fallback (Mocking Cloud Run Job)
-    if env in ["local", "development"]:
+    if env in ["local", "development"] or os.getenv("WORKER_DISPATCH_MODE") == "local":
         logger.info(f"Local environment detected. Dispatching job {job_id} to local worker.")
         try:
             worker_url = os.getenv("LOCAL_WORKER_URL", "http://worker:8001/run")

@@ -199,7 +199,12 @@ def _build_data_context(
                     sections.append(f"      • {c}")
         sections.append("")
     elif hypothesis_status == "NOT_REQUIRED":
-        sections.append("Giả thuyết: Không cần thiết — kết luận là NORMAL.")
+        if decision == "INSUFFICIENT_HISTORY":
+            sections.append(
+                "Giả thuyết: Chưa tạo vì chưa đủ lịch sử dữ liệu để suy luận đáng tin cậy."
+            )
+        else:
+            sections.append(f"Giả thuyết: Không cần thiết — kết luận là {decision}.")
 
     return "\n".join(sections)
 
@@ -218,6 +223,19 @@ def _strip_code_fences(text: str) -> str:
     if match:
         return match.group(1).strip()
     return text
+
+
+def _report_matches_anomaly_decision(content: str, decision: str) -> bool:
+    """Reject an LLM report that contradicts the canonical cold-start decision."""
+    if decision != "INSUFFICIENT_HISTORY":
+        return True
+    has_cold_start_marker = (
+        "INSUFFICIENT_HISTORY" in content or "Chưa đủ lịch sử" in content
+    )
+    contradicts_cold_start = bool(
+        re.search(r"\bNORMAL\b|Bình thường", content, flags=re.IGNORECASE)
+    )
+    return has_cold_start_marker and not contradicts_cold_start
 
 
 def _write_report_file(
@@ -260,10 +278,11 @@ async def report_writer_node(state: AnomalyGraphState) -> dict:
     """LangGraph Node: Viết báo cáo Markdown tiếng Việt bằng LLM cho Data Steward.
 
     Là node cuối cùng trong Graph 3, chạy sau persist_analysis_node.
-    Trả về `steward_report_path` trong state.
+    Trả về path, nội dung Markdown và nguồn LLM/FALLBACK trong state.
     """
     execution_run_id = state.get("execution_run_id") or state.get("anomaly_run_id", "unknown")
     dataset_id = state.get("dataset_id", "unknown")
+    canonical_decision = (state.get("anomaly_decision") or {}).get("decision", "UNKNOWN")
 
     # Load DB data
     def _load():
@@ -306,7 +325,11 @@ async def report_writer_node(state: AnomalyGraphState) -> dict:
         raw_output = response.content if hasattr(response, "content") else str(response)
         cleaned = _strip_code_fences(raw_output)
 
-        if cleaned and "# Báo Cáo Data Steward" in cleaned:
+        if (
+            cleaned
+            and "# Báo Cáo Data Steward" in cleaned
+            and _report_matches_anomaly_decision(cleaned, canonical_decision)
+        ):
             md_content = cleaned
             llm_used = True
             logger.info(
@@ -314,7 +337,8 @@ async def report_writer_node(state: AnomalyGraphState) -> dict:
             )
         else:
             logger.warning(
-                "LLM output không hợp lệ (thiếu tiêu đề hoặc trống). Dùng fallback. Output snippet: %.200s", cleaned
+                "LLM output không hợp lệ, thiếu tiêu đề hoặc mâu thuẫn decision canonical. Dùng fallback. "
+                "Output snippet: %.200s", cleaned
             )
     except Exception as exc:
         logger.warning("LLM gặp lỗi khi viết báo cáo, dùng fallback template: %s", exc)
@@ -324,20 +348,27 @@ async def report_writer_node(state: AnomalyGraphState) -> dict:
         md_content = render_steward_report_vi(execution_run_id, dataset_id, dict(state))
         logger.info("Dùng fallback template tiếng Việt cho execution_run_id=%s", execution_run_id)
 
-    # Ghi file
-    try:
-        report_path = await asyncio.to_thread(_write_report_file, execution_run_id, md_content)
-        log_prefix = "LLM" if llm_used else "FALLBACK"
-        logger.info("[%s] Báo cáo Steward đã ghi: %s", log_prefix, report_path)
-    except Exception as write_exc:
-        logger.error("Không thể ghi file báo cáo: %s", write_exc, exc_info=True)
-        report_path = ""
+    # Versioned runs publish through ``governed_artifacts`` in the durable
+    # analysis orchestrator.  They must not depend on a local filesystem path
+    # that is unavailable to another worker/revision.  Legacy dashboard runs
+    # retain their compatibility trace file.
+    report_path = ""
+    if not state.get("dataset_version_id"):
+        try:
+            report_path = await asyncio.to_thread(_write_report_file, execution_run_id, md_content)
+            log_prefix = "LLM" if llm_used else "FALLBACK"
+            logger.info("[%s] Báo cáo Steward đã ghi: %s", log_prefix, report_path)
+        except Exception as write_exc:
+            logger.error("Không thể ghi file báo cáo: %s", write_exc, exc_info=True)
 
     metadata = dict(state.get("metadata") or {})
     metadata["steward_report_path"] = report_path
     metadata["steward_report_llm_used"] = llm_used
+    metadata["report_source"] = "LLM" if llm_used else "FALLBACK"
 
     return {
         "steward_report_path": report_path,
+        "steward_report_markdown": md_content,
+        "report_source": metadata["report_source"],
         "metadata": metadata,
     }

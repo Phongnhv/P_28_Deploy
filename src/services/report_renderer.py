@@ -250,7 +250,13 @@ def render_steward_report_vi(
     # Giả thuyết
     lines += ["## 6. Giả Thuyết Nguyên Nhân (AI Đề Xuất)", ""]
     if hypothesis_status == "NOT_REQUIRED":
-        lines += ["> Phân tích giả thuyết không cần thiết — kết luận là Bình thường.", ""]
+        if decision == "INSUFFICIENT_HISTORY":
+            lines += [
+                "> Chưa tạo giả thuyết vì chưa đủ lịch sử dữ liệu để suy luận đáng tin cậy.",
+                "",
+            ]
+        else:
+            lines += [f"> Phân tích giả thuyết không cần thiết — kết luận là {decision_vi}.", ""]
     elif not hypotheses:
         lines += [f"> Không có giả thuyết nào được tạo (trạng thái: `{hypothesis_status}`).", ""]
     else:
@@ -276,7 +282,10 @@ def render_steward_report_vi(
     lines += ["## 7. Ghi Chú Phân Tích", ""]
     notes: list[str] = []
     if hypothesis_status == "NOT_REQUIRED":
-        notes.append("Phân tích giả thuyết bị bỏ qua do kết luận là Bình thường.")
+        if decision == "INSUFFICIENT_HISTORY":
+            notes.append("Phân tích giả thuyết chưa thực hiện vì chưa đủ lịch sử dữ liệu.")
+        else:
+            notes.append(f"Phân tích giả thuyết bị bỏ qua do kết luận là {decision_vi}.")
     if hypothesis_status == "FALLBACK_USED":
         notes.append("Gọi LLM thất bại; đã dùng giả thuyết dự phòng deterministic.")
     if not dq_run:

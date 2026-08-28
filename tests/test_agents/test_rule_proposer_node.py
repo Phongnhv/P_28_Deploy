@@ -27,8 +27,11 @@ from src.models.rule_schemas import (
 
 def _make_table_proposal(table_name: str, n_rules: int = 2) -> TableRuleProposal:
     """Tạo TableRuleProposal hợp lệ để dùng trong mock."""
+    from src.agents.nodes.rule_proposer_node import CandidateProposedRule, CandidateTableRuleProposal
+
     rules = [
-        ProposedRule(
+        CandidateProposedRule(
+            candidate_id=f"cand-{i}",
             column=f"col_{i}",
             rule_type=RuleType.NOT_NULL,
             parameters=RuleParameters(),
@@ -40,7 +43,7 @@ def _make_table_proposal(table_name: str, n_rules: int = 2) -> TableRuleProposal
         )
         for i in range(n_rules)
     ]
-    return TableRuleProposal(table=table_name, rules=rules)
+    return CandidateTableRuleProposal(table=table_name, rules=rules)
 
 
 def _make_digest(tables: list[str]) -> dict:
@@ -130,6 +133,81 @@ def test_split_digest_by_table_basic():
     assert "customers" in result
     assert "broken_table" not in result
     assert len(result) == 2
+
+
+@pytest.mark.asyncio
+async def test_rule_proposer_batches_31_candidates_and_uses_node7_prompt(tmp_path):
+    from src.agents.nodes.rule_proposer_node import rule_proposer_node
+
+    candidates = [
+        {
+            "candidate_id": f"candidate-{index}",
+            "table": "orders",
+            "column": "id" if index % 2 == 0 else "value",
+            "rule_type": "NOT_NULL",
+            "parameters": {"slot": index},
+            "evidence_items": [{"id": f"profile:item:{index}", "source_type": "DATA_PROFILE"}],
+        }
+        for index in range(31)
+    ]
+    proposal = TableRuleProposal(table="orders", rules=[])
+    with (
+        patch("src.agents.nodes.rule_proposer_node.get_llm"),
+        patch("src.agents.nodes.rule_proposer_node._propose_for_table", new_callable=AsyncMock, return_value=proposal) as propose,
+        patch("src.agents.nodes.rule_proposer_node.get_settings") as settings,
+    ):
+        settings.return_value.rule_proposer_concurrency = 2
+        settings.return_value.rule_proposer_max_retries = 0
+        settings.return_value.rule_proposer_batch_size = 8
+        settings.return_value.debug_dump_table_digests = False
+        settings.return_value.llm_provider = "openai"
+        settings.return_value.output_dir = str(tmp_path)
+        settings.return_value.results_dir = str(tmp_path)
+        await rule_proposer_node({
+            "dataset_id": "uploaded-orders",
+            "dataset_profile_digest": _make_digest(["orders"]),
+            "rule_candidates": candidates,
+            "semantic_contract": {"tables": {"orders": {"columns": [{"name": "id"}, {"name": "value"}]}}},
+            "specialized_system_prompts": {"orders": "NODE 7 SPECIALIZED PROMPT"},
+        })
+
+    assert propose.await_count == 4
+    assert [len(call.kwargs["candidates"]) for call in propose.await_args_list] == [8, 8, 8, 7]
+    assert all(call.kwargs["specialized_system_prompt"] == "NODE 7 SPECIALIZED PROMPT" for call in propose.await_args_list)
+    assert all(len(call.kwargs["table_digest"]["columns"]) <= 2 for call in propose.await_args_list)
+
+
+def test_node8_structured_contract_requires_candidate_id():
+    """Node 8 must reject a rule that cannot be traced to a server candidate."""
+    from src.agents.nodes.rule_proposer_node import CandidateProposedRule
+
+    payload = _make_table_proposal("orders", n_rules=1).rules[0].model_dump()
+    payload.pop("candidate_id", None)
+
+    with pytest.raises(ValidationError, match="candidate_id"):
+        CandidateProposedRule.model_validate(payload)
+
+    with pytest.raises(ValidationError, match="candidate_id"):
+        CandidateProposedRule.model_validate({**payload, "candidate_id": None})
+
+
+def test_node8_assigns_stable_ids_to_legacy_candidates():
+    """Uploaded/legacy candidates without IDs receive deterministic trace IDs."""
+    from src.agents.nodes.rule_proposer_node import _dedupe_candidates
+
+    candidate = {
+        "table": "orders",
+        "column": "amount",
+        "rule_type": "RANGE",
+        "parameters": {"min": 0},
+        "evidence_items": [{"id": "profile:orders:amount:min"}],
+    }
+
+    first = _dedupe_candidates([candidate])[0]
+    second = _dedupe_candidates([candidate])[0]
+
+    assert first["candidate_id"].startswith("candidate-")
+    assert first["candidate_id"] == second["candidate_id"]
 
 
 def test_split_digest_by_table_unwrap_key():
@@ -288,10 +366,7 @@ def test_valid_range_rule():
 
 @pytest.mark.asyncio
 async def test_failure_isolation():
-    """Khi 1 table LLM raise exception, các table còn lại vẫn có rules.
-
-    Bảng lỗi phải xuất hiện trong rule_proposal_errors, không trong proposed_rules.
-    """
+    """A failed table batch must fail closed and discard every partial rule."""
     tables = ["orders", "customers", "drivers"]
     digest = _make_digest(tables)
 
@@ -335,17 +410,16 @@ async def test_failure_isolation():
         }
         result = await rule_proposer_node(state)
 
-    # Bảng orders và drivers phải có rules
+    # Partial results must never reach the persistence/review gate.
     rule_tables = {r["table_name"] for r in result["proposed_rules"]}
-    assert "orders" in rule_tables
-    assert "drivers" in rule_tables
+    assert not rule_tables
+    assert result.get("error")
 
     # Bảng customers phải nằm trong errors
     assert result["rule_proposal_errors"]
     error_tables = {e["table"] for e in result["rule_proposal_errors"]}
     assert "customers" in error_tables
 
-    # customers không được có rule
     assert "customers" not in rule_tables
 
 

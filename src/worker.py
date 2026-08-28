@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import sys
@@ -10,7 +11,7 @@ from sqlalchemy.orm import Session
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config import get_settings
-from src.models.database import JobModel
+from src.models.database import DatasetVersionModel, JobModel
 from src.services.dataset_loader import load_dataset_rows
 from src.services.job_service import claim_job
 from src.services.rule_store import get_engine, init_db
@@ -48,9 +49,30 @@ def to_str(val):
 
 def run_ingest_profile(job_id: str, dataset_id: str):
     """
-    Worker handler for INGEST_PROFILE job type.
-    Reads data, inserts into trips_raw, runs dbt (simulated/actual), and profiles.
+    Compatibility entrypoint for Docker Compose.
+
+    The former implementation loaded a taxi manifest and deleted the shared
+    ``trips_raw`` table.  It is intentionally disabled.  Compose jobs now
+    delegate to the canonical versioned source runner, which requires an
+    explicit immutable dataset version and cannot affect another dataset.
     """
+    from src.models.database import DatasetVersionModel
+    from src.services.job_runner import run_ingest_profile as run_canonical_ingest_profile
+
+    engine = get_engine()
+    with Session(engine) as session:
+        job = session.query(JobModel).filter_by(id=job_id).first()
+        if not job:
+            raise RuntimeError(f"Job {job_id} not found")
+        version_id = job.linked_entity if (job.linked_entity or "").startswith("dv-") else None
+        version = session.get(DatasetVersionModel, version_id) if version_id else None
+        if not version or version.dataset_id != dataset_id:
+            raise RuntimeError("Legacy worker requires an explicit READY dataset version; use /workspaces/.../datasets/import")
+    return run_canonical_ingest_profile(job_id, dataset_id, dataset_version_id=version.id)
+
+    # Obsolete taxi-only code is retained below solely as a source-compatible
+    # historical reference; the return above makes it unreachable. Do not
+    # re-enable it: it has no dataset-scoped storage contract.
     logger.info(f"Starting INGEST_PROFILE for dataset: {dataset_id}")
 
     # 1. Load manifest and verify checksum
@@ -66,7 +88,8 @@ def run_ingest_profile(job_id: str, dataset_id: str):
     engine = get_engine()
     with Session(engine) as session:
         # Clear existing raw rows to maintain idempotency
-        session.execute(text("DELETE FROM trips_raw"))
+        # No unscoped legacy deletion. The compatibility implementation above
+        # is the only permitted ingestion path.
 
         # Insert rows
         insert_query = text("""
@@ -263,7 +286,7 @@ async def main():
     init_db()
 
     engine = get_engine()
-    linked_entity = "yellow_tripdata"
+    linked_entity = None
     with Session(engine) as session:
         # Fetch the job
         job = session.query(JobModel).filter_by(id=job_id).first()
@@ -272,8 +295,29 @@ async def main():
             sys.exit(1)
         if job.linked_entity:
             linked_entity = job.linked_entity
+            if linked_entity.startswith("dv-"):
+                version = session.get(DatasetVersionModel, linked_entity)
+                if version:
+                    linked_entity = version.dataset_id
+        elif job_type in {"PROPOSE_RULES", "RUN_DQ"}:
+            # Explicitly legacy-only default. Canonical versioned jobs must
+            # always carry an immutable linked entity and are rejected below.
+            linked_entity = "yellow_tripdata"
 
-    # Try to claim the job
+    # Canonical workflows share one durable dispatch/lease contract.  The
+    # helper claims the job and reloads the linked entity itself, so the API
+    # never has to serialize workflow state into a process invocation.
+    from src.services.job_dispatch import SUPPORTED_JOB_TYPES, _run_persisted_job
+    if job_type in SUPPORTED_JOB_TYPES:
+        # ``main`` itself runs under asyncio because legacy proposal jobs use
+        # an async graph.  The durable canonical runner owns its own event
+        # loop, so execute it in a worker thread instead of nesting
+        # ``asyncio.run`` inside the current loop.
+        if not await asyncio.to_thread(_run_persisted_job, job_id, job_type):
+            sys.exit(1)
+        return
+
+    # Legacy compatibility jobs retain the older handlers below.
     if not claim_job(job_id):
         logger.info(f"Job {job_id} could not be claimed (already running or completed). Exit.")
         sys.exit(0)
@@ -281,6 +325,8 @@ async def main():
     # Run the corresponding job logic
     start_time = time.time()
     try:
+        if not linked_entity:
+            raise ValueError("Legacy job is missing its linked dataset entity")
         if job_type == "INGEST_PROFILE":
             # Run ingestion and profiling synchronously
             run_ingest_profile(job_id, linked_entity)
@@ -314,6 +360,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    import asyncio
-
     asyncio.run(main())

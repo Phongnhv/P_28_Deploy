@@ -1,3 +1,4 @@
+
 import logging
 import os
 import sys
@@ -14,7 +15,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src.api.routes import dq_router, require_role, router
+from src.api.data_access_routes import router as data_access_router
+from src.api.routes import dq_router, router
 from src.config import get_settings
 from src.services.rule_store import get_engine, init_db
 
@@ -53,15 +55,17 @@ async def lifespan(app: FastAPI):
     yield
     print("Shutting down...")
 
+settings = get_settings()
 
 app = FastAPI(
-    title="AI20K Agent",
-    description="RidePulse DQ Localhost MVP",
+    title="DataPulse",
+    description="DataPulse AI Data Quality Platform",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url=None if settings.app_env == "production" else "/docs",
+    redoc_url=None if settings.app_env == "production" else "/redoc",
+    openapi_url=None if settings.app_env == "production" else "/openapi.json",
 )
-
-settings = get_settings()
 
 # CORS Configuration
 frontend_origin_env = os.getenv("FRONTEND_ORIGIN")
@@ -143,26 +147,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(router, prefix="/api/v1")
-
-# Every dq_router endpoint requires an authenticated session.
-#
-# The dependency is attached here rather than on each route because dq_router is
-# constructed at routes.py:122, before require_role is defined at routes.py:142.
-# Attaching it once at mount time also means a new endpoint added to dq_router
-# cannot ship unprotected by accident -- which is how all nineteen of them,
-# including publish, review and bulk-review, became reachable with no session at
-# all.
-#
-# This layer is authentication only. Authorisation is separate: the endpoints that
-# approve, publish or deactivate a rule additionally require STEWARD or ADMIN, and
-# declare that on the route itself. PRODUCT_SPEC.md safety rule 3 ("only an
-# approved typed rule can compile and run") is unenforceable if a plain USER can
-# approve, so mounting with the full role list would not have been enough.
-app.include_router(
-    dq_router,
-    prefix="/api/v1",
-    dependencies=[Depends(require_role(["USER", "STEWARD", "ADMIN"]))],
-)
+app.include_router(dq_router, prefix="/api/v1")
+app.include_router(data_access_router)
 
 
 @app.get("/health", tags=["System"])
