@@ -463,6 +463,125 @@ def _filter_semantic_context(semantic_contract: dict | None, candidates: list[di
     return compact
 
 
+def _message_content(result: Any) -> Any:
+    if isinstance(result, CandidateTableRuleProposal):
+        return result
+    if isinstance(result, dict):
+        if "structured_response" in result and result["structured_response"] is not None:
+            return result["structured_response"]
+        messages = result.get("messages", [])
+        if messages:
+            last_msg = messages[-1]
+            return getattr(last_msg, "content", last_msg)
+    return result
+
+
+async def _propose_for_table_deepagent(
+    table_name: str,
+    table_digest: dict,
+    model,
+    candidates: list[dict] | None = None,
+    semantic_contract: dict | None = None,
+    business_context: str | None = None,
+    data_dictionary: dict | str | None = None,
+    dataset_id: str = "unknown",
+    specialized_system_prompt: str | None = None,
+) -> CandidateTableRuleProposal:
+    """Sử dụng DeepAgent (ReAct pattern + Tools) để điều tra và đề xuất rules."""
+    from deepagents import GeneralPurposeSubagentProfile, HarnessProfile, create_deep_agent, register_harness_profile
+    try:
+        from langchain.agents.middleware.todo import TodoListMiddleware
+        from langchain.agents.middleware.tool_call_limit import ToolCallLimitMiddleware
+    except ImportError:
+        TodoListMiddleware = None
+        ToolCallLimitMiddleware = None
+
+    from src.agents.nodes.templates import (
+        RULE_PROPOSER_AGENT_SYSTEM_PROMPT,
+        RULE_PROPOSER_AGENT_USER_PROMPT,
+    )
+    from src.agents.tools.rule_proposer_tools import RULE_PROPOSER_TOOLS
+    settings = get_settings()
+
+    model_name = getattr(settings, f"{settings.llm_provider}_model_name", "rule-proposer")
+    model_key = f"{settings.llm_provider}:{model_name}"
+    try:
+        register_harness_profile(
+            model_key,
+            HarnessProfile(
+                excluded_tools=frozenset({"ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute", "task"}),
+                general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
+            ),
+        )
+    except Exception:
+        pass
+
+    system_prompt = RULE_PROPOSER_AGENT_SYSTEM_PROMPT
+    if specialized_system_prompt:
+        system_prompt = f"{specialized_system_prompt}\n\n{RULE_PROPOSER_AGENT_SYSTEM_PROMPT}"
+
+    middlewares = []
+    if TodoListMiddleware is not None and ToolCallLimitMiddleware is not None:
+        middlewares = [
+            TodoListMiddleware(),
+            ToolCallLimitMiddleware(
+                thread_limit=settings.rule_proposer_thread_tool_call_limit,
+                run_limit=settings.rule_proposer_max_tool_calls,
+                exit_behavior="continue",
+            ),
+        ]
+
+    skill_path = str(Path(__file__).resolve().parents[1] / "skills"/ "rule_proposer")
+
+    agent = create_deep_agent(
+        model=model,
+        tools=RULE_PROPOSER_TOOLS,
+        system_prompt=system_prompt,
+        response_format=CandidateTableRuleProposal,
+        middleware=middlewares,
+        skills=[skill_path],
+    )
+
+    if candidates is not None:
+        coverage_requirements = json.dumps(candidates, ensure_ascii=False)
+    else:
+        coverage_requirements = json.dumps(
+            _build_coverage_requirements(table_digest),
+            ensure_ascii=False,
+        )
+
+    dict_content = (
+        json.dumps(data_dictionary, ensure_ascii=False, indent=2)
+        if isinstance(data_dictionary, dict)
+        else (str(data_dictionary) if data_dictionary else "None")
+    )
+
+    prompt = RULE_PROPOSER_AGENT_USER_PROMPT.format(
+        table_name=table_name,
+        dataset_id=dataset_id,
+        business_context=business_context or "Không có ngữ cảnh nghiệp vụ bổ sung.",
+        coverage_requirements=coverage_requirements,
+        table_digest=json.dumps(table_digest, ensure_ascii=False),
+        semantic_contract=json.dumps(semantic_contract or {}, ensure_ascii=False),
+        data_dictionary=dict_content,
+    )
+
+    result = await agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
+    content = _message_content(result)
+
+    if isinstance(content, CandidateTableRuleProposal):
+        return content
+    elif isinstance(content, dict):
+        return CandidateTableRuleProposal.model_validate(content)
+    elif isinstance(content, str):
+        try:
+            return CandidateTableRuleProposal.model_validate_json(content)
+        except Exception:
+            return CandidateTableRuleProposal.model_validate(json.loads(content))
+    else:
+        raise ValueError("DeepAgent returned an unrecognized structured response")
+
+
 async def _propose_for_table(
     table_name: str,
     table_digest: dict,
@@ -475,16 +594,17 @@ async def _propose_for_table(
     candidates: list[dict] | None = None,
     dataset_id: str = "unknown",
     specialized_system_prompt: str | None = None,
+    mode: str | None = None,
+    raw_llm=None,
+    batch_index: int = 1,
 ) -> CandidateTableRuleProposal:
     """Gọi LLM một lần cho một bảng, bảo vệ bằng semaphore + retry."""
+    from src.utils.metrics_tracker import get_metrics_tracker
+    tracker = get_metrics_tracker()
+    settings = get_settings()
+    active_mode = mode or getattr(settings, "rule_proposer_mode", "deepagent")
     columns = [col["name"] for col in table_digest.get("columns", [])]
     dashboard_mode = bool(table_digest.get("dashboard_candidate_mode"))
-    is_taxi = (
-        "trip" in table_name.lower()
-        or "taxi" in str(dataset_id).lower()
-        or any("pickup" in str(c).lower() for c in columns)
-        or table_name in ("source_rows", "trips_raw")
-    )
     historical = [] if dashboard_mode else query_historical_rules(table_name, columns)
 
     async with semaphore:
@@ -493,12 +613,64 @@ async def _propose_for_table(
             try:
                 entry_ts = datetime.now()
                 logger.info(
-                    "[%s] Bắt đầu gọi LLM (attempt %d/%d) lúc %s",
+                    "[%s] Bắt đầu đề xuất rules [Mode: %s] (attempt %d/%d) lúc %s",
                     table_name,
+                    active_mode.upper(),
                     attempt + 1,
                     max_retries + 1,
                     entry_ts.isoformat(),
                 )
+
+                if active_mode == "deepagent" and raw_llm is not None:
+                    try:
+                        result = await _propose_for_table_deepagent(
+                            table_name=table_name,
+                            table_digest=table_digest,
+                            model=raw_llm,
+                            candidates=candidates,
+                            semantic_contract=semantic_contract,
+                            business_context=business_context,
+                            data_dictionary=data_dictionary,
+                            dataset_id=dataset_id,
+                            specialized_system_prompt=specialized_system_prompt,
+                        )
+                        exit_ts = datetime.now()
+                        duration = (exit_ts - entry_ts).total_seconds()
+                        logger.info(
+                            "[%s] Hoàn thành DeepAgent (attempt %d) sau %.2fs — %d rules",
+                            table_name,
+                            attempt + 1,
+                            duration,
+                            len(result.rules),
+                        )
+                        tracker.record_deepagent_run(
+                            table_name=table_name,
+                            batch_index=batch_index,
+                            duration_seconds=duration,
+                            rules_count=len(result.rules),
+                            mode="deepagent",
+                            status="SUCCESS",
+                        )
+                        return result
+                    except Exception as agent_exc:
+                        exit_ts = datetime.now()
+                        duration = (exit_ts - entry_ts).total_seconds()
+                        tracker.record_deepagent_run(
+                            table_name=table_name,
+                            batch_index=batch_index,
+                            duration_seconds=duration,
+                            rules_count=0,
+                            mode="deepagent",
+                            status="FAILED",
+                            error=str(agent_exc),
+                        )
+                        logger.exception(
+                            "[%s] DeepAgent gặp lỗi (%s), fallback sang 1-shot structured LLM",
+                            table_name,
+                            agent_exc,
+                        )
+                        if not getattr(settings, "rule_proposer_allow_legacy_fallback", True):
+                            raise
 
                 if candidates is not None:
                     coverage_requirements = json.dumps(candidates, ensure_ascii=False)
@@ -542,12 +714,21 @@ async def _propose_for_table(
                     ]
                 result: CandidateTableRuleProposal = await structured_llm.ainvoke(messages)
                 exit_ts = datetime.now()
+                duration = (exit_ts - entry_ts).total_seconds()
                 logger.info(
-                    "[%s] Hoàn thành (attempt %d) sau %.2fs — %d rules",
+                    "[%s] Hoàn thành Legacy 1-shot (attempt %d) sau %.2fs — %d rules",
                     table_name,
                     attempt + 1,
-                    (exit_ts - entry_ts).total_seconds(),
+                    duration,
                     len(result.rules),
+                )
+                tracker.record_deepagent_run(
+                    table_name=table_name,
+                    batch_index=batch_index,
+                    duration_seconds=duration,
+                    rules_count=len(result.rules),
+                    mode="legacy",
+                    status="SUCCESS",
                 )
                 return result
 
@@ -799,6 +980,8 @@ async def rule_proposer_node(state: AgentState) -> dict:
                 candidates=candidate_batch,
                 dataset_id=dataset_id,
                 specialized_system_prompt=specialized_prompts.get(table_name),
+                raw_llm=llm,
+                batch_index=_batch_index,
             )
             for table_name, _batch_index, candidate_batch in batch_jobs
         ],

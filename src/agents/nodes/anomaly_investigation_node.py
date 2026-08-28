@@ -97,12 +97,12 @@ async def anomaly_investigation_node(state: AnomalyGraphState) -> dict:
         ToolCallLimitMiddleware(
             thread_limit=settings.anomaly_investigation_thread_tool_call_limit,
             run_limit=settings.anomaly_investigation_tool_call_limit,
-            exit_behavior="end",
+            exit_behavior="continue",
         ),
     ]
 
-    skill_path = str(Path(__file__).resolve().parents[1] / "skills")
-    
+    skill_path = str(Path(__file__).resolve().parents[1] / "skills"/ "anomaly_investigator")
+
 
     agent = create_deep_agent(
         model=model,

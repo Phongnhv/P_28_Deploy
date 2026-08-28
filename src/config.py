@@ -44,11 +44,13 @@ class Settings(BaseSettings):
 
     # Rule Proposer tunables
     agent_mode: Literal["mock", "graph"] = os.getenv("AGENT_MODE") or "mock"
-    rule_proposer_concurrency: int = 10
+    rule_proposer_concurrency: int = 2
     rule_proposer_max_retries: int = 2
-    rule_proposer_batch_size: int = Field(default=8, ge=1, le=20)
+    rule_proposer_batch_size: int = Field(default=20, ge=1, le=20)
     rule_proposer_mode: Literal["deepagent", "legacy"] = os.getenv("RULE_PROPOSER_MODE") or "deepagent"
-    rule_proposer_max_tool_calls: int = 8
+    rule_proposer_max_tool_calls: int = 6
+    rule_proposer_thread_tool_call_limit: int = Field(default=15, ge=1, le=200)
+    rule_proposer_allow_legacy_fallback: bool = True
     debug_dump_table_digests: bool = False
     anomaly_investigation_mode: Literal["deepagent", "legacy"] = os.getenv("ANOMALY_INVESTIGATION_MODE") or "deepagent"
     anomaly_investigation_tool_call_limit: int = Field(default=10, ge=1, le=100)
