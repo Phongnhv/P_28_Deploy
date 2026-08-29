@@ -1,4 +1,5 @@
 """Deterministic anomaly detection for persisted dashboard DQ runs.
+
 Consolidated to use the canonical anomaly service via an adapter.
 """
 
@@ -49,12 +50,22 @@ def detect_dashboard_anomalies(
         logger.error("Error in canonical anomaly detection: %s", exc, exc_info=True)
         return []
 
+    rollout_mode = result.get("rollout_mode", "DISABLED")
     anomalies: list[DashboardAnomaly] = []
 
     # Map signals with high scores (anomaly decisions) back to DashboardAnomaly
     for sig in result.get("signals", []):
+        fam = sig.get("family", "")
+
+        # Skip all ML signals when rollout mode is SHADOW
+        if fam == "ML" and rollout_mode == "SHADOW":
+            continue
+
+        # Skip disabled, failed, or insufficient-history ML signals
+        if fam == "ML" and not sig.get("sufficient_history", False):
+            continue
+
         # Only surface signals that indicate anomalies (score >= 0.70)
-        # Or if the family is execution health / business invariant and failed
         if sig.get("score", 0.0) < 0.70:
             continue
 
@@ -72,9 +83,6 @@ def detect_dashboard_anomalies(
         checked_count = res_model.checked_count
         failed_count = res_model.failed_count
 
-        # Mẫu quá nhỏ thì tỷ lệ vi phạm không đủ tin cậy để báo động cho Steward.
-        # `minimum_checked_count` đã được khai báo trong chữ ký hàm từ đầu nhưng không
-        # dòng nào dùng tới — một rule chạy trên 50 dòng vẫn nổi lên như bất thường thật.
         if checked_count < minimum_checked_count:
             logger.debug(
                 "Bỏ qua signal %s: chỉ kiểm tra %d dòng (< %d), độ tin cậy không đủ.",
@@ -85,14 +93,29 @@ def detect_dashboard_anomalies(
             continue
 
         current_rate = failed_count / checked_count if checked_count > 0 else 0.0
-
         baseline = sig.get("baseline", {})
+        detector_name = sig.get("detector_name", "")
 
-        anomaly_type = "Z_SCORE_SPIKE" if sig["detector_name"] == "ROBUST_MAD_DETECTOR" else "HIGH_VIOLATION_RATE"
-        if sig["detector_name"] == "BUSINESS_INVARIANT_DETECTOR":
+        if fam == "ML" or detector_name == "ISOLATION_FOREST":
+            anomaly_type = "ISOLATION_FOREST_OUTLIER"
+            detection_mode = "ISOLATION_FOREST"
+            historical_mean = None
+            z_score = None
+        elif detector_name == "BUSINESS_INVARIANT_DETECTOR":
             anomaly_type = "BUSINESS_RULE_VIOLATION"
-
-        detection_mode = "HISTORICAL" if sig["sufficient_history"] else "COLD_START"
+            detection_mode = "BUSINESS_RULE"
+            historical_mean = None
+            z_score = None
+        elif detector_name == "ROBUST_MAD_DETECTOR":
+            anomaly_type = "Z_SCORE_SPIKE"
+            detection_mode = "HISTORICAL"
+            historical_mean = round(baseline.get("median", 0.0), 6) if sig["sufficient_history"] else None
+            z_score = round(baseline.get("robust_z", 0.0), 2) if "robust_z" in baseline else None
+        else:
+            anomaly_type = "HIGH_VIOLATION_RATE"
+            detection_mode = "COLD_START"
+            historical_mean = None
+            z_score = None
 
         # Map back to DashboardAnomaly structure
         anomalies.append(
@@ -101,8 +124,8 @@ def detect_dashboard_anomalies(
                 rule_title=res_model.rule_title,
                 anomaly_type=anomaly_type,
                 current_rate=round(current_rate, 6),
-                historical_mean=round(baseline.get("median", 0.0), 6) if sig["sufficient_history"] else None,
-                z_score=round(sig["score"] * 3.0, 2),  # Scaled back for UI representation
+                historical_mean=historical_mean,
+                z_score=z_score,
                 history_size=baseline.get("history_size", 0),
                 detection_mode=detection_mode,
                 checked_count=checked_count,

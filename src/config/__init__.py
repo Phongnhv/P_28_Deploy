@@ -36,7 +36,6 @@ class Settings(BaseSettings):
     llm_provider: Literal["openai", "anthropic", "mistral", "google"] = os.getenv("PROVIDER") or "openai"
 
     # Set model based on provider
-    # model_name: str = os.getenv("MISTRAL_MODEL") or "mistral-medium-latest"
     openai_model_name: str = os.getenv("OPENAI_MODEL") or "gpt-5.6-luna"
     anthropic_model_name: str = os.getenv("ANTHROPIC_MODEL") or "claude-opus-5"
     mistral_model_name: str = os.getenv("MISTRAL_MODEL") or "mistral-medium-latest"
@@ -56,12 +55,10 @@ class Settings(BaseSettings):
     anomaly_investigation_tool_call_limit: int = Field(default=10, ge=1, le=100)
     anomaly_investigation_thread_tool_call_limit: int = Field(default=20, ge=1, le=200)
 
+    # Anomaly Detection versioning
+    detector_config_version: str = os.getenv("DETECTOR_CONFIG_VERSION") or "anomaly-v2-iforest"
+
     # Database
-    # ``DATABASE_URL`` is the explicit control-plane database.  When it is not
-    # supplied, use the configured Supabase connection for both workflow
-    # metadata and execution instead of silently creating a local SQLite file.
-    # SQLite remains an intentional fallback only for tests or an unconfigured
-    # local checkout.
     database_url: str = Field(
         default_factory=lambda: (
             os.getenv("DATABASE_URL")
@@ -69,8 +66,6 @@ class Settings(BaseSettings):
             or "sqlite:///steward_local.db"
         )
     )
-    # Canonical source data can be separate from the control-plane store when
-    # an explicit DATABASE_URL is used.
     supabase_database_url: str | None = os.getenv("SUPABASE_DATABASE_URL")
     dq_execution_backend: Literal["auto", "local", "supabase"] = os.getenv("DQ_EXECUTION_BACKEND") or "auto"
     database_pool_size: int = Field(default=5, ge=1, le=20)
@@ -79,9 +74,9 @@ class Settings(BaseSettings):
 
     # Output
     output_dir: str = "./output"
-    results_dir: str = "./output"  # Backwards-compatible alias
+    results_dir: str = "./output"
 
-    # Generated dbt artifacts (GCS/Cloud Run, AWS S3, or MinIO locally)
+    # Generated dbt artifacts
     object_storage_provider: Literal["s3", "gcs"] = "s3"
     object_storage_bucket: str = "ridepulse-dbt-artifacts"
     object_storage_prefix: str = "dbt-tests"
@@ -97,3 +92,6 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+__all__ = ["Settings", "get_settings"]

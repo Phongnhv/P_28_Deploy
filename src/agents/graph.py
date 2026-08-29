@@ -751,7 +751,7 @@ async def run_anomaly_graph(
         "anomaly_run_id": anomaly_run_id,
         "execution_run_id": execution_run_id,
         "dataset_id": dataset_id,
-        "detector_config_version": "anomaly-v1",
+        "detector_config_version": settings.detector_config_version,
         "metadata": {
             "investigation_mode": active_mode,
         },
@@ -769,7 +769,6 @@ async def run_anomaly_graph(
         decision_data = final_state.get("anomaly_decision", {})
         signals = final_state.get("signal_observations", [])
         hypotheses = final_state.get("hypotheses", [])
-        # report_writer_node sets steward_report_path in state and metadata
         steward_report_path = final_state.get("steward_report_path") or final_state.get("metadata", {}).get(
             "steward_report_path"
         )

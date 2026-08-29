@@ -1,16 +1,21 @@
-"""Canonical anomaly detection service with Median/MAD and historical baseline calculations.
-Used by Graph 3 and Dashboard API.
+"""Canonical Anomaly Detection Service for Graph 3 and Dashboard Parity.
+
+Calculates robust statistical estimators (Median/MAD), business invariant violations,
+multivariate Isolation Forest anomaly signals, and aggregated decisions.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.config import get_settings
+from src.config.detector_config import get_detector_config
 from src.models.database import (
     AnomalyFeedbackModel,
     AnomalyRunModel,
@@ -18,59 +23,45 @@ from src.models.database import (
     DqRunModel,
     ProfileModel,
 )
+from src.services.anomaly_features import (
+    build_bulk_rule_feature_frames,
+)
+from src.services.isolation_forest_detector import (
+    run_isolation_forest_for_frame,
+)
 from src.services.rule_store import TestResultModel, TestRunModel
 
 logger = logging.getLogger(__name__)
 
-# Số đợt chạy gần nhất dùng làm baseline cho mỗi rule (cửa sổ trượt).
-# Không giới hạn cửa sổ thì median/MAD bị pha loãng bởi toàn bộ lịch sử từ đầu,
-# khiến detector ngày càng chai lì với drift mới.
-_HISTORY_WINDOW = 30
-
-# Số bản ghi profile gần nhất dùng làm baseline cho VOLUME_DRIFT_DETECTOR.
+# Constants for sliding history window and estimators
+_HISTORY_WINDOW = 20
 _VOLUME_HISTORY_WINDOW = 20
-
-# Khi MAD = 0 (lịch sử hoàn toàn phẳng), dùng thang đo dự phòng thay cho hằng số cứng.
-_MAD_ZERO_FLOOR = 0.005  # 0.5 điểm phần trăm
+_MIN_HISTORY_ROBUST = 5
+_MAD_ZERO_FLOOR = 0.005
 _MAX_ROBUST_Z = 10.0
 
 
-def compute_median(values: list[float]) -> float:
-    if not values:
-        return 0.0
-    sorted_vals = sorted(values)
-    n = len(sorted_vals)
-    mid = n // 2
-    if n % 2 == 0:
-        return (sorted_vals[mid - 1] + sorted_vals[mid]) / 2.0
-    return sorted_vals[mid]
-
-
-def compute_mad(values: list[float], median: float) -> float:
-    if not values:
-        return 0.0
-    deviations = [abs(x - median) for x in values]
-    return compute_median(deviations)
-
-
 def calculate_robust_zscore(current: float, history: list[float]) -> tuple[float, float, float]:
-    """Calculate robust Z-score using Median and MAD.
+    """Calculate Modified Z-score using Median and Median Absolute Deviation (MAD).
 
-    Formula: Robust Z = 0.6745 * (current - median) / MAD
-    Returns:
-        (robust_zscore, median, mad)
+    Formula: Robust_Z = 0.6745 * (x - median) / MAD
+    Returns: (robust_z, median, mad)
     """
     if not history:
         return 0.0, current, 0.0
-    median = compute_median(history)
-    mad = compute_mad(history, median)
+
+    sorted_hist = sorted(history)
+
+    def _median(arr: list[float]) -> float:
+        mid = len(arr) // 2
+        return (arr[mid] + arr[~mid]) / 2.0
+
+    median = _median(sorted_hist)
+    abs_deviations = sorted(abs(x - median) for x in history)
+    mad = _median(abs_deviations)
 
     if mad == 0.0:
-        # MAD = 0 nghĩa là lịch sử hoàn toàn phẳng — rất phổ biến khi mọi đợt chạy đều 0% vi phạm.
-        # Trả về hằng số 3.0 cho mọi sai lệch khiến lệch 0.001% và lệch 100% nhận cùng một điểm.
-        # Thay bằng thang đo dự phòng theo độ lớn baseline để phản hồi có phân cấp.
-        if current == median:
-            return 0.0, median, 0.0
+        # Fallback to percentage-based or absolute floor scale if MAD is 0
         fallback_scale = max(abs(median) * 0.1, _MAD_ZERO_FLOOR)
         robust_z = 0.6745 * (current - median) / fallback_scale
         return max(-_MAX_ROBUST_Z, min(_MAX_ROBUST_Z, robust_z)), median, 0.0
@@ -86,8 +77,15 @@ def get_excluded_execution_run_ids(db: Session) -> set[str]:
     return {r.execution_run_id for r in runs}
 
 
-def detect_anomalies(db: Session, execution_run_id: str, detector_config_version: str = "anomaly-v1") -> dict[str, Any]:
+def detect_anomalies(db: Session, execution_run_id: str, detector_config_version: str | None = None) -> dict[str, Any]:
     """Canonical function to calculate signals, aggregate decisions, and return anomaly outcomes."""
+    settings = get_settings()
+    if detector_config_version is None:
+        detector_config_version = getattr(settings, "detector_config_version", "anomaly-v2-iforest")
+
+    # Load versioned detector configuration (raises ValueError on unknown versions)
+    config = get_detector_config(detector_config_version)
+
     # Graph 2 writes the dashboard's durable execution evidence to
     # ``test_runs`` / ``test_results``.  Older API flows use ``dq_runs`` /
     # ``dq_results`` instead.  Graph 3 must consume either contract; otherwise
@@ -118,106 +116,117 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
     signals: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
 
-    # 1.1 Nạp lịch sử của TẤT CẢ rules trong một query duy nhất (trước đây là N+1: mỗi
-    # rule một query). Sắp xếp mới nhất trước rồi cắt cửa sổ trượt _HISTORY_WINDOW cho
-    # từng rule — baseline chỉ phản ánh giai đoạn gần đây thay vì toàn bộ lịch sử.
-    # Loại trừ: đợt chạy hiện tại, đợt chạy lỗi, và đợt đã được Steward gán TRUE_ANOMALY.
+    # 1. Nạp lịch sử của TẤT CẢ rules trong một query duy nhất cho statistical detector.
+    # Sắp xếp mới nhất trước rồi cắt cửa sổ trượt _HISTORY_WINDOW cho từng rule.
     history_by_rule: dict[str, list[float]] = {}
     rule_ids = [res.rule_id for res in current_results]
+    current_created_at = getattr(current_run, "created_at", None)
+
     if rule_ids and uses_test_store:
-        history_rows = (
-            db.query(TestResultModel)
+        stat_query = (
+            db.query(TestResultModel.rule_id, TestResultModel.violation_count, TestResultModel.total_rows, TestRunModel.test_run_id)
             .join(TestRunModel, TestRunModel.test_run_id == TestResultModel.test_run_id)
             .filter(
                 TestResultModel.rule_id.in_(rule_ids),
-                TestResultModel.test_run_id != execution_run_id,
                 TestRunModel.dataset_id == current_run.dataset_id,
+                TestRunModel.test_run_id != execution_run_id,
                 TestRunModel.status == "DONE",
+                TestResultModel.status.in_(["PASS", "FAIL", "PASSED", "FAILED"]),
             )
-            .order_by(TestRunModel.created_at.desc())
-            .all()
         )
-        for row in history_rows:
-            if row.test_run_id in excluded_run_ids:
+        if current_created_at is not None:
+            stat_query = stat_query.filter(TestRunModel.created_at < current_created_at)
+
+        history_rows = stat_query.order_by(TestRunModel.created_at.desc()).all()
+
+        for h_row in history_rows:
+            if h_row.test_run_id in excluded_run_ids:
                 continue
-            bucket = history_by_rule.setdefault(row.rule_id, [])
-            if len(bucket) < _HISTORY_WINDOW:
-                bucket.append(
-                    row.violation_count / row.total_rows if row.total_rows > 0 else 0.0
-                )
-    elif rule_ids:
-        history_rows = (
-            db.query(DqResultModel)
+            if h_row.total_rows and h_row.total_rows > 0:
+                rate = h_row.violation_count / h_row.total_rows
+                arr = history_by_rule.setdefault(h_row.rule_id, [])
+                if len(arr) < _HISTORY_WINDOW:
+                    arr.append(rate)
+
+    elif rule_ids and not uses_test_store:
+        stat_query = (
+            db.query(DqResultModel.rule_id, DqResultModel.failed_count, DqResultModel.checked_count, DqRunModel.id)
             .join(DqRunModel, DqRunModel.id == DqResultModel.run_id)
             .filter(
                 DqResultModel.rule_id.in_(rule_ids),
-                DqResultModel.run_id != execution_run_id,
                 DqRunModel.dataset_id == current_run.dataset_id,
-                or_(DqRunModel.status == "SUCCEEDED", DqRunModel.status == "DONE"),
+                DqRunModel.id != execution_run_id,
+                DqRunModel.status.in_(["SUCCEEDED", "DONE"]),
+                DqResultModel.status.in_(["PASS", "FAIL", "PASSED", "FAILED"]),
             )
-            .order_by(DqRunModel.created_at.desc())
-            .all()
         )
-        for row in history_rows:
-            if row.run_id in excluded_run_ids:
-                continue
-            bucket = history_by_rule.setdefault(row.rule_id, [])
-            if len(bucket) < _HISTORY_WINDOW:
-                bucket.append(row.failed_count / row.checked_count if row.checked_count > 0 else 0.0)
+        if current_created_at is not None:
+            stat_query = stat_query.filter(DqRunModel.created_at < current_created_at)
 
-    # 2. Iterate through rules and run detectors
+        history_rows = stat_query.order_by(DqRunModel.created_at.desc()).all()
+
+        for h_row in history_rows:
+            if h_row.id in excluded_run_ids:
+                continue
+            if h_row.checked_count and h_row.checked_count > 0:
+                rate = h_row.failed_count / h_row.checked_count
+                arr = history_by_rule.setdefault(h_row.rule_id, [])
+                if len(arr) < _HISTORY_WINDOW:
+                    arr.append(rate)
+
+    # 2. Extract statistical signals for each rule
     for res in current_results:
         rule_id = res.rule_id
-        checked_count = res.total_rows if uses_test_store else res.checked_count
-        failed_count = res.violation_count if uses_test_store else res.failed_count
-        current_rate = failed_count / checked_count if checked_count > 0 else 0.0
+        if uses_test_store:
+            checked_count = res.total_rows
+            failed_count = res.violation_count
+        else:
+            checked_count = res.checked_count
+            failed_count = res.failed_count
+
+        current_rate = (failed_count / checked_count) if checked_count and checked_count > 0 else 0.0
 
         history_rates = history_by_rule.get(rule_id, [])
+        sufficient_history = len(history_rates) >= config.min_history_size_robust
 
-        sufficient_history = len(history_rates) >= 5
-
-        # Detector 1 & 2 & 3: Invariant / Cold-start / Robust historical on Rule Level
         score = 0.0
         reliability = 1.0
-        observed_value = current_rate
-        baseline_stats = {}
-        detector_name = ""
+        observed_value = round(current_rate, 4)
+        detector_name = "ROBUST_MAD_DETECTOR"
         explanation_code = ""
-
-        # Low checked count reduces reliability
-        if checked_count < 100:
-            reliability = 0.5
+        baseline_stats = {}
 
         if sufficient_history:
-            # Warm start: Robust MAD historical
             robust_z, median, mad = calculate_robust_zscore(current_rate, history_rates)
-            baseline_stats = {"median": median, "mad": mad, "history_size": len(history_rates)}
-            detector_name = "ROBUST_MAD_DETECTOR"
+            baseline_stats = {
+                "median": round(median, 4),
+                "mad": round(mad, 4),
+                "history_size": len(history_rates),
+                "robust_z": round(robust_z, 4),
+            }
 
-            # Translate Z-score to score (0 to 1)
-            # z >= 3.0 maps to score >= 0.8
-            if current_rate > 0.01:
-                if robust_z >= 3.0:
-                    score = min(1.0, 0.8 + (robust_z - 3.0) * 0.05)
-                elif robust_z >= 2.0:
-                    score = 0.5 + (robust_z - 2.0) * 0.3
-                else:
-                    score = max(0.0, robust_z * 0.25)
+            if robust_z >= config.z_score_threshold_anomaly:
+                score = min(1.0, 0.70 + (robust_z - config.z_score_threshold_anomaly) * 0.1)
+                explanation_code = f"Tỷ lệ vi phạm ({current_rate:.2%}) đột biến so với baseline lịch sử (median={median:.2%}, MAD={mad:.4f}) với Robust Z = {robust_z:.2f}."
+            elif robust_z >= config.z_score_threshold_watch:
+                score = 0.45 + (robust_z - config.z_score_threshold_watch) * 0.25
+                explanation_code = f"Tỷ lệ vi phạm ({current_rate:.2%}) có dấu hiệu cảnh báo so với baseline lịch sử với Robust Z = {robust_z:.2f}."
             else:
                 score = 0.0
+                explanation_code = "Tỷ lệ vi phạm bình thường so với baseline lịch sử."
 
-            if score >= 0.7:
-                explanation_code = f"Tỷ lệ vi phạm hiện tại ({current_rate:.2%}) vượt quá ngưỡng baseline lịch sử (median={median:.2%}, MAD={mad:.2%}) với Robust Z-Score = {robust_z:.2f}."
-            else:
-                explanation_code = "Hoạt động bình thường theo baseline lịch sử."
+            reliability = min(1.0, 0.7 + len(history_rates) * 0.015)
+
         else:
-            # Cold start: Static threshold
-            detector_name = "COLD_START_STATIC_DETECTOR"
-            baseline_stats = {"static_threshold": 0.05}
-            reliability = 0.6 if history_rates else 0.4  # lower reliability for absolute cold start
+            # Cold-start fallback
+            baseline_stats = {
+                "static_threshold": 0.05,
+                "history_size": len(history_rates),
+            }
+            detector_name = "COLD_START_DETECTOR"
+            reliability = 0.6 if history_rates else 0.4
 
-            # Static rule: if failed and rate >= 0.05, it is an anomaly
-            if res.status == "FAIL" or res.status == "FAILED":
+            if res.status in ("FAIL", "FAILED"):
                 if current_rate >= 0.05:
                     score = 0.8
                     explanation_code = f"Tỷ lệ vi phạm ({current_rate:.2%}) vượt quá ngưỡng Cold-Start tĩnh 5%."
@@ -230,11 +239,21 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
 
         # Business rule override check
         rule_title = str(getattr(res, "rule_title", ""))
-        is_business_rule = rule_title.startswith("BUSINESS_") or "invariant" in rule_title.lower() or res.rule_id.endswith(".BUSINESS_RULE")
+        is_business_rule = (
+            rule_title.startswith("BUSINESS_")
+            or "invariant" in rule_title.lower()
+            or res.rule_id.endswith(".BUSINESS_RULE")
+        )
         if is_business_rule and res.status in ("FAIL", "FAILED"):
             score = 1.0
             detector_name = "BUSINESS_INVARIANT_DETECTOR"
             explanation_code = f"Vi phạm nghiêm trọng luật nghiệp vụ (Business Invariant): {rule_title}."
+
+        evidence_ref = (
+            f"dq_results.id={res.id}"
+            if not uses_test_store
+            else f"test_results.{res.test_run_id}:{res.rule_id}"
+        )
 
         signals.append({
             "signal_id": f"sig-{uuid.uuid4().hex[:12]}",
@@ -249,15 +268,76 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
             "detector_name": detector_name,
             "detector_version": "1.0.0",
             "explanation_code": explanation_code,
-            "evidence_refs": [
-                f"dq_results.id={res.id}"
-                if not uses_test_store
-                else f"test_results.{res.test_run_id}:{res.rule_id}"
-            ]
+            "evidence_refs": [evidence_ref],
         })
 
-    # 3. Table/Dataset Level Detectors (Volume & Freshness)
-    # Fetch row count from profile
+    # 3. Isolation Forest Detector (Bulk Builder & Model Fitting)
+    if config.isolation_forest_enabled and config.isolation_forest_mode != "DISABLED":
+        start_ml_time = time.perf_counter()
+        try:
+            frames = build_bulk_rule_feature_frames(
+                db=db,
+                current_run=current_run,
+                current_results=current_results,
+                uses_test_store=uses_test_store,
+                excluded_run_ids=excluded_run_ids,
+                feature_schema_version=config.feature_schema_version,
+                max_history=config.max_history_size_iforest,
+            )
+
+            eligible_count = len(frames)
+            fitted_count = 0
+            insufficient_count = 0
+            invalid_current_count = 0
+            degenerate_count = 0
+
+            for frame in frames.values():
+                evidence_ref = (
+                    f"test_results.{execution_run_id}:{frame.rule_id}"
+                    if uses_test_store
+                    else f"dq_results.{execution_run_id}:{frame.rule_id}"
+                )
+                ml_sig = run_isolation_forest_for_frame(
+                    frame=frame,
+                    evidence_refs=[evidence_ref],
+                    config=config,
+                )
+                signals.append(ml_sig)
+
+                status = ml_sig.get("baseline", {}).get("status")
+                if status == "INSUFFICIENT_HISTORY":
+                    insufficient_count += 1
+                elif status == "INVALID_CURRENT_VECTOR":
+                    invalid_current_count += 1
+                elif status in ("DEGENERATE_HISTORY", "DEGENERATE_TRAINING_SCORES"):
+                    degenerate_count += 1
+                elif ml_sig.get("sufficient_history", False):
+                    fitted_count += 1
+
+                if "error" in ml_sig.get("baseline", {}):
+                    errors.append({
+                        "detector": "ISOLATION_FOREST",
+                        "rule_id": frame.rule_id,
+                        "error": ml_sig["baseline"]["error"],
+                    })
+
+            ml_duration = time.perf_counter() - start_ml_time
+            logger.info(
+                "Isolation Forest completed: eligible_rules=%d, fitted=%d, insufficient=%d, "
+                "invalid_current=%d, degenerate=%d, duration=%.3fs",
+                eligible_count,
+                fitted_count,
+                insufficient_count,
+                invalid_current_count,
+                degenerate_count,
+                ml_duration,
+            )
+
+        except Exception as ml_exc:
+            logger.warning("Isolation Forest bulk processing failed: %s", ml_exc, exc_info=True)
+            errors.append({"detector": "ISOLATION_FOREST", "error": str(ml_exc)})
+
+    # 4. Table/Dataset Level Detectors (Volume & Freshness)
     profile = (
         db.query(ProfileModel)
         .filter(ProfileModel.dataset_id == current_run.dataset_id)
@@ -266,9 +346,6 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
     )
     if profile:
         current_rows = profile.row_count
-        # Fetch historical row counts
-        # LIMIT không kèm ORDER BY là hành vi không xác định trong SQL — DB được quyền
-        # trả về 20 dòng bất kỳ, khiến baseline thay đổi giữa các lần chạy trên cùng dữ liệu.
         hist_profiles = (
             db.query(ProfileModel)
             .filter(ProfileModel.dataset_id == current_run.dataset_id, ProfileModel.generated_at < profile.generated_at)
@@ -282,7 +359,6 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
         vol_score = 0.0
         vol_reliability = 1.0
         vol_explanation = ""
-        vol_baseline = {}
 
         if sufficient_vol_history:
             vol_z, vol_median, vol_mad = calculate_robust_zscore(float(current_rows), [float(x) for x in hist_rows])
@@ -344,31 +420,50 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
                 if not uses_test_store
                 else f"test_results.{e.test_run_id}:{e.rule_id}"
                 for e in exec_errors
-            ]
+            ],
         })
 
-    # 4. Deterministic Aggregation (Phase 3.6)
-    # 4.1 Group signals by family
+    # 5. Deterministic Family Aggregation & Rollout Policies
     family_scores: dict[str, list[float]] = {}
-    family_weights = {
-        "BUSINESS_RULE": 1.0,
-        "EXECUTION": 1.0,
-        "VOLUME": 0.8,
-        "FRESHNESS": 0.8,
-        "STATISTICAL": 0.6,
-        "ML": 0.5,
-    }
+    family_weights = config.family_weights
+    rollout_mode = config.isolation_forest_mode if config.isolation_forest_enabled else "DISABLED"
 
     for sig in signals:
         fam = sig["family"]
+        # In SHADOW mode: ML signals are logged and persisted, but excluded from decision aggregation
+        if fam == "ML" and (rollout_mode == "SHADOW" or not sig.get("sufficient_history", False)):
+            continue
         family_scores.setdefault(fam, []).append(sig["score"])
 
-    # Represent family: Max score in family
-    family_reps: dict[str, float] = {}
+    # Base score = MAX of non-ML families
+    non_ml_reps: dict[str, float] = {}
     for fam, scs in family_scores.items():
-        family_reps[fam] = max(scs) if scs else 0.0
+        if fam != "ML":
+            non_ml_reps[fam] = max(scs) if scs else 0.0
 
-    # Family "chủ đạo": điểm cao nhất, hoà điểm thì ưu tiên family đáng tin cậy hơn.
+    base_score = max(non_ml_reps.values()) if non_ml_reps else 0.0
+    family_reps = dict(non_ml_reps)
+
+    # ML Conservative Bounded Uplift in ADVISORY and CALIBRATED modes
+    ml_score = 0.0
+    ml_reliability = 0.0
+    ml_signals = [
+        sig for sig in signals
+        if sig["family"] == "ML" and sig.get("sufficient_history", False) and sig.get("score", 0.0) > 0.0
+    ]
+
+    if ml_signals and rollout_mode in ("ADVISORY", "CALIBRATED"):
+        best_ml_signal = max(ml_signals, key=lambda s: s["score"])
+        ml_score = best_ml_signal["score"]
+        ml_reliability = best_ml_signal["reliability"]
+        family_reps["ML"] = ml_score
+
+        uplift = config.ml_family_weight * ml_reliability * max(0.0, ml_score - base_score)
+        final_score = min(1.0, base_score + uplift)
+    else:
+        final_score = base_score
+
+    # Determine dominant family
     dominant_family = ""
     if family_reps:
         dominant_family = max(
@@ -376,10 +471,9 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
             key=lambda fam: (family_reps[fam], family_weights.get(fam, 0.5)),
         )
 
-    # Check for priority overrides
+    # Priority overrides (Business invariant >= 0.8 or Execution health == 1.0)
     has_critical_override = False
     override_reason = ""
-    # If BUSINESS_RULE has score >= 0.8, or EXECUTION has score 1.0
     if family_reps.get("BUSINESS_RULE", 0.0) >= 0.8:
         has_critical_override = True
         override_reason = "Vi phạm nghiêm trọng luật nghiệp vụ (Business Invariant)."
@@ -393,31 +487,28 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
         confidence = 0.95
         severity = "HIGH"
     else:
-        # Family aggregation — MAX, không phải trung bình.
-        #
-        # Bất thường là quan hệ HOẶC: chỉ cần MỘT family báo động là đợt chạy đáng ngờ.
-        # Bản cũ lấy trung bình có trọng số nên một family khỏe mạnh (score 0.0) kéo tụt
-        # điểm của family đang báo động — ví dụ STATISTICAL=0.80 + VOLUME=0.00 cho ra
-        # 0.3429 (NORMAL) thay vì 0.80 (ANOMALY). Với dataset đã ingest, signal VOLUME
-        # luôn tồn tại nên trần điểm của family STATISTICAL chỉ còn 0.6/1.4 = 0.4286,
-        # thấp hơn cả ngưỡng WATCH → detector thống kê bị vô hiệu hoá hoàn toàn.
-        #
-        # MAX đảm bảo tính đơn điệu: thêm một signal không bao giờ làm giảm điểm tổng hợp.
-        final_score = max(family_reps.values()) if family_reps else 0.0
+        # Calculate avg_reliability over active participating signals
+        active_signals = [
+            sig for sig in signals
+            if not (sig["family"] == "ML" and (rollout_mode == "SHADOW" or not sig.get("sufficient_history", False)))
+        ]
+        rel_sum = sum(sig["reliability"] for sig in active_signals)
+        avg_reliability = (rel_sum / len(active_signals)) if active_signals else 0.0
 
-        # Reliability sum
-        rel_sum = sum(sig["reliability"] for sig in signals)
-        avg_reliability = (rel_sum / len(signals)) if signals else 0.0
-
-        # Classify decision
-        if not signals or (avg_reliability < 0.5 and final_score < 0.5):
+        if not active_signals or (avg_reliability < 0.5 and final_score < 0.5):
             decision = "INSUFFICIENT_HISTORY"
             confidence = avg_reliability
             severity = "LOW"
         elif final_score >= 0.70:
-            decision = "ANOMALY"
-            confidence = 0.80
-            severity = "HIGH"
+            # Corroboration Guardrail: ML alone cannot produce ANOMALY without non-ML corroboration (>= 0.45)
+            if dominant_family == "ML" and base_score < 0.45:
+                decision = "WATCH"
+                confidence = 0.70
+                severity = "MEDIUM"
+            else:
+                decision = "ANOMALY"
+                confidence = 0.80
+                severity = "HIGH"
         elif final_score >= 0.45:
             decision = "WATCH"
             confidence = 0.70
@@ -427,7 +518,6 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
             confidence = 0.90
             severity = "LOW"
 
-    # Normalize score
     final_score = round(final_score, 4)
 
     return {
@@ -439,4 +529,6 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
         "errors": errors,
         "override_reason": override_reason,
         "dominant_family": dominant_family,
+        "detector_config_version": detector_config_version,
+        "rollout_mode": rollout_mode,
     }
