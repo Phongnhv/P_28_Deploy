@@ -1,8 +1,10 @@
 from typing import Literal
 
+from langchain.chat_models import init_chat_model
+
 from src.config import get_settings
 
-Provider_type = Literal["openai", "anthropic", "mistral"]
+Provider_type = Literal["openai", "anthropic", "mistral", "google"]
 
 
 def get_llm(provider: Provider_type, temperature: float | None = None, callbacks: list | None = None):
@@ -21,8 +23,6 @@ def get_llm(provider: Provider_type, temperature: float | None = None, callbacks
     cb_list = callbacks if callbacks is not None else [get_metrics_tracker()]
 
     if provider == "openai":
-        from langchain.chat_models import init_chat_model
-
         return init_chat_model(
             f"openai:{settings.openai_model_name}",
             api_key=settings.openai_api_key,
@@ -34,28 +34,23 @@ def get_llm(provider: Provider_type, temperature: float | None = None, callbacks
         )
 
     elif provider == "anthropic":
-        from langchain_anthropic import ChatAnthropic
-
-        return ChatAnthropic(
-            model=settings.anthropic_model_name,
+        return init_chat_model(
+            f"anthropic:{settings.anthropic_model_name}",
             api_key=settings.anthropic_api_key,
             temperature=temp,
+            timeout=settings.llm_request_timeout_seconds,
             callbacks=cb_list,
         )
     elif provider == "mistral":
-        from langchain_mistralai import ChatMistralAI
-
-        return ChatMistralAI(
-            model=settings.mistral_model_name,
+        return init_chat_model(
+            f"mistralai:{settings.mistral_model_name}",
             api_key=settings.mistral_api_key,
             temperature=temp,
             callbacks=cb_list,
         )
     elif provider == "google":
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
-        return ChatGoogleGenerativeAI(
-            model=settings.google_model_name,
+        return init_chat_model(
+            f"google_genai:{settings.google_model_name}",
             api_key=settings.google_api_key,
             temperature=temp,
             callbacks=cb_list,
@@ -65,6 +60,6 @@ def get_llm(provider: Provider_type, temperature: float | None = None, callbacks
 
 
 if __name__ == "__main__":
-    llm = get_llm(provider="mistral")
+    llm = get_llm(provider="openai")
     result = llm.invoke("Hello")
     print(result)
