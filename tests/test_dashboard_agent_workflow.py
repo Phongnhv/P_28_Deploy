@@ -61,7 +61,9 @@ def seed_completed_profile() -> None:
                     null_rate=null_rate,
                     distinct_count=distinct_count,
                     non_null_count=round(100 * (1 - null_rate)),
-                    negative_rate=0.01 if name == "trip_distance" else (0.0 if data_type in {"integer", "float"} else None),
+                    negative_rate=0.01
+                    if name == "trip_distance"
+                    else (0.0 if data_type in {"integer", "float"} else None),
                     quantiles_json=(
                         json.dumps({"p05": 0.1, "p25": 1.0, "p50": 2.5, "p75": 5.0, "p95": 12.0})
                         if data_type in {"integer", "float"}
@@ -139,36 +141,63 @@ def test_graph_normalizer_rejects_parameter_drift_and_duplicate_categories():
     raw = [
         {
             "candidate_id": "not-null:vendor_id",
-            "rule_type": "NOT_NULL", "column": "vendor_id", "parameters": {},
-            "confidence_score": 0.95, "severity": "HIGH",
-            "rule_description": "Vendor ID must be populated.", "ai_reasoning": "Aggregate completeness is stable.",
+            "rule_type": "NOT_NULL",
+            "column": "vendor_id",
+            "parameters": {},
+            "confidence_score": 0.95,
+            "severity": "HIGH",
+            "rule_description": "Vendor ID must be populated.",
+            "ai_reasoning": "Aggregate completeness is stable.",
         },
         {
             "candidate_id": "not-null:vendor_id",
-            "rule_type": "NOT_NULL", "column": "vendor_id", "parameters": {},
-            "confidence_score": 0.90, "severity": "HIGH",
-            "rule_description": "Duplicate not-null proposal.", "ai_reasoning": "Must be deduplicated.",
+            "rule_type": "NOT_NULL",
+            "column": "vendor_id",
+            "parameters": {},
+            "confidence_score": 0.90,
+            "severity": "HIGH",
+            "rule_description": "Duplicate not-null proposal.",
+            "ai_reasoning": "Must be deduplicated.",
         },
         {
             "candidate_id": "nonnegative:trip_distance",
-            "rule_type": "RANGE", "column": "trip_distance", "parameters": {"min": -10.0},
-            "confidence_score": 0.99, "severity": "HIGH",
-            "rule_description": "Invented threshold.", "ai_reasoning": "Must be rejected.",
+            "rule_type": "RANGE",
+            "column": "trip_distance",
+            "parameters": {"min": -10.0},
+            "confidence_score": 0.99,
+            "severity": "HIGH",
+            "rule_description": "Invented threshold.",
+            "ai_reasoning": "Must be rejected.",
         },
         {
             "candidate_id": "nonnegative:trip_distance",
-            "rule_type": "RANGE", "column": "trip_distance", "parameters": {"min": 0.0, "max": 80.0},
-            "confidence_score": 0.85, "severity": "HIGH",
-            "rule_description": "Trip distance must be non-negative.", "ai_reasoning": "Aggregate minimum is negative.",
+            "rule_type": "RANGE",
+            "column": "trip_distance",
+            "parameters": {"min": 0.0, "max": 80.0},
+            "confidence_score": 0.85,
+            "severity": "HIGH",
+            "rule_description": "Trip distance must be non-negative.",
+            "ai_reasoning": "Aggregate minimum is negative.",
         },
         {
             "candidate_id": "governed-enum:payment_type",
-            "rule_type": "ACCEPTED_VALUES", "column": "payment_type",
-            "parameters": {"accepted_values": [
-                "Flex Fare trip", "Credit card", "Cash", "No charge", "Dispute", "Unknown", "Voided trip"
-            ]},
-            "confidence_score": 0.80, "severity": "MEDIUM",
-            "rule_description": "Payment type must be governed.", "ai_reasoning": "Use the governed semantic value set.",
+            "rule_type": "ACCEPTED_VALUES",
+            "column": "payment_type",
+            "parameters": {
+                "accepted_values": [
+                    "Flex Fare trip",
+                    "Credit card",
+                    "Cash",
+                    "No charge",
+                    "Dispute",
+                    "Unknown",
+                    "Voided trip",
+                ]
+            },
+            "confidence_score": 0.80,
+            "severity": "MEDIUM",
+            "rule_description": "Payment type must be governed.",
+            "ai_reasoning": "Use the governed semantic value set.",
         },
     ]
 
@@ -235,6 +264,7 @@ def test_graph_normalizer_rejects_mismatched_candidate_id():
 
 def test_mock_mode_returns_dashboard_supported_proposals(monkeypatch):
     from src.config import get_settings
+
     monkeypatch.setenv("AGENT_MODE", "mock")
     get_settings.cache_clear()
     try:

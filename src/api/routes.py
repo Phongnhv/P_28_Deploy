@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,7 @@ from src.models.database import (
     GovernedArtifactModel,
     Graph1NodeExecutionModel,
     Graph1RunModel,
+    GraphNodeRunModel,
     JobModel,
     ProfileModel,
     ProfileRunSnapshotModel,
@@ -95,14 +97,17 @@ from src.services.job_runner import (
 from src.services.rule_proposer_workflow import (
     WorkflowError,
     complete_rule_review,
-    execute_step,
     get_or_create_run,
     navigate_forward,
     queue_check_run,
     run_analysis_report,
     run_checks_and_prepare_analysis,
+    run_workflow_stage_job,
     serialize_artifact,
     serialize_run,
+)
+from src.services.rule_proposer_workflow import (
+    confirm_semantic_contract as confirm_workflow_semantic_contract,
 )
 from src.services.rule_proposer_workflow import (
     rewind as rewind_workflow,
@@ -130,6 +135,15 @@ from src.services.versioned_dataset import (
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
+
+
+class SemanticContractConfirmInput(BaseModel):
+    artifact_id: str
+    expected_version: int
+    contract: dict[str, Any]
+    review_note: str | None = None
+
+
 router = APIRouter()
 dq_router = APIRouter(prefix="/dq", tags=["Data Quality"])
 
@@ -697,24 +711,54 @@ async def import_dataset(
         checksum=hashlib.sha256(payload).hexdigest(),
     )
     job_id = str(uuid.uuid4())
-    job = JobModel(id=job_id, type="INGEST_PROFILE", status="PENDING", progress=0.0,
-                   message="Queued for profiling", idempotency_key=f"import-{dataset_id}",
-                   linked_entity=dataset_id, correlation_id=str(uuid.uuid4()), attempt_count=1)
+    job = JobModel(
+        id=job_id,
+        type="INGEST_PROFILE",
+        status="PENDING",
+        progress=0.0,
+        message="Queued for profiling",
+        idempotency_key=f"import-{dataset_id}",
+        linked_entity=dataset_id,
+        correlation_id=str(uuid.uuid4()),
+        attempt_count=1,
+    )
     db.add(dataset)
     db.flush()
     db.add(job)
-    db.add(DatasetAccessModel(id=str(uuid.uuid4()), dataset_id=dataset_id, username=session.username,
-                              access_level="MANAGE", granted_by=session.username))
+    db.add(
+        DatasetAccessModel(
+            id=str(uuid.uuid4()),
+            dataset_id=dataset_id,
+            username=session.username,
+            access_level="MANAGE",
+            granted_by=session.username,
+        )
+    )
     db.commit()
-    add_audit_event(db, session_id=session.id, actor_role=session.role, action_code="DATASET_IMPORTED",
-                    entity_type="dataset", entity_id=dataset_id,
-                    detail={"filename": file.filename, "job_id": job_id})
+    add_audit_event(
+        db,
+        session_id=session.id,
+        actor_role=session.role,
+        action_code="DATASET_IMPORTED",
+        entity_type="dataset",
+        entity_id=dataset_id,
+        detail={"filename": file.filename, "job_id": job_id},
+    )
     background_tasks.add_task(run_ingest_profile, job_id, dataset_id, session.id, session.role)
-    return {"dataset": {"id": dataset.id, "name": dataset.name, "description": dataset.description,
-                         "status": dataset.status, "row_count": dataset.row_count, "source_label": dataset.source_label,
-                         "manifest_version": dataset.manifest_version, "checksum": dataset.checksum,
-                         "updated_at": dataset.updated_at.isoformat()},
-            "job": {"job_id": job_id, "status": "PENDING"}}
+    return {
+        "dataset": {
+            "id": dataset.id,
+            "name": dataset.name,
+            "description": dataset.description,
+            "status": dataset.status,
+            "row_count": dataset.row_count,
+            "source_label": dataset.source_label,
+            "manifest_version": dataset.manifest_version,
+            "checksum": dataset.checksum,
+            "updated_at": dataset.updated_at.isoformat(),
+        },
+        "job": {"job_id": job_id, "status": "PENDING"},
+    }
 
 
 @router.post("/workspaces/{workspace_id}/datasets/import", status_code=202)
@@ -1748,7 +1792,12 @@ def list_workflow_artifacts(
     if not run:
         raise HTTPException(status_code=404, detail="Workflow run not found")
     require_dataset_access(db, session, run.dataset_id)
-    artifacts = db.query(WorkflowArtifactModel).filter_by(workflow_run_id=run.id).order_by(WorkflowArtifactModel.created_at).all()
+    artifacts = (
+        db.query(WorkflowArtifactModel)
+        .filter_by(workflow_run_id=run.id)
+        .order_by(WorkflowArtifactModel.created_at)
+        .all()
+    )
     return [serialize_artifact(artifact) for artifact in artifacts]
 
 
@@ -1768,10 +1817,34 @@ def run_workflow_step(
     collision = verify_idempotency(db, idempotency_key)
     if collision:
         return CreateJobResponse(job_id=collision, status="SUCCEEDED")
+    active_stage_job = (
+        db.query(JobModel)
+        .filter(
+            JobModel.correlation_id == run.id,
+            JobModel.type == ("UNDERSTAND_DATA" if step == "UNDERSTAND_DATA" else "PROPOSE_RULES"),
+            JobModel.status.in_(["PENDING", "RUNNING"]),
+        )
+        .first()
+    )
+    if active_stage_job:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "CONFLICT", "message": "This workflow stage already has an active execution"},
+        )
     job = JobModel(
-        id=str(uuid.uuid4()), type="UNDERSTAND_DATA" if step == "UNDERSTAND_DATA" else "RUN_DQ" if step in {"RUN_CHECKS", "ANALYZE_REPORT"} else "PROPOSE_RULES",
-        status="RUNNING", progress=10.0, message=f"Running {step}", idempotency_key=idempotency_key or "",
-        linked_entity=run.dataset_id, correlation_id=run.id, attempt_count=1,
+        id=str(uuid.uuid4()),
+        type="UNDERSTAND_DATA"
+        if step == "UNDERSTAND_DATA"
+        else "RUN_DQ"
+        if step in {"RUN_CHECKS", "ANALYZE_REPORT"}
+        else "PROPOSE_RULES",
+        status="RUNNING",
+        progress=10.0,
+        message=f"Running {step}",
+        idempotency_key=idempotency_key or "",
+        linked_entity=run.dataset_id,
+        correlation_id=run.id,
+        attempt_count=1,
     )
     db.add(job)
     try:
@@ -1799,9 +1872,16 @@ def run_workflow_step(
                 session.role,
             )
             return CreateJobResponse(job_id=job.id, status="PENDING")
-        execute_step(db, run, step)
-        job.status, job.progress, job.message = "SUCCEEDED", 100.0, "Completed"
+        steps = json.loads(run.steps_json or "[]")
+        current = next((item for item in steps if item.get("key") == step), None)
+        if not current or current.get("status") not in {"READY", "FAILED", "COMPLETED"}:
+            raise WorkflowError("This workflow step is not ready to run.")
+        current["status"] = "RUNNING"
+        run.steps_json = json.dumps(steps, ensure_ascii=False)
+        job.status, job.progress = "PENDING", 0.0
         db.commit()
+        background_tasks.add_task(run_workflow_stage_job, run.id, step, job.id)
+        return CreateJobResponse(job_id=job.id, status="PENDING")
     except WorkflowError as exc:
         job.status, job.error, job.message = "FAILED", str(exc), "Workflow step failed"
         db.commit()
@@ -1954,6 +2034,20 @@ def review_workflow_artifact(
     return serialize_artifact(reviewed)
 
 
+@router.post("/workflows/{workflow_run_id}/semantic-contract/confirm")
+def confirm_workflow_contract(workflow_run_id: str, body: SemanticContractConfirmInput, session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])), db: Session = Depends(get_db)):
+    run = db.get(WorkflowRunModel, workflow_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+    require_dataset_access(db, session, run.dataset_id, manage=True)
+    try:
+        artifact = confirm_workflow_semantic_contract(db, run, artifact_id=body.artifact_id, expected_version=body.expected_version, contract=body.contract, review_note=body.review_note)
+        db.commit()
+    except WorkflowError as exc:
+        raise HTTPException(status_code=409, detail={"code": "WORKFLOW_STATE", "message": str(exc)})
+    return {"workflow": serialize_run(run), "artifact": serialize_artifact(artifact)}
+
+
 @router.post("/workflows/{workflow_run_id}/advance")
 def advance_workflow_stage(
     workflow_run_id: str,
@@ -1979,35 +2073,18 @@ def get_semantic_contract(
     """
     GET /api/v1/datasets/{id}/semantic-contract - Returns the latest semantic contract draft or confirmed version.
     """
-    from pathlib import Path
     dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
     require_dataset_access(db, session, id)
 
-    # Find the latest PROPOSE_RULES job for this dataset
-    job = db.query(JobModel).filter(
-        JobModel.linked_entity == id,
-        JobModel.type == "PROPOSE_RULES"
-    ).order_by(JobModel.created_at.desc()).first()
-
-    if not job:
-        raise HTTPException(status_code=404, detail="No rule proposal job found for this dataset")
-
-    run_id = job.id
-    settings = get_settings()
-    semantic_dir = Path(settings.output_dir) / "semantic"
-    semantic_file = semantic_dir / f"debug_semantic_contract_{run_id}.json"
-
-    if not semantic_file.exists():
-        raise HTTPException(status_code=404, detail=f"Semantic Contract not generated yet for run {run_id}")
-
-    try:
-        with open(semantic_file, encoding="utf-8") as f:
-            data = json.load(f)
-        return data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read semantic contract: {str(e)}")
+    run = db.query(WorkflowRunModel).filter_by(dataset_id=id, status="ACTIVE").order_by(WorkflowRunModel.updated_at.desc()).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="No workflow run found for this dataset")
+    artifact = db.query(WorkflowArtifactModel).filter_by(workflow_run_id=run.id, step_key="UNDERSTAND_DATA", artifact_type="SEMANTIC_CONTRACT", stale=False).order_by(WorkflowArtifactModel.version.desc()).first()
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Semantic contract not generated yet")
+    return json.loads(artifact.payload_json or "{}")
 
 
 @router.post("/datasets/{id}/semantic-contract/confirm")
@@ -2016,53 +2093,29 @@ def confirm_semantic_contract(
     body: dict,
     background_tasks: BackgroundTasks,
     session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     POST /api/v1/datasets/{id}/semantic-contract/confirm - Allows Steward to confirm/update the semantic contract.
     Resumes rule proposal graph execution in background.
     """
-    from pathlib import Path
     dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
     require_dataset_access(db, session, id, manage=True)
 
-    # Find the latest PROPOSE_RULES job
-    job = db.query(JobModel).filter(
-        JobModel.linked_entity == id,
-        JobModel.type == "PROPOSE_RULES"
-    ).order_by(JobModel.created_at.desc()).first()
-
-    if not job:
-        raise HTTPException(status_code=404, detail="No rule proposal job found to confirm")
-
-    run_id = job.id
-    settings = get_settings()
-    semantic_dir = Path(settings.output_dir) / "semantic"
-    semantic_dir.mkdir(parents=True, exist_ok=True)
-    semantic_file = semantic_dir / f"debug_semantic_contract_{run_id}.json"
-
-    # Set status to confirmed in the payload
-    body["status"] = "confirmed"
-    body["dataset_id"] = id
-
+    run = db.query(WorkflowRunModel).filter_by(dataset_id=id, status="ACTIVE").order_by(WorkflowRunModel.updated_at.desc()).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="No workflow run found for this dataset")
+    artifact = db.query(WorkflowArtifactModel).filter_by(workflow_run_id=run.id, step_key="UNDERSTAND_DATA", artifact_type="SEMANTIC_CONTRACT", stale=False).order_by(WorkflowArtifactModel.version.desc()).first()
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Semantic contract not generated yet")
     try:
-        with open(semantic_file, "w", encoding="utf-8") as f:
-            json.dump(body, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save semantic contract: {str(e)}")
-
-    # Update job status back to PENDING to resume the job
-    job.status = "PENDING"
-    job.progress = 30.0
-    job.message = "Semantic contract confirmed. Resuming rule proposals generation..."
-    db.commit()
-
-    # Trigger background task to continue
-    background_tasks.add_task(run_propose_rules, job.id, id, session.id, session.role)
-
-    return {"message": "Semantic contract confirmed successfully. Resumed proposals job.", "job_id": job.id}
+        confirmed = confirm_workflow_semantic_contract(db, run, artifact_id=artifact.id, expected_version=artifact.version, contract=body)
+        db.commit()
+    except WorkflowError as exc:
+        raise HTTPException(status_code=409, detail={"code": "WORKFLOW_STATE", "message": str(exc)})
+    return {"message": "Semantic contract confirmed successfully.", "workflow": serialize_run(run), "artifact": serialize_artifact(confirmed)}
 
 
 @router.get("/datasets/{id}/rows")
@@ -2255,10 +2308,7 @@ def query_dataset_rows(
             & SourceRowModel.dropoff_at.is_not(None)
             & (SourceRowModel.pickup_at > SourceRowModel.dropoff_at)
         ),
-        (
-            SourceRowModel.payment_type.is_not(None)
-            & SourceRowModel.payment_type.notin_(allowed_payments)
-        )
+        (SourceRowModel.payment_type.is_not(None) & SourceRowModel.payment_type.notin_(allowed_payments))
         if allowed_payments
         else SourceRowModel.payment_type.is_(None),
     )
@@ -2306,12 +2356,7 @@ def get_latest_dq_run(
     db: Session = Depends(get_db),
 ):
     require_dataset_access(db, session, id)
-    run = (
-        db.query(DqRunModel)
-        .filter(DqRunModel.dataset_id == id)
-        .order_by(DqRunModel.created_at.desc())
-        .first()
-    )
+    run = db.query(DqRunModel).filter(DqRunModel.dataset_id == id).order_by(DqRunModel.created_at.desc()).first()
     if not run:
         return None
     return DqRunSchema(
@@ -2509,7 +2554,15 @@ def create_manual_rule(
         evidence=json.dumps({"source_refs": ["manual"]}),
         parameter_provenance="[]",
         assumptions="[]",
-        confidence_breakdown=json.dumps({"overall": 1.0, "evidence_strength": 1.0, "business_support": 1.0, "sample_representativeness": 1.0, "explanation": "Manually authored by data steward"}),
+        confidence_breakdown=json.dumps(
+            {
+                "overall": 1.0,
+                "evidence_strength": 1.0,
+                "business_support": 1.0,
+                "sample_representativeness": 1.0,
+                "explanation": "Manually authored by data steward",
+            }
+        ),
         created_at=utc_now(),
         updated_at=utc_now(),
     )
@@ -3253,6 +3306,107 @@ def list_audit_logs(
 
 
 # ---------------------------------------------------------------------------
+# Graph observability
+#
+# The wizard shows a step running and then an artifact appearing.  Everything in
+# between -- which nodes ran, in what order, how long each took, which one failed
+# -- had no route out of the backend.  These four endpoints are that route.
+# ---------------------------------------------------------------------------
+@router.get("/graph/catalog", tags=["Graph"])
+def get_graph_catalog(
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+):
+    """Static topology of every graph, so the UI can draw one before it runs."""
+    from src.agents.graph_catalog import get_catalog
+
+    return get_catalog()
+
+
+@router.get("/graph/node-runs", tags=["Graph"])
+def list_graph_node_runs(
+    workflow_run_id: str | None = None,
+    dataset_id: str | None = None,
+    dq_run_id: str | None = None,
+    anomaly_run_id: str | None = None,
+    graph_key: str | None = None,
+    graph_run_id: str | None = None,
+    limit: int = 200,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """Node executions, newest run first, filtered by whichever context is known."""
+    from src.services.node_telemetry import serialize_node_run
+
+    query = db.query(GraphNodeRunModel)
+    if workflow_run_id:
+        query = query.filter(GraphNodeRunModel.workflow_run_id == workflow_run_id)
+    if dataset_id:
+        query = query.filter(GraphNodeRunModel.dataset_id == dataset_id)
+    if dq_run_id:
+        query = query.filter(GraphNodeRunModel.dq_run_id == dq_run_id)
+    if anomaly_run_id:
+        query = query.filter(GraphNodeRunModel.anomaly_run_id == anomaly_run_id)
+    if graph_key:
+        query = query.filter(GraphNodeRunModel.graph_key == graph_key)
+    if graph_run_id:
+        query = query.filter(GraphNodeRunModel.graph_run_id == graph_run_id)
+
+    rows = (
+        query.order_by(GraphNodeRunModel.started_at.desc(), GraphNodeRunModel.sequence.desc())
+        .limit(max(1, min(limit, 1000)))
+        .all()
+    )
+    return [serialize_node_run(row) for row in rows]
+
+
+@router.get("/graph/node-runs/{node_run_id}", tags=["Graph"])
+def get_graph_node_run(
+    node_run_id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """One node execution including its redacted input/output summaries."""
+    from src.services.node_telemetry import serialize_node_run
+
+    row = db.get(GraphNodeRunModel, node_run_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404, detail={"code": "NOT_FOUND", "message": "Node run not found"}
+        )
+    return serialize_node_run(row, include_payload=True)
+
+
+@router.get("/dq-runs/{run_id}/steward-report", tags=["Graph"])
+def get_steward_report(
+    run_id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """Serve the Markdown report written by ``report_writer_node``.
+
+    Graph 3's last node writes a steward report to ``output/steward_reports/``
+    and nothing ever read it back, so the report never reached a user.  Files are
+    matched on the execution-run id embedded in the filename; the newest wins.
+    """
+    settings = get_settings()
+    base_dir = getattr(settings, "output_dir", None) or "./output"
+    report_dir = Path(base_dir) / "steward_reports"
+    matches = sorted(report_dir.glob(f"steward_report_*_{run_id}.md")) if report_dir.exists() else []
+    if not matches:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "NOT_FOUND", "message": "No steward report has been written for this run"},
+        )
+    newest = matches[-1]
+    return {
+        "run_id": run_id,
+        "filename": newest.name,
+        "generated_at": datetime.fromtimestamp(newest.stat().st_mtime, tz=UTC).isoformat(),
+        "content": newest.read_text(encoding="utf-8"),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Agent Chat & Status Routes
 # ---------------------------------------------------------------------------
 @router.get("/status")
@@ -3268,7 +3422,14 @@ class SmokeCreateJobRequest(BaseModel):
     linked_entity: str | None = None
 
 
-@router.post("/jobs", status_code=202)
+@router.post(
+    "/jobs",
+    status_code=202,
+    # Being a smoke-test convenience does not make it harmless: this dispatches the
+    # same INGEST_PROFILE work as the audited endpoint, and without a session it
+    # accepted anonymous requests with 202 on a public URL.
+    dependencies=[Depends(require_role(["STEWARD", "ADMIN"]))],
+)
 def compatibility_trigger_job(
     request: SmokeCreateJobRequest,
     background_tasks: BackgroundTasks,
@@ -3446,6 +3607,9 @@ async def get_test_run_results(
 @dq_router.post(
     "/runs/{run_id}/publish",
     response_model=PublishRulesResponse,
+    # Publishing puts rules into the active ruleset, where they compile and run.
+    # Safety rule 3 makes that a steward decision, not a reader's.
+    dependencies=[Depends(require_role(["STEWARD", "ADMIN"]))],
 )
 async def publish_run_rules(run_id: str) -> PublishRulesResponse:
     """Xuất bản (Publish/Merge) các rules đã APPROVED từ proposal run vào Active Ruleset chính thức."""
@@ -3483,6 +3647,7 @@ async def list_active_rules(
 
 @dq_router.patch(
     "/active-rules/{rule_id}/deactivate",
+    dependencies=[Depends(require_role(["STEWARD", "ADMIN"]))],
 )
 async def deactivate_active_rule(rule_id: str) -> dict:
     """Vô hiệu hoá một active rule."""
@@ -3556,6 +3721,7 @@ async def list_proposal_rules(
     dimension: str | None = None,
 ) -> list[RuleReviewResponse]:
     from src.services.rule_store import get_run, list_rules
+
     run = await asyncio.to_thread(get_run, run_id)
     if not run:
         raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
@@ -3567,6 +3733,7 @@ async def list_proposal_rules(
 @dq_router.patch(
     "/runs/{run_id}/rules/{rule_id}",
     response_model=RuleReviewResponse,
+    dependencies=[Depends(require_role(["STEWARD", "ADMIN"]))],
 )
 async def review_proposal_rule(
     run_id: str,
@@ -3574,6 +3741,7 @@ async def review_proposal_rule(
     body: RuleUpdateRequest,
 ) -> RuleReviewResponse:
     from src.services.rule_store import get_run, review_rule
+
     run = await asyncio.to_thread(get_run, run_id)
     if not run:
         raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
@@ -3596,6 +3764,7 @@ async def review_proposal_rule(
 @dq_router.post(
     "/runs/{run_id}/rules/bulk-review",
     response_model=BulkReviewResponse,
+    dependencies=[Depends(require_role(["STEWARD", "ADMIN"]))],
 )
 async def bulk_review_proposal_rules(
     run_id: str,
@@ -3658,9 +3827,11 @@ async def get_run_approved_rules(run_id: str) -> ApprovedRulesResponse:
 # Specialized API v1 Endpoints (Execution & Anomaly Separation)
 # ---------------------------------------------------------------------------
 
+
 @dq_router.post(
     "/rule-runs/{proposal_run_id}/publish",
     response_model=PublishRulesetResponse,
+    dependencies=[Depends(require_role(["STEWARD", "ADMIN"]))],
 )
 async def publish_ruleset_endpoint(
     proposal_run_id: str,
@@ -3668,6 +3839,7 @@ async def publish_ruleset_endpoint(
 ) -> PublishRulesetResponse:
     """Publishes approved rules into an active immutable RulesetVersion."""
     from src.services.rule_store import publish_approved_rules
+
     ruleset_ver_id = await asyncio.to_thread(
         publish_approved_rules,
         proposal_run_id=proposal_run_id,
@@ -3731,8 +3903,16 @@ async def get_execution_run_results_endpoint(
             raise HTTPException(status_code=404, detail=f"Execution run {id} not found")
 
         anomaly_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.execution_run_id == id).first()
-        signals = session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anomaly_run.id).all() if anomaly_run else []
-        hypotheses = session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == anomaly_run.id).all() if anomaly_run else []
+        signals = (
+            session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anomaly_run.id).all()
+            if anomaly_run
+            else []
+        )
+        hypotheses = (
+            session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == anomaly_run.id).all()
+            if anomaly_run
+            else []
+        )
 
         return CombinedRunStatusResponse(
             execution_run_id=id,
@@ -3762,7 +3942,9 @@ async def get_anomaly_signals_endpoint(
             # Also check if id is execution_run_id
             anom_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.execution_run_id == id).first()
             if anom_run:
-                signals = session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anom_run.id).all()
+                signals = (
+                    session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anom_run.id).all()
+                )
 
         result = []
         for s in signals:
@@ -3798,7 +3980,11 @@ async def get_anomaly_hypotheses_endpoint(
         if not hyps:
             anom_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.execution_run_id == id).first()
             if anom_run:
-                hyps = session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == anom_run.id).all()
+                hyps = (
+                    session.query(AnomalyHypothesisModel)
+                    .filter(AnomalyHypothesisModel.anomaly_run_id == anom_run.id)
+                    .all()
+                )
 
         return [
             {
@@ -3807,7 +3993,9 @@ async def get_anomaly_hypotheses_endpoint(
                 "summary": h.summary,
                 "confidence": h.confidence,
                 "supporting_signal_ids": json.loads(h.supporting_signal_ids) if h.supporting_signal_ids else [],
-                "contradicting_signal_ids": json.loads(h.contradicting_signal_ids) if h.contradicting_signal_ids else [],
+                "contradicting_signal_ids": json.loads(h.contradicting_signal_ids)
+                if h.contradicting_signal_ids
+                else [],
                 "evidence_refs": json.loads(h.evidence_refs) if h.evidence_refs else [],
                 "recommended_checks": json.loads(h.recommended_checks) if h.recommended_checks else [],
                 "missing_evidence": h.missing_evidence,
@@ -3845,4 +4033,3 @@ async def submit_anomaly_feedback_endpoint(
         session.add(fb)
         session.commit()
         return {"status": "SUCCESS", "feedback_id": feedback_id, "anomaly_run_id": anom_run.id}
-

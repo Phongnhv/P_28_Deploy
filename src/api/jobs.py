@@ -7,21 +7,23 @@ from src.services.job_service import create_job, update_job_status
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["Jobs"])
 
+
 class CreateJobRequest(BaseModel):
     type: str
     linked_entity: str = None
+
 
 @router.post("", status_code=202)
 def trigger_job(
     request: CreateJobRequest,
     idempotency_key: str = Depends(verify_idempotency_key),
-    x_correlation_id: str | None = Header(None, alias="X-Correlation-ID")
+    x_correlation_id: str | None = Header(None, alias="X-Correlation-ID"),
 ):
     job, created = create_job(
         job_type=request.type,
         idempotency_key=idempotency_key,
         linked_entity=request.linked_entity,
-        correlation_id=x_correlation_id
+        correlation_id=x_correlation_id,
     )
 
     if not created:
@@ -35,9 +37,11 @@ def trigger_job(
 
     return {"job_id": job.id, "status": job.status, "message": "Job accepted"}
 
+
 @router.get("/{job_id}")
 def get_job_status_endpoint(job_id: str):
     from src.services.job_service import get_job
+
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
@@ -48,7 +52,7 @@ def get_job_status_endpoint(job_id: str):
         "status": job.status,
         "error": job.error,
         "attempt_count": job.attempt_count,
-        "correlation_id": getattr(job, 'correlation_id', None),
+        "correlation_id": getattr(job, "correlation_id", None),
         "created_at": job.created_at.isoformat() if job.created_at else None,
-        "updated_at": job.updated_at.isoformat() if job.updated_at else None
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
     }

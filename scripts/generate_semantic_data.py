@@ -34,11 +34,11 @@ def generate_semantic_data():
     np.random.seed(mutation_seed)
     mutation_indices = np.random.choice(50000, size=1250, replace=False)
 
-    g1_idx = mutation_indices[0:250]     # negative_fare_amount
-    g2_idx = mutation_indices[250:500]   # negative_trip_distance
-    g3_idx = mutation_indices[500:750]   # null_vendor_id
+    g1_idx = mutation_indices[0:250]  # negative_fare_amount
+    g2_idx = mutation_indices[250:500]  # negative_trip_distance
+    g3_idx = mutation_indices[500:750]  # null_vendor_id
     g4_idx = mutation_indices[750:1000]  # invalid_payment_type
-    g5_idx = mutation_indices[1000:1250] # duplicate_fingerprint
+    g5_idx = mutation_indices[1000:1250]  # duplicate_fingerprint
 
     # Apply synthetic defect mutations
     df_sampled.loc[g1_idx, "fare_amount"] = -15.0
@@ -83,7 +83,9 @@ def generate_semantic_data():
         6: "Myle Technologies Inc",
         7: "Helix",
     }
-    df_sampled["VendorID"] = df_sampled["VendorID"].map(lambda x: vendor_map.get(x, "Unknown Vendor") if pd.notna(x) else "Unknown Vendor")
+    df_sampled["VendorID"] = df_sampled["VendorID"].map(
+        lambda x: vendor_map.get(x, "Unknown Vendor") if pd.notna(x) else "Unknown Vendor"
+    )
 
     # RatecodeID mapping
     ratecode_map = {
@@ -95,7 +97,9 @@ def generate_semantic_data():
         6: "Group ride",
         99: "Null/Unknown",
     }
-    df_sampled["RatecodeID"] = df_sampled["RatecodeID"].map(lambda x: ratecode_map.get(x, "Unknown Ratecode") if pd.notna(x) else "Unknown Ratecode")
+    df_sampled["RatecodeID"] = df_sampled["RatecodeID"].map(
+        lambda x: ratecode_map.get(x, "Unknown Ratecode") if pd.notna(x) else "Unknown Ratecode"
+    )
 
     # payment_type mapping
     payment_map = {
@@ -108,7 +112,9 @@ def generate_semantic_data():
         6: "Voided trip",
         99: "Invalid Payment (Dispute/Test)",
     }
-    df_sampled["payment_type"] = df_sampled["payment_type"].map(lambda x: payment_map.get(x, "Unknown Payment") if pd.notna(x) else "Unknown Payment")
+    df_sampled["payment_type"] = df_sampled["payment_type"].map(
+        lambda x: payment_map.get(x, "Unknown Payment") if pd.notna(x) else "Unknown Payment"
+    )
 
     # PULocationID & DOLocationID replacement in-place
     df_sampled["PULocationID"] = df_sampled["PULocationID"].apply(format_zone_label)
@@ -151,11 +157,27 @@ def generate_semantic_data():
 
     # Keep strictly the 21 columns
     expected_21_cols = [
-        "source_row_id", "vendor_id", "pickup_at", "dropoff_at", "passenger_count",
-        "trip_distance", "rate_code_id", "store_and_fwd_flag", "pickup_location_id",
-        "dropoff_location_id", "payment_type", "fare_amount", "extra", "mta_tax",
-        "tip_amount", "tolls_amount", "improvement_surcharge", "total_amount",
-        "congestion_surcharge", "airport_fee", "cbd_congestion_fee"
+        "source_row_id",
+        "vendor_id",
+        "pickup_at",
+        "dropoff_at",
+        "passenger_count",
+        "trip_distance",
+        "rate_code_id",
+        "store_and_fwd_flag",
+        "pickup_location_id",
+        "dropoff_location_id",
+        "payment_type",
+        "fare_amount",
+        "extra",
+        "mta_tax",
+        "tip_amount",
+        "tolls_amount",
+        "improvement_surcharge",
+        "total_amount",
+        "congestion_surcharge",
+        "airport_fee",
+        "cbd_congestion_fee",
     ]
     df_sampled = df_sampled[expected_21_cols]
 
@@ -177,7 +199,6 @@ def generate_semantic_data():
     print(f"Saved 21-column semantic parquet to {semantic_parquet_path}")
     print(f"Saved 21-column semantic CSV sample to {semantic_csv_path}")
 
-
     # Compute SHA-256 Checksum
     sha256 = hashlib.sha256()
     with open(semantic_parquet_path, "rb") as f:
@@ -192,7 +213,14 @@ def generate_semantic_data():
         if col == "source_row_id":
             col_type = "string"
             nullable = False
-        elif "at" in col or col in ["store_and_fwd_flag", "vendor_id", "rate_code_id", "payment_type", "pickup_location_id", "dropoff_location_id"]:
+        elif "at" in col or col in [
+            "store_and_fwd_flag",
+            "vendor_id",
+            "rate_code_id",
+            "payment_type",
+            "pickup_location_id",
+            "dropoff_location_id",
+        ]:
             col_type = "string"
             nullable = True
         elif col == "passenger_count":
@@ -202,11 +230,7 @@ def generate_semantic_data():
             col_type = "float"
             nullable = True
 
-        columns_schema.append({
-            "name": col,
-            "type": col_type,
-            "nullable": nullable
-        })
+        columns_schema.append({"name": col, "type": col_type, "nullable": nullable})
 
     manifest = {
         "manifest_name": "nyc-yellow-50k-v1",
@@ -226,8 +250,8 @@ def generate_semantic_data():
             "negative_trip_distance": 250,
             "null_vendor_id": 250,
             "invalid_payment_type": 250,
-            "duplicate_fingerprint": 250
-        }
+            "duplicate_fingerprint": 250,
+        },
     }
 
     manifest_semantic_path = out_semantic_dir / "manifest.json"

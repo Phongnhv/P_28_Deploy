@@ -33,6 +33,7 @@ def setup_test_db(tmp_path, monkeypatch):
             if item is None:
                 return False
             return re.search(expr, str(item)) is not None
+
         dbapi_conn.create_function("REGEXP", 2, _sqlite_regexp)
 
     monkeypatch.setattr(rule_store_module, "_engine", test_engine)
@@ -44,7 +45,8 @@ def setup_test_db(tmp_path, monkeypatch):
         conn.execute(text("DROP TABLE IF EXISTS mock_trips;"))
         # - license_plate: 1 invalid regex ("INVALID_123")
         # - dropoff_datetime: 1 invalid cross-field (TRIP_5 has pickup > dropoff)
-        conn.execute(text("""
+        conn.execute(
+            text("""
             CREATE TABLE mock_trips (
                 trip_id TEXT,
                 fare_amount REAL,
@@ -54,9 +56,11 @@ def setup_test_db(tmp_path, monkeypatch):
                 pickup_datetime TEXT,
                 dropoff_datetime TEXT
             );
-        """))
+        """)
+        )
 
-        conn.execute(text("""
+        conn.execute(
+            text("""
             INSERT INTO mock_trips VALUES
             ('TRIP_1', 15.0, 1, 'Credit card', 'NY-1234', '2026-08-10T10:00:00Z', '2026-08-10T10:30:00Z'),
             ('TRIP_1', 20.0, 2, 'Cash',        'NY-5678', '2026-08-10T11:00:00Z', '2026-08-10T11:45:00Z'),
@@ -68,14 +72,13 @@ def setup_test_db(tmp_path, monkeypatch):
             ('TRIP_7', 40.0, 4, 'Credit card', 'NY-4444', '2026-08-10T17:00:00Z', '2026-08-10T17:35:00Z'),
             ('TRIP_8', 12.0, 1, 'Gold',        'NY-5555', '2026-08-10T18:00:00Z', '2026-08-10T18:25:00Z'),
             ('TRIP_9', 50.0, 1, 'Credit card', 'NY-6666', '2026-08-10T19:00:00Z', '2026-08-10T19:40:00Z');
-        """))
+        """)
+        )
         conn.commit()
 
     yield
 
-    with engine.connect() as conn:
-        conn.execute(text("DROP TABLE IF EXISTS mock_trips;"))
-        conn.commit()
+    engine.dispose()
 
 
 def test_uploaded_dataset_contract_uses_graph1_profile_instead_of_control_database():
@@ -156,8 +159,8 @@ async def test_generate_tests_compilation():
     assert len(generated) == 2  # 1 batch row (4 rules) + 1 unique
 
     batch_test = next(t for t in generated if t["query_type"] == "batch_row")
-    assert "SUM(CASE WHEN \"fare_amount\" IS NULL THEN 1 ELSE 0 END) AS v_0" in batch_test["sql_text"]
-    assert "NOT (\"pickup_datetime\" <= \"dropoff_datetime\")" in batch_test["sql_text"]
+    assert 'SUM(CASE WHEN "fare_amount" IS NULL THEN 1 ELSE 0 END) AS v_0' in batch_test["sql_text"]
+    assert 'NOT ("pickup_datetime" <= "dropoff_datetime")' in batch_test["sql_text"]
     assert "p_min_1" in batch_test["bind_params"]
     assert batch_test["bind_params"]["p_min_1"] == 0.0
 
@@ -376,7 +379,12 @@ async def test_api_execute_tests_endpoint():
     proposal_run_id = f"prop_api_{uuid.uuid4().hex[:8]}"
     create_run(proposal_run_id, "mock_trips")
 
+    # dq_router sits behind a session dependency, so an anonymous client answers
+    # 401 before reaching the route under test.
     client = TestClient(app)
+    login = client.post("/api/v1/session", json={"username": "steward", "password": "steward"})
+    assert login.status_code == 200
+    client.headers["X-CSRF-Token"] = login.json()["csrf_token"]
 
     # dq_router yeu cau session (mount voi require_role trong src/main.py) va
     # get_session kiem CSRF tren moi request da xac thuc.

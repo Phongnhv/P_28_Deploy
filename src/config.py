@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     rule_proposer_max_retries: int = 2
     rule_proposer_batch_size: int = Field(default=8, ge=1, le=20)
     debug_dump_table_digests: bool = False
+    anomaly_investigation_mode: Literal["deepagent", "legacy"] = os.getenv("ANOMALY_INVESTIGATION_MODE") or "deepagent"
 
     # Database
     # ``DATABASE_URL`` is the explicit control-plane database.  When it is not
@@ -71,7 +72,7 @@ class Settings(BaseSettings):
     database_pool_timeout_seconds: int = Field(default=30, ge=1, le=120)
 
     # Vector Store
-    chroma_persist_dir: str = "./data/chroma" # Change to .env later
+    chroma_persist_dir: str = "./data/chroma"  # Change to .env later
 
     # Output
     output_dir: str = "./output"

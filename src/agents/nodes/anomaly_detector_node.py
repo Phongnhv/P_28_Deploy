@@ -39,8 +39,12 @@ async def anomaly_detector_node(state: AnomalyGraphState) -> dict:
             }
 
             signals = result["signals"]
-            logger.info("Anomaly detection completed. Decision: %s, Score: %s, Signals Count: %d",
-                        decision_data["decision"], decision_data["score"], len(signals))
+            logger.info(
+                "Anomaly detection completed. Decision: %s, Score: %s, Signals Count: %d",
+                decision_data["decision"],
+                decision_data["score"],
+                len(signals),
+            )
 
             # Export trace JSON for debugging/audit
             try:
@@ -51,21 +55,21 @@ async def anomaly_detector_node(state: AnomalyGraphState) -> dict:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 dump_file = out_dir / f"debug_anomalies_{timestamp}_{execution_run_id}.json"
                 dump_file.write_text(
-                    json.dumps({
-                        "anomaly_decision": decision_data,
-                        "signals": signals,
-                    }, ensure_ascii=False, indent=2),
+                    json.dumps(
+                        {
+                            "anomaly_decision": decision_data,
+                            "signals": signals,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
                     encoding="utf-8",
                 )
                 logger.info("Exported anomalies trace to: %s", dump_file)
             except Exception as trace_exc:
                 logger.warning("Failed to write anomalies trace file: %s", trace_exc)
 
-            return {
-                "signal_observations": signals,
-                "anomaly_decision": decision_data,
-                "anomaly_status": "SUCCEEDED"
-            }
+            return {"signal_observations": signals, "anomaly_decision": decision_data, "anomaly_status": "SUCCEEDED"}
 
     except Exception as exc:
         logger.error("Anomaly detector node execution failed: %s", exc, exc_info=True)
@@ -76,8 +80,8 @@ async def anomaly_detector_node(state: AnomalyGraphState) -> dict:
                 "score": 0.0,
                 "confidence": 0.0,
                 "severity": "HIGH",
-                "override_reason": f"Detector exception: {exc}"
+                "override_reason": f"Detector exception: {exc}",
             },
             "anomaly_status": "FAILED",
-            "error": str(exc)
+            "error": str(exc),
         }

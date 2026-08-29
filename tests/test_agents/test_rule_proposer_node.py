@@ -25,10 +25,14 @@ from src.models.rule_schemas import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 def _make_table_proposal(table_name: str, n_rules: int = 2) -> TableRuleProposal:
     """Tạo TableRuleProposal hợp lệ để dùng trong mock."""
+    from src.agents.nodes.rule_proposer_node import CandidateProposedRule, CandidateTableRuleProposal
+
     rules = [
-        ProposedRule(
+        CandidateProposedRule(
+            candidate_id=f"cand-{i}",
             column=f"col_{i}",
             rule_type=RuleType.NOT_NULL,
             parameters=RuleParameters(),
@@ -40,7 +44,7 @@ def _make_table_proposal(table_name: str, n_rules: int = 2) -> TableRuleProposal
         )
         for i in range(n_rules)
     ]
-    return TableRuleProposal(table=table_name, rules=rules)
+    return CandidateTableRuleProposal(table=table_name, rules=rules)
 
 
 def _make_digest(tables: list[str]) -> dict:
@@ -52,18 +56,72 @@ def _make_digest(tables: list[str]) -> dict:
             "rows": 100,
             "sample": {"rate": 1.0, "n": 100},
             "columns": [
-                {"name": "id", "type": "INTEGER", "role": "id", "null_pct": 0.0,
-                 "signals": ["no_nulls", "unique_in_sample"]},
-                {"name": "value", "type": "REAL", "role": "numeric", "null_pct": 5.0,
-                 "range": [0.0, 100.0]},
+                {
+                    "name": "id",
+                    "type": "INTEGER",
+                    "role": "id",
+                    "null_pct": 0.0,
+                    "signals": ["no_nulls", "unique_in_sample"],
+                },
+                {"name": "value", "type": "REAL", "role": "numeric", "null_pct": 5.0, "range": [0.0, 100.0]},
             ],
         }
     return digest
 
 
+def test_dictionary_for_table_supports_inferred_dictionary_shape():
+    from src.agents.nodes.rule_proposer_node import _dictionary_for_table
+
+    orders_dictionary = {
+        "table_name": "orders",
+        "description": "Thông tin đơn hàng",
+        "columns": [],
+    }
+    normalized = {
+        "tables": {
+            "orders": orders_dictionary,
+            "customers": {"table_name": "customers", "columns": []},
+        },
+        "inferred": True,
+    }
+
+    assert _dictionary_for_table(normalized, "orders") == orders_dictionary
+    assert _dictionary_for_table(normalized, "missing") is None
+
+
+def test_dictionary_for_table_supports_direct_and_single_table_shapes():
+    from src.agents.nodes.rule_proposer_node import _dictionary_for_table
+
+    direct = {"orders": {"table_name": "orders", "columns": []}}
+    single = {"table_name": "orders", "columns": []}
+
+    assert _dictionary_for_table(direct, "orders") == direct["orders"]
+    assert _dictionary_for_table(single, "orders") == single
+
+
+def test_rule_proposer_context_merge_preserves_legacy_missing_tables():
+    from src.agents.nodes.rule_proposer_node import _merge_table_business_contexts
+
+    state = {
+        "specialized_system_prompts": {
+            "orders": "legacy orders",
+            "customers": "legacy customers",
+        },
+        "table_business_contexts": {
+            "orders": "current orders",
+        },
+    }
+
+    assert _merge_table_business_contexts(state) == {
+        "orders": "current orders",
+        "customers": "legacy customers",
+    }
+
+
 # ---------------------------------------------------------------------------
 # 1. split_digest_by_table — tách digest và bỏ qua bảng lỗi
 # ---------------------------------------------------------------------------
+
 
 def test_split_digest_by_table_basic():
     """Kiểm tra tách đúng số bảng và không bị thừa bảng lỗi."""
@@ -125,6 +183,7 @@ def test_node8_structured_contract_requires_candidate_id():
     from src.agents.nodes.rule_proposer_node import CandidateProposedRule
 
     payload = _make_table_proposal("orders", n_rules=1).rules[0].model_dump()
+    payload.pop("candidate_id", None)
 
     with pytest.raises(ValidationError, match="candidate_id"):
         CandidateProposedRule.model_validate(payload)
@@ -353,11 +412,7 @@ def test_build_coverage_requirements_uses_structured_cross_field_parameters():
     }
 
     requirements = _build_coverage_requirements(digest)
-    cross_field_requirements = [
-        item
-        for item in requirements
-        if item["rule_type"] == "CROSS_FIELD_COMPARISON"
-    ]
+    cross_field_requirements = [item for item in requirements if item["rule_type"] == "CROSS_FIELD_COMPARISON"]
 
     assert len(cross_field_requirements) == 1
     assert cross_field_requirements[0]["column"] == "pickup_at"
@@ -371,6 +426,7 @@ def test_build_coverage_requirements_uses_structured_cross_field_parameters():
 # ---------------------------------------------------------------------------
 # 2. Schema validation guardrails
 # ---------------------------------------------------------------------------
+
 
 def test_range_rule_requires_min_or_max():
     """RANGE không có min/max phải raise ValidationError."""
@@ -439,6 +495,7 @@ def test_valid_range_rule():
 # 3. Failure isolation — 1 bảng fail không ảnh hưởng bảng khác
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_failure_isolation():
     """A failed table batch must fail closed and discard every partial rule."""
@@ -502,6 +559,7 @@ async def test_failure_isolation():
 # 4. Retry test — raise 2 lần rồi succeed → 3 lần gọi, kết quả thành công
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_retry_on_failure():
     """LLM raise 2 lần liên tiếp rồi trả về kết quả hợp lệ lần 3."""
@@ -522,8 +580,9 @@ async def test_retry_on_failure():
 
     with (
         patch("src.agents.nodes.rule_proposer_node.get_llm") as mock_get_llm,
-        patch("src.agents.nodes.rule_proposer_node.split_digest_by_table",
-              return_value={table_name: digest[table_name]}),
+        patch(
+            "src.agents.nodes.rule_proposer_node.split_digest_by_table", return_value={table_name: digest[table_name]}
+        ),
         patch("src.agents.nodes.rule_proposer_node.asyncio.sleep", new_callable=AsyncMock),
     ):
         mock_llm_instance = MagicMock()
@@ -550,6 +609,7 @@ async def test_retry_on_failure():
 # ---------------------------------------------------------------------------
 # 5. rule_id stamping
 # ---------------------------------------------------------------------------
+
 
 def test_stamp_rule_creates_correct_id():
     """rule_id phải theo format table.column.RULE_TYPE."""
@@ -610,14 +670,8 @@ def test_parse_and_stamp_cross_field_comparison_from_llm_response():
                 "confidence_score": 0.98,
                 "severity": "CRITICAL",
                 "dimension": "CONSISTENCY",
-                "rule_description": (
-                    "Thời điểm đón khách phải xảy ra trước hoặc cùng lúc với "
-                    "thời điểm trả khách."
-                ),
-                "ai_reasoning": (
-                    "Digest có datetime_order và nghiệp vụ yêu cầu đón khách "
-                    "trước khi trả khách."
-                ),
+                "rule_description": ("Thời điểm đón khách phải xảy ra trước hoặc cùng lúc với thời điểm trả khách."),
+                "ai_reasoning": ("Digest có datetime_order và nghiệp vụ yêu cầu đón khách trước khi trả khách."),
             },
             {
                 "column": "tpep_pickup_datetime",
@@ -640,8 +694,7 @@ def test_parse_and_stamp_cross_field_comparison_from_llm_response():
     assert rule.parameters.target_column == "tpep_dropoff_datetime"
     assert rule.parameters.operator == "<="
     assert stamped["rule_id"] == (
-        "yellow_taxi_trips.tpep_pickup_datetime.VS."
-        "tpep_dropoff_datetime.CROSS_FIELD_COMPARISON"
+        "yellow_taxi_trips.tpep_pickup_datetime.VS.tpep_dropoff_datetime.CROSS_FIELD_COMPARISON"
     )
     assert stamped["parameters"] == {
         "target_column": "tpep_dropoff_datetime",
@@ -651,10 +704,12 @@ def test_parse_and_stamp_cross_field_comparison_from_llm_response():
     invalid_rule = dict(llm_response["rules"][0])
     invalid_rule["target_column"] = "tpep_dropoff_datetime"
     with pytest.raises(ValidationError):
-        TableRuleProposal.model_validate({
-            "table": llm_response["table"],
-            "rules": [invalid_rule, llm_response["rules"][1]],
-        })
+        TableRuleProposal.model_validate(
+            {
+                "table": llm_response["table"],
+                "rules": [invalid_rule, llm_response["rules"][1]],
+            }
+        )
 
     with pytest.raises(ValidationError):
         RuleParameters(

@@ -166,9 +166,7 @@ def _build_data_context(
     # Hypotheses
     if hypotheses:
         sections.append(f"Giả thuyết nguyên nhân ({len(hypotheses)} giả thuyết, sắp xếp theo độ tin cậy):")
-        for idx, h in enumerate(
-            sorted(hypotheses, key=lambda x: x.get("confidence", 0.0), reverse=True), 1
-        ):
+        for idx, h in enumerate(sorted(hypotheses, key=lambda x: x.get("confidence", 0.0), reverse=True), 1):
             # Parse JSON strings safely
             def _parse(val):
                 if isinstance(val, list):
@@ -215,6 +213,7 @@ def _build_data_context(
 # Output post-processing
 # ---------------------------------------------------------------------------
 
+
 def _strip_code_fences(text: str) -> str:
     """Loại bỏ code fences (```markdown ... ```) nếu LLM bọc output."""
     text = text.strip()
@@ -247,6 +246,7 @@ def _write_report_file(
     """Ghi file Markdown với timestamp, trả về path."""
     try:
         from src.config import get_settings
+
         settings = get_settings()
         base_dir = Path(output_dir or getattr(settings, "output_dir", None) or "./output")
     except Exception:
@@ -269,10 +269,10 @@ def _write_report_file(
     return str(out_path)
 
 
-
 # ---------------------------------------------------------------------------
 # LangGraph Node
 # ---------------------------------------------------------------------------
+
 
 async def report_writer_node(state: AnomalyGraphState) -> dict:
     """LangGraph Node: Viết báo cáo Markdown tiếng Việt bằng LLM cho Data Steward.
@@ -287,14 +287,13 @@ async def report_writer_node(state: AnomalyGraphState) -> dict:
     # Load DB data
     def _load():
         from src.services.report_renderer import _load_execution_data
+
         return _load_execution_data(execution_run_id)
 
     dq_run, dq_results = await asyncio.to_thread(_load)
 
     # Build context
-    data_context = _build_data_context(
-        execution_run_id, dataset_id, dict(state), dq_run, dq_results
-    )
+    data_context = _build_data_context(execution_run_id, dataset_id, dict(state), dq_run, dq_results)
 
     user_prompt = (
         f"{data_context}\n\n"
@@ -333,7 +332,9 @@ async def report_writer_node(state: AnomalyGraphState) -> dict:
         ):
             md_content = cleaned
             llm_used = True
-            logger.info("LLM viết báo cáo thành công cho execution_run_id=%s (%d ký tự)", execution_run_id, len(md_content))
+            logger.info(
+                "LLM viết báo cáo thành công cho execution_run_id=%s (%d ký tự)", execution_run_id, len(md_content)
+            )
         else:
             logger.warning(
                 "LLM output không hợp lệ, thiếu tiêu đề hoặc mâu thuẫn decision canonical. Dùng fallback. "

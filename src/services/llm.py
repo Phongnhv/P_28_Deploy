@@ -6,6 +6,7 @@ from src.services.eval_telemetry import EvalTelemetryCallback
 
 Provider_type = Literal["openai", "anthropic", "mistral", "google"]
 
+
 def get_llm(provider: Provider_type, temperature: float | None = None):
     """Tạo LLM instance cho provider được chỉ định.
 
@@ -36,7 +37,7 @@ def get_llm(provider: Provider_type, temperature: float | None = None):
             api_key=settings.openai_api_key,
             temperature=temp,
             timeout=settings.llm_request_timeout_seconds,
-            max_retries=1,
+            max_retries=6,
             callbacks=callbacks,
         )
     elif provider == "anthropic":

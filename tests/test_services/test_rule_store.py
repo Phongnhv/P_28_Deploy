@@ -34,6 +34,7 @@ def setup_test_db(tmp_path, monkeypatch):
     monkeypatch.setattr(rule_store_module, "_engine", test_engine)
     init_db()
     yield test_engine
+    test_engine.dispose()
 
 
 def test_publish_approved_rules_workflow():
@@ -143,6 +144,7 @@ def test_legacy_demo_dataset_requires_explicit_production_opt_in(monkeypatch):
 
 def test_publish_api_endpoints():
     """Kiểm tra các REST API endpoints mới cho Active Rules và Publish."""
+    # Publish and deactivate now require a STEWARD session, so sign in first.
     client = TestClient(app)
 
     # dq_router yeu cau session (mount voi require_role trong src/main.py) va

@@ -51,12 +51,43 @@ def test_db():
     settings.agent_mode = original_agent_mode
     engine.dispose()
 
+
 @pytest_asyncio.fixture
 async def client():
-    """Async HTTP client for testing API endpoints."""
+    """Async HTTP client for testing API endpoints.
+
+    Deliberately unauthenticated. ``test_session.py`` asserts that protected routes
+    answer 401 without a session, so this fixture must stay anonymous -- use
+    ``steward_client`` for tests that need to get past the session check.
+    """
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+@pytest_asyncio.fixture
+async def steward_client():
+    """Client already signed in as STEWARD, with the CSRF header applied.
+
+    The dq_router is mounted behind a session dependency, and its approve/publish
+    routes additionally require STEWARD or ADMIN, so any test that exercises the
+    review workflow needs a real session rather than a bare transport.
+
+    The CSRF token is attached as a default header because ``verify_csrf`` rejects
+    every mutating request whose ``X-CSRF-Token`` does not match the session's --
+    setting it once here keeps the assertions in the tests about the route's own
+    behaviour instead of about session plumbing.
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.post(
+            "/api/v1/session",
+            json={"username": "steward", "password": "steward"},
+        )
+        response.raise_for_status()
+        ac.headers["X-CSRF-Token"] = response.json()["csrf_token"]
+        yield ac
+
 
 @pytest.fixture
 def mock_llm():

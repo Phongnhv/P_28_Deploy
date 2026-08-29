@@ -1,4 +1,3 @@
-
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -28,7 +27,7 @@ async def test_job_dispatch_and_idempotency():
         res1 = await client.post(
             "/api/v1/jobs",
             json={"type": "INGEST_PROFILE", "linked_entity": dataset_id},
-            headers={"Idempotency-Key": ikey, "X-CSRF-Token": csrf_token}
+            headers={"Idempotency-Key": ikey, "X-CSRF-Token": csrf_token},
         )
         assert res1.status_code == 202
         data = res1.json()
@@ -39,7 +38,7 @@ async def test_job_dispatch_and_idempotency():
         res2 = await client.post(
             "/api/v1/jobs",
             json={"type": "INGEST_PROFILE", "linked_entity": dataset_id},
-            headers={"Idempotency-Key": ikey, "X-CSRF-Token": csrf_token}
+            headers={"Idempotency-Key": ikey, "X-CSRF-Token": csrf_token},
         )
         assert res2.status_code == 409
 

@@ -16,12 +16,14 @@ def _range_payload() -> dict:
         "business_rationale": "Negative amounts distort financial totals.",
         "proposal_basis": "MIXED",
         "selected_evidence_refs": ["policy.nonnegative_column.amount"],
-        "parameter_provenance": [{
-            "parameter_name": "min",
-            "source_type": "POLICY",
-            "source_ref": "policy.nonnegative_column.amount",
-            "derivation_method": "configured non-negative policy",
-        }],
+        "parameter_provenance": [
+            {
+                "parameter_name": "min",
+                "source_type": "POLICY",
+                "source_ref": "policy.nonnegative_column.amount",
+                "derivation_method": "configured non-negative policy",
+            }
+        ],
         "assumptions": [],
         "confidence": {
             "overall": 0.9,
@@ -102,14 +104,16 @@ def test_stamp_resolves_only_allowlisted_evidence_from_digest():
         "rows": 100,
         "sample": {"rate": 1.0, "n": 100},
         "dashboard_candidate_mode": True,
-        "dashboard_rule_candidates": [{
-            "candidate_id": "nonnegative:amount",
-            "column": "amount",
-            "rule_type": "RANGE",
-            "parameters": {"min": 0.0},
-            "dimension": "VALIDITY",
-            "evidence": ["policy.nonnegative_column.amount", "profile.column.amount.min_value"],
-        }],
+        "dashboard_rule_candidates": [
+            {
+                "candidate_id": "nonnegative:amount",
+                "column": "amount",
+                "rule_type": "RANGE",
+                "parameters": {"min": 0.0},
+                "dimension": "VALIDITY",
+                "evidence": ["policy.nonnegative_column.amount", "profile.column.amount.min_value"],
+            }
+        ],
         "columns": [{"name": "amount", "range": [-1.0, 50.0], "signals": ["has_negative_values"]}],
     }
     requirement = _build_coverage_requirements(digest)[0]
@@ -118,9 +122,7 @@ def test_stamp_resolves_only_allowlisted_evidence_from_digest():
     rule = ProposedRule.model_validate(payload)
     stamped = _stamp_rule(rule, "source_rows", "run-1", requirement=requirement, table_digest=digest)
 
-    assert stamped["evidence"]["observed_metrics"] == {
-        "policy.nonnegative_column.amount": None
-    }
+    assert stamped["evidence"]["observed_metrics"] == {"policy.nonnegative_column.amount": None}
     assert "status" not in stamped
     assert stamped["confidence_score"] == 0.9
 
@@ -130,9 +132,7 @@ def test_stamp_normalizes_evidence_reference_to_matched_candidate():
     payload["selected_evidence_refs"] = ["policy.nonnegative_column.other"]
     payload["parameter_provenance"][0]["source_ref"] = "policy.nonnegative_column.other"
     rule = ProposedRule.model_validate(payload)
-    requirement = {
-        "evidence_items": [{"id": "policy.nonnegative_column.amount", "value": None}]
-    }
+    requirement = {"evidence_items": [{"id": "policy.nonnegative_column.amount", "value": None}]}
     stamped = _stamp_rule(rule, "source_rows", "run-1", requirement=requirement)
     assert stamped["selected_evidence_refs"] == ["policy.nonnegative_column.amount"]
     assert stamped["parameter_provenance"][0]["source_ref"] == "policy.nonnegative_column.amount"
@@ -162,9 +162,11 @@ def test_row_count_requirement_supplies_deterministic_parameter():
     row_count = next(item for item in requirements if item["rule_type"] == "ROW_COUNT")
     assert row_count["column"] is None
     assert row_count["parameters"] == {"min_row_count": 40_000}
-    assert row_count["evidence_items"] == [{
-        "id": "profile:_table:rows",
-        "source_type": "DATA_PROFILE",
-        "metric": "rows",
-        "value": 50_000,
-    }]
+    assert row_count["evidence_items"] == [
+        {
+            "id": "profile:_table:rows",
+            "source_type": "DATA_PROFILE",
+            "metric": "rows",
+            "value": 50_000,
+        }
+    ]

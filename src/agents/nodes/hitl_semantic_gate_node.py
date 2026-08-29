@@ -7,6 +7,7 @@ from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+
 async def hitl_semantic_gate_node(state: AgentState) -> dict:
     """HITL Semantic Gate Node.
 
@@ -23,10 +24,7 @@ async def hitl_semantic_gate_node(state: AgentState) -> dict:
         logger.info("Semantic contract đã được xác nhận hoặc tự động xác nhận. Đi tiếp sang sinh rule candidates.")
         if contract.get("status") != "confirmed":
             contract["status"] = "confirmed"
-        return {
-            "progress_state": "PROPOSING_RULES",
-            "semantic_contract": contract
-        }
+        return {"progress_state": "PROPOSING_RULES", "semantic_contract": contract}
 
     # Nếu là draft, lưu lại và tạm dừng graph
     run_id = state.get("rule_run_id", "test_run")
@@ -36,7 +34,11 @@ async def hitl_semantic_gate_node(state: AgentState) -> dict:
     try:
         out_dir = getattr(settings, "output_dir", None)
         res_dir = getattr(settings, "results_dir", None)
-        base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+        base_dir = (
+            out_dir
+            if isinstance(out_dir, (str, Path))
+            else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+        )
         semantic_dir = Path(base_dir) / "semantic"
         semantic_dir.mkdir(parents=True, exist_ok=True)
         out_path = semantic_dir / f"debug_semantic_contract_{run_id}.json"
@@ -48,17 +50,16 @@ async def hitl_semantic_gate_node(state: AgentState) -> dict:
     # 2. Cập nhật trạng thái run/job và lưu semantic contract vào DB
     try:
         from src.services.rule_store import save_semantic_contract, update_run_status
+
         dataset_id = state.get("dataset_id", "unknown")
         save_semantic_contract(run_id, dataset_id, contract, status="DRAFT")
         update_run_status(run_id, "AWAITING_SEMANTIC_REVIEW")
-        logger.info(f"Đã lưu semantic contract vào DB và cập nhật trạng thái run {run_id} thành AWAITING_SEMANTIC_REVIEW")
+        logger.info(
+            f"Đã lưu semantic contract vào DB và cập nhật trạng thái run {run_id} thành AWAITING_SEMANTIC_REVIEW"
+        )
     except Exception as e:
         logger.warning(f"Không thể cập nhật trạng thái run: {e}")
 
-
     # Tạm dừng có chủ đích — KHÔNG phải lỗi. Dùng `pause_reason` để conditional edge dẫn
     # tới END mà runner vẫn phân biệt được "chờ Steward duyệt" với "chạy thất bại".
-    return {
-        "pause_reason": "AWAITING_SEMANTIC_REVIEW",
-        "progress_state": "WAITING_FOR_SEMANTIC_REVIEW"
-    }
+    return {"pause_reason": "AWAITING_SEMANTIC_REVIEW", "progress_state": "WAITING_FOR_SEMANTIC_REVIEW"}

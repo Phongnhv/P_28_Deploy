@@ -22,7 +22,11 @@ from src.services.rule_store import get_engine, init_db
 load_dotenv()
 
 # Only enable Phoenix OpenTelemetry tracing when explicitly requested and not in test/disabled mode
-if "pytest" not in sys.modules and not os.getenv("DISABLE_TRACING") and (os.getenv("ENABLE_PHOENIX") == "true" or os.getenv("PHOENIX_COLLECTOR_ENDPOINT")):
+if (
+    "pytest" not in sys.modules
+    and not os.getenv("DISABLE_TRACING")
+    and (os.getenv("ENABLE_PHOENIX") == "true" or os.getenv("PHOENIX_COLLECTOR_ENDPOINT"))
+):
     try:
         from openinference.instrumentation.langchain import LangChainInstrumentor
         from opentelemetry import trace
@@ -42,6 +46,7 @@ if "pytest" not in sys.modules and not os.getenv("DISABLE_TRACING") and (os.gete
         pass
 
 logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -92,6 +97,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # Exception handlers for stable error envelope (Step 8)
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -103,13 +109,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         messages.append(f"{loc}: {err['msg']}")
     message = "; ".join(messages)
     return JSONResponse(
-        status_code=422,
-        content={
-            "code": "VALIDATION_ERROR",
-            "message": message,
-            "request_id": request_id
-        }
+        status_code=422, content={"code": "VALIDATION_ERROR", "message": message, "request_id": request_id}
     )
+
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
@@ -131,13 +133,9 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
         elif exc.status_code == 422:
             code = "CSRF_INVALID"
     return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "code": code,
-            "message": message,
-            "request_id": request_id
-        }
+        status_code=exc.status_code, content={"code": code, "message": message, "request_id": request_id}
     )
+
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
@@ -145,12 +143,9 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.error("Unhandled exception: %s", str(exc), exc_info=True)
     return JSONResponse(
         status_code=500,
-        content={
-            "code": "INTERNAL_ERROR",
-            "message": "An internal server error occurred.",
-            "request_id": request_id
-        }
+        content={"code": "INTERNAL_ERROR", "message": "An internal server error occurred.", "request_id": request_id},
     )
+
 
 app.include_router(router, prefix="/api/v1")
 app.include_router(
@@ -160,9 +155,11 @@ app.include_router(
 )
 app.include_router(data_access_router)
 
+
 @app.get("/health", tags=["System"])
 async def health():
     return {"status": "ok", "env": settings.app_env}
+
 
 @app.get("/ready", tags=["System"])
 async def ready():

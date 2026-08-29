@@ -7,6 +7,10 @@ import type {
   DatasetProfile,
   DqRunCreateResponse,
   DqResult,
+  ActiveRule,
+  AnomalyFeedbackInput,
+  AnomalyHypothesis,
+  AnomalySignal,
   DqAnomaly,
   DatasetRowQuery,
   DatasetRowsResponse,
@@ -29,12 +33,11 @@ import type {
   AgentArtifact,
   ArtifactReviewInput,
   LoopDecisionInput,
-  Graph1Run,
-  Graph1NodeExecution,
-  Graph1RuleDecision,
-  AnalysisRun,
-  AnalysisNodeExecution,
-  AnalysisResult,
+  GraphCatalog,
+  NodeRun,
+  NodeRunDetail,
+  NodeRunFilter,
+  StewardReport,
 } from "../types";
 
 function resolveApiBaseUrl(configuredValue?: string) {
@@ -258,6 +261,28 @@ export const realApiClient: ApiClient = {
   getDqAnomalies(runId) {
     return request<DqAnomaly[]>(`/api/v1/dq-runs/${runId}/anomalies`);
   },
+  async getActiveRules(datasetId) {
+    const response = await request<{ total_rules: number; rules: ActiveRule[] }>(
+      `/api/v1/dq/active-rules?dataset_id=${encodeURIComponent(datasetId)}`,
+    );
+    return response.rules;
+  },
+  getAnomalySignals(runId) {
+    return request<AnomalySignal[]>(
+      `/api/v1/dq/anomaly-runs/${encodeURIComponent(runId)}/signals`,
+    );
+  },
+  getAnomalyHypotheses(runId) {
+    return request<AnomalyHypothesis[]>(
+      `/api/v1/dq/anomaly-runs/${encodeURIComponent(runId)}/hypotheses`,
+    );
+  },
+  async submitAnomalyFeedback(runId, input) {
+    await request<{ status: string }>(
+      `/api/v1/dq/anomaly-runs/${encodeURIComponent(runId)}/feedback`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  },
   getLatestDqRun(datasetId) {
     return request<DqRun | null>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/dq-runs/latest`);
   },
@@ -340,52 +365,25 @@ export const realApiClient: ApiClient = {
       body: JSON.stringify({ target_step: targetStep }),
     });
   },
-  createGraph1Run(datasetId: string, datasetVersionId?: string, profileRunId?: string) {
-    const query = new URLSearchParams();
-    if (datasetVersionId) query.set("dataset_version_id", datasetVersionId);
-    if (profileRunId) query.set("profile_run_id", profileRunId);
-    const suffix = query.toString() ? `?${query.toString()}` : "";
-    return request<Graph1Run>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/graph1-runs${suffix}`, {
-      method: "POST",
-      headers: { "Idempotency-Key": crypto.randomUUID() },
-    });
+  getGraphCatalog() {
+    return request<GraphCatalog>("/api/v1/graph/catalog");
   },
-  getLatestGraph1Run(datasetId: string, datasetVersionId?: string) {
-    const query = datasetVersionId ? `?dataset_version_id=${encodeURIComponent(datasetVersionId)}` : "";
-    return request<Graph1Run | null>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/graph1-runs/latest${query}`);
+  listNodeRuns(filter: NodeRunFilter) {
+    const params = new URLSearchParams();
+    if (filter.workflowRunId) params.set("workflow_run_id", filter.workflowRunId);
+    if (filter.datasetId) params.set("dataset_id", filter.datasetId);
+    if (filter.dqRunId) params.set("dq_run_id", filter.dqRunId);
+    if (filter.anomalyRunId) params.set("anomaly_run_id", filter.anomalyRunId);
+    if (filter.graphKey) params.set("graph_key", filter.graphKey);
+    if (filter.graphRunId) params.set("graph_run_id", filter.graphRunId);
+    if (filter.limit) params.set("limit", String(filter.limit));
+    const query = params.toString();
+    return request<NodeRun[]>(`/api/v1/graph/node-runs${query ? `?${query}` : ""}`);
   },
-  getGraph1Run(runId: string) {
-    return request<Graph1Run>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}`);
+  getNodeRun(nodeRunId: string) {
+    return request<NodeRunDetail>(`/api/v1/graph/node-runs/${encodeURIComponent(nodeRunId)}`);
   },
-  listGraph1Nodes(runId: string) {
-    return request<Graph1NodeExecution[]>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}/nodes`);
-  },
-  confirmGraph1Semantic(runId: string, contract: Record<string, unknown>) {
-    return request<Graph1Run>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}/semantic-review`, {
-      method: "POST", body: JSON.stringify({ contract }),
-    });
-  },
-  reviewGraph1Rules(runId: string, decisions: Graph1RuleDecision[]) {
-    return request<Graph1Run>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}/rule-review`, {
-      method: "POST", body: JSON.stringify({ decisions }),
-    });
-  },
-  createAnalysisRun(graph1RunId: string, rerun = false) {
-    // The analysis launch is idempotent by Graph 1 run. Retry a dropped
-    // connection so a committed run can still be recovered by its key.
-    const query = rerun ? "?rerun=true" : "";
-    return requestWithTransientRetry<AnalysisRun>(`/api/v1/graph1-runs/${encodeURIComponent(graph1RunId)}/analysis-runs${query}`, {
-      method: "POST",
-      headers: { "Idempotency-Key": rerun ? `analysis-rerun-${graph1RunId}-${crypto.randomUUID()}` : `analysis-${graph1RunId}` },
-    });
-  },
-  getAnalysisRun(analysisRunId: string) {
-    return request<AnalysisRun>(`/api/v1/analysis-runs/${encodeURIComponent(analysisRunId)}`);
-  },
-  listAnalysisNodes(analysisRunId: string) {
-    return request<AnalysisNodeExecution[]>(`/api/v1/analysis-runs/${encodeURIComponent(analysisRunId)}/nodes`);
-  },
-  getAnalysisResult(analysisRunId: string) {
-    return request<AnalysisResult>(`/api/v1/analysis-runs/${encodeURIComponent(analysisRunId)}/result`);
+  getStewardReport(runId: string) {
+    return request<StewardReport>(`/api/v1/dq-runs/${encodeURIComponent(runId)}/steward-report`);
   },
 };

@@ -329,60 +329,47 @@ def init_db() -> None:
         _migrate_local_workflow_columns(engine)
     logger.info("Database đã được khởi tạo tại: %s", get_settings().database_url)
 
-    # The legacy taxi fixture is useful for local compatibility tests, but a
-    # production restart must never recreate data that an operator deleted.
-    if should_seed_legacy_demo_dataset(settings.app_env):
-        try:
-            with Session(engine) as session:
-                ensure_default_users(session)
-                ensure_demo_steward(session)
-                demo_dataset = session.get(DatasetModel, "dataset-nyc-yellow-taxi-50k")
-                if not demo_dataset:
-                    demo_dataset = DatasetModel(
-                        id="dataset-nyc-yellow-taxi-50k",
-                        name="NYC Yellow Taxi 50k Sample",
-                        description="Sample trip data for DQ profiling",
-                        status="REGISTERED",
-                        row_count=50000,
-                        source_label="semantic",
-                        manifest_version="1.0.0",
-                        checksum="dummy",
-                    )
-                    session.add(demo_dataset)
-                    session.commit()
-                    logger.info("Seeded default demo dataset 'dataset-nyc-yellow-taxi-50k'")
-                for username, access_level in (("user", "READ"), ("steward", "MANAGE"), ("demo-steward", "MANAGE")):
-                    existing_access = (
-                        session.query(DatasetAccessModel)
-                        .filter(
-                            DatasetAccessModel.dataset_id == demo_dataset.id,
-                            DatasetAccessModel.username == username,
-                        )
-                        .first()
-                    )
-                    if not existing_access:
-                        session.add(
-                            DatasetAccessModel(
-                                id=f"access-{demo_dataset.id}-{username}",
-                                dataset_id=demo_dataset.id,
-                                username=username,
-                                access_level=access_level,
-                                granted_by="system-seed",
-                            )
-                        )
+    # Seed default demo dataset if not present
+    try:
+        with Session(engine) as session:
+            ensure_default_users(session)
+            demo_dataset = session.get(DatasetModel, "dataset-nyc-yellow-taxi-50k")
+            if not demo_dataset:
+                demo_dataset = DatasetModel(
+                    id="dataset-nyc-yellow-taxi-50k",
+                    name="NYC Yellow Taxi 50k Sample",
+                    description="Sample trip data for DQ profiling",
+                    status="REGISTERED",
+                    row_count=50000,
+                    source_label="semantic",
+                    manifest_version="1.0.0",
+                    checksum="dummy",
+                )
+                session.add(demo_dataset)
                 session.commit()
-        except Exception as e:
-            logger.warning("Failed to seed default dataset: %s", e)
-    else:
-        # Accounts are independent from the legacy fixture and remain required
-        # for the bounded judge login in production.
-        try:
-            with Session(engine) as session:
-                ensure_default_users(session)
-                ensure_demo_steward(session)
-            logger.info("Legacy demo dataset seeding is disabled for %s.", settings.app_env)
-        except Exception as e:
-            logger.warning("Failed to seed default accounts: %s", e)
+                logger.info("Seeded default demo dataset 'dataset-nyc-yellow-taxi-50k'")
+            for username, access_level in (("user", "READ"), ("steward", "MANAGE")):
+                existing_access = (
+                    session.query(DatasetAccessModel)
+                    .filter(
+                        DatasetAccessModel.dataset_id == demo_dataset.id,
+                        DatasetAccessModel.username == username,
+                    )
+                    .first()
+                )
+                if not existing_access:
+                    session.add(
+                        DatasetAccessModel(
+                            id=f"access-{demo_dataset.id}-{username}",
+                            dataset_id=demo_dataset.id,
+                            username=username,
+                            access_level=access_level,
+                            granted_by="system-seed",
+                        )
+                    )
+            session.commit()
+    except Exception as e:
+        logger.warning("Failed to seed default dataset: %s", e)
 
     # Migration helper: nếu active_rules đang trống nhưng có proposed_rules APPROVED, tự động publish
     try:
@@ -1335,14 +1322,18 @@ def publish_approved_rules(run_id: str) -> int:
             clean_params = _extract_clean_parameters(p.rule_type, spec)
             params_str = json.dumps(clean_params, ensure_ascii=False)
 
-            table_name = spec.get("table_name") or (p.id.split(".")[0] if "." in p.id else "source_rows")
-            column_name = spec.get("column")
             proposed_source = (
                 session.query(ProposedRuleModel)
                 .filter(ProposedRuleModel.rule_id == p.id)
                 .order_by(ProposedRuleModel.created_at.desc())
                 .first()
             )
+            table_name = (
+                spec.get("table_name")
+                or (proposed_source.table_name if proposed_source and proposed_source.table_name != "source_rows" else None)
+                or (p.dataset_id if p.dataset_id else (p.id.split(".")[0] if "." in p.id else "source_rows"))
+            )
+            column_name = spec.get("column")
             dimension = proposed_source.dimension if proposed_source else "VALIDITY"
 
             active_rule = session.get(ActiveRuleModel, p.id)

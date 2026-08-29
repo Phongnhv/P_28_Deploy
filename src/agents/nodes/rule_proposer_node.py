@@ -107,13 +107,38 @@ class CandidateTableRuleDraft(BaseModel):
 # Domain context & Data dictionary injected vào mỗi lần gọi LLM
 # ---------------------------------------------------------------------------
 
-DOMAIN_CONTEXT = """\
-Hệ thống quản lý dữ liệu vận tải taxi thành phố New York (NYC TLC Yellow Taxi Trip Records).
-Dataset ghi nhận chi tiết các chuyến đi taxi: thời gian đón/trả khách, địa điểm đón/trả (Taxi Zone),
-số lượng hành khách, khoảng cách di chuyển, các khoản cước phí, phụ phí, thuế, phí cầu đường, tiền tip và tổng tiền thanh toán.
-"""
+def _merge_table_business_contexts(state: AgentState) -> dict[str, str]:
+    """Merge new and legacy context fields, with the new field taking precedence."""
+    legacy = state.get("specialized_system_prompts") or {}
+    current = state.get("table_business_contexts") or {}
+    return {
+        **(legacy if isinstance(legacy, dict) else {}),
+        **(current if isinstance(current, dict) else {}),
+    }
 
-DATA_DICTIONARY_PATH = Path(__file__).resolve().parents[3] / "data" / "data_dictionary_trip_records_yellow.json"
+
+def _dictionary_for_table(normalized_dictionary: object, table_name: str) -> dict | str | None:
+    """Resolve one table's dictionary from supported state shapes.
+
+    Inferred dictionaries are stored as ``{"tables": {name: payload}}`` while
+    some callers provide a directly keyed mapping or a single-table payload.
+    Keep this normalization at the node boundary so prompt construction always
+    receives the dictionary for the table being proposed.
+    """
+    if not isinstance(normalized_dictionary, dict):
+        return normalized_dictionary if normalized_dictionary else None
+
+    tables = normalized_dictionary.get("tables")
+    if isinstance(tables, dict) and table_name in tables:
+        return tables[table_name]
+
+    if table_name in normalized_dictionary:
+        return normalized_dictionary[table_name]
+
+    if normalized_dictionary.get("table_name") == table_name:
+        return normalized_dictionary
+
+    return None
 
 
 def _build_coverage_requirements(table_digest: dict) -> list[dict]:
@@ -136,9 +161,7 @@ def _build_coverage_requirements(table_digest: dict) -> list[dict]:
     requirements: list[dict] = []
     digest_columns = table_digest.get("columns") or []
     available_columns = {
-        column.get("name")
-        for column in digest_columns
-        if isinstance(column, dict) and column.get("name")
+        column.get("name") for column in digest_columns if isinstance(column, dict) and column.get("name")
     }
 
     for column in digest_columns:
@@ -152,67 +175,78 @@ def _build_coverage_requirements(table_digest: dict) -> list[dict]:
         signals = set(column.get("signals", []))
         null_pct = column.get("null_pct", 0.0) or 0.0
 
-        if "no_nulls" in signals and (
-            role in {"id", "datetime"}
-            or name in {"vendor_id", "rate_code_id", "payment_type"}
-        ):
-            requirements.append({
-                "column": name,
-                "rule_type": "NOT_NULL",
-                "evidence": ["no_nulls", f"role={role}"],
-            })
+        if "no_nulls" in signals and (role in {"id", "datetime", "category", "categorical"}):
+            requirements.append(
+                {
+                    "column": name,
+                    "rule_type": "NOT_NULL",
+                    "evidence": ["no_nulls", f"role={role}"],
+                }
+            )
 
         if signals.intersection({"has_pk_constraint", "has_unique_constraint", "unique_full_table"}):
-            requirements.append({
-                "column": name,
-                "rule_type": "UNIQUE",
-                "evidence": sorted(signals.intersection({
-                    "has_pk_constraint", "has_unique_constraint", "unique_full_table"
-                })),
-            })
+            requirements.append(
+                {
+                    "column": name,
+                    "rule_type": "UNIQUE",
+                    "evidence": sorted(
+                        signals.intersection({"has_pk_constraint", "has_unique_constraint", "unique_full_table"})
+                    ),
+                }
+            )
 
-        if role == "numeric" and signals.intersection({
-            "has_extreme_outliers", "has_negative_values", "has_zero_values"
-        }):
-            requirements.append({
-                "column": name,
-                "rule_type": "RANGE",
-                "evidence": sorted(signals.intersection({
-                    "has_extreme_outliers", "has_negative_values", "has_zero_values"
-                })),
-            })
+        if role == "numeric" and signals.intersection(
+            {"has_extreme_outliers", "has_negative_values", "has_zero_values"}
+        ):
+            requirements.append(
+                {
+                    "column": name,
+                    "rule_type": "RANGE",
+                    "evidence": sorted(
+                        signals.intersection({"has_extreme_outliers", "has_negative_values", "has_zero_values"})
+                    ),
+                }
+            )
 
         values = [value for value in column.get("values", []) if value is not None]
         if role == "categorical" and values:
-            requirements.append({
-                "column": name,
-                "rule_type": "ACCEPTED_VALUES",
-                "evidence": {"values": values},
-            })
+            requirements.append(
+                {
+                    "column": name,
+                    "rule_type": "ACCEPTED_VALUES",
+                    "evidence": {"values": values},
+                }
+            )
 
         if role == "datetime":
-            requirements.append({
-                "column": name,
-                "rule_type": "FRESHNESS",
-                "evidence": {"range": column.get("range")},
-            })
+            requirements.append(
+                {
+                    "column": name,
+                    "rule_type": "FRESHNESS",
+                    "evidence": {"range": column.get("range")},
+                }
+            )
 
-        if null_pct > 5.0 and name not in {
-            "congestion_surcharge", "airport_fee", "cbd_congestion_fee"
-        }:
-            requirements.append({
-                "column": name,
-                "rule_type": "NULL_RATE",
-                "evidence": {"null_pct": null_pct},
-            })
+        if null_pct > 5.0:
+            requirements.append(
+                {
+                    "column": name,
+                    "rule_type": "NULL_RATE",
+                    "evidence": {"null_pct": null_pct},
+                }
+            )
 
-        is_datetime_col = any(suffix in name for suffix in ["_at", "_time", "_date", "datetime", "pickup", "dropoff"])
+        is_datetime_col = role == "datetime" or any(
+            suffix in name.lower() for suffix in ["_at", "_time", "_date", "datetime"]
+        )
         if "fixed_length" in signals and not is_datetime_col:
-            requirements.append({
-                "column": name,
-                "rule_type": "REGEX_FORMAT",
-                "evidence": {"length_stats": column.get("length_stats")},
-            })
+            requirements.append(
+                {
+                    "column": name,
+                    "rule_type": "REGEX_FORMAT",
+                    "evidence": {"length_stats": column.get("length_stats")},
+                }
+            )
 
     cross_field_operators = {
         "datetime_order": "<=",
@@ -246,24 +280,28 @@ def _build_coverage_requirements(table_digest: dict) -> list[dict]:
             )
             continue
 
-        requirements.append({
-            "column": source_column,
-            "rule_type": "CROSS_FIELD_COMPARISON",
-            "parameters": {
-                "target_column": target_column,
-                "operator": operator,
-            },
-            "evidence": hint,
-        })
+        requirements.append(
+            {
+                "column": source_column,
+                "rule_type": "CROSS_FIELD_COMPARISON",
+                "parameters": {
+                    "target_column": target_column,
+                    "operator": operator,
+                },
+                "evidence": hint,
+            }
+        )
 
-    requirements.append({
-        "column": None,
-        "rule_type": "ROW_COUNT",
-        "parameters": {
-            "min_row_count": max(1, int((table_digest.get("rows") or 0) * 0.8)),
-        },
-        "evidence": {"rows": table_digest.get("rows", 0)},
-    })
+    requirements.append(
+        {
+            "column": None,
+            "rule_type": "ROW_COUNT",
+            "parameters": {
+                "min_row_count": max(1, int((table_digest.get("rows") or 0) * 0.8)),
+            },
+            "evidence": {"rows": table_digest.get("rows", 0)},
+        }
+    )
     return _attach_evidence_items(requirements, table_digest)
 
 
@@ -325,20 +363,24 @@ def _attach_evidence_items(requirements: list[dict], table_digest: dict) -> list
                     prefix = "schema" if "constraint" in reference or reference == "has_pk_constraint" else "profile"
                     reference = f"{prefix}:{column or '_table'}:{reference}"
                 metric = reference.rsplit(".", 1)[-1].rsplit(":", 1)[-1]
-                evidence_items.append({
-                    "id": reference,
-                    "source_type": _evidence_source_type(reference),
-                    "metric": metric,
-                    "value": _digest_metric_value(table_digest, column, metric),
-                })
+                evidence_items.append(
+                    {
+                        "id": reference,
+                        "source_type": _evidence_source_type(reference),
+                        "metric": metric,
+                        "value": _digest_metric_value(table_digest, column, metric),
+                    }
+                )
         elif isinstance(raw_evidence, dict):
             for metric, value in raw_evidence.items():
-                evidence_items.append({
-                    "id": f"profile:{column or '_table'}:{metric}",
-                    "source_type": "DATA_PROFILE",
-                    "metric": metric,
-                    "value": value,
-                })
+                evidence_items.append(
+                    {
+                        "id": f"profile:{column or '_table'}:{metric}",
+                        "source_type": "DATA_PROFILE",
+                        "metric": metric,
+                        "value": value,
+                    }
+                )
         item["evidence_items"] = evidence_items
         enriched.append(item)
     return enriched
@@ -592,6 +634,8 @@ async def _propose_for_table(
     semaphore: asyncio.Semaphore,
     max_retries: int,
     semantic_contract: dict | None = None,
+    business_context: str | None = None,
+    data_dictionary: dict | str | None = None,
     candidates: list[dict] | None = None,
     dataset_id: str = "unknown",
     specialized_system_prompt: str | None = None,
@@ -599,6 +643,12 @@ async def _propose_for_table(
     """Gọi LLM một lần cho một bảng, bảo vệ bằng semaphore + retry."""
     columns = [col["name"] for col in table_digest.get("columns", [])]
     dashboard_mode = bool(table_digest.get("dashboard_candidate_mode"))
+    is_taxi = (
+        "trip" in table_name.lower()
+        or "taxi" in str(dataset_id).lower()
+        or any("pickup" in str(c).lower() for c in columns)
+        or table_name in ("source_rows", "trips_raw")
+    )
     historical = [] if dashboard_mode else query_historical_rules(table_name, columns)
 
     async with semaphore:
@@ -614,8 +664,6 @@ async def _propose_for_table(
                     entry_ts.isoformat(),
                 )
 
-                is_taxi = dataset_id.lower().startswith("nyc-yellow") or "taxi" in dataset_id.lower()
-
                 if candidates is not None:
                     coverage_requirements = json.dumps(candidates, ensure_ascii=False)
                 else:
@@ -630,21 +678,18 @@ async def _propose_for_table(
                         table_digest=json.dumps(table_digest, ensure_ascii=False),
                         coverage_requirements=coverage_requirements,
                     )
-                elif not is_taxi:
-                    from src.agents.nodes.templates import generic_rule_proposer_prompt
-                    messages = generic_rule_proposer_prompt.format_messages(
-                        table_name=table_name,
-                        table_digest=json.dumps(table_digest, ensure_ascii=False),
-                        semantic_contract=json.dumps(semantic_contract or {}, ensure_ascii=False),
-                        historical_rules=json.dumps(historical, ensure_ascii=False),
-                        coverage_requirements=coverage_requirements,
-                    )
                 else:
+                    dict_content = (
+                        json.dumps(data_dictionary, ensure_ascii=False, indent=2)
+                        if isinstance(data_dictionary, dict)
+                        else (str(data_dictionary) if data_dictionary else "None")
+                    )
                     messages = rule_proposer_prompt.format_messages(
                         table_name=table_name,
                         table_digest=json.dumps(table_digest, ensure_ascii=False),
-                        domain_context=DOMAIN_CONTEXT,
-                        data_dictionary=_load_data_dictionary(),
+                        semantic_contract=json.dumps(semantic_contract or {}, ensure_ascii=False),
+                        business_context=business_context or "Không có ngữ cảnh nghiệp vụ bổ sung.",
+                        data_dictionary=dict_content,
                         historical_rules=json.dumps(historical, ensure_ascii=False),
                         coverage_requirements=coverage_requirements,
                         few_shot_examples=_RULE_PROPOSER_FEW_SHOT,
@@ -688,7 +733,7 @@ async def _propose_for_table(
             except (ValidationError, Exception) as exc:
                 last_exc = exc
                 if attempt < max_retries:
-                    wait_seconds = 2 ** attempt  # 1s, 2s, 4s …
+                    wait_seconds = 2**attempt  # 1s, 2s, 4s …
                     logger.warning(
                         "[%s] Lỗi attempt %d: %s — thử lại sau %ds",
                         table_name,
@@ -712,6 +757,7 @@ async def _propose_for_table(
 # Helper: validate + stamp rule_id cho một ProposedRule
 # ---------------------------------------------------------------------------
 
+
 def _stamp_rule(
     rule: ProposedRule,
     table_name: str,
@@ -727,9 +773,7 @@ def _stamp_rule(
     col_key = rule.column if rule.column else "_table"
     if rule.rule_type.value == "CROSS_FIELD_COMPARISON":
         target_column = rule.parameters.target_column
-        base_id = (
-            f"{table_name}.{col_key}.VS.{target_column}.{rule.rule_type.value}"
-        )
+        base_id = f"{table_name}.{col_key}.VS.{target_column}.{rule.rule_type.value}"
     else:
         base_id = f"{table_name}.{col_key}.{rule.rule_type.value}"
 
@@ -757,8 +801,7 @@ def _stamp_rule(
     evidence_items = (requirement or {}).get("evidence_items", [])
     if requirement is None:
         evidence_items = [
-            {"id": ref, "source_type": _evidence_source_type(ref), "value": None}
-            for ref in rule.selected_evidence_refs
+            {"id": ref, "source_type": _evidence_source_type(ref), "value": None} for ref in rule.selected_evidence_refs
         ]
     evidence_by_id = {item["id"]: item for item in evidence_items}
     selected_refs = list(rule.selected_evidence_refs)
@@ -803,12 +846,12 @@ def _stamp_rule(
     sample = digest.get("sample") or {}
     dashboard_full_table = bool(digest.get("dashboard_candidate_mode"))
     evidence = RuleEvidenceSnapshot(
-        sample_row_count=int(digest.get("rows") or 0) if dashboard_full_table else int(sample.get("n") or digest.get("rows") or 0),
+        sample_row_count=int(digest.get("rows") or 0)
+        if dashboard_full_table
+        else int(sample.get("n") or digest.get("rows") or 0),
         sample_rate=1.0 if dashboard_full_table else float(sample.get("rate", 1.0)),
         sampling_caveat=sample.get("caveat"),
-        observed_metrics={
-            ref: evidence_by_id[ref].get("value") for ref in selected_refs
-        },
+        observed_metrics={ref: evidence_by_id[ref].get("value") for ref in selected_refs},
         source_refs=selected_refs,
     )
 
@@ -839,6 +882,7 @@ def _stamp_rule(
 # ---------------------------------------------------------------------------
 # Main node: rule_proposer_node
 # ---------------------------------------------------------------------------
+
 
 async def rule_proposer_node(state: AgentState) -> dict:
     """Rule Proposer Node — fan-out LLM structured output per table.
@@ -871,7 +915,9 @@ async def rule_proposer_node(state: AgentState) -> dict:
 
     out_dir = getattr(settings, "output_dir", None)
     res_dir = getattr(settings, "results_dir", None)
-    base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+    base_dir = (
+        out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+    )
     rule_proposer_dir = Path(base_dir) / "rule_proposer"
 
     # 2. Debug dump (tuỳ chọn)
@@ -892,6 +938,9 @@ async def rule_proposer_node(state: AgentState) -> dict:
 
     contract = state.get("semantic_contract") or {}
     tables_contract = contract.get("tables", {})
+
+    business_contexts = _merge_table_business_contexts(state)
+    normalized_dict = state.get("normalized_data_dictionary") or {}
 
     all_candidates = state.get("rule_candidates", [])
     candidates_by_table: dict[str, list[dict]] = {}
@@ -924,6 +973,8 @@ async def rule_proposer_node(state: AgentState) -> dict:
                 semantic_contract=_filter_semantic_context(
                     tables_contract.get(table_name), candidate_batch
                 ),
+                business_context=business_contexts.get(table_name),
+                data_dictionary=_dictionary_for_table(normalized_dict, table_name),
                 candidates=candidate_batch,
                 dataset_id=dataset_id,
                 specialized_system_prompt=specialized_prompts.get(table_name),
@@ -1030,6 +1081,7 @@ async def rule_proposer_node(state: AgentState) -> dict:
 
     return result
 
+
 # ---------------------------------------------------------------------------
 
 
@@ -1049,9 +1101,7 @@ async def persist_rules_node(state: AgentState) -> dict:
         logger.warning("persist_rules_node: không có rule nào để lưu.")
         n_saved = 0
     else:
-        n_saved = await asyncio.to_thread(
-            save_proposed_rules, run_id, dataset_id, proposed_rules
-        )
+        n_saved = await asyncio.to_thread(save_proposed_rules, run_id, dataset_id, proposed_rules)
         logger.info("persist_rules_node: đã lưu %d rules (run_id=%s)", n_saved, run_id)
 
     return {
@@ -1066,6 +1116,7 @@ async def persist_rules_node(state: AgentState) -> dict:
 # ---------------------------------------------------------------------------
 # Debug harness
 # ---------------------------------------------------------------------------
+
 
 async def main():
     """Chạy rule_proposer_node từ file digest đã lưu.
@@ -1117,4 +1168,3 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
     # Run test syntax: python -m src.agents.nodes.rule_proposer_node
-

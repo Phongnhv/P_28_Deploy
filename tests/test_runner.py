@@ -25,33 +25,49 @@ async def test_loopback_cors_accepts_127_origin(client):
 @pytest.fixture
 def allowlist():
     return {
-        'source_row_id', 'vendor_id', 'pickup_at', 'dropoff_at', 'passenger_count',
-        'trip_distance', 'payment_type', 'fare_amount'
+        "source_row_id",
+        "vendor_id",
+        "pickup_at",
+        "dropoff_at",
+        "passenger_count",
+        "trip_distance",
+        "payment_type",
+        "fare_amount",
     }
+
 
 def test_compiler_not_null(allowlist):
     sql = compile_rule_to_sql("not_null", {"column": "vendor_id"}, allowlist)
-    assert 'IS NULL' in sql
+    assert "IS NULL" in sql
     assert '"vendor_id"' in sql
 
+
 def test_compiler_numeric_range(allowlist):
-    sql = compile_rule_to_sql("numeric_range", {"column": "fare_amount", "min_value": 0.0, "max_value": 150.0}, allowlist)
-    assert 'fare_amount' in sql
-    assert ':min_value' in sql
-    assert ':max_value' in sql
+    sql = compile_rule_to_sql(
+        "numeric_range", {"column": "fare_amount", "min_value": 0.0, "max_value": 150.0}, allowlist
+    )
+    assert "fare_amount" in sql
+    assert ":min_value" in sql
+    assert ":max_value" in sql
+
 
 def test_compiler_accepted_values(allowlist):
     sql = compile_rule_to_sql("accepted_values", {"column": "payment_type", "allowed_values": ["1", "2"]}, allowlist)
-    assert 'NOT IN (:val_0, :val_1)' in sql
+    assert "NOT IN (:val_0, :val_1)" in sql
+
 
 def test_compiler_cross_field(allowlist):
-    sql = compile_rule_to_sql("cross_field_comparison", {"columns": ["pickup_at", "dropoff_at"], "operator": "<="}, allowlist)
+    sql = compile_rule_to_sql(
+        "cross_field_comparison", {"columns": ["pickup_at", "dropoff_at"], "operator": "<="}, allowlist
+    )
     assert 'NOT ("pickup_at" <= "dropoff_at")' in sql
+
 
 def test_compiler_duplicate_fingerprint(allowlist):
     sql = compile_rule_to_sql("duplicate_fingerprint", {"fingerprint_columns": ["vendor_id", "pickup_at"]}, allowlist)
-    assert 'GROUP BY' in sql
-    assert 'HAVING COUNT(*) > 1' in sql
+    assert "GROUP BY" in sql
+    assert "HAVING COUNT(*) > 1" in sql
+
 
 def test_compiler_sql_injection_rejection(allowlist):
     # Reject bad column
@@ -64,11 +80,16 @@ def test_compiler_sql_injection_rejection(allowlist):
 
     # Reject injection characters in accepted values
     with pytest.raises(ValueError):
-        compile_rule_to_sql("accepted_values", {"column": "payment_type", "allowed_values": ["1'; DROP TABLE trips;"]}, allowlist)
+        compile_rule_to_sql(
+            "accepted_values", {"column": "payment_type", "allowed_values": ["1'; DROP TABLE trips;"]}, allowlist
+        )
 
     # Reject injection characters in cross field operator
     with pytest.raises(ValueError):
-        compile_rule_to_sql("cross_field_comparison", {"columns": ["pickup_at", "dropoff_at"], "operator": "<=; DROP TABLE;"}, allowlist)
+        compile_rule_to_sql(
+            "cross_field_comparison", {"columns": ["pickup_at", "dropoff_at"], "operator": "<=; DROP TABLE;"}, allowlist
+        )
+
 
 @pytest.mark.asyncio
 async def test_dq_run_and_failed_ids_capped_at_20(client):
@@ -78,6 +99,7 @@ async def test_dq_run_and_failed_ids_capped_at_20(client):
     csrf_token = login_res.json()["csrf_token"]
     # 1. Ingest dataset first to populate source_rows (required to execute queries)
     import uuid
+
     key_suffix = str(uuid.uuid4())[:8]
     ingest_headers = {"X-CSRF-Token": csrf_token, "Idempotency-Key": f"dq-run-ingest-{key_suffix}"}
     ingest_res = await client.post("/api/v1/datasets/dataset-nyc-yellow-taxi-50k/ingestions", headers=ingest_headers)
@@ -94,9 +116,11 @@ async def test_dq_run_and_failed_ids_capped_at_20(client):
             id="rv_test-run-cap",
             rule_proposal_id=prop.id,
             dataset_id="dataset-nyc-yellow-taxi-50k",
-            rule_spec=json.dumps({"type": "numeric_range", "column": "trip_distance", "min_value": 50.0}), # most distances are < 50
+            rule_spec=json.dumps(
+                {"type": "numeric_range", "column": "trip_distance", "min_value": 50.0}
+            ),  # most distances are < 50
             status="APPROVED",
-            version=1
+            version=1,
         )
         session.add(rv)
         session.add(
@@ -111,11 +135,7 @@ async def test_dq_run_and_failed_ids_capped_at_20(client):
 
     # 3. Trigger DQ Run
     dq_headers = {"X-CSRF-Token": csrf_token, "Idempotency-Key": f"dq-run-trigger-{key_suffix}"}
-    dq_res = await client.post(
-        "/api/v1/dq-runs",
-        headers=dq_headers,
-        json={"rule_ids": ["rv_test-run-cap"]}
-    )
+    dq_res = await client.post("/api/v1/dq-runs", headers=dq_headers, json={"rule_ids": ["rv_test-run-cap"]})
     assert dq_res.status_code == 202
     job_id = dq_res.json()["job_id"]
     run_id = dq_res.json()["run_id"]
@@ -131,7 +151,7 @@ async def test_dq_run_and_failed_ids_capped_at_20(client):
     res = results[0]
     assert res["status"] == "FAIL"
     assert len(res["failed_row_ids"]) <= 20
-    assert res["failed_count"] > 20 # there are many trips with distance < 50
+    assert res["failed_count"] > 20  # there are many trips with distance < 50
 
     anomaly_res = await client.get(f"/api/v1/dq-runs/{run_id}/anomalies")
     assert anomaly_res.status_code == 200
@@ -161,13 +181,21 @@ async def test_dq_run_and_failed_ids_capped_at_20(client):
     assert row_payload["total"] > 0
     assert 0 < len(row_payload["rows"]) <= 5
     assert set(row_payload["rows"][0]) == {
-        "source_row_id", "vendor_id", "pickup_at", "dropoff_at", "passenger_count",
-        "trip_distance", "payment_type", "fare_amount", "total_amount",
+        "source_row_id",
+        "vendor_id",
+        "pickup_at",
+        "dropoff_at",
+        "passenger_count",
+        "trip_distance",
+        "payment_type",
+        "fare_amount",
+        "total_amount",
     }
     with Session(get_engine()) as session:
         configuration = session.get(RuleConfigurationModel, "test-run-cap")
         assert configuration is not None
         assert configuration.last_run_at is not None
+
 
 def db_create_proposal(session: Session, dataset_id: str) -> RuleProposalModel:
     prop = RuleProposalModel(
@@ -182,7 +210,7 @@ def db_create_proposal(session: Session, dataset_id: str) -> RuleProposalModel:
         evidence_refs=json.dumps(["manual"]),
         evidence_summary="manual distance check",
         confidence=1.0,
-        model_name="test"
+        model_name="test",
     )
     session.add(prop)
     session.commit()
