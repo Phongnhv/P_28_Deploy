@@ -244,8 +244,10 @@ def build_dashboard_proposal_graph() -> StateGraph:
 
 
 def _should_run_or_fail(state: AgentState) -> str:
-    """Route the dbt artifact to execution or terminal failure."""
+    """Route the dbt artifact to execution, direct SQL fallback, or terminal failure."""
     if state.get("dbt_validation_valid") is True:
+        return "run"
+    if state.get("generated_tests") and state.get("allow_direct_sql_fallback", True):
         return "run"
     return "fail"
 
@@ -331,11 +333,6 @@ def build_execution_graph(observer: NodeObserver | None = None) -> StateGraph:
     graph.add_edge("persist_report", END)
 
     return graph.compile()
-
-
-# ---------------------------------------------------------------------------
-# Run 3: Anomaly Graph (Detector ➔ Hypothesis ➔ Persist)
-# ---------------------------------------------------------------------------
 
 def build_anomaly_graph(
     investigation_mode: Literal["deepagent", "legacy"] | None = None,

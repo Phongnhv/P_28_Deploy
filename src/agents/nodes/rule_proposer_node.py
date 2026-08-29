@@ -40,8 +40,16 @@ from src.agents.tools.profile_digest import (
 )
 from src.config import get_settings
 from src.models.rule_schemas import (
+    DataQualityDimension,
+    EvidenceSourceType,
+    ParameterProvenance,
+    ProposalBasis,
     ProposedRule,
+    RuleConfidence,
     RuleEvidenceSnapshot,
+    RuleParameters,
+    RuleType,
+    Severity,
     TableRuleProposal,
 )
 from src.services.llm import get_llm
@@ -881,6 +889,120 @@ def _stamp_rule(
     }
 
 
+def _promote_candidates_to_rules(
+    candidates_by_table: dict[str, list[dict]],
+    run_id: str,
+    per_table_digest: dict[str, dict],
+) -> list[dict]:
+    """Heuristic Rule Promotion: Tự động chuyển đổi các rule_candidates đã xác thực thành ProposedRule khi LLM gặp sự cố."""
+    stamped_rules: list[dict] = []
+    used_ids: set[str] = set()
+    stamped_keys: set[str] = set()
+
+    dimension_map = {
+        "NOT_NULL": DataQualityDimension.COMPLETENESS,
+        "UNIQUE": DataQualityDimension.UNIQUENESS,
+        "RANGE": DataQualityDimension.VALIDITY,
+        "ACCEPTED_VALUES": DataQualityDimension.VALIDITY,
+        "REGEX_FORMAT": DataQualityDimension.VALIDITY,
+        "CROSS_FIELD_COMPARISON": DataQualityDimension.CONSISTENCY,
+        "NULL_RATE": DataQualityDimension.COMPLETENESS,
+        "ROW_COUNT": DataQualityDimension.COMPLETENESS,
+        "FRESHNESS": DataQualityDimension.FRESHNESS,
+    }
+
+    for table_name, candidates in candidates_by_table.items():
+        table_digest = per_table_digest.get(table_name, {})
+        for cand in candidates:
+            if not isinstance(cand, dict):
+                continue
+            col = cand.get("column")
+            rule_type_raw = str(cand.get("rule_type") or "").upper()
+            try:
+                rule_type_enum = RuleType(rule_type_raw)
+            except ValueError:
+                continue
+
+            params = cand.get("parameters") or {}
+            evidence_items = cand.get("evidence_items") or []
+            selected_refs = [
+                item["id"] for item in evidence_items if isinstance(item, dict) and "id" in item
+            ]
+            if not selected_refs:
+                evidence_refs_list = cand.get("evidence") or []
+                selected_refs = [str(r) for r in evidence_refs_list] if evidence_refs_list else [f"profile:{table_name}:{col or '_table'}"]
+
+            col_display = f"cột '{col}'" if col else f"bảng '{table_name}'"
+            rule_name = f"{table_name}_{col}_{rule_type_raw}".lower() if col else f"{table_name}_{rule_type_raw}".lower()
+            desc = f"Kiểm tra chất lượng {rule_type_raw} cho {col_display} trên bảng '{table_name}'."
+
+            dim = dimension_map.get(rule_type_raw, DataQualityDimension.VALIDITY)
+
+            provenance = [
+                ParameterProvenance(
+                    parameter_name=k,
+                    source_type=EvidenceSourceType.DATA_PROFILE,
+                    source_ref=selected_refs[0],
+                    derivation_method="heuristic_candidate_promoter",
+                )
+                for k in params.keys()
+            ]
+
+            confidence = RuleConfidence(
+                overall=0.60,
+                evidence_strength=0.60,
+                business_support=0.60,
+                sample_representativeness=0.60,
+                explanation="Được đề xuất tự động từ phân tích thống kê và hợp đồng dữ liệu (Heuristic Fallback).",
+            )
+
+            try:
+                rule_obj = ProposedRule(
+                    candidate_id=cand.get("candidate_id") or f"cand_{table_name}_{col}_{rule_type_raw}",
+                    column=col,
+                    rule_type=rule_type_enum,
+                    parameters=RuleParameters(**params),
+                    rule_name=rule_name,
+                    business_rationale="Đề xuất luật tự động dựa trên phân tích thống kê phân vị và tính toàn vẹn của dữ liệu (Heuristic Fallback).",
+                    proposal_basis=ProposalBasis.DATA_PROFILE,
+                    selected_evidence_refs=selected_refs,
+                    parameter_provenance=provenance,
+                    assumptions=["Được sinh tự động từ thống kê profile để duy trì tính liên tục của workflow khi LLM gián đoạn."],
+                    confidence=confidence,
+                    severity=Severity.MEDIUM,
+                    dimension=dim,
+                    rule_description=desc,
+                    ai_reasoning="Dịch vụ LLM tạm thời gián đoạn. Hệ thống tự động nâng cấp Rule Candidate thống kê thành Proposed Rule hợp lệ.",
+                )
+
+                stamped = _stamp_rule(
+                    rule_obj,
+                    table_name,
+                    run_id,
+                    used_ids,
+                    cand,
+                    table_digest,
+                )
+                if stamped:
+                    sig = json.dumps(
+                        {
+                            "table": stamped.get("table_name"),
+                            "column": stamped.get("column"),
+                            "rule_type": stamped.get("rule_type"),
+                            "parameters": stamped.get("parameters") or {},
+                        },
+                        sort_keys=True,
+                        default=str,
+                    )
+                    if sig not in stamped_keys:
+                        stamped_keys.add(sig)
+                        stamped_rules.append(stamped)
+            except Exception as e:
+                logger.warning("Không thể promote candidate %s: %s", cand, e)
+
+    return stamped_rules
+
+
 # ---------------------------------------------------------------------------
 # Main node: rule_proposer_node
 # ---------------------------------------------------------------------------
@@ -1037,15 +1159,33 @@ async def rule_proposer_node(state: AgentState) -> dict:
                 stamped_rule_keys.add(signature)
                 flat_rules.append(stamped)
 
-    # Never persist a partial policy set when one of its batches failed.
+    heuristic_fallback_used = False
     if errors:
-        flat_rules = []
+        # Nếu TẤT CẢ các batch đều thất bại (LLM service gián đoạn hoàn toàn), kích hoạt Heuristic Rule Promotion
+        if len(errors) == len(batch_jobs) and candidates_by_table and state.get("allow_heuristic_fallback", True):
+            logger.warning(
+                "Tất cả các lượt gọi LLM đều thất bại (%d/%d batches). Kích hoạt Heuristic Rule Promotion từ candidates.",
+                len(errors),
+                len(batch_jobs),
+            )
+            promoted = _promote_candidates_to_rules(candidates_by_table, run_id, per_table)
+            if promoted:
+                flat_rules = promoted
+                heuristic_fallback_used = True
+                logger.info("Heuristic Rule Promotion đã sinh thành công %d proposed rules dự phòng.", len(flat_rules))
+            else:
+                flat_rules = []
+        else:
+            # Khi một phần batch bị lỗi: fail-closed để tránh lưu bộ luật chắp vá
+            flat_rules = []
+
 
     logger.info(
-        "rule_proposer_node hoàn thành: run_id=%s | %d rules | %d errors",
+        "rule_proposer_node hoàn thành: run_id=%s | %d rules | %d errors | fallback=%s",
         run_id,
         len(flat_rules),
         len(errors),
+        heuristic_fallback_used,
     )
 
     # Xuất trace JSON proposed rules
@@ -1058,6 +1198,7 @@ async def rule_proposer_node(state: AgentState) -> dict:
             "generated_at": datetime.now().isoformat(),
             "total_rules": len(flat_rules),
             "total_errors": len(errors),
+            "heuristic_fallback_used": heuristic_fallback_used,
             "proposed_rules": flat_rules,
             "errors": errors,
         }
@@ -1072,18 +1213,22 @@ async def rule_proposer_node(state: AgentState) -> dict:
         "rule_run_id": run_id,
     }
 
-    if errors:
-        result["error"] = (
-            f"Rule proposer failed closed because {len(errors)}/{len(batch_jobs)} batch(es) failed: "
-            + "; ".join(
-                f"{e.get('table')} batch {e.get('batch')}: {e.get('error')}"
-                for e in errors[:3]
+    if not flat_rules:
+        if errors:
+            result["error"] = (
+                f"Rule proposer failed closed because {len(errors)}/{len(batch_jobs)} batch(es) failed: "
+                + "; ".join(
+                    f"{e.get('table')} batch {e.get('batch')}: {e.get('error')}"
+                    for e in errors[:3]
+                )
             )
-        )
-    elif not flat_rules:
-        result["error"] = "Rule proposer returned no valid structured proposals."
+        else:
+            result["error"] = "Rule proposer returned no valid structured proposals."
+    elif heuristic_fallback_used:
+        result["heuristic_fallback_used"] = True
 
     return result
+
 
 
 # ---------------------------------------------------------------------------
