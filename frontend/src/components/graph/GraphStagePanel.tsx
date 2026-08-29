@@ -19,6 +19,7 @@ export function GraphStagePanel({
   loadNodeDetail,
   defaultOpen = true,
   showTimeline = true,
+  emptyNote,
 }: {
   catalog: GraphCatalog | null;
   runs: NodeRun[];
@@ -27,6 +28,9 @@ export function GraphStagePanel({
   loadNodeDetail: (nodeRunId: string) => Promise<NodeRunDetail>;
   defaultOpen?: boolean;
   showTimeline?: boolean;
+  /** Shown when this graph has no runs, to explain why rather than leave a row
+      of "not run" cards next to results that plainly exist. */
+  emptyNote?: string;
 }) {
   const vi = language === "vi";
   const [open, setOpen] = useState(defaultOpen);
@@ -75,6 +79,9 @@ export function GraphStagePanel({
 
       {open && (
         <div className="graph-stage-body">
+          {emptyNote && relevantRuns.length === 0 && (
+            <p className="graph-stage-note">{emptyNote}</p>
+          )}
           {graphs.map((graph) => {
             const graphRuns = relevantRuns.filter((run) => run.graph_key === graph.key);
             return (

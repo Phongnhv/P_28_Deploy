@@ -103,6 +103,9 @@ export interface Dataset {
 export interface DatasetImportResponse {
   dataset: Dataset;
   job: CreateJobResponse;
+  /** Versions are content-addressed: identical bytes replay the first import
+      instead of profiling again. True means nothing new was run. */
+  idempotent_replay?: boolean;
 }
 
 export interface Job {
@@ -248,10 +251,14 @@ export interface DqRunCreateResponse {
 export interface DqResult {
   rule_id: string;
   rule_title: string;
-  status: "PASS" | "FAIL";
+  /** SKIPPED is a rule the executor could not express, not a silent pass. */
+  status: "PASS" | "FAIL" | "SKIPPED";
   checked_count: number;
   failed_count: number;
   failed_row_ids: string[];
+  /** Dataset-level rules report a measured percentage instead of failing rows. */
+  violation_rate?: number | null;
+  error_message?: string | null;
 }
 
 export interface DqAnomaly {
@@ -289,6 +296,50 @@ export interface DatasetRowsResponse {
   offset: number;
   rows: DatasetRow[];
   schema?: Array<{ name: string; logical_type?: string; physical_type?: string; nullable?: boolean }>;
+}
+
+/** Decide every proposal of a dataset in one transaction. */
+export interface BulkProposalReviewInput {
+  dataset_id: string;
+  action: "approve" | "reject";
+  /** Leave true to keep decisions the Steward already made one by one. */
+  pending_only?: boolean;
+}
+
+/** Steward sign-off on the contract Graph 1A inferred. */
+export interface SemanticContractConfirmInput {
+  artifact_id: string;
+  expected_version: number;
+  contract: Record<string, unknown>;
+  review_note?: string;
+}
+
+export interface DataDictionaryColumn {
+  name: string;
+  description: string;
+  semantic_type: string;
+  business_role: string;
+  nullable_expected: boolean;
+  governance_notes: string[];
+}
+
+export interface DataDictionaryTable {
+  table_name: string;
+  description: string;
+  columns: DataDictionaryColumn[];
+  business_rules: string[];
+}
+
+/** A Steward-supplied dictionary. `null` from the API means the agent infers one. */
+export interface DataDictionary {
+  id: string;
+  dataset_id: string;
+  dataset_version_id?: string | null;
+  source: "UPLOADED" | "INFERRED";
+  source_filename?: string | null;
+  column_count: number;
+  tables: DataDictionaryTable[];
+  updated_at?: string | null;
 }
 
 export interface DatasetRowQuery {
@@ -358,7 +409,8 @@ export interface AgentArtifact {
   agent_role: "DATA_RULE_AGENT" | "STANDARDIZATION_AGENT" | "LOOP_AGENT";
   type: AgentArtifactType;
   version: number;
-  status: "DRAFT" | "VALIDATED" | "APPROVED" | "REJECTED" | "STALE";
+  /** "CONFIRMED" is what the semantic-contract confirm endpoint returns. */
+  status: "DRAFT" | "VALIDATED" | "APPROVED" | "CONFIRMED" | "REJECTED" | "STALE";
   /** Artifact is retained as a temporary downstream session after a rewind. */
   temporary?: boolean;
   payload: unknown;
@@ -625,6 +677,7 @@ export interface ApiClient {
   createManualRule(datasetId: string, input: ManualRuleInput): Promise<RuleProposal>;
   reviewProposal(proposalId: string, input: ReviewInput): Promise<RuleProposal>;
   deleteProposal(proposalId: string): Promise<void>;
+  bulkReviewProposals(input: BulkProposalReviewInput): Promise<RuleProposal[]>;
   listRuleConfigurations(datasetId: string): Promise<RuleConfiguration[]>;
   updateRuleConfiguration(proposalId: string, input: RuleConfigurationInput): Promise<RuleConfiguration>;
   startDqRun(ruleIds: string[], idempotencyKey: string): Promise<DqRunCreateResponse>;
@@ -640,6 +693,9 @@ export interface ApiClient {
   getLatestDqRun(datasetId: string): Promise<DqRun | null>;
   getQualityTrends(datasetId: string): Promise<QualityTrendPoint[]>;
   queryDatasetRows(datasetId: string, query: DatasetRowQuery): Promise<DatasetRowsResponse>;
+  getDataDictionary(datasetId: string): Promise<DataDictionary | null>;
+  uploadDataDictionary(datasetId: string, file: File): Promise<DataDictionary>;
+  deleteDataDictionary(datasetId: string): Promise<void>;
   listAuditLogs(): Promise<AuditLog[]>;
   listUsers(): Promise<UserAccount[]>;
   createUser(input: UserCreateInput): Promise<UserAccount>;
@@ -653,6 +709,10 @@ export interface ApiClient {
   advanceWorkflowStep(workflowRunId: string): Promise<WorkflowRun>;
   listWorkflowArtifacts(workflowRunId: string): Promise<AgentArtifact[]>;
   reviewArtifact(artifactId: string, input: ArtifactReviewInput): Promise<AgentArtifact>;
+  confirmSemanticContract(
+    workflowRunId: string,
+    input: SemanticContractConfirmInput,
+  ): Promise<{ workflow: WorkflowRun; artifact: AgentArtifact }>;
   continueLoop(workflowRunId: string, input: LoopDecisionInput): Promise<WorkflowRun>;
   rewindWorkflow(workflowRunId: string, targetStep: WorkflowStepKey): Promise<WorkflowRun>;
   getGraphCatalog(): Promise<GraphCatalog>;
@@ -669,7 +729,7 @@ export interface ApiClient {
  * from the catalog even when nothing has run, then overlays run state.
  * ------------------------------------------------------------------------- */
 
-export type GraphKey = "G1A" | "G1B" | "G1_FULL" | "G_DASHBOARD" | "G2" | "G3";
+export type GraphKey = "G1A" | "G1B" | "G1_FULL" | "G_DASHBOARD" | "G2" | "G2_DIRECT" | "G3";
 export type NodeKind = "LLM" | "DETERMINISTIC" | "GATE";
 export type NodeRunStatus = "RUNNING" | "SUCCEEDED" | "FAILED" | "SKIPPED";
 

@@ -156,7 +156,10 @@ class RuleConfidence(BaseModel):
     def _validate_overall(self) -> RuleConfidence:
         component_mean = (self.evidence_strength + self.business_support + self.sample_representativeness) / 3
         if abs(self.overall - component_mean) > 0.25:
-            self.overall = round(component_mean, 2)
+            # Reject rather than quietly rewrite. Overwriting the model's own
+            # figure would present a confidence it never gave, and hide the very
+            # inconsistency this guardrail exists to catch.
+            raise ValueError("confidence.overall chênh quá 0.25 so với trung bình các thành phần")
         return self
 
 

@@ -98,8 +98,14 @@ class DatasetAccessModel(Base):
 class SourceRowModel(Base):
     __tablename__ = "source_rows"
 
+    # Row ids restart at row-00001 for every dataset, so the id alone is not
+    # unique across the table. With source_row_id as the sole primary key, the
+    # second dataset ever ingested collided on row-00001 and the whole ingest
+    # died with an IntegrityError. The natural key is the pair.
     source_row_id: Mapped[str] = mapped_column(String(256), primary_key=True)
-    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    dataset_id: Mapped[str] = mapped_column(
+        String(256), ForeignKey("datasets.id"), primary_key=True, nullable=False, index=True
+    )
 
     vendor_id: Mapped[str | None] = mapped_column(String(64))
     pickup_at: Mapped[str | None] = mapped_column(String(64))
@@ -830,3 +836,30 @@ class GraphNodeRunModel(Base):
     dq_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     anomaly_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+
+
+class DatasetDataDictionaryModel(Base):
+    """The data dictionary a Steward supplied for a dataset.
+
+    Graph 1A already branches on whether a dictionary exists: with one it skips
+    ``data_dictionary_generator`` and uses what it was given, without one it asks
+    the LLM to infer it. Nothing persisted the supplied side of that branch, so
+    the generator always ran. This table is that missing half — only uploads are
+    stored here, the inferred variant stays a workflow artifact.
+    """
+
+    __tablename__ = "dataset_data_dictionaries"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "dataset_version_id", name="uq_data_dictionary_dataset_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="UPLOADED")
+    source_filename: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    column_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    uploaded_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)

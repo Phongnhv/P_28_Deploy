@@ -25,6 +25,7 @@ import json
 import logging
 import uuid
 from collections.abc import Callable
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -183,6 +184,28 @@ def _model_name_from(payload: Any) -> str | None:
     return None
 
 
+def configured_model_name() -> str | None:
+    """The model this deployment is set up to call.
+
+    LLM nodes do not echo the model back in their output, so every LLM node run
+    was stored with model_name NULL and the UI had no way to show that a model
+    was involved at all -- which reads as "the agent did not really run". This
+    is the configured model, not a claim about a specific response.
+    """
+    try:
+        from src.config import get_settings
+
+        settings = get_settings()
+        return {
+            "openai": settings.openai_model_name,
+            "anthropic": settings.anthropic_model_name,
+            "mistral": settings.mistral_model_name,
+            "google": settings.google_model_name,
+        }.get(settings.llm_provider)
+    except Exception:  # pragma: no cover - telemetry must never break a graph
+        return None
+
+
 def _session() -> Session:
     from src.services.rule_store import get_engine
 
@@ -248,6 +271,10 @@ def _record_end(
             if result is not None:
                 row.output_summary_json = _dump(result)
                 row.model_name = _model_name_from(result)
+            # A node that called a model but did not report which one still has
+            # to say a model was involved.
+            if row.model_name is None and row.node_kind == "LLM" and status == "SUCCEEDED":
+                row.model_name = configured_model_name()
             # Ids minted inside the node only exist now.
             if context is not None:
                 row.dq_run_id = context.dq_run_id
@@ -256,6 +283,34 @@ def _record_end(
             db.commit()
     except Exception:  # pragma: no cover - telemetry must never break a graph
         logger.warning("Could not close node telemetry row %s", row_id, exc_info=True)
+
+
+@contextmanager
+def record_stage(graph_key: str, node_name: str, node_kind: str, inputs: Any = None):
+    """Record one stage of a non-langgraph execution path as a node run.
+
+    ``instrument`` wraps langgraph nodes; work that runs as plain Python — the
+    bounded SQL executor behind "Run approved rules" — had no way to report
+    itself, so its graph showed every node as "not run" beside results that
+    plainly existed. Yield value is a dict the caller fills with whatever the
+    stage produced; it becomes the node's output summary.
+    """
+    context = current_graph_run() or start_graph_run()
+    started = utc_now()
+    row_id = _record_start(
+        graph_key=graph_key,
+        node_name=node_name,
+        node_kind=node_kind,
+        context=context,
+        state=inputs,
+    )
+    result: dict[str, Any] = {}
+    try:
+        yield result
+    except Exception as exc:
+        _record_end(row_id, started=started, status="FAILED", error=str(exc)[:2000], context=context)
+        raise
+    _record_end(row_id, started=started, status="SUCCEEDED", result=result or None, context=context)
 
 
 def instrument(

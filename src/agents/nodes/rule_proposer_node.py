@@ -490,9 +490,17 @@ def _bind_proposal_to_candidates(
     )
     raw_rules = proposal_payload.get("rules") or []
     if len(raw_rules) < len(candidates):
-        raise ValueError(
-            "LLM must return one narrative per server candidate: "
-            f"expected {len(candidates)}, received {len(raw_rules)}"
+        # Not fatal. Demanding one narrative per candidate discarded the entire
+        # batch when the model covered 19 of 20 -- measured on gpt-4o-mini as
+        # "expected 20, received 5" and "expected 10, received 9", both ending in
+        # 0 rules -- and the DeepAgent loop then retried the whole batch, which
+        # is where the minutes and the rate-limit storm came from. Bind what was
+        # covered; the uncovered candidates are simply not proposed this round.
+        logger.warning(
+            "[%s] Model covered %d of %d candidates; proposing the covered ones.",
+            table_name,
+            len(raw_rules),
+            len(candidates),
         )
     raw_payloads = [
         raw_rule.model_dump() if isinstance(raw_rule, BaseModel) else dict(raw_rule)
@@ -500,6 +508,10 @@ def _bind_proposal_to_candidates(
     ]
     unused_payload_indexes = set(range(len(raw_payloads)))
     ordered_payloads: list[dict] = []
+    # Kept aligned with ordered_payloads, since a candidate with no narrative is
+    # skipped rather than bound.
+    covered_candidates: list[dict] = []
+    uncovered: list[str] = []
 
     # Associate one model narrative with every server candidate. Correct IDs win;
     # then an exact column/type match; finally checklist order. This tolerates the
@@ -532,11 +544,24 @@ def _bind_proposal_to_candidates(
         if selected_index is None and unused_payload_indexes:
             selected_index = min(unused_payload_indexes)
         if selected_index is None:
-            raise ValueError(
-                f"No LLM narrative remains for server candidate {candidate_id!r}"
-            )
+            uncovered.append(candidate_id)
+            continue
         ordered_payloads.append(raw_payloads[selected_index])
+        covered_candidates.append(candidate)
         unused_payload_indexes.remove(selected_index)
+
+    if uncovered and not ordered_payloads:
+        # Nothing at all came back for this batch; that is a real failure.
+        raise ValueError(
+            f"No LLM narrative for any of the {len(candidates)} server candidates"
+        )
+    if uncovered:
+        logger.info(
+            "[%s] %d candidate(s) had no narrative and were left unproposed: %s",
+            table_name,
+            len(uncovered),
+            ", ".join(uncovered[:5]) + ("…" if len(uncovered) > 5 else ""),
+        )
 
     if unused_payload_indexes:
         logger.warning(
@@ -549,7 +574,7 @@ def _bind_proposal_to_candidates(
     bound_rules: list[CandidateProposedRule] = []
     used_candidate_ids: set[str] = set()
 
-    for payload, candidate in zip(ordered_payloads, candidates):
+    for payload, candidate in zip(ordered_payloads, covered_candidates):
         candidate_id = str(candidate.get("candidate_id") or "")
         if not candidate_id:
             raise ValueError("Server candidate is missing candidate_id after deduplication")
@@ -691,6 +716,12 @@ async def _propose_for_table_deepagent(
             ToolCallLimitMiddleware(
                 thread_limit=settings.rule_proposer_thread_tool_call_limit,
                 run_limit=settings.rule_proposer_max_tool_calls,
+                # Must stay "continue". "end" is far faster (33s / 5 calls versus
+                # ten minutes / 75 calls) but it stops the run the moment the
+                # tool budget is spent, before the agent emits its structured
+                # answer -- measured at budgets 6 and 15, both failed with
+                # "could not produce a valid structured response". Speed is not
+                # worth returning nothing.
                 exit_behavior="continue",
             ),
         ]

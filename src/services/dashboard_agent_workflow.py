@@ -455,8 +455,18 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
     )
 
 
-def generate_dashboard_proposals(db: Session, dataset_id: str) -> list[DashboardProposal]:
-    """Return validated proposals in the configured local agent mode."""
+def generate_dashboard_proposals(
+    db: Session, dataset_id: str, semantic_contract: dict[str, Any] | None = None
+) -> list[DashboardProposal]:
+    """Return two to five validated proposals in the configured local agent mode.
+
+    The parameter and the whole tail of this function were lost in a merge: the
+    body still referenced ``semantic_contract`` as if it were an argument, so
+    every call raised NameError inside the try, was swallowed by the except, and
+    silently returned ``_mock_proposals``. The agent's own rules never reached a
+    caller, and the fallback in rule_proposer_workflow -- which passes the
+    contract as a third argument -- could not even be called.
+    """
     evidence = build_proposal_evidence(db, dataset_id)
     settings = get_settings()
     if settings.agent_mode == "mock":
@@ -474,7 +484,16 @@ def generate_dashboard_proposals(db: Session, dataset_id: str) -> list[Dashboard
         logger.warning("Graph proposal generation failed for dataset %s, falling back: %s", dataset_id, exc)
         return _mock_proposals(evidence)
 
-    raise AgentWorkflowError("The proposal graph did not produce enough valid rules for dashboard display.")
+    proposals = _normalise_graph_rules(raw_rules, evidence)
+    if not proposals:
+        raise AgentWorkflowError(
+            "The proposal graph did not return enough valid evidence-backed rules."
+        )
+    proposals = _complete_with_policy_candidates(proposals, evidence)
+    if 2 <= len(proposals) <= 5:
+        return proposals
+
+    return _mock_proposals(evidence)
 
 
 def generate_rule_proposals_via_graph_1b(
@@ -507,8 +526,15 @@ def generate_rule_proposals_via_graph_1b(
     if not proposals:
         raise AgentWorkflowError("Graph 1B did not return enough valid, evidence-backed rules.")
     proposals = _complete_with_policy_candidates(proposals, evidence)
-    if not 2 <= len(proposals) <= 5:
-        raise AgentWorkflowError("Graph 1B could not form a valid dashboard rule set.")
+    # Only a lower bound here. The 2..5 window belongs to the dashboard shortcut,
+    # where five tiles is a layout budget; this path feeds the step-3 review
+    # queue, which routinely holds dozens. Enforcing the upper bound threw away
+    # complete, evidence-backed sets for being too useful -- measured as 14 valid
+    # rules rejected outright.
+    if len(proposals) < 2:
+        raise AgentWorkflowError(
+            f"Graph 1B produced only {len(proposals)} evidence-backed rule(s); at least 2 are required."
+        )
     return proposals
 
 

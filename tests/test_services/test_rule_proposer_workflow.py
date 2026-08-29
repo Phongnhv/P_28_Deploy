@@ -119,6 +119,14 @@ def _confirm_current_contract(db: Session, run: WorkflowRunModel) -> None:
 
 def test_back_navigation_preserves_artifacts_until_a_stage_is_rerun(monkeypatch):
     _seed_profile()
+    # Graph 1B is the primary proposer; the single-node generator is only its
+    # fallback. Stubbing the fallback alone let the real Graph 1B run and emit
+    # its own candidate set, which is why these tests saw eight proposals where
+    # they had asked for one.
+    monkeypatch.setattr(
+        "src.services.rule_proposer_workflow.generate_rule_proposals_via_graph_1b",
+        lambda *_args, **_kwargs: [_proposal()],
+    )
     monkeypatch.setattr("src.services.rule_proposer_workflow.generate_dashboard_proposals", lambda *_: [_proposal()])
     with Session(get_engine()) as db:
         dataset = db.get(DatasetModel, DATASET_ID)
@@ -178,6 +186,14 @@ def test_understanding_falls_back_when_agent_provider_is_unavailable(monkeypatch
 
 def test_deleted_pending_rule_is_retained_as_stale_and_does_not_block_review(monkeypatch):
     _seed_profile()
+    # Graph 1B is the primary proposer; the single-node generator is only its
+    # fallback. Stubbing the fallback alone let the real Graph 1B run and emit
+    # its own candidate set, which is why these tests saw eight proposals where
+    # they had asked for one.
+    monkeypatch.setattr(
+        "src.services.rule_proposer_workflow.generate_rule_proposals_via_graph_1b",
+        lambda *_args, **_kwargs: [_proposal()],
+    )
     monkeypatch.setattr("src.services.rule_proposer_workflow.generate_dashboard_proposals", lambda *_: [_proposal()])
     with Session(get_engine()) as db:
         dataset = db.get(DatasetModel, DATASET_ID)
@@ -198,6 +214,14 @@ def test_deleted_pending_rule_is_retained_as_stale_and_does_not_block_review(mon
 
 def test_publish_creates_immutable_ruleset_and_queues_only_approved_versions(monkeypatch):
     _seed_profile()
+    # Graph 1B is the primary proposer; the single-node generator is only its
+    # fallback. Stubbing the fallback alone let the real Graph 1B run and emit
+    # its own candidate set, which is why these tests saw eight proposals where
+    # they had asked for one.
+    monkeypatch.setattr(
+        "src.services.rule_proposer_workflow.generate_rule_proposals_via_graph_1b",
+        lambda *_args, **_kwargs: [_proposal()],
+    )
     monkeypatch.setattr("src.services.rule_proposer_workflow.generate_dashboard_proposals", lambda *_: [_proposal()])
     with Session(get_engine()) as db:
         dataset = db.get(DatasetModel, DATASET_ID)
@@ -237,6 +261,14 @@ def test_publish_creates_immutable_ruleset_and_queues_only_approved_versions(mon
 
 def test_mock_execution_and_analysis_complete_the_same_workflow(monkeypatch):
     _seed_profile()
+    # Graph 1B is the primary proposer; the single-node generator is only its
+    # fallback. Stubbing the fallback alone let the real Graph 1B run and emit
+    # its own candidate set, which is why these tests saw eight proposals where
+    # they had asked for one.
+    monkeypatch.setattr(
+        "src.services.rule_proposer_workflow.generate_rule_proposals_via_graph_1b",
+        lambda *_args, **_kwargs: [_proposal()],
+    )
     monkeypatch.setattr("src.services.rule_proposer_workflow.generate_dashboard_proposals", lambda *_: [_proposal()])
     with Session(get_engine()) as db:
         dataset = db.get(DatasetModel, DATASET_ID)
@@ -283,6 +315,14 @@ def test_mock_execution_and_analysis_complete_the_same_workflow(monkeypatch):
 
 def test_graph_2_result_is_visible_before_graph_3_is_started(monkeypatch):
     _seed_profile()
+    # Graph 1B is the primary proposer; the single-node generator is only its
+    # fallback. Stubbing the fallback alone let the real Graph 1B run and emit
+    # its own candidate set, which is why these tests saw eight proposals where
+    # they had asked for one.
+    monkeypatch.setattr(
+        "src.services.rule_proposer_workflow.generate_rule_proposals_via_graph_1b",
+        lambda *_args, **_kwargs: [_proposal()],
+    )
     monkeypatch.setattr("src.services.rule_proposer_workflow.generate_dashboard_proposals", lambda *_: [_proposal()])
 
     async def no_op_analysis(**_kwargs):

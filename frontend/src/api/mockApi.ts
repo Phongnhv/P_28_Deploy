@@ -2,6 +2,8 @@ import type {
   ApiClient,
   AuditLog,
   CreateJobResponse,
+  DataDictionary,
+  SemanticContractConfirmInput,
   Dataset,
   DatasetProfile,
   DqResult,
@@ -361,6 +363,8 @@ function completeWorkflowStep(workflowId: string, step: WorkflowStepKey) {
   workflowRuns = workflowRuns.map((item) => item.id === workflowId ? workflow : item);
 }
 
+const mockDataDictionaries = new Map<string, DataDictionary>();
+
 export const mockApi: ApiClient = {
   async createSession(username, password): Promise<SessionResponse> {
     await wait(300);
@@ -527,6 +531,28 @@ export const mockApi: ApiClient = {
     }
     return Array.from({ length: 8 }, (_, index) => ({ run_id: `historical-${index}`, created_at: new Date(Date.now() - (7 - index) * 86_400_000).toISOString(), quality_score: 92.4 + index * 0.54 - (index % 3) * 0.37, failure_rate: 0.076 - index * 0.004, total_checked: 200000, total_failed: 15200 - index * 800, rule_count: 4 }));
   },
+  async getDataDictionary(id): Promise<DataDictionary | null> {
+    await wait(120);
+    return mockDataDictionaries.get(id) ?? null;
+  },
+  async uploadDataDictionary(id, file): Promise<DataDictionary> {
+    await wait(200);
+    const record: DataDictionary = {
+      id: `ddict-${id}`,
+      dataset_id: id,
+      source: "UPLOADED",
+      source_filename: file.name,
+      column_count: 0,
+      tables: [{ table_name: id, description: "", columns: [], business_rules: [] }],
+      updated_at: new Date().toISOString(),
+    };
+    mockDataDictionaries.set(id, record);
+    return record;
+  },
+  async deleteDataDictionary(id): Promise<void> {
+    await wait(120);
+    mockDataDictionaries.delete(id);
+  },
   async queryDatasetRows(id, query: DatasetRowQuery): Promise<DatasetRowsResponse> {
     await wait(160);
     if (id !== datasetId) throw new Error("Dataset not found.");
@@ -659,6 +685,40 @@ export const mockApi: ApiClient = {
     workflowRuns = workflowRuns.map((item) => item.id === workflow.id ? workflow : item);
     addAudit(`WORKFLOW_ARTIFACT_${status}`, "workflow_artifact", id, `${status} ${existing.type} artifact in the local workflow.`);
     return structuredClone(updated);
+  },
+  async bulkReviewProposals(input) {
+    await wait(200);
+    const targets = proposals.filter(
+      (item) =>
+        item.dataset_id === input.dataset_id &&
+        (input.pending_only === false || ["PROPOSED", "EDITED"].includes(item.status)),
+    );
+    const nextStatus = input.action === "approve" ? "APPROVED" : "REJECTED";
+    targets.forEach((item) => {
+      item.status = nextStatus as RuleProposal["status"];
+    });
+    addAudit(
+      input.action === "approve" ? "PROPOSAL_BULK_APPROVED" : "PROPOSAL_BULK_REJECTED",
+      "dataset",
+      input.dataset_id,
+      `${targets.length} proposals decided in bulk.`,
+    );
+    return structuredClone(proposals.filter((item) => item.dataset_id === input.dataset_id));
+  },
+  async confirmSemanticContract(id: string, input: SemanticContractConfirmInput) {
+    await wait(180);
+    const workflow = workflowRuns.find((item) => item.id === id);
+    if (!workflow) throw new Error("Workflow run not found.");
+    const existing = workflowArtifacts.find((item) => item.id === input.artifact_id);
+    if (!existing) throw new Error("Semantic contract artifact not found.");
+    if (existing.version !== input.expected_version) {
+      throw new Error("The contract changed since it was loaded. Reload before confirming.");
+    }
+    const updated: AgentArtifact = { ...existing, status: "APPROVED", payload: input.contract };
+    workflowArtifacts = workflowArtifacts.map((item) => (item.id === existing.id ? updated : item));
+    workflowRuns = workflowRuns.map((item) => (item.id === workflow.id ? workflow : item));
+    addAudit("SEMANTIC_CONTRACT_CONFIRMED", "workflow_artifact", existing.id, "Confirmed the inferred semantic contract.");
+    return { workflow: structuredClone(workflow), artifact: structuredClone(updated) };
   },
   async continueLoop(id: string, input: LoopDecisionInput) {
     await wait(180);

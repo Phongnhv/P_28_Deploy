@@ -1,5 +1,7 @@
 import { useState } from "react";
 import type { StewardReport } from "../../types";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 /**
  * Reader for the Markdown report produced by Graph 3's `report_writer` node.
@@ -78,7 +80,12 @@ export function StewardReportPanel({
             <code>{report.filename}</code>
             <span>{new Date(report.generated_at).toLocaleString()}</span>
           </div>
-          <pre className="steward-report-content">{report.content}</pre>
+          {/* react-markdown and remark-gfm were already dependencies but nothing
+              used them: the report was dumped into a <pre>, so a Steward read
+              raw pipes and hashes instead of the tables the writer produced. */}
+          <div className="steward-report-content">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{report.content}</ReactMarkdown>
+          </div>
         </div>
       )}
     </section>

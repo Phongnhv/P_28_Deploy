@@ -29,12 +29,17 @@ export function NodeCard({
   language,
   isSelected,
   onSelect,
+  step,
+  totalSteps,
 }: {
   node: GraphNodeSpec;
   run?: NodeRun;
   language: "en" | "vi";
   isSelected: boolean;
   onSelect: (node: GraphNodeSpec, run?: NodeRun) => void;
+  /** 1-based position in the graph, so the row reads as ordered stages. */
+  step?: number;
+  totalSteps?: number;
 }) {
   const label = language === "vi" ? node.label_vi : node.label_en;
   const purpose = language === "vi" ? node.purpose_vi : node.purpose_en;
@@ -50,6 +55,12 @@ export function NodeCard({
       aria-label={`${label} — ${kindLabel[node.kind]}`}
     >
       <div className="graph-node-top">
+        {step !== undefined && (
+          <span className="graph-node-step">
+            {step}
+            {totalSteps ? <i>/{totalSteps}</i> : null}
+          </span>
+        )}
         <span className={`graph-node-kind kind-${node.kind.toLowerCase()}`}>{kindLabel[node.kind]}</span>
         {run && (
           <span className={`graph-node-status state-${state}`} title={run.status}>

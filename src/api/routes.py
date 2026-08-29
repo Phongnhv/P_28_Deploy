@@ -121,6 +121,14 @@ from src.services.session_service import (
     hash_password,
     verify_csrf,
 )
+from src.services.data_dictionary_store import (
+    DataDictionaryError,
+    delete_data_dictionary,
+    get_data_dictionary,
+    parse_data_dictionary,
+    save_data_dictionary,
+    serialize_data_dictionary,
+)
 from src.services.supabase_dataset import create_supabase_engine
 from src.services.supabase_dataset import query_dataset_rows as query_supabase_dataset_rows
 from src.services.versioned_dataset import (
@@ -339,6 +347,10 @@ class DqResultSchema(BaseModel):
     checked_count: int
     failed_count: int
     failed_row_ids: list[str]
+    # Dataset-level rules report a measured rate rather than offending rows; it
+    # was persisted but never returned, so the UI had nothing to show for them.
+    violation_rate: float | None = None
+    error_message: str | None = None
 
 
 class DqAnomalySchema(BaseModel):
@@ -703,7 +715,10 @@ async def import_dataset(
     dataset = DatasetModel(
         id=dataset_id,
         name=display_name[:256],
-        description="Imported CSV/Parquet dataset. Aggregate profiling is in progress.",
+        # No progress claim here. ``status`` already reports REGISTERED ->
+        # PROFILE_READY, and a sentence frozen at import time kept telling the
+        # catalogue that profiling was running long after it had finished.
+        description="Imported CSV/Parquet dataset.",
         status="REGISTERED",
         row_count=0,
         source_label=file.filename or f"imported{suffix}",
@@ -1874,7 +1889,11 @@ def run_workflow_step(
             return CreateJobResponse(job_id=job.id, status="PENDING")
         steps = json.loads(run.steps_json or "[]")
         current = next((item for item in steps if item.get("key") == step), None)
-        if not current or current.get("status") not in {"READY", "FAILED", "COMPLETED"}:
+        # WAITING_APPROVAL is a re-run, not a skip: the stage already produced an
+        # artifact and the Steward is asking for a new one. Excluding it meant
+        # "regenerate rules" answered 409 for every dataset that had ever had
+        # rules proposed. LOCKED stays blocked, so ordering is still enforced.
+        if not current or current.get("status") not in {"READY", "FAILED", "COMPLETED", "WAITING_APPROVAL"}:
             raise WorkflowError("This workflow step is not ready to run.")
         current["status"] = "RUNNING"
         run.steps_json = json.dumps(steps, ensure_ascii=False)
@@ -2066,6 +2085,85 @@ def advance_workflow_stage(
     return serialize_run(run)
 
 
+@router.get("/datasets/{id}/data-dictionary")
+def get_dataset_data_dictionary(
+    id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """GET /api/v1/datasets/{id}/data-dictionary - Returns the supplied dictionary.
+
+    Absence is the normal case, not an error: it is what tells Graph 1A to infer
+    the dictionary instead. The route answers 200 with ``null`` so the UI can
+    render "the agent will generate this" without treating it as a failure.
+    """
+    dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    require_dataset_access(db, session, id)
+
+    record = get_data_dictionary(db, id)
+    return serialize_data_dictionary(record) if record else None
+
+
+@router.post("/datasets/{id}/data-dictionary", status_code=201)
+async def upload_dataset_data_dictionary(
+    id: str,
+    file: UploadFile = File(...),
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """POST /api/v1/datasets/{id}/data-dictionary - Stores a Steward's dictionary.
+
+    Uploading replaces any earlier upload for the dataset, so re-uploading a
+    corrected sheet is the fix for a bad one rather than an error.
+    """
+    dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    require_dataset_access(db, session, id)
+
+    payload = await file.read()
+    if len(payload) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail={"code": "DICTIONARY_TOO_LARGE", "message": "The dictionary exceeds the 5 MB limit."})
+    try:
+        document = parse_data_dictionary(payload, file.filename or "dictionary.csv", dataset.name or id)
+    except DataDictionaryError as exc:
+        raise HTTPException(status_code=422, detail={"code": "INVALID_DATA_DICTIONARY", "message": str(exc)}) from exc
+
+    latest_version = (
+        db.query(DatasetVersionModel)
+        .filter_by(dataset_id=id, status="READY")
+        .order_by(DatasetVersionModel.version_number.desc())
+        .first()
+    )
+    record = save_data_dictionary(
+        db,
+        dataset_id=id,
+        dataset_version_id=latest_version.id if latest_version else None,
+        payload=document,
+        source_filename=file.filename,
+        uploaded_by=session.username,
+    )
+    return serialize_data_dictionary(record)
+
+
+@router.delete("/datasets/{id}/data-dictionary", status_code=204)
+def delete_dataset_data_dictionary(
+    id: str,
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """DELETE /api/v1/datasets/{id}/data-dictionary - Hands the job back to the agent."""
+    dataset = db.query(DatasetModel).filter(DatasetModel.id == id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    require_dataset_access(db, session, id)
+    if not delete_data_dictionary(db, id):
+        raise HTTPException(status_code=404, detail="No supplied data dictionary for this dataset")
+    return None
+
+
 @router.get("/datasets/{id}/semantic-contract")
 def get_semantic_contract(
     id: str, session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])), db: Session = Depends(get_db)
@@ -2127,7 +2225,9 @@ def query_dataset_rows(
     min_distance: float | None = None,
     max_distance: float | None = None,
     quality_status: str = Query("ALL", pattern="^(ALL|VALID|ISSUE)$"),
-    sort_by: str = Query("pickup_at", min_length=0, max_length=128),
+    # Empty by default: the caller's dataset decides what is sortable, and each
+    # branch below falls back on its own when the column does not apply.
+    sort_by: str = Query("", min_length=0, max_length=128),
     sort_direction: str = Query("desc", pattern="^(asc|desc)$"),
     filter_column: str | None = Query(None, max_length=128),
     filter_value: str | None = Query(None, max_length=512),
@@ -2324,7 +2424,11 @@ def query_dataset_rows(
         "fare_amount": SourceRowModel.fare_amount,
         "total_amount": SourceRowModel.total_amount,
     }
-    sort_column = sort_columns[sort_by]
+    # An unguarded lookup here raised KeyError -> 500 for any sort column
+    # outside this taxi-shaped set, and `sort_by` accepts any string (it even
+    # allows the empty one). The versioned and file-backed branches above both
+    # fall back when the column is unknown; this one did not.
+    sort_column = sort_columns.get(sort_by, SourceRowModel.source_row_id)
     ordering = sort_column.asc() if sort_direction == "asc" else sort_column.desc()
     rows = query.order_by(ordering, SourceRowModel.source_row_id.asc()).offset(offset).limit(limit).all()
     return DatasetRowsResponse(
@@ -2470,6 +2574,33 @@ def start_rule_proposals(
     return CreateJobResponse(job_id=job_id, status="PENDING")
 
 
+def _serialize_proposal(p: RuleProposalModel) -> RuleProposalSchema:
+    """The single wire shape for a proposal, shared by every route returning one."""
+    return RuleProposalSchema(
+        id=p.id,
+        dataset_id=p.dataset_id,
+        workflow_run_id=p.workflow_run_id,
+        title=p.title,
+        description=p.description,
+        severity=p.severity,
+        status=p.status,
+        rule=RuleSpecSchema(**json.loads(p.rule_spec)),
+        evidence_refs=json.loads(p.evidence_refs),
+        evidence_summary=p.evidence_summary,
+        confidence=p.confidence,
+        model_name=p.model_name,
+        rule_name=p.rule_name,
+        business_rationale=p.business_rationale,
+        proposal_basis=p.proposal_basis,
+        evidence=json.loads(p.evidence or "{}"),
+        parameter_provenance=json.loads(p.parameter_provenance or "[]"),
+        assumptions=json.loads(p.assumptions or "[]"),
+        confidence_breakdown=json.loads(p.confidence_breakdown or "{}"),
+        created_at=p.created_at.isoformat(),
+        updated_at=p.updated_at.isoformat(),
+    )
+
+
 @router.get("/rule-proposals", response_model=list[RuleProposalSchema])
 def list_proposals(
     dataset_id: str,
@@ -2491,32 +2622,7 @@ def list_proposals(
         )
         query = query.filter(RuleProposalModel.status != "STALE")
     proposals = query.all()
-    return [
-        RuleProposalSchema(
-            id=p.id,
-            dataset_id=p.dataset_id,
-            workflow_run_id=p.workflow_run_id,
-            title=p.title,
-            description=p.description,
-            severity=p.severity,
-            status=p.status,
-            rule=RuleSpecSchema(**json.loads(p.rule_spec)),
-            evidence_refs=json.loads(p.evidence_refs),
-            evidence_summary=p.evidence_summary,
-            confidence=p.confidence,
-            model_name=p.model_name,
-            rule_name=p.rule_name,
-            business_rationale=p.business_rationale,
-            proposal_basis=p.proposal_basis,
-            evidence=json.loads(p.evidence or "{}"),
-            parameter_provenance=json.loads(p.parameter_provenance or "[]"),
-            assumptions=json.loads(p.assumptions or "[]"),
-            confidence_breakdown=json.loads(p.confidence_breakdown or "{}"),
-            created_at=p.created_at.isoformat(),
-            updated_at=p.updated_at.isoformat(),
-        )
-        for p in proposals
-    ]
+    return [_serialize_proposal(p) for p in proposals]
 
 
 @router.post("/datasets/{id}/rule-proposals/manual", response_model=RuleProposalSchema)
@@ -2601,6 +2707,106 @@ def create_manual_rule(
         created_at=prop.created_at.isoformat(),
         updated_at=prop.updated_at.isoformat(),
     )
+
+
+class BulkProposalReviewInput(BaseModel):
+    dataset_id: str
+    action: str  # approve | reject
+    # Default keeps a bulk action from silently overturning decisions the
+    # Steward already made one by one; pass false to re-decide everything.
+    pending_only: bool = True
+
+
+def _apply_proposal_approval(db: Session, prop: RuleProposalModel) -> None:
+    """Promote a proposal to APPROVED and make its rule version executable."""
+    prop.status = "APPROVED"
+    rv_id = f"rv_{prop.id}"
+    existing_rv = db.query(RuleVersionModel).filter(RuleVersionModel.id == rv_id).first()
+    if not existing_rv:
+        db.add(
+            RuleVersionModel(
+                id=rv_id,
+                rule_proposal_id=prop.id,
+                dataset_id=prop.dataset_id,
+                rule_spec=prop.rule_spec,
+                status="APPROVED",
+                version=1,
+                created_at=utc_now(),
+            )
+        )
+    else:
+        existing_rv.status = "APPROVED"
+    configuration = (
+        db.query(RuleConfigurationModel)
+        .filter(RuleConfigurationModel.rule_proposal_id == prop.id)
+        .first()
+    )
+    if not configuration:
+        db.add(
+            RuleConfigurationModel(
+                rule_proposal_id=prop.id, execution_status="ACTIVE", schedule_frequency="MANUAL", timezone="UTC"
+            )
+        )
+
+
+def _apply_proposal_rejection(db: Session, prop: RuleProposalModel) -> None:
+    """Reject a proposal and withdraw any rule version it had authorised."""
+    prop.status = "REJECTED"
+    existing_rv = db.query(RuleVersionModel).filter(RuleVersionModel.id == f"rv_{prop.id}").first()
+    if existing_rv:
+        db.delete(existing_rv)
+
+
+@router.post("/rule-proposals/bulk-review", response_model=list[RuleProposalSchema])
+def bulk_review_proposals(
+    body: BulkProposalReviewInput,
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """POST /api/v1/rule-proposals/bulk-review - Decide a dataset's proposals at once.
+
+    Reviewing 40-odd rules one request at a time is both slow and non-atomic:
+    a failure halfway leaves the queue in a state nobody chose. This applies the
+    whole decision in one transaction and returns the resulting proposals.
+    """
+    if body.action not in {"approve", "reject"}:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "INVALID_BULK_ACTION", "message": "action must be 'approve' or 'reject'."},
+        )
+    dataset = db.query(DatasetModel).filter(DatasetModel.id == body.dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    require_dataset_access(db, session, body.dataset_id, manage=True)
+
+    query = db.query(RuleProposalModel).filter(RuleProposalModel.dataset_id == body.dataset_id)
+    if body.pending_only:
+        query = query.filter(RuleProposalModel.status.in_(("PROPOSED", "EDITED")))
+    targets = query.all()
+
+    for prop in targets:
+        if body.action == "approve":
+            _apply_proposal_approval(db, prop)
+        else:
+            _apply_proposal_rejection(db, prop)
+    db.commit()
+
+    add_audit_event(
+        db,
+        session_id=session.id,
+        actor_role=session.role,
+        action_code="PROPOSAL_BULK_APPROVED" if body.action == "approve" else "PROPOSAL_BULK_REJECTED",
+        entity_type="dataset",
+        entity_id=body.dataset_id,
+        detail={"action": body.action, "count": len(targets), "pending_only": body.pending_only},
+    )
+
+    return [
+        _serialize_proposal(prop)
+        for prop in db.query(RuleProposalModel)
+        .filter(RuleProposalModel.dataset_id == body.dataset_id)
+        .all()
+    ]
 
 
 @router.patch("/rule-proposals/{id}", response_model=RuleProposalSchema)
@@ -3025,6 +3231,8 @@ def get_dq_results(
             checked_count=r.checked_count,
             failed_count=r.failed_count,
             failed_row_ids=json.loads(r.failed_row_ids),
+            violation_rate=r.violation_rate,
+            error_message=r.error_message,
         )
         for r in results
     ]

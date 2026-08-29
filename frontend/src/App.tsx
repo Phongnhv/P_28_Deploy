@@ -1,9 +1,9 @@
 /**
  * Giao diện của toàn bộ wizard 5 bước nằm trong chính file này.
  *
- * Bước 1 dùng `DatasetsPage`, bước 2 `OverviewPage`, bước 3 `WorkflowPage`,
- * bước 4 `RunsPage` — tất cả khai báo bên dưới. Chỉ bước 5 tách ra thành
- * `components/wizard/Step5Analytics.tsx` vì nó dựng biểu đồ recharts.
+ * Bước 2 dùng `OverviewPage`, bước 3 `WorkflowPage`, bước 4 `RunsPage` — tất cả
+ * khai báo bên dưới. Bước 1 tách ra `components/wizard/Step1DataPreparation.tsx`
+ * và bước 5 ra `components/wizard/Step5Analytics.tsx`.
  *
  * Từng có bốn file `Step1..Step4` trong `components/wizard/` trông y hệt các
  * trang này nhưng không nơi nào import; chúng đã bị xoá ngày 28/08/2026. Nếu
@@ -19,8 +19,13 @@ import { ApiError, clearApiSession } from "./api/client";
 import ThemeControl from "./ThemeControl";
 import LanguageToggle from "./LanguageToggle";
 import { useI18n } from "./i18n/context";
-import { Graph2Analytics, Graph3Analytics } from "./components/wizard/WizardAnalytics";
+import { Graph2Analytics } from "./components/wizard/WizardAnalytics";
 import { DataExplorerDialog } from "./components/wizard/DataExplorerDialog";
+import { Step1DataPreparation } from "./components/wizard/Step1DataPreparation";
+import { AnomalyStatisticsPanel } from "./components/wizard/AnomalyStatisticsPanel";
+import { DetailOverlay } from "./components/wizard/DetailOverlay";
+import { NotificationBell, type AppNotification } from "./components/NotificationBell";
+import { DatasetCatalogView } from "./components/wizard/DatasetCatalogView";
 import { GraphStagePanel } from "./components/graph/GraphStagePanel";
 import { GraphObservatoryPage } from "./components/graph/GraphObservatoryPage";
 import { StewardReportPanel } from "./components/graph/StewardReportPanel";
@@ -42,6 +47,7 @@ import type {
   DatasetAccess,
   DatasetAccessLevel,
   Job,
+  JobType,
   ManualRuleInput,
   ProposalBasis,
   RuleProposal,
@@ -60,6 +66,7 @@ import type {
   WorkflowStep,
   WorkflowStepKey,
   GraphCatalog,
+  GraphKey,
   NodeRun,
 } from "./types";
 
@@ -138,22 +145,86 @@ function StatusPill({
   );
 }
 
-function ProgressPanel({ job, title }: { job: Job; title: string }) {
+/** Seconds since a timestamp, ticking once a second while the panel is open. */
+function useElapsedSeconds(since: string | undefined, active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  if (!since) return 0;
+  const started = new Date(since).getTime();
+  return Number.isNaN(started) ? 0 : Math.max(0, Math.floor((now - started) / 1000));
+}
+
+function formatElapsed(seconds: number, vi: boolean): string {
+  if (seconds < 60) return vi ? `${seconds} giây` : `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return vi ? `${minutes} phút ${rest} giây` : `${minutes}m ${rest}s`;
+}
+
+/**
+ * Live state of the running job.
+ *
+ * The backend only writes `job.progress` at a handful of stage boundaries — for
+ * PROPOSE_RULES it is 20, then 60, then 100 — and the gap between them is the
+ * LLM call, which can run for minutes. The bar therefore sat at 20% looking
+ * frozen for most of the job's life.
+ *
+ * The fix is not to invent a creeping percentage: that would report progress
+ * nobody measured. Node telemetry already records each graph node as it
+ * finishes, which is real, finer-grained evidence of the same work, so the bar
+ * is driven by that when it is available and falls back to the coarse job
+ * number when it is not.
+ */
+function ProgressPanel({
+  job,
+  title,
+  nodeProgress,
+}: {
+  job: Job;
+  title: string;
+  nodeProgress?: { done: number; total: number; current?: string; startedAt?: string };
+}) {
+  const { language } = useI18n();
+  const vi = language === "vi";
+  const running = job.status === "RUNNING" || job.status === "PENDING";
+  const elapsed = useElapsedSeconds(nodeProgress?.startedAt ?? job.created_at, running);
+
+  // Capped below 100: nodes finishing is not the same as the job finishing,
+  // and only the job may claim completion.
+  const nodeShare =
+    nodeProgress && nodeProgress.total > 0
+      ? Math.min(95, (nodeProgress.done / nodeProgress.total) * 100)
+      : 0;
+  const percent = Math.min(100, Math.max(job.progress, nodeShare));
+
   return (
     <div className="progress-panel">
       <div className="progress-heading">
         <div>
-          <span className="eyebrow">ACTIVE JOB</span>
+          <span className="eyebrow">{vi ? "TÁC VỤ ĐANG CHẠY" : "ACTIVE JOB"}</span>
           <h3>{title}</h3>
         </div>
-        <strong>{job.progress}%</strong>
+        <strong>{Math.round(percent)}%</strong>
       </div>
-      <div className="progress-track">
-        <span style={{ width: `${job.progress}%` }} />
+      <div className={`progress-track ${running ? "live" : ""}`}>
+        <span style={{ width: `${percent}%` }} />
       </div>
+      {nodeProgress && nodeProgress.total > 0 && (
+        <div className="progress-nodes">
+          <span>
+            {vi ? "Node" : "Node"} {Math.min(nodeProgress.done + (running ? 1 : 0), nodeProgress.total)}/
+            {nodeProgress.total}
+            {nodeProgress.current ? ` · ${nodeProgress.current}` : ""}
+          </span>
+        </div>
+      )}
       <div className="progress-meta">
         <span>{job.message}</span>
-        <span>{job.status}</span>
+        <span>{running ? formatElapsed(elapsed, vi) : job.status}</span>
       </div>
     </div>
   );
@@ -336,116 +407,18 @@ const workflowPhases = [
   },
 ];
 
+/** Which graph each job type executes, for reading its node telemetry. */
+const jobGraphKey: Partial<Record<JobType, GraphKey>> = {
+  UNDERSTAND_DATA: "G1A",
+  PROPOSE_RULES: "G1B",
+  GRAPH1_EXECUTION: "G1_FULL",
+  GRAPH1_CONTINUATION: "G1_FULL",
+  RUN_DQ: "G2",
+  ANALYSIS_GRAPH2_GRAPH3: "G3",
+};
+
 function workflowPhaseIndex(step: WorkflowStepKey) {
   return workflowPhases.findIndex((phase) => phase.steps.includes(step));
-}
-
-function DatasetsPage({
-  datasets,
-  dataset,
-  onOpenExplorer,
-  onImportDataset,
-  onSelectDataset,
-  onDeleteDataset,
-  canOperate,
-  importing,
-}: {
-  datasets: Dataset[];
-  dataset?: Dataset;
-  onOpenExplorer: (datasetId: string) => void;
-  onImportDataset: (file: File) => void;
-  onSelectDataset: (datasetId: string) => void;
-  onDeleteDataset?: (datasetId: string) => void;
-  canOperate: boolean;
-  importing: boolean;
-}) {
-  return (
-    <div className="datasets-page">
-      <div className="page-heading datasets-heading">
-        <div>
-          <span className="eyebrow">STEP 1 · DATASET PREPARATION</span>
-          <h1>Select or import a dataset</h1>
-          <p>Choose or upload a dataset, preview its rows, then continue to Graph 1A.</p>
-        </div>
-      </div>
-
-      {datasets.length ? (
-        <div className="dataset-catalog-grid">
-          <label className={`dataset-import-card ${importing ? "busy" : ""}`}>
-            <input type="file" accept=".csv,.parquet,text/csv,application/vnd.apache.parquet" disabled={!canOperate || importing} onChange={(event) => { const file = event.target.files?.[0]; if (file) onImportDataset(file); event.currentTarget.value = ""; }} />
-            <span className="dataset-import-plus">+</span>
-            <strong>{importing ? "Profiling dataset…" : "Import a dataset"}</strong>
-            <small>CSV or Parquet · profile automatically</small>
-          </label>
-          {datasets.map((item) => {
-            const isSelected = item.id === dataset?.id;
-            return (
-              <article
-                className={`dataset-catalog-card ${isSelected ? "active" : ""}`}
-                key={item.id}
-                onClick={() => onSelectDataset(item.id)}
-                style={{ cursor: "pointer", border: isSelected ? "2px solid var(--color-primary, #2563eb)" : undefined }}
-              >
-                <div className="dataset-catalog-top">
-                  <StatusPill
-                    label={isSelected ? "SELECTED" : item.status.replaceAll("_", " ")}
-                    tone={isSelected ? "success" : "info"}
-                  />
-                  <code>{item.manifest_version}</code>
-                </div>
-                <h2>{item.name}</h2>
-                <p>{item.description}</p>
-                <div className="dataset-catalog-stats">
-                  <div>
-                    <span>Rows</span>
-                    <strong>{item.row_count.toLocaleString()}</strong>
-                  </div>
-                  <div>
-                    <span>Source</span>
-                    <strong>{item.source_label}</strong>
-                  </div>
-                  <div>
-                    <span>Updated</span>
-                    <strong>{formatTime(item.updated_at)}</strong>
-                  </div>
-                </div>
-                <div className="dataset-catalog-actions" style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
-                  <button
-                    className="button secondary"
-                    style={{ flex: 1 }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onOpenExplorer(item.id);
-                    }}
-                  >
-                    Data Explorer
-                  </button>
-                  <button
-                    className="button ghost danger"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDeleteDataset?.(item.id);
-                    }}
-                    title="Delete dataset"
-                  >
-                    🗑️ Delete
-                  </button>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="empty-state">
-          <h2>No datasets registered.</h2>
-          <p className="muted">
-            Registered artifacts will appear here when they are available.
-          </p>
-        </div>
-      )}
-
-    </div>
-  );
 }
 
 /**
@@ -463,6 +436,8 @@ function SemanticContractPanel({
   canOperate,
   busy,
   onStartUnderstand,
+  onConfirmContract,
+  language,
 }: {
   workflow: WorkflowRun | null;
   artifacts: AgentArtifact[];
@@ -471,6 +446,8 @@ function SemanticContractPanel({
   canOperate: boolean;
   busy: boolean;
   onStartUnderstand: (datasetId: string) => void;
+  onConfirmContract: (artifact: AgentArtifact) => void;
+  language: "en" | "vi";
 }) {
   const { t } = useI18n();
   const activeArtifact = workflow && dataset && workflow.dataset_id === dataset.id
@@ -480,6 +457,11 @@ function SemanticContractPanel({
   const payload = activeArtifact?.payload && typeof activeArtifact.payload === "object"
     ? (activeArtifact.payload as Record<string, unknown>)
     : null;
+
+  // The confirm endpoint reports "CONFIRMED"; "APPROVED" is what the generic
+  // artifact review flow writes. Either one means it is signed off.
+  const confirmed =
+    activeArtifact?.status === "CONFIRMED" || activeArtifact?.status === "APPROVED";
 
   const contractColumns = payload && Array.isArray(payload.columns)
     ? (payload.columns.filter((column): column is Record<string, unknown> =>
@@ -499,13 +481,33 @@ function SemanticContractPanel({
               <h2>{t("datasets.understandAgentTitle", { name: dataset!.name })}</h2>
               <p className="muted">{t("datasets.understandAgentDesc")}</p>
             </div>
-            <button
-              className="button primary"
-              disabled={!canOperate || busy}
-              onClick={() => onStartUnderstand(dataset.id)}
-            >
-              {busy ? "Running Analysis…" : "⚡ Run Understand Agent"}
-            </button>
+            <div className="contract-actions">
+              <button
+                className="button secondary"
+                disabled={!canOperate || busy}
+                onClick={() => onStartUnderstand(dataset.id)}
+              >
+                {busy
+                  ? language === "vi" ? "Đang phân tích…" : "Running analysis…"
+                  : payload
+                    ? language === "vi" ? "↻ Chạy lại" : "↻ Run again"
+                    : language === "vi" ? "⚡ Chạy agent hiểu dữ liệu" : "⚡ Run Understand Agent"}
+              </button>
+              {/* The confirm endpoint has existed since the workflow was built
+                  but nothing ever called it, so the contract could be produced
+                  and never signed off. */}
+              {payload && activeArtifact && (
+                <button
+                  className="button primary"
+                  disabled={!canOperate || busy || confirmed}
+                  onClick={() => onConfirmContract(activeArtifact)}
+                >
+                  {confirmed
+                    ? language === "vi" ? "✓ Đã xác nhận" : "✓ Confirmed"
+                    : language === "vi" ? "Xác nhận hợp đồng" : "Confirm contract"}
+                </button>
+              )}
+            </div>
           </div>
 
           {payload ? (
@@ -627,6 +629,7 @@ function WorkflowPage({
   onUploadPreview,
   onBackToDatasetSelection,
   graphPanel,
+  nodeProgress,
 }: {
   dataset?: Dataset;
   profile: DatasetProfile | null;
@@ -652,6 +655,7 @@ function WorkflowPage({
   onSelectDataset: (datasetId: string) => void;
   onUploadPreview: (file: File) => void;
   onBackToDatasetSelection: () => void;
+  nodeProgress?: { done: number; total: number; current?: string; startedAt?: string };
   /** Graph 1B node detail, wired by App so this page stays presentational. */
   graphPanel?: ReactNode;
 }) {
@@ -901,8 +905,19 @@ function WorkflowPage({
                 từ đó trước, vì mọi luật sinh ra sau này đều dựa trên hợp đồng này.
               </p>
             )}
+            {/* Evidence keys are namespaced `profile.column.<name>.<signal>`, so
+                each one belongs to a column. Listing them all in a separate
+                block at the bottom meant reading a wall of 200 chips and
+                mentally re-joining them to the rows above. */}
             <div className="schema-list">
               {contractColumns.map((column) => {
+                const columnName = String(column.name ?? "");
+                const columnSignals = Array.isArray(payload.evidence)
+                  ? payload.evidence
+                      .map(String)
+                      .filter((key) => key.startsWith(`profile.column.${columnName}.`))
+                      .map((key) => key.slice(`profile.column.${columnName}.`.length))
+                  : [];
                 // Ngưỡng 0.8 trùng với ngưỡng dùng ở bảng độ tin cậy bước 1, để
                 // "kém chắc chắn" mang cùng một nghĩa ở mọi màn hình.
                 const score =
@@ -913,13 +928,22 @@ function WorkflowPage({
                     className={`schema-row${uncertain ? " uncertain" : ""}`}
                     key={String(column.name)}
                   >
-                    <strong>{String(column.name ?? "Unnamed column")}</strong>
+                    <strong>{columnName || "Unnamed column"}</strong>
                     <span>{String(column.semantic_type ?? "unknown")}</span>
                     <small className={uncertain ? "low" : undefined}>
                       {score === null
                         ? "Không có điểm tin cậy"
                         : `${Math.round(score * 100)}% tin cậy`}
                     </small>
+                    {columnSignals.length > 0 && (
+                      <div className="schema-signals">
+                        {columnSignals.map((signal) => (
+                          <code key={signal} title={`profile.column.${columnName}.${signal}`}>
+                            {signal}
+                          </code>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -933,12 +957,17 @@ function WorkflowPage({
               </div>
             </div>
             <div className="evidence-list">
+              {/* Only the signals that describe the dataset as a whole; the
+                  per-column ones now sit on their own rows above. */}
               {Array.isArray(payload.evidence) &&
-                payload.evidence.map((evidence) => (
-                  <span key={String(evidence)} className="evidence-chip">
-                    {String(evidence)}
-                  </span>
-                ))}
+                payload.evidence
+                  .map(String)
+                  .filter((evidence) => !evidence.startsWith("profile.column."))
+                  .map((evidence) => (
+                    <span key={evidence} className="evidence-chip">
+                      {evidence}
+                    </span>
+                  ))}
             </div>
           </div>
         </div>
@@ -1167,11 +1196,6 @@ function WorkflowPage({
                 : "Run current step";
   const visibleWorkflowSteps = workflow.steps;
   const currentPhaseIndex = Math.max(0, workflowPhaseIndex(workflow.current_step));
-  const phaseStatus = (phaseIndex: number) => {
-    if (phaseIndex < currentPhaseIndex) return "COMPLETED";
-    if (phaseIndex > currentPhaseIndex) return "LOCKED";
-    return currentStep?.status ?? "READY";
-  };
   const publishPhase = workflowPhases.find((p) => p.steps.includes("PUBLISH_RULESET")) ?? workflowPhases[workflowPhases.length - 1];
   const executionSteps = (publishPhase?.steps ?? [])
     .map((key) => workflow.steps.find((step) => step.key === key))
@@ -1244,29 +1268,10 @@ function WorkflowPage({
           </button>
         </div>
       </div>
-      <div className="workflow-layout">
-        <aside className="workflow-stepper" aria-label="Four workflow phases">
-          {workflowPhases.map((phase, index) => {
-            const status = phaseStatus(index);
-            return (
-              <button
-                type="button"
-                disabled
-                className={`workflow-step ${index === currentPhaseIndex ? "current" : ""} ${status.toLowerCase()}`}
-                key={phase.label}
-                aria-label={phase.label}
-              >
-                <div className="workflow-step-index">
-                  {status === "COMPLETED" ? "✓" : index + 1}
-                </div>
-                <div className="workflow-step-copy">
-                  <strong>{phase.label}</strong>
-                  <span>{phase.owner}</span>
-                </div>
-              </button>
-            );
-          })}
-        </aside>
+      {/* The two-phase rail was removed: it was a disabled, non-interactive
+          restatement of the wizard stepper already at the top of the page, and
+          it took a column of width from the content that matters. */}
+      <div className="workflow-layout single">
         <section className="workflow-detail panel">
           <div className="workflow-detail-heading">
             <div>
@@ -1315,6 +1320,7 @@ function WorkflowPage({
             <ProgressPanel
               job={activeJob}
               title={`Running ${workflowStepLabels[workflow.current_step].label}`}
+              nodeProgress={nodeProgress}
             />
           )}
           {graphPanel}
@@ -1472,6 +1478,21 @@ function App() {
   const [datasetAccess, setDatasetAccess] = useState<DatasetAccess[]>([]);
   const [adminLoading, setAdminLoading] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  // Panels the step-1 buttons open over the page. Reading a chart or the audit
+  // trail must not cost you the step you were working in.
+  const [stepOverlay, setStepOverlay] = useState<
+    "catalog" | "observatory" | "audit" | null
+  >(null);
+  // Step 3 reveals its review queue only after the Steward asks for rules, so
+  // the screen opens on the contract the rules will be derived from rather than
+  // on forty rows of output.
+  const [ruleQueueOpen, setRuleQueueOpen] = useState(false);
+  const [bulkReviewBusy, setBulkReviewBusy] = useState(false);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  // Counted directly rather than derived from the list length: the list is
+  // capped at 50, so once it is full the length stops growing and a derived
+  // unread count would silently stick.
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [activeJob, setActiveJob] = useState<Job | null>(null);
   const [workflowActionBusy, setWorkflowActionBusy] = useState(false);
   const [activeRun, setActiveRun] = useState<DqRun | null>(null);
@@ -1600,6 +1621,51 @@ function App() {
   }, [selectedDatasetId]);
 
   const loadNodeDetail = useCallback((nodeRunId: string) => api.getNodeRun(nodeRunId), []);
+
+  // Real sub-progress for the running job. Each job type drives one graph, and
+  // node telemetry records every node as it finishes, so counting the nodes of
+  // the newest graph run gives measured progress between the job's own coarse
+  // stage boundaries.
+  // Graph 1B refuses to run until the semantic contract is CONFIRMED. Surfacing
+  // that here turns a 409 after the click into a precondition stated before it.
+  const understandingArtifact =
+    workflow && dataset && workflow.dataset_id === dataset.id
+      ? workflowArtifactForStep(workflow, workflowArtifacts, "UNDERSTAND_DATA")
+      : undefined;
+  const contractConfirmed =
+    understandingArtifact?.status === "CONFIRMED" || understandingArtifact?.status === "APPROVED";
+
+  const activeJobNodeProgress = useMemo(() => {
+    if (!activeJob) return undefined;
+    const graphKey = jobGraphKey[activeJob.type];
+    if (!graphKey) return undefined;
+    const relevant = nodeRuns.filter((run) => run.graph_key === graphKey);
+    if (relevant.length === 0) return undefined;
+    // Older runs for the same dataset are still in the list; keep only the
+    // newest graph run or the count would include historical executions.
+    const newest = relevant.reduce((latest, run) =>
+      (run.started_at ?? "") > (latest.started_at ?? "") ? run : latest,
+    );
+    const current = relevant.filter((run) => run.graph_run_id === newest.graph_run_id);
+    const total = graphCatalog?.graphs.find((graph) => graph.key === graphKey)?.nodes.length ?? current.length;
+    const done = current.filter((run) => run.status === "SUCCEEDED" || run.status === "SKIPPED").length;
+    const inFlight = current.find((run) => run.status === "RUNNING");
+    const startedAt = current.reduce<string | undefined>(
+      (earliest, run) => (run.started_at && (!earliest || run.started_at < earliest) ? run.started_at : earliest),
+      undefined,
+    );
+    return {
+      done,
+      total,
+      current: inFlight
+        ? (language === "vi"
+            ? graphCatalog?.graphs.find((g) => g.key === graphKey)?.nodes.find((n) => n.name === inFlight.node_name)?.label_vi
+            : graphCatalog?.graphs.find((g) => g.key === graphKey)?.nodes.find((n) => n.name === inFlight.node_name)?.label_en)
+          ?? inFlight.node_name
+        : undefined,
+      startedAt,
+    };
+  }, [activeJob, nodeRuns, graphCatalog, language]);
   const loadStewardReport = useCallback((runId: string) => api.getStewardReport(runId), []);
 
   // Topology never changes at runtime, so fetch it once per session.
@@ -1656,6 +1722,14 @@ function App() {
     setWorkflow(null);
     setWorkflowArtifacts([]);
     await refreshWorkspace();
+    // Selecting only selects. Confirm it so the absence of any analysis running
+    // reads as "done, your move" rather than as the click not registering.
+    const chosen = datasets.find((item) => item.id === datasetId);
+    setToast(
+      language === "vi"
+        ? `Đã chọn "${chosen?.name ?? datasetId}". Chọn Profile dataset để tiếp tục.`
+        : `Selected "${chosen?.name ?? datasetId}". Choose Profile dataset to continue.`,
+    );
   }
 
   useEffect(() => {
@@ -1669,6 +1743,27 @@ function App() {
     const timer = window.setTimeout(() => setToast(""), 3500);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  // Every message the app raises is recorded here rather than at each of the
+  // ~20 call sites. Watching the rendered value means a future setToast is
+  // captured automatically instead of quietly bypassing the bell.
+  useEffect(() => {
+    if (!toast) return;
+    setNotifications((current) => [
+      { id: `n-${Date.now()}-${current.length}`, kind: "success" as const, message: toast, at: new Date().toISOString() },
+      ...current,
+    ].slice(0, 50));
+    setUnreadNotifications((count) => count + 1);
+  }, [toast]);
+
+  useEffect(() => {
+    if (!error) return;
+    setNotifications((current) => [
+      { id: `n-${Date.now()}-${current.length}`, kind: "error" as const, message: error, at: new Date().toISOString() },
+      ...current,
+    ].slice(0, 50));
+    setUnreadNotifications((count) => count + 1);
+  }, [error]);
 
   async function handleLogin(loginUsername: string, password: string) {
     setLoginBusy(true);
@@ -1715,16 +1810,23 @@ function App() {
       setActiveJob(current);
     }
     const finalStatus = current.status as Job["status"];
+    // The job is over either way, so the in-flight marker has to be cleared on
+    // both paths. Leaving it set on failure disabled every run button on every
+    // step — `activeJob` gates them all, and several handlers return early on
+    // it — so one failed job bricked the page until a reload. The retry action
+    // below is what lets the user try again, not a lingering activeJob.
+    setActiveJob(null);
     if (finalStatus === "SUCCEEDED") {
       await onComplete();
-      setActiveJob(null);
       setRetryAction(null);
       setToast("Job completed successfully.");
     } else {
       setRetryAction(() => () => void pollJob(acceptedJob, onComplete, jobApi));
       setError(
         current.error ??
-          "The job did not complete. Retry the operation when ready.",
+          (finalStatus === "FAILED" || finalStatus === "FAILED_RETRYABLE"
+            ? "The job failed. Retry the operation when ready."
+            : "The job is still running after 10 minutes. Retry to keep watching it."),
       );
     }
   }
@@ -1760,6 +1862,16 @@ function App() {
       setSelectedDatasetId(imported.dataset.id);
       setDatasets((current) => [imported.dataset, ...current]);
       setView("datasets");
+      if (imported.idempotent_replay) {
+        // Dataset versions are content-addressed, so byte-identical bytes reuse
+        // the existing version rather than profiling again. Say so: silence
+        // here looks like the upload was ignored.
+        setToast(
+          language === "vi"
+            ? `Tệp này trùng khớp hoàn toàn với "${imported.dataset.name}" đã có — dùng lại bản profile cũ, không chạy lại.`
+            : `This file is byte-identical to "${imported.dataset.name}" — the existing profile was reused, nothing was re-run.`,
+        );
+      }
       await pollJob(imported.job, async () => {
         await refreshWorkspace();
       });
@@ -1931,8 +2043,35 @@ function App() {
 
   async function runApprovedRules() {
     try {
+      // Pausing a rule means "do not execute this one". The endpoint refuses the
+      // whole request if any named rule is paused, so sending them all made one
+      // paused rule fail the entire run instead of being skipped.
+      const pausedIds = new Set(
+        ruleConfigurations
+          .filter((configuration) => configuration.execution_status === "PAUSED")
+          .map((configuration) => configuration.rule_id),
+      );
+      const runnable = approvedRules.filter(
+        (rule) => !pausedIds.has(rule.id) && !pausedIds.has(rule.id.replace(/^rv_/, "")),
+      );
+      const skipped = approvedRules.length - runnable.length;
+      if (runnable.length === 0) {
+        setError(
+          language === "vi"
+            ? "Mọi luật đã duyệt đang tạm dừng. Bật lại ít nhất một luật ở Execution settings trước khi chạy."
+            : "Every approved rule is paused. Resume at least one in Execution settings before running.",
+        );
+        return;
+      }
+      if (skipped > 0) {
+        setToast(
+          language === "vi"
+            ? `Bỏ qua ${skipped} luật đang tạm dừng.`
+            : `Skipped ${skipped} paused rule${skipped === 1 ? "" : "s"}.`,
+        );
+      }
       const queuedRun = await api.startDqRun(
-        approvedRules.map((rule) => rule.id),
+        runnable.map((rule) => rule.id),
         crypto.randomUUID(),
       );
       setActiveRun(await api.getDqRun(queuedRun.run_id));
@@ -1994,19 +2133,17 @@ function App() {
       }
       let currentWorkflow = workflow;
       if (!currentWorkflow) {
+        // Selecting a dataset clears the workflow, so the first click on a run
+        // button lands here. This used to create the workflow and return, which
+        // meant the button had to be pressed twice: the first press looked like
+        // it had done nothing. Every caller of this function is an explicit run
+        // request, so create the workflow and then carry out what was asked.
         currentWorkflow = await workflowApi.createWorkflow(dataset.id, fresh);
         setWorkflow(currentWorkflow);
         setWorkflowArtifacts(
           await workflowApi.listWorkflowArtifacts(currentWorkflow.id),
         );
         setProposals(await api.listProposals(dataset.id, currentWorkflow.id));
-        // Entering from dataset selection must never execute a ready stage.
-        // The steward first sees the selected current activity and explicitly
-        // chooses its primary action (notably Understand data).
-        setToast(
-          `Ready to ${workflowStepLabels[currentWorkflow.current_step].label.toLowerCase()}.`,
-        );
-        return;
       }
       const queuedJob = await workflowApi.runWorkflowStep(
         currentWorkflow.id,
@@ -2028,6 +2165,74 @@ function App() {
       setError(getErrorMessage(err, "Unable to run workflow step."));
     } finally {
       setWorkflowActionBusy(false);
+    }
+  }
+
+  async function confirmSemanticContract(artifact: AgentArtifact) {
+    if (!workflow || !canOperate || workflowActionBusy || activeJob) return;
+    setError("");
+    setWorkflowActionBusy(true);
+    try {
+      const result = await workflowApi.confirmSemanticContract(workflow.id, {
+        artifact_id: artifact.id,
+        expected_version: artifact.version,
+        // Confirming without edits sends the contract back unchanged; the
+        // endpoint treats the body as the authoritative version.
+        contract: (artifact.payload ?? {}) as Record<string, unknown>,
+      });
+      setWorkflow(result.workflow);
+      setWorkflowArtifacts(await workflowApi.listWorkflowArtifacts(result.workflow.id));
+      setAuditLogs(await api.listAuditLogs());
+      setToast(
+        language === "vi"
+          ? "Đã xác nhận hợp đồng ngữ nghĩa."
+          : "Semantic contract confirmed.",
+      );
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to confirm the semantic contract."));
+    } finally {
+      setWorkflowActionBusy(false);
+    }
+  }
+
+  async function bulkReviewProposals(action: "approve" | "reject") {
+    if (!dataset || !canOperate || bulkReviewBusy) return;
+    const pending = proposals.filter((item) => ["PROPOSED", "EDITED"].includes(item.status));
+    if (pending.length === 0) {
+      setToast(
+        language === "vi"
+          ? "Không còn đề xuất nào đang chờ quyết định."
+          : "No proposals are awaiting a decision.",
+      );
+      return;
+    }
+    // Deciding dozens of rules at once is hard to undo, so it is confirmed.
+    const question =
+      language === "vi"
+        ? `${action === "approve" ? "Duyệt" : "Từ chối"} toàn bộ ${pending.length} đề xuất đang chờ?`
+        : `${action === "approve" ? "Approve" : "Reject"} all ${pending.length} pending proposals?`;
+    if (!window.confirm(question)) return;
+
+    setError("");
+    setBulkReviewBusy(true);
+    try {
+      const updated = await api.bulkReviewProposals({
+        dataset_id: dataset.id,
+        action,
+        pending_only: true,
+      });
+      setProposals(updated);
+      setRuleConfigurations(await api.listRuleConfigurations(dataset.id));
+      setAuditLogs(await api.listAuditLogs());
+      setToast(
+        language === "vi"
+          ? `Đã ${action === "approve" ? "duyệt" : "từ chối"} ${pending.length} đề xuất.`
+          : `${action === "approve" ? "Approved" : "Rejected"} ${pending.length} proposals.`,
+      );
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to apply the bulk decision."));
+    } finally {
+      setBulkReviewBusy(false);
     }
   }
 
@@ -2161,6 +2366,35 @@ function App() {
             )}
             <button
               type="button"
+              className={`notif-button ${stepOverlay === "audit" ? "active" : ""}`}
+              onClick={() => setStepOverlay(stepOverlay === "audit" ? null : "audit")}
+              aria-label={language === "vi" ? "Nhật ký kiểm toán" : "Audit log"}
+              title={language === "vi" ? "Nhật ký kiểm toán" : "Audit log"}
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+                <path
+                  d="M7 3.5h7.5L18 7v13.5H7z"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinejoin="round"
+                />
+                <path d="M14 3.5V7h4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+                <path d="M9.5 11h6M9.5 14h6M9.5 17h3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
+            </button>
+            <NotificationBell
+              notifications={notifications}
+              unreadCount={unreadNotifications}
+              language={language}
+              onOpen={() => setUnreadNotifications(0)}
+              onClear={() => {
+                setNotifications([]);
+                setUnreadNotifications(0);
+              }}
+            />
+            <button
+              type="button"
               className="profile-button-mini icon-button"
               onClick={() => void handleLogout()}
               title={t("app.signOut")}
@@ -2172,7 +2406,7 @@ function App() {
           </div>
         </header>
 
-        {!showAdmin && !showGraphs && (
+        {!showAdmin && !showGraphs && !stepOverlay && (
           <div className="wizard-header-container">
             <nav className="wizard-stepper" aria-label="Wizard Steps">
               {[
@@ -2259,8 +2493,24 @@ function App() {
           )}
           {error && (
             <div className="alert error">
-              <strong>Action failed</strong>
+              <strong>{language === "vi" ? "Thao tác thất bại" : "Action failed"}</strong>
               <span>{error}</span>
+              {/* pollJob has always recorded how to retry a failed job, but
+                  nothing rendered it: the message said "retry the operation"
+                  while offering no way to do so. */}
+              {retryAction && (
+                <button
+                  className="alert-retry"
+                  onClick={() => {
+                    const retry = retryAction;
+                    setError("");
+                    setRetryAction(null);
+                    retry();
+                  }}
+                >
+                  {language === "vi" ? "↻ Thử lại" : "↻ Retry"}
+                </button>
+              )}
               <button onClick={() => setError("")}>×</button>
             </div>
           )}
@@ -2279,6 +2529,7 @@ function App() {
                           ? (language === "vi" ? "Đang phân tích và tạo báo cáo…" : "Analyzing results and building report")
                           : (language === "vi" ? "Đang chạy kiểm thử quy tắc…" : "Running approved checks")
                   }
+                  nodeProgress={activeJobNodeProgress}
                 />
               )}
               {toast && (
@@ -2311,6 +2562,7 @@ function App() {
                     ? "Generating rule proposals"
                     : "Running approved checks"
               }
+              nodeProgress={activeJobNodeProgress}
             />
           ) : showGraphs ? (
             <GraphStagePanel
@@ -2336,24 +2588,32 @@ function App() {
                   Everything about the dataset itself lives here so the four
                   graph steps that follow each hold exactly one graph. */}
               {wizardStep === 1 && (
-                <div>
-                  <DatasetsPage
-                    datasets={datasets}
-                    dataset={dataset}
-                    onOpenExplorer={(datasetId) => {
-                      if (datasetId !== dataset?.id) void selectDataset(datasetId);
-                      setShowDataExplorer(true);
-                    }}
-                    onImportDataset={(file) => void importDataset(file)}
-                    onSelectDataset={(id) => void selectDataset(id)}
-                    onDeleteDataset={(id) => void deleteDataset(id)}
-                    canOperate={canOperate}
-                    importing={Boolean(activeJob)}
-                  />
-                  <div style={{ marginTop: "32px" }}>
+                <Step1DataPreparation
+                  datasets={datasets}
+                  dataset={dataset}
+                  language={language}
+                  canOperate={canOperate}
+                  importing={Boolean(activeJob)}
+                  profiling={Boolean(activeJob)}
+                  profileReady={Boolean(profile)}
+                  onImportDataset={(file) => void importDataset(file)}
+                  onSelectDataset={(id) => void selectDataset(id)}
+                  onDeleteDataset={(id) => void deleteDataset(id)}
+                  onOpenExplorer={(datasetId) => {
+                    if (datasetId !== dataset?.id) void selectDataset(datasetId);
+                    setShowDataExplorer(true);
+                  }}
+                  onProfileDataset={() => void startAnalysis()}
+                  loadDictionary={(datasetId) => api.getDataDictionary(datasetId)}
+                  uploadDictionary={(datasetId, file) => api.uploadDataDictionary(datasetId, file)}
+                  deleteDictionary={(datasetId) => api.deleteDataDictionary(datasetId)}
+                  profilePanel={
                     <OverviewPage
                       dataset={dataset}
-                      datasets={datasets}
+                      /* Scoped to the selected dataset: the catalogue used to
+                         list every dataset here, so the panel under one
+                         dataset's name showed another dataset's numbers. */
+                      datasets={dataset ? [dataset] : []}
                       profile={profile}
                       datasetProfiles={datasetProfiles}
                       qualityTrends={qualityTrends}
@@ -2365,21 +2625,25 @@ function App() {
                       onStartAnalysis={() => void startAnalysis()}
                       onRequestProposals={() => void requestProposals()}
                       onNavigate={(v) => {
-                        if (v === "datasets") setWizardStep(1);
+                        // "datasets" and "rules" are real pipeline moves; the
+                        // read-only views open in place so step 1 is not lost.
+                        if (v === "datasets") setStepOverlay("catalog");
+                        if (v === "visualization") setStepOverlay("observatory");
+                        if (v === "audit") setStepOverlay("audit");
                         if (v === "rules") setWizardStep(3);
                       }}
                       onSelectDataset={(id) => void selectDataset(id)}
                     />
-                  </div>
-                  <div style={{ marginTop: "32px" }}>
+                  }
+                  observatoryPanel={
                     <VisualizationPage
                       profile={profile}
                       results={dqResults}
                       anomalies={dqAnomalies}
                       trends={qualityTrends}
                     />
-                  </div>
-                </div>
+                  }
+                />
               )}
 
               {/* STEP 2: Graph 1A — dataset understanding */}
@@ -2411,6 +2675,8 @@ function App() {
                         if (id !== dataset?.id) void selectDataset(id);
                         void startWorkflowStep("UNDERSTAND_DATA", true);
                       }}
+                      onConfirmContract={(artifact) => void confirmSemanticContract(artifact)}
+                      language={language}
                     />
                   </div>
                 </div>
@@ -2450,6 +2716,7 @@ function App() {
                     onSelectDataset={(id) => void selectDataset(id)}
                     onUploadPreview={(file) => void importDataset(file)}
                     onBackToDatasetSelection={() => setWizardStep(1)}
+                    nodeProgress={activeJobNodeProgress}
                     graphPanel={
                       <GraphStagePanel
                         catalog={graphCatalog}
@@ -2465,17 +2732,108 @@ function App() {
                       chạy trước mà workflow lại chưa khởi tạo — khi đó người dùng
                       mở bước 3 và thấy màn hình trống, dù luật vẫn nằm trong DB.
                       Có đề xuất thì hiện, không phụ thuộc trạng thái workflow. */}
-                  {proposals.length > 0 && (
-                    <section className="standalone-review">
-                      <div className="panel-heading">
-                        <div>
-                          <span className="eyebrow">HÀNG ĐỢI DUYỆT</span>
-                          <h3>Đề xuất luật của agent</h3>
-                        </div>
-                        <span className="panel-caption">
-                          {proposals.length} đề xuất cho {dataset?.name ?? "dataset này"}
-                        </span>
+                  {/* Generating rules is its own decision, so it gets its own
+                      control. The queue below stays closed until it is asked
+                      for: opening step 3 straight onto forty rows buried the
+                      contract those rows were derived from. */}
+                  <section className="prep-section rule-gate">
+                    <header className="prep-section-head">
+                      <span className="prep-section-index">2</span>
+                      <div className="prep-section-title">
+                        <h2>{language === "vi" ? "Sinh luật từ hợp đồng" : "Generate rules"}</h2>
+                        <p>
+                          {understandingArtifact && !contractConfirmed
+                            ? language === "vi"
+                              ? "Hợp đồng ngữ nghĩa chưa được xác nhận. Xác nhận trước rồi mới sinh được luật."
+                              : "The semantic contract is not confirmed yet. Confirm it before generating rules."
+                            : proposals.length > 0
+                              ? language === "vi"
+                                ? `Đã có ${proposals.length} đề xuất cho bộ dữ liệu này.`
+                                : `${proposals.length} proposals already exist for this dataset.`
+                              : language === "vi"
+                                ? "Agent đọc hợp đồng ngữ nghĩa ở trên và đề xuất bộ luật kiểm tra."
+                                : "The agent reads the contract above and proposes a rule set."}
+                        </p>
                       </div>
+                      <div className="rule-gate-actions">
+                        {understandingArtifact && !contractConfirmed && (
+                          <button
+                            className="button secondary"
+                            disabled={!canOperate || workflowActionBusy || Boolean(activeJob)}
+                            onClick={() => void confirmSemanticContract(understandingArtifact)}
+                          >
+                            {language === "vi" ? "Xác nhận hợp đồng" : "Confirm contract"}
+                          </button>
+                        )}
+                        {proposals.length > 0 && (
+                          <button
+                            className="button secondary"
+                            onClick={() => setRuleQueueOpen((open) => !open)}
+                          >
+                            {ruleQueueOpen
+                              ? language === "vi" ? "Ẩn hàng đợi" : "Hide queue"
+                              : language === "vi" ? `Xem ${proposals.length} đề xuất` : `Review ${proposals.length} proposals`}
+                          </button>
+                        )}
+                        <button
+                          className="button primary"
+                          disabled={
+                            !canOperate ||
+                            Boolean(activeJob) ||
+                            workflowActionBusy ||
+                            (Boolean(understandingArtifact) && !contractConfirmed)
+                          }
+                          title={
+                            understandingArtifact && !contractConfirmed
+                              ? language === "vi"
+                                ? "Xác nhận hợp đồng ngữ nghĩa trước khi sinh luật."
+                                : "Confirm the semantic contract before generating rules."
+                              : undefined
+                          }
+                          onClick={() => {
+                            setRuleQueueOpen(true);
+                            void requestProposals();
+                          }}
+                        >
+                          {activeJob
+                            ? language === "vi" ? "Đang sinh luật…" : "Generating…"
+                            : proposals.length > 0
+                              ? language === "vi" ? "↻ Sinh lại luật" : "↻ Regenerate rules"
+                              : language === "vi" ? "⚡ Sinh Rule" : "⚡ Generate rules"}
+                        </button>
+                      </div>
+                    </header>
+                  </section>
+
+                  {proposals.length > 0 && ruleQueueOpen && (
+                    <section className="standalone-review prep-section">
+                      <header className="prep-section-head">
+                        <span className="prep-section-index">3</span>
+                        <div className="prep-section-title">
+                          <h2>{language === "vi" ? "Duyệt đề xuất luật" : "Review rule proposals"}</h2>
+                          <p>
+                            {language === "vi"
+                              ? `${proposals.length} đề xuất cho ${dataset?.name ?? "bộ dữ liệu này"}`
+                              : `${proposals.length} proposals for ${dataset?.name ?? "this dataset"}`}
+                          </p>
+                        </div>
+                        <div className="rule-gate-actions">
+                          <button
+                            className="button ghost danger"
+                            disabled={!canOperate || bulkReviewBusy}
+                            onClick={() => void bulkReviewProposals("reject")}
+                          >
+                            {language === "vi" ? "Từ chối tất cả" : "Reject all"}
+                          </button>
+                          <button
+                            className="button primary"
+                            disabled={!canOperate || bulkReviewBusy}
+                            onClick={() => void bulkReviewProposals("approve")}
+                          >
+                            {language === "vi" ? "Duyệt tất cả" : "Approve all"}
+                          </button>
+                        </div>
+                      </header>
                       <ReviewSummaryPanel proposals={proposals} />
                       <div className="proposal-list">
                         {proposals.map((proposal) => (
@@ -2506,6 +2864,31 @@ function App() {
                           />
                         ))}
                       </div>
+                      {/* Repeated at the foot of the list: after scrolling forty
+                          rules, the controls at the top are long gone. */}
+                      <div className="bulk-review-bar">
+                        <span>
+                          {language === "vi"
+                            ? `${proposals.filter((p) => ["PROPOSED", "EDITED"].includes(p.status)).length} đề xuất đang chờ quyết định`
+                            : `${proposals.filter((p) => ["PROPOSED", "EDITED"].includes(p.status)).length} awaiting a decision`}
+                        </span>
+                        <div className="rule-gate-actions">
+                          <button
+                            className="button ghost danger"
+                            disabled={!canOperate || bulkReviewBusy}
+                            onClick={() => void bulkReviewProposals("reject")}
+                          >
+                            {language === "vi" ? "Từ chối tất cả" : "Reject all rules"}
+                          </button>
+                          <button
+                            className="button primary"
+                            disabled={!canOperate || bulkReviewBusy}
+                            onClick={() => void bulkReviewProposals("approve")}
+                          >
+                            {language === "vi" ? "Duyệt tất cả" : "Approve all rules"}
+                          </button>
+                        </div>
+                      </div>
                     </section>
                   )}
                 </div>
@@ -2521,13 +2904,17 @@ function App() {
                     approvedCount={approvedRules.length}
                     busy={Boolean(activeJob)}
                     canOperate={canOperate}
+                    datasetId={dataset?.id}
                     onRun={() => void runApprovedRules()}
                     graphPanel={
                       <>
                         <GraphStagePanel
                           catalog={graphCatalog}
                           runs={nodeRuns}
-                          graphKeys={["G2"]}
+                          /* G2_DIRECT is what the button on this step runs; the
+                             dbt graph (G2) belongs to the analysis workflow and
+                             is shown after it so both paths stay visible. */
+                          graphKeys={["G2_DIRECT", "G2"]}
                           language={language}
                           loadNodeDetail={loadNodeDetail}
                         />
@@ -2559,9 +2946,10 @@ function App() {
                     }
                   />
                   {dataset && <ActiveRulesPanel datasetId={dataset.id} />}
-                  <div style={{ marginTop: "32px" }}>
-                    <AuditPage logs={auditLogs} />
-                  </div>
+                  {/* The audit history used to be pasted onto the bottom of this
+                      step, pushing the results it was meant to annotate off the
+                      screen. It now lives behind the topbar log button, which
+                      opens it over whatever page you are on. */}
                 </div>
               )}
 
@@ -2584,6 +2972,11 @@ function App() {
                     graphKeys={["G3"]}
                     language={language}
                     loadNodeDetail={loadNodeDetail}
+                    emptyNote={
+                      language === "vi"
+                        ? "Các node này chạy trong luồng phân tích Graph 2 + Graph 3. Số liệu bên dưới đến từ bộ phát hiện bất thường chạy kèm nút \"Chạy luật đã duyệt\" ở bước 4, nên các node ở đây chưa được kích hoạt."
+                        : "These nodes run in the Graph 2 + Graph 3 analysis workflow. The figures below come from the anomaly detection that runs alongside \"Run approved rules\" in step 4, so nothing here has been invoked yet."
+                    }
                   />
                   {activeRun ? (
                     <>
@@ -2598,7 +2991,11 @@ function App() {
                         <AnomalyInvestigationPanel runId={activeRun.id} canOperate={canOperate} />
                       </div>
                       <div style={{ marginTop: "32px" }}>
-                        <Graph3Analytics anomalies={dqAnomalies} />
+                        <AnomalyStatisticsPanel
+                          anomalies={dqAnomalies}
+                          results={dqResults}
+                          language={language}
+                        />
                       </div>
                     </>
                   ) : (
@@ -2657,6 +3054,48 @@ function App() {
               </div>
             </>
           )}
+      {stepOverlay && (
+        <DetailOverlay
+          eyebrow={
+            stepOverlay === "catalog"
+              ? language === "vi" ? "TOÀN BỘ DANH MỤC" : "FULL CATALOGUE"
+              : stepOverlay === "observatory"
+                ? language === "vi" ? "PHÒNG ĐIỀU KHIỂN CHẤT LƯỢNG" : "QUALITY CONTROL ROOM"
+                : language === "vi" ? "LỊCH SỬ CHỈ GHI THÊM" : "APPEND-ONLY HISTORY"
+          }
+          title={
+            stepOverlay === "catalog"
+              ? language === "vi" ? "Danh mục bộ dữ liệu" : "Dataset catalog"
+              : stepOverlay === "observatory"
+                ? language === "vi" ? "Quan sát chất lượng dữ liệu" : "Data quality observatory"
+                : language === "vi" ? "Lịch sử kiểm toán" : "Audit history"
+          }
+          closeLabel={language === "vi" ? "Đóng" : "Close"}
+          onClose={() => setStepOverlay(null)}
+        >
+          {stepOverlay === "catalog" && (
+            <DatasetCatalogView
+              datasets={datasets}
+              datasetProfiles={datasetProfiles}
+              selectedId={dataset?.id}
+              language={language}
+              onSelectDataset={(id) => {
+                void selectDataset(id);
+                setStepOverlay(null);
+              }}
+            />
+          )}
+          {stepOverlay === "observatory" && (
+            <VisualizationPage
+              profile={profile}
+              results={dqResults}
+              anomalies={dqAnomalies}
+              trends={qualityTrends}
+            />
+          )}
+          {stepOverlay === "audit" && <AuditPage logs={auditLogs} />}
+        </DetailOverlay>
+      )}
       {showDataExplorer && dataset && (
         <DataExplorerDialog
           dataset={dataset}
@@ -2664,6 +3103,7 @@ function App() {
           loadRows={(datasetId, limit) =>
             api.queryDatasetRows(datasetId, { limit, offset: 0, quality_status: "ALL" })
           }
+          loadDictionary={(datasetId) => api.getDataDictionary(datasetId)}
           onClose={() => setShowDataExplorer(false)}
         />
       )}
@@ -2801,12 +3241,8 @@ function OverviewPage({
           >
             Dataset catalog →
           </button>
-          <button
-            className="button primary"
-            onClick={() => onNavigate("visualization")}
-          >
-            Open observatory →
-          </button>
+          {/* No observatory button here: section 5 of step 1 opens the same
+              panel, and two entry points a screen apart read as two things. */}
         </div>
       </div>
       <section className="stat-grid overview-kpis">
@@ -3333,14 +3769,22 @@ function ProposalCard({
                 ? "Edit approved rule"
                 : "Edit rejected rule"}
           </button>
-          {canApprove && (
-            <button className="button primary proposal-action approve" onClick={onApprove}>
-              {proposal.status === "REJECTED"
+          {/* Kept on screen even once it no longer applies. Hiding it left an
+              approved rule showing only "reject" and "edit", which reads as a
+              missing action rather than as a decision already made. */}
+          <button
+            className="button primary proposal-action approve"
+            onClick={onApprove}
+            disabled={!canApprove}
+            title={canApprove ? undefined : "Rule đã được duyệt"}
+          >
+            {!canApprove
+              ? "✓ Đã duyệt"
+              : proposal.status === "REJECTED"
                 ? "Re-approve rule"
-                : "Approve rule"}{" "}
-              <span>→</span>
-            </button>
-          )}
+                : "Approve rule"}
+            {canApprove && <span> →</span>}
+          </button>
           {proposal.status !== "APPROVED" && (
             <button className="button ghost proposal-action delete" onClick={onDelete}>
               Delete
@@ -4049,6 +4493,7 @@ function RunsPage({
   canOperate,
   onRun,
   graphPanel,
+  datasetId,
 }: {
   activeRun: DqRun | null;
   results: DqResult[];
@@ -4059,7 +4504,30 @@ function RunsPage({
   onRun: () => void;
   /** Graph 2 node detail, wired by App. */
   graphPanel?: ReactNode;
+  /** Resets the reveal when the user switches dataset. */
+  datasetId?: string;
 }) {
+  const { language } = useI18n();
+  const vi = language === "vi";
+  // The workspace refresh loads the most recent run so the data is there when
+  // it is wanted, but arriving on this step used to show a finished run the
+  // user had not asked for -- it read as if pressing the button had already
+  // happened. Results appear when this run is started, or when the previous one
+  // is opened on purpose.
+  const [revealed, setRevealed] = useState(false);
+  const hasPriorRun = Boolean(activeRun);
+  useEffect(() => {
+    // A run in flight while this page is open is this user's doing, so show it.
+    if (busy) setRevealed(true);
+  }, [busy]);
+  useEffect(() => {
+    // Keyed on the dataset, not the run id. Resetting whenever the run id
+    // changed hid the results of the run the user had just started -- the id
+    // changes the moment the new run is created -- and closed the previous run
+    // again whenever a workspace refresh returned a different latest run.
+    setRevealed(false);
+  }, [datasetId]);
+
   return (
     <>
       <div className="page-heading">
@@ -4071,30 +4539,55 @@ function RunsPage({
             bounded IDs only.
           </p>
         </div>
-        <button
-          className="button primary"
-          onClick={onRun}
-          disabled={!approvedCount || busy || !canOperate}
-        >
-          Run approved rules <span>→</span>
-        </button>
+        <div className="run-header-actions">
+          {hasPriorRun && !revealed && (
+            <button className="button secondary" onClick={() => setRevealed(true)}>
+              {vi ? "Xem lượt chạy trước" : "View previous run"}
+            </button>
+          )}
+          <button
+            className="button primary"
+            onClick={() => {
+              setRevealed(true);
+              onRun();
+            }}
+            disabled={!approvedCount || busy || !canOperate}
+          >
+            {vi ? "Chạy luật đã duyệt" : "Run approved rules"} <span>→</span>
+          </button>
+        </div>
       </div>
-      {!activeRun ? (
+      {!activeRun || !revealed ? (
         <section className="empty-state">
           <div className="empty-illustration">↗</div>
-          <h2>No run yet</h2>
+          <h2>{hasPriorRun ? (vi ? "Sẵn sàng chạy" : "Ready to run") : vi ? "Chưa có lượt chạy nào" : "No run yet"}</h2>
           <p>
-            Approve at least one proposal, then execute it through the read-only
-            runner.
+            {hasPriorRun
+              ? vi
+                ? `Có sẵn kết quả của lượt chạy trước (${activeRun?.rule_ids.length} luật). Chạy lượt mới, hoặc mở lại kết quả cũ.`
+                : `A previous run is available (${activeRun?.rule_ids.length} rules). Start a new run, or open the earlier results.`
+              : vi
+                ? "Duyệt ít nhất một đề xuất ở bước 3, rồi chạy chúng qua bộ thực thi chỉ đọc."
+                : "Approve at least one proposal in step 3, then execute it through the read-only runner."}
           </p>
           {canOperate && (
-            <button
-              className="button primary"
-              onClick={onRun}
-              disabled={!approvedCount || busy}
-            >
-              Run approved rules →
-            </button>
+            <div className="run-header-actions">
+              {hasPriorRun && (
+                <button className="button secondary" onClick={() => setRevealed(true)}>
+                  {vi ? "Xem lượt chạy trước" : "View previous run"}
+                </button>
+              )}
+              <button
+                className="button primary"
+                onClick={() => {
+                  setRevealed(true);
+                  onRun();
+                }}
+                disabled={!approvedCount || busy}
+              >
+                {vi ? "Chạy luật đã duyệt" : "Run approved rules"} →
+              </button>
+            </div>
           )}
         </section>
       ) : (
@@ -4235,15 +4728,32 @@ function RunsPage({
                     <strong>{result.rule_title}</strong>
                     <StatusPill
                       label={result.status}
-                      tone={result.status === "PASS" ? "success" : "danger"}
+                      tone={
+                        result.status === "PASS"
+                          ? "success"
+                          : result.status === "SKIPPED"
+                            ? "warning"
+                            : "danger"
+                      }
                     />
                     <span>{result.checked_count.toLocaleString()}</span>
                     <strong
                       className={result.failed_count ? "metric-warn" : ""}
                     >
                       {result.failed_count.toLocaleString()}
+                      {/* A dataset-level rule is judged on its rate, so show the
+                          measured value beside the raw count. */}
+                      {typeof result.violation_rate === "number" && (
+                        <small className="result-rate">{result.violation_rate.toFixed(2)}%</small>
+                      )}
                     </strong>
-                    <FailedRowIds ids={result.failed_row_ids} />
+                    {result.status === "SKIPPED" ? (
+                      <span className="result-skipped" title={result.error_message ?? undefined}>
+                        {result.error_message ?? (language === "vi" ? "Không thực thi được" : "Not executable")}
+                      </span>
+                    ) : (
+                      <FailedRowIds ids={result.failed_row_ids} />
+                    )}
                   </div>
                 ))}
               </div>

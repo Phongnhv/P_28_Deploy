@@ -12,8 +12,10 @@ import type {
   AnomalyHypothesis,
   AnomalySignal,
   DqAnomaly,
+  DataDictionary,
   DatasetRowQuery,
   DatasetRowsResponse,
+  SemanticContractConfirmInput,
   QualityTrendPoint,
   DqRun,
   Job,
@@ -172,9 +174,15 @@ export const realApiClient: ApiClient = {
       version: { id: string; version_number: number; status: string; checksum: string; row_count: number };
       job: { job_id: string; status: string };
       profile_run_id?: string;
+      idempotent_replay?: boolean;
     }>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/datasets/import`, {
       method: "POST",
-      headers: { "Idempotency-Key": `ui-${checksum}` },
+      // Unique per upload attempt, not per file. Keying on the content alone
+      // meant re-uploading the same file returned the first run's dataset and
+      // never profiled anything again — deliberately re-importing a file is a
+      // new run, not a duplicate submit. Computed once per call, so a transient
+      // network retry still reuses the same key.
+      headers: { "Idempotency-Key": `ui-${checksum}-${crypto.randomUUID()}` },
       body,
     });
     return {
@@ -197,6 +205,7 @@ export const realApiClient: ApiClient = {
         job_id: payload.job.job_id,
         status: payload.job.status === "RUNNING" ? "RUNNING" : "PENDING",
       },
+      idempotent_replay: payload.idempotent_replay ?? false,
     } satisfies DatasetImportResponse;
   },
   async deleteDataset(id) {
@@ -236,6 +245,12 @@ export const realApiClient: ApiClient = {
   },
   deleteProposal(proposalId) {
     return request<void>(`/api/v1/rule-proposals/${encodeURIComponent(proposalId)}`, { method: "DELETE" });
+  },
+  bulkReviewProposals(input) {
+    return request<RuleProposal[]>("/api/v1/rule-proposals/bulk-review", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
   },
   listRuleConfigurations(datasetId) {
     return request<RuleConfiguration[]>(`/api/v1/rule-configurations?dataset_id=${encodeURIComponent(datasetId)}`);
@@ -298,6 +313,22 @@ export const realApiClient: ApiClient = {
       `/api/v1/datasets/${encodeURIComponent(datasetId)}/rows?${params.toString()}`,
     );
   },
+  getDataDictionary(datasetId) {
+    // The API answers 200 with `null` when nothing was uploaded: that is the
+    // signal for "the agent will infer it", not a missing resource.
+    return request<DataDictionary | null>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/data-dictionary`);
+  },
+  uploadDataDictionary(datasetId, file) {
+    const body = new FormData();
+    body.append("file", file);
+    return request<DataDictionary>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/data-dictionary`, {
+      method: "POST",
+      body,
+    });
+  },
+  async deleteDataDictionary(datasetId) {
+    await request<void>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/data-dictionary`, { method: "DELETE" });
+  },
   listAuditLogs() {
     return request<AuditLog[]>("/api/v1/audit-logs?limit=50");
   },
@@ -352,6 +383,12 @@ export const realApiClient: ApiClient = {
       method: "POST",
       body: JSON.stringify(input),
     });
+  },
+  confirmSemanticContract(workflowRunId: string, input: SemanticContractConfirmInput) {
+    return request<{ workflow: WorkflowRun; artifact: AgentArtifact }>(
+      `/api/v1/workflows/${encodeURIComponent(workflowRunId)}/semantic-contract/confirm`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
   },
   continueLoop(workflowRunId: string, input: LoopDecisionInput) {
     return request<WorkflowRun>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}/loop-decision`, {

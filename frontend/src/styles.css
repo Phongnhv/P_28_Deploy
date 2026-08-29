@@ -211,7 +211,6 @@ code,
   box-shadow: 0 7px 20px rgb(37 99 235 / 5%);
 }
 .column-bar,
-.review-progress,
 .progress-track,
 .confidence-track {
   background: #dbeafe;
@@ -751,9 +750,13 @@ nav {
   background: var(--surface-muted);
 }
 .page-container {
-  width: min(100%, 1360px);
+  /* Scales with the viewport instead of stopping at a fixed cap. A hard pixel
+     limit left a wide dead margin on both sides of a large screen while the
+     card grids inside stayed cramped; the very generous ceiling below only
+     exists so an ultra-wide monitor does not stretch a row of cards forever. */
+  width: min(100%, 2400px);
   min-width: 0;
-  padding: 42px clamp(22px, 4vw, 52px) 72px;
+  padding: 36px clamp(18px, 2.4vw, 44px) 72px;
   margin: 0 auto;
 }
 .dev-banner {
@@ -1474,39 +1477,78 @@ nav {
   color: var(--accent-deep);
 }
 
+/* Stacked, not a row. The markup was rewritten into head / track / legend but
+   this rule still laid it out as one flex row, so the three blocks were squeezed
+   onto a single line and the bar had nowhere to render. */
 .review-summary {
-  display: flex;
-  align-items: center;
-  gap: 22px;
-  padding: 18px 19px;
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
   margin-bottom: 18px;
   border-radius: var(--radius);
+  border: 1px solid var(--border);
   background: var(--surface);
   box-shadow: 0 7px 20px rgb(38 68 49 / 4%);
 }
-.review-summary strong {
-  display: block;
-  margin-top: 5px;
-  color: var(--ink);
-  font-size: 14px;
+
+.rs-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
-.review-progress {
-  flex: 1;
-  overflow: hidden;
-  height: 4px;
-  border-radius: 4px;
-  background: #e4ebe4;
-}
-.review-progress span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--accent);
-}
-.review-summary > span {
+.rs-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
   color: var(--muted);
-  font-size: 10px;
-  white-space: nowrap;
+}
+.rs-count {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The two spans sit side by side and together fill the decided share. */
+.rs-track {
+  display: flex;
+  overflow: hidden;
+  height: 7px;
+  border-radius: 999px;
+  background: #e6eaef;
+}
+.rs-track > span { display: block; height: 100%; transition: width 0.3s ease; }
+.rs-approved { background: #6aa87f; }
+.rs-rejected { background: #d98b83; }
+
+.rs-legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+.rs-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.rs-legend .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.rs-legend .dot.approved { background: #6aa87f; }
+.rs-legend .dot.rejected { background: #d98b83; }
+.rs-legend .dot.pending { background: #c3cad4; }
+.rs-edited { font-style: italic; }
+.rs-percent {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
 }
 .proposal-list {
   display: grid;
@@ -2831,17 +2873,8 @@ nav {
     grid-template-columns: minmax(105px, 1.2fr) 1.4fr 48px;
     gap: 9px;
   }
-  .review-summary {
-    align-items: start;
-    flex-wrap: wrap;
-    gap: 11px;
-  }
-  .review-progress {
-    flex-basis: 100%;
-    order: 3;
-  }
-  .review-summary > span {
-    margin-left: auto;
+  .rs-legend {
+    gap: 10px;
   }
   .proposal-main {
     display: block;
@@ -3029,7 +3062,6 @@ nav {
   border-color: #263a5e;
 }
 :root[data-theme="dark"] .column-bar,
-:root[data-theme="dark"] .review-progress,
 :root[data-theme="dark"] .progress-track,
 :root[data-theme="dark"] .confidence-track {
   background: #273d64;
@@ -3136,8 +3168,7 @@ nav {
 }
 :root[data-theme="light"] .progress-track,
 :root[data-theme="light"] .confidence-track,
-:root[data-theme="light"] .column-bar,
-:root[data-theme="light"] .review-progress {
+:root[data-theme="light"] .column-bar {
   background: #dce8ff;
 }
 :root[data-theme="light"] .dataset-hero {
@@ -4142,17 +4173,33 @@ button.step-nav-button:disabled {
 }
 .schema-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(100px, 0.8fr) minmax(
-      120px,
-      0.8fr
-    );
+  /* Name · type · confidence on the first line, that column's signals wrapping
+     underneath across the full width. */
+  grid-template-columns: minmax(0, 1.4fr) minmax(100px, 0.8fr) minmax(120px, 0.8fr);
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem 0.75rem;
   padding: 0.6rem 0.7rem;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
 }
+
+.schema-signals {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding-top: 7px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+.schema-signals code {
+  padding: 1px 7px;
+  border-radius: 5px;
+  font-size: 10px;
+  color: #4a6d94;
+  background: #eef3fa;
+}
+.schema-row.uncertain .schema-signals code { background: #f6f0e6; color: #8a6b36; }
 .schema-row strong {
   overflow: hidden;
   color: var(--ink);
@@ -4297,9 +4344,10 @@ button.step-nav-button:disabled {
 
 /* Main Wizard Layout */
 .wizard-header-container {
-  position: sticky;
-  top: 0;
-  z-index: 100;
+  /* Deliberately not sticky. Pinned to the top it followed the page down and
+     ate a band of every screen below the fold, which is exactly where the
+     dataset cards and profile panels need the room. */
+  z-index: 1;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   padding: 16px 24px;
@@ -6474,20 +6522,29 @@ button.step-nav-button:disabled {
 .graph-flow-track {
   display: flex;
   align-items: stretch;
+  /* "safe" keeps the first node reachable when the row is wider than the
+     viewport; plain `center` would push its left edge out of the scroll area. */
+  justify-content: safe center;
   overflow-x: auto;
   padding-bottom: 8px;
+  width: 100%;
+  max-width: 1240px;
+  margin: 0 auto;
 }
 
 .graph-flow-item {
   display: flex;
   align-items: center;
-  flex: 0 0 auto;
+  /* The spare width goes into the cards, not the connectors. Letting the arrows
+     stretch instead left three small cards marooned across a wide panel. */
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .graph-flow-arrow {
   position: relative;
   flex: 0 0 auto;
-  width: 46px;
+  width: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -6496,7 +6553,7 @@ button.step-nav-button:disabled {
 .graph-flow-arrow-line {
   width: 100%;
   height: 2px;
-  background: var(--border);
+  background: color-mix(in srgb, var(--accent) 30%, var(--border));
   position: relative;
 }
 
@@ -6513,38 +6570,49 @@ button.step-nav-button:disabled {
 
 .graph-flow-arrow-label {
   position: absolute;
-  top: -16px;
+  top: -19px;
   left: 50%;
   transform: translateX(-50%);
-  font-size: 10px;
-  color: var(--muted);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #6b7f9e;
   white-space: nowrap;
-  background: var(--surface);
-  padding: 0 4px;
+  background: #eef2f8;
+  border-radius: 999px;
+  padding: 2px 8px;
 }
 
 /* --- Thẻ node ------------------------------------------------------------ */
 
 .graph-node-card {
-  width: 208px;
-  min-height: 152px;
+  /* Fills its flex item, but capped: past ~340px the two-line purpose text
+     turns into one long line and the card reads as mostly empty. */
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 208px;
+  min-height: 172px;
   display: grid;
-  align-content: start;
-  gap: 6px;
-  padding: 12px;
-  border-radius: 12px;
+  /* badge row / name / id / purpose / footer. The 1fr on the purpose row
+     pushes the footer to the bottom edge, so durations line up across the
+     whole row of cards however long the descriptions are. */
+  grid-template-rows: auto auto auto 1fr auto;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 14px;
   border: 1px solid var(--border);
   border-left: 4px solid var(--graph-idle);
   background: var(--surface);
   cursor: pointer;
   text-align: left;
   color: var(--ink);
-  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
 }
 
 .graph-node-card:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
 }
 
 .graph-node-card.selected {
@@ -6569,8 +6637,33 @@ button.step-nav-button:disabled {
 .graph-node-top {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  /* Step number and kind badge group on the left; the status tick is pushed to
+     the right edge. `space-between` would strand the badge in the middle now
+     that this row has three children. */
+  justify-content: flex-start;
+  gap: 7px;
+}
+.graph-node-top > .graph-node-status { margin-left: auto; }
+
+.graph-node-step {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #3f6ea8;
+  background: #e9f0fa;
+  font-variant-numeric: tabular-nums;
+}
+.graph-node-step i {
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 600;
+  opacity: 0.65;
 }
 
 .graph-node-kind {
@@ -6611,13 +6704,19 @@ button.step-nav-button:disabled {
 .graph-node-status.state-skipped { color: var(--muted); }
 
 .graph-node-name {
-  font-size: 13.5px;
+  font-size: 14px;
+  font-weight: 650;
   line-height: 1.3;
 }
 
 .graph-node-id {
+  align-self: start;
+  justify-self: start;
+  padding: 2px 7px;
+  border-radius: 6px;
   font-size: 10.5px;
-  color: var(--muted);
+  color: var(--ink-soft);
+  background: var(--surface-muted);
   word-break: break-all;
 }
 
@@ -6632,8 +6731,9 @@ button.step-nav-button:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: auto;
-  padding-top: 6px;
+  margin-top: 2px;
+  padding-top: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
   font-size: 11px;
   color: var(--muted);
   flex-wrap: wrap;
@@ -6760,34 +6860,43 @@ button.step-nav-button:disabled {
 
 /* --- Panel chi tiết trượt ra --------------------------------------------- */
 
+/* Node detail floats over the graph rather than replacing it. It was a 520px
+   side rail (the summary tables broke one word per line), then briefly a
+   full-screen page, which cost the reader their place in the flow. A dialog
+   over a dimmed page keeps the graph visible behind what it explains. */
 .graph-drawer-scrim {
   position: fixed;
   inset: 0;
-  background: rgb(10 18 34 / 42%);
-  z-index: 60;
+  background: rgb(10 18 34 / 46%);
+  z-index: 70;
 }
 
 .graph-drawer {
   position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: min(520px, 100vw);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(1080px, calc(100vw - 40px));
+  max-height: calc(100vh - 72px);
   background: var(--surface);
-  border-left: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
-  z-index: 61;
+  z-index: 71;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .graph-drawer-head {
+  flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  padding: 18px 20px;
+  gap: 20px;
+  padding: 18px 22px;
   border-bottom: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .graph-drawer-head h3 {
@@ -6801,12 +6910,18 @@ button.step-nav-button:disabled {
 }
 
 .graph-drawer-close {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
   background: none;
-  border: 0;
-  font-size: 17px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  font-size: 16px;
+  line-height: 1;
   cursor: pointer;
   color: var(--muted);
-  padding: 4px;
 }
 
 .graph-drawer-close:hover {
@@ -6814,7 +6929,10 @@ button.step-nav-button:disabled {
 }
 
 .graph-drawer-body {
-  padding: 18px 20px 28px;
+  width: 100%;
+  padding: 20px 22px 26px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   display: grid;
   gap: 20px;
@@ -6916,8 +7034,19 @@ button.step-nav-button:disabled {
 
 .graph-summary-panes {
   display: grid;
-  gap: 14px;
+  /* Input and output side by side now that this is a page. In the old rail they
+     were stacked and each one still needed a horizontal scrollbar. */
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 18px;
   margin-top: 10px;
+}
+
+.graph-summary-panes > div {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
 }
 
 .graph-summary-panes h4 {
@@ -6935,29 +7064,68 @@ button.step-nav-button:disabled {
   font-size: 11.5px;
 }
 
+/* Nested levels become an inset block instead of a bare indent guide, so it is
+   obvious where a sub-structure begins and ends. */
 .graph-summary-object.depth-1,
 .graph-summary-object.depth-2,
 .graph-summary-object.depth-3 {
-  padding-left: 10px;
-  border-left: 1px solid var(--border);
+  margin-top: 4px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  background: color-mix(in srgb, var(--surface-muted) 70%, transparent);
 }
+.graph-summary-object.depth-2 { background: color-mix(in srgb, var(--surface-muted) 45%, transparent); }
+.graph-summary-object.depth-3 { background: transparent; }
 
+/* Top level reads as a spec table: one row per field, ruled off from the next,
+   key on the left and value on the right. Every nesting level used to split the
+   remaining width again, so four levels down the value column was one character
+   wide and rendered as a vertical stack of letters. Deeper levels stack instead
+   and sit in an inset block. */
 .graph-summary-entry {
   display: grid;
-  grid-template-columns: minmax(90px, 34%) 1fr;
-  gap: 8px;
-  align-items: start;
+  grid-template-columns: minmax(130px, 32%) minmax(0, 1fr);
+  gap: 4px 14px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.graph-summary-object.depth-0 > .graph-summary-entry {
+  padding: 9px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+.graph-summary-object.depth-0 > .graph-summary-entry:first-child { padding-top: 0; }
+.graph-summary-object.depth-0 > .graph-summary-entry:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.graph-summary-object:not(.depth-0) > .graph-summary-entry {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
 }
 
 .graph-summary-entry dt {
   color: var(--muted);
-  word-break: break-word;
+  font-size: 11px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.graph-summary-object.depth-0 > .graph-summary-entry > dt {
+  font-weight: 650;
+  color: var(--ink-soft);
+}
+
+.graph-summary-object:not(.depth-0) > .graph-summary-entry > dt {
+  font-weight: 600;
 }
 
 .graph-summary-entry dd {
   margin: 0;
   min-width: 0;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .graph-summary-scalar {
@@ -7136,17 +7304,92 @@ button.step-nav-button:disabled {
   flex-wrap: wrap;
 }
 
+/* Rendered Markdown, not a code dump. `white-space: pre-wrap` and the monospace
+   look belonged to the <pre> this replaced; a report is prose and tables. */
 .steward-report-content {
   margin: 0;
-  padding: 18px;
-  max-height: 460px;
+  padding: 20px 22px;
+  max-height: 520px;
   overflow: auto;
-  font-size: 12.5px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--ink-soft);
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--ink);
 }
+.steward-report-content > :first-child { margin-top: 0; }
+.steward-report-content > :last-child { margin-bottom: 0; }
+
+.steward-report-content h1 { font-size: 19px; margin: 0 0 6px; }
+.steward-report-content h2 {
+  font-size: 15px;
+  margin: 26px 0 10px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--border);
+}
+.steward-report-content h3 { font-size: 13.5px; margin: 20px 0 8px; }
+.steward-report-content p { margin: 0 0 11px; }
+.steward-report-content ul,
+.steward-report-content ol { margin: 0 0 12px; padding-left: 22px; }
+.steward-report-content li { margin-bottom: 4px; }
+.steward-report-content hr {
+  margin: 22px 0;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+/* The report leads with a "generated from a template" note as a blockquote;
+   it is a caveat about the content, so it should read as one. */
+.steward-report-content blockquote {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-left: 3px solid #d8b878;
+  border-radius: 8px;
+  background: #fbf6ec;
+  color: #7a6136;
+  font-size: 12.5px;
+}
+.steward-report-content blockquote p { margin: 0; }
+
+.steward-report-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 16px;
+  font-size: 12.5px;
+}
+.steward-report-content th {
+  padding: 8px 11px;
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.steward-report-content td {
+  padding: 9px 11px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  vertical-align: top;
+}
+.steward-report-content tbody tr:last-child td { border-bottom: none; }
+
+.steward-report-content code {
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  color: #4a6d94;
+  background: #eef3fa;
+}
+.steward-report-content pre {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: 9px;
+  overflow-x: auto;
+  background: var(--surface-muted);
+}
+.steward-report-content pre code { padding: 0; background: none; }
+.steward-report-content strong { color: var(--ink); }
 
 @media (max-width: 720px) {
   .graph-drawer {
@@ -7318,3 +7561,967 @@ button.step-nav-button:disabled {
     padding: 14px 16px;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Step 1 · Data preparation
+   Numbered sections so the two things you supply and the three you reveal read
+   as one sequence rather than as five competing panels.
+   --------------------------------------------------------------------------- */
+
+.prep-page { display: flex; flex-direction: column; gap: 20px; }
+
+.prep-section {
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 14px;
+  padding: 20px 22px;
+}
+
+.prep-section-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.prep-section-index {
+  flex: 0 0 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-primary, #2563eb);
+  background: color-mix(in srgb, var(--color-primary, #2563eb) 12%, transparent);
+}
+
+.prep-section-title { flex: 1 1 auto; min-width: 0; }
+.prep-section-title h2 { margin: 0; font-size: 17px; line-height: 1.3; }
+.prep-section-title p { margin: 4px 0 0; font-size: 13px; color: var(--muted, #64748b); }
+
+.prep-section-body { margin-top: 16px; }
+
+.prep-count {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted, #64748b);
+  background: color-mix(in srgb, var(--muted, #64748b) 12%, transparent);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+.prep-badge {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+.prep-badge.supplied {
+  color: var(--chart-ok, #16a34a);
+  background: color-mix(in srgb, var(--chart-ok, #16a34a) 14%, transparent);
+}
+.prep-badge.inferred {
+  color: var(--chart-warn, #d97706);
+  background: color-mix(in srgb, var(--chart-warn, #d97706) 14%, transparent);
+}
+
+/* Upload targets. The compact variant is the dictionary: optional, so it must
+   not carry the same visual weight as the dataset it describes. */
+.prep-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 28px 20px;
+  border: 1.5px dashed var(--border, #cbd5e1);
+  border-radius: 12px;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.prep-dropzone.compact { padding: 18px 20px; }
+.prep-dropzone:hover {
+  border-color: var(--color-primary, #2563eb);
+  background: color-mix(in srgb, var(--color-primary, #2563eb) 4%, transparent);
+}
+.prep-dropzone.busy { opacity: 0.6; cursor: progress; }
+.prep-dropzone input { display: none; }
+.prep-dropzone-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  font-size: 19px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--color-primary, #2563eb);
+}
+.prep-dropzone strong { font-size: 14px; }
+.prep-dropzone small { font-size: 12px; color: var(--muted, #64748b); }
+
+.prep-dictionary-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--chart-ok, #16a34a) 30%, transparent);
+  background: color-mix(in srgb, var(--chart-ok, #16a34a) 7%, transparent);
+}
+.prep-dictionary-summary > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.prep-dictionary-summary strong { font-size: 14px; }
+
+.prep-muted { font-size: 13px; color: var(--muted, #64748b); margin: 0; }
+.prep-error { margin: 10px 0 0; font-size: 13px; color: var(--chart-bad, #dc2626); }
+
+/* Dataset cards: compact, but every field from the full card is still legible. */
+.prep-dataset-grid {
+  margin-top: 16px;
+  display: grid;
+  /* auto-fit, not auto-fill: empty tracks collapse, so a short catalogue
+     spreads across the row instead of huddling left with dead space beside it. */
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+  align-items: stretch;
+}
+
+.prep-dataset-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 15px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.prep-dataset-card:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgb(15 23 42 / 8%); }
+.prep-dataset-card:focus-visible { outline: 2px solid var(--color-primary, #2563eb); outline-offset: 2px; }
+.prep-dataset-card.active {
+  border-color: var(--color-primary, #2563eb);
+  box-shadow: 0 0 0 1px var(--color-primary, #2563eb);
+}
+
+.prep-dataset-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.prep-dataset-top code { font-size: 11px; color: var(--muted, #64748b); }
+
+.prep-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: var(--muted, #475569);
+  background: color-mix(in srgb, var(--muted, #64748b) 12%, transparent);
+}
+.prep-status.selected {
+  color: var(--color-primary, #2563eb);
+  background: color-mix(in srgb, var(--color-primary, #2563eb) 14%, transparent);
+}
+.prep-status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+.prep-dataset-card h3 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.3;
+  /* Names run long; clamp rather than let one card set the row height. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.prep-dataset-card > p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted, #64748b);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.prep-dataset-stats {
+  margin: 2px 0 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border, #e2e8f0);
+}
+.prep-dataset-stats div { min-width: 0; }
+.prep-dataset-stats dt {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted, #94a3b8);
+}
+.prep-dataset-stats dd {
+  margin: 2px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prep-dataset-card > p { flex: 1 1 auto; min-height: 32px; }
+.prep-dataset-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border, #e2e8f0) 70%, transparent);
+}
+.prep-dataset-actions .button { flex: 1; font-size: 12.5px; padding: 7px 10px; }
+.prep-dataset-actions .button.ghost.danger { flex: 0 0 auto; }
+
+/* Revealed panels sit inside their section, indented under its heading. */
+.prep-reveal {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border, #e2e8f0);
+}
+
+/* Data Explorer tabs */
+.explorer-dialog-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+}
+.explorer-dialog-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 11px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted, #64748b);
+  border-bottom: 2px solid transparent;
+}
+.explorer-dialog-tabs button:hover { color: var(--text, #0f172a); }
+.explorer-dialog-tabs button.active {
+  color: var(--color-primary, #2563eb);
+  border-bottom-color: var(--color-primary, #2563eb);
+}
+.explorer-tab-count {
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 1px 7px;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+.explorer-dictionary-source { margin: 0 0 12px; font-size: 12px; color: var(--muted, #64748b); }
+
+@media (max-width: 720px) {
+  .prep-section { padding: 16px; }
+  .prep-section-head { flex-wrap: wrap; }
+  .prep-dataset-grid { grid-template-columns: 1fr; }
+}
+
+/* ---------------------------------------------------------------------------
+   Step 1 · the two supply cards, side by side
+   --------------------------------------------------------------------------- */
+
+.prep-supply-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  align-items: stretch;
+}
+.prep-supply-row > .prep-section { margin: 0; display: flex; flex-direction: column; }
+/* The dropzones must line up even when one card carries an extra badge line. */
+.prep-supply-row > .prep-section > .prep-section-body { flex: 1 1 auto; display: flex; flex-direction: column; }
+.prep-supply-row .prep-dropzone { flex: 1 1 auto; }
+.prep-supply-row .prep-dropzone.compact { padding: 24px 20px; }
+
+@media (max-width: 980px) {
+  .prep-supply-row { grid-template-columns: 1fr; }
+}
+
+/* ---------------------------------------------------------------------------
+   Detail overlay — a panel read in place, not a page you navigate away to
+   --------------------------------------------------------------------------- */
+
+.detail-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg, #f5f6f0);
+}
+
+.detail-overlay-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px clamp(22px, 4vw, 52px);
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  background: var(--surface, #fff);
+}
+.detail-overlay-head h2 { margin: 4px 0 0; font-size: 22px; }
+
+.detail-overlay-close {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 9px;
+  cursor: pointer;
+  color: var(--muted, #64748b);
+  background: transparent;
+  border: 1px solid var(--border, #e2e8f0);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.detail-overlay-close:hover {
+  color: var(--text, #0f172a);
+  background: color-mix(in srgb, var(--muted, #64748b) 12%, transparent);
+}
+
+.detail-overlay-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 28px clamp(22px, 4vw, 52px) 64px;
+}
+/* Inner pages ship their own heading. The overlay header already names the
+   page, so drop just the repeated eyebrow and <h1> — not the whole block,
+   which on the observatory also carries the quality dial. */
+.detail-overlay-body > .page-heading:first-child > div:first-child > .eyebrow,
+.detail-overlay-body > .page-heading:first-child > div:first-child > h1 {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Dataset catalog table
+   --------------------------------------------------------------------------- */
+
+.catalog-view-caption { margin: 0 0 16px; font-size: 13px; color: var(--muted, #64748b); }
+
+.catalog-view-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+}
+
+.catalog-view-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.catalog-view-table th {
+  padding: 11px 14px;
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted, #64748b);
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  white-space: nowrap;
+}
+.catalog-view-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border, #e2e8f0) 60%, transparent);
+  vertical-align: middle;
+}
+.catalog-view-table tbody tr { cursor: pointer; }
+.catalog-view-table tbody tr:hover { background: color-mix(in srgb, var(--color-primary, #2563eb) 5%, transparent); }
+.catalog-view-table tbody tr.active { background: color-mix(in srgb, var(--color-primary, #2563eb) 9%, transparent); }
+.catalog-view-table tbody tr:last-child td { border-bottom: none; }
+.catalog-view-table .numeric { text-align: right; font-variant-numeric: tabular-nums; }
+.catalog-view-table th.numeric { text-align: right; }
+.catalog-view-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--muted, #94a3b8);
+}
+.catalog-view-source {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+   Notification bell
+   --------------------------------------------------------------------------- */
+
+.notif { position: relative; display: inline-flex; }
+
+.notif-button {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  border-radius: 10px;
+  color: var(--muted, #64748b);
+  background: transparent;
+  border: 1px solid var(--border, #e2e8f0);
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.notif-button:hover,
+.notif-button.active {
+  color: var(--color-primary, #2563eb);
+  border-color: color-mix(in srgb, var(--color-primary, #2563eb) 45%, transparent);
+  background: color-mix(in srgb, var(--color-primary, #2563eb) 8%, transparent);
+}
+
+.notif-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  border-radius: 999px;
+  background: #e0685f;
+  box-shadow: 0 0 0 2px var(--surface, #fff);
+}
+
+.notif-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 300;
+  width: min(360px, calc(100vw - 32px));
+  border-radius: 12px;
+  border: 1px solid var(--border, #e2e8f0);
+  background: var(--surface, #fff);
+  box-shadow: 0 12px 34px rgb(15 23 42 / 14%);
+  overflow: hidden;
+}
+
+.notif-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+}
+.notif-panel-head strong { font-size: 13.5px; }
+
+.notif-clear {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted, #64748b);
+}
+.notif-clear:hover { color: var(--color-primary, #2563eb); }
+
+.notif-list { max-height: 380px; overflow-y: auto; }
+
+.notif-empty {
+  margin: 0;
+  padding: 26px 14px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted, #94a3b8);
+}
+
+.notif-item {
+  display: flex;
+  gap: 10px;
+  padding: 11px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border, #e2e8f0) 60%, transparent);
+}
+.notif-item:last-child { border-bottom: none; }
+.notif-item-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: #6aa87f;
+}
+.notif-item.error .notif-item-dot { background: #e0685f; }
+.notif-item-body { min-width: 0; }
+.notif-item-body p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.notif-item-body time {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--muted, #94a3b8);
+}
+
+/* ---------------------------------------------------------------------------
+   Softer accents — the step-1 chrome was carrying full-saturation signal
+   colours on decoration, which made the page shout before it informed.
+   --------------------------------------------------------------------------- */
+
+.prep-badge.supplied { color: #3f7d59; background: #e8f2ec; }
+.prep-badge.inferred { color: #92693a; background: #f7efe3; }
+.prep-status { color: #5d6b7a; background: #eef1f5; }
+.prep-status.selected { color: #2f5fa8; background: #e7effb; }
+.prep-section { border-color: #e6e9ef; }
+.prep-dataset-card { border-color: #e6e9ef; }
+.prep-dataset-card:hover { border-color: #c3d2ea; }
+.prep-section-index { color: #2f5fa8; background: #e7effb; }
+
+/* Step 2 · the contract panel's two actions, kept on one line */
+.contract-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+/* The retry control on the error banner. Distinct from the dismiss "×" so
+   recovering from a failed job is not mistaken for hiding the message. */
+.alert.error .alert-retry {
+  margin-left: auto;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  color: #8a3d36;
+  background: #fbe9e7;
+  border: 1px solid #edc4bf;
+}
+.alert.error .alert-retry:hover { background: #f7ddda; }
+
+/* ---------------------------------------------------------------------------
+   Active job progress
+   The bar's width is measured progress. The moving sheen on top of it carries
+   no number: it only says the job is still alive during a long LLM call, so a
+   stretch with no new measurement does not read as a hang.
+   --------------------------------------------------------------------------- */
+
+.progress-track.live span {
+  position: relative;
+  overflow: hidden;
+}
+.progress-track.live span::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(255 255 255 / 55%) 50%,
+    transparent 100%
+  );
+  animation: progress-sheen 1.4s ease-in-out infinite;
+}
+@keyframes progress-sheen {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+/* A stalled bar is still information; respect a reduced-motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  .progress-track.live span::after { animation: none; }
+}
+
+.progress-nodes {
+  margin: 2px 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-deep, #2563eb);
+}
+
+.progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* ---------------------------------------------------------------------------
+   Node input / output summary
+   The backend redacts containers into descriptors. Each one is stated once,
+   as a chip, instead of being spelled out as key/value rows.
+   --------------------------------------------------------------------------- */
+
+.graph-summary-shape {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.graph-shape {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.graph-shape b { font-size: 11.5px; font-variant-numeric: tabular-nums; }
+
+.graph-shape.shape-dict { color: #3f6ea8; background: #e9f0fa; }
+.graph-shape.shape-records { color: #3f7d59; background: #e8f2ec; }
+.graph-shape.shape-list { color: #7a5fa8; background: #f0ebf9; }
+.graph-shape.shape-opaque { color: #6b7280; background: #eef1f5; }
+
+.graph-shape-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.graph-shape-fields code {
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 10px;
+  color: var(--ink-soft);
+  background: var(--surface-muted);
+}
+
+.graph-shape-sample {
+  flex: 1 0 100%;
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+.graph-shape-sample-label {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-top: 2px;
+}
+
+.graph-summary-bool {
+  font-weight: 600;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 5px;
+}
+.graph-summary-bool.yes { color: #3f7d59; background: #e8f2ec; }
+.graph-summary-bool.no { color: #8a6b36; background: #f7efe3; }
+
+.graph-summary-entry dt.truncation {
+  font-style: italic;
+  opacity: 0.75;
+}
+
+/* The two panes are the point of the section, so they get a header each. */
+.graph-summary-panes > div > h4 {
+  margin: 0 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+/* Input and output are the two halves of a node's contract, so they are told
+   apart by colour and direction, not only by a word. */
+.graph-summary-panes > div > h4 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+}
+.graph-summary-panes .pane-arrow {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1;
+}
+.graph-summary-panes .pane-in { border-top: 3px solid #a7c3e6; }
+.graph-summary-panes .pane-out { border-top: 3px solid #a9d3ba; }
+.graph-summary-panes .pane-in h4 { color: #3f6ea8; }
+.graph-summary-panes .pane-out h4 { color: #3f7d59; }
+.graph-summary-panes .pane-in .pane-arrow { color: #3f6ea8; background: #e9f0fa; }
+.graph-summary-panes .pane-out .pane-arrow { color: #3f7d59; background: #e8f2ec; }
+
+.graph-summary-scalar {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------------------
+   Step 3 · rule generation and review
+   --------------------------------------------------------------------------- */
+
+/* The two-phase rail is gone, so the detail panel takes the full width. */
+.workflow-layout.single {
+  display: block;
+}
+
+.rule-gate-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.prep-section.rule-gate .prep-section-head { align-items: center; }
+
+/* Bulk decisions repeat under the list; a rule between them and the last card
+   keeps "approve all" from reading as an action on that one card. */
+.bulk-review-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.proposal-action.approve:disabled {
+  cursor: default;
+  color: #3f7d59;
+  background: #e8f2ec;
+  border-color: #cfe3d7;
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .rs-track { background: #273d64; }
+:root:not([data-theme="light"]) .rs-track { background: #273d64; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .rs-track { background: #e6eaef; }
+}
+
+/* An explanation is better than a row of "not run" cards with no reason given. */
+.graph-stage-note {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  border-left: 3px solid #d8b878;
+  background: #fbf6ec;
+  color: #7a6136;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* A dataset-level rule is judged on a rate, so the measured value sits with the
+   raw count instead of being dropped for want of a column. */
+.result-rate {
+  display: block;
+  margin-top: 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A skipped rule states why; silence would read as a quiet pass. */
+.result-skipped {
+  font-size: 11.5px;
+  color: #8a6b36;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+   Graph 3 · anomaly statistics
+   Every figure comes from the anomaly payload. Colour is used for rank and
+   state, kept in the same muted family as the rest of the wizard.
+   --------------------------------------------------------------------------- */
+
+.anomaly-stats {
+  display: grid;
+  gap: 18px;
+  padding: 20px 22px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.anomaly-stats-head h3 { margin: 4px 0 0; font-size: 19px; }
+.anomaly-stats-head p { margin: 5px 0 0; font-size: 13px; color: var(--muted); }
+.anomaly-empty { margin: 0; font-size: 13.5px; color: var(--muted); }
+
+.anomaly-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: 12px;
+}
+
+.anomaly-kpi {
+  display: grid;
+  gap: 3px;
+  align-content: start;
+  padding: 13px 14px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface);
+}
+.anomaly-kpi > span {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.anomaly-kpi > strong { font-size: 24px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.anomaly-kpi > small { font-size: 11px; color: var(--muted); }
+/* Only the count of anomalies is an alarm; the rest are measurements. */
+.anomaly-kpi.alert { border-color: #e8c9c4; background: #fdf4f2; }
+.anomaly-kpi.alert > strong { color: #b4554d; }
+
+.anomaly-coldstart {
+  margin: 0;
+  padding: 11px 13px;
+  border-radius: 10px;
+  border-left: 3px solid #d8b878;
+  background: #fbf6ec;
+  color: #7a6136;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.anomaly-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.anomaly-panel {
+  min-width: 0;
+  padding: 15px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.anomaly-panel h4 {
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.anomaly-subhead { margin-top: 18px !important; }
+
+.anomaly-rank { list-style: none; margin: 0; padding: 0; display: grid; gap: 11px; }
+.anomaly-rank > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 12px;
+}
+.anomaly-rank-label { min-width: 0; }
+.anomaly-rank-label strong {
+  display: block;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.anomaly-rank-label code { font-size: 10.5px; color: var(--muted); }
+.anomaly-rank-bar {
+  grid-column: 1;
+  height: 7px;
+  border-radius: 999px;
+  background: #eef1f5;
+  overflow: hidden;
+}
+.anomaly-rank-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #d98b83, #b4554d);
+}
+.anomaly-rank > li > b {
+  grid-row: 1 / 3;
+  grid-column: 2;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  color: #b4554d;
+}
+
+.anomaly-breakdown { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; }
+.anomaly-breakdown > li {
+  display: grid;
+  grid-template-columns: minmax(90px, 34%) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+}
+.anomaly-breakdown-bar { height: 7px; border-radius: 999px; background: #eef1f5; overflow: hidden; }
+.anomaly-breakdown-bar > span { display: block; height: 100%; border-radius: inherit; background: #6b8fc0; }
+.anomaly-breakdown > li > b { font-variant-numeric: tabular-nums; }
+
+.anomaly-table-scroll { overflow-x: auto; }
+.anomaly-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.anomaly-table th {
+  padding: 9px 11px;
+  text-align: left;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.anomaly-table td {
+  padding: 11px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  vertical-align: top;
+}
+.anomaly-table tbody tr:last-child td { border-bottom: none; }
+.anomaly-table .numeric { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.anomaly-table th.numeric { text-align: right; }
+.anomaly-table .strong-red { font-weight: 700; color: #b4554d; }
+.anomaly-table-sub { display: block; margin-top: 2px; font-size: 10.5px; color: var(--muted); }
+.anomaly-reason { color: var(--muted); min-width: 220px; }
+
+.anomaly-type-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #8a6b36;
+  background: #f7efe3;
+}
+.anomaly-coldstart-chip {
+  padding: 1px 7px;
+  border-radius: 5px;
+  font-size: 10px;
+  color: #6b7f9e;
+  background: #eef2f8;
+}
+
+.run-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.empty-state .run-header-actions { justify-content: center; margin-top: 4px; }

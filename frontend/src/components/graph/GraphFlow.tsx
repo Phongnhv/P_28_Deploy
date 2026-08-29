@@ -84,6 +84,8 @@ export function GraphFlow({
                 language={language}
                 isSelected={selectedNodeName === node.name}
                 onSelect={onSelectNode}
+                step={index + 1}
+                totalSteps={graph.nodes.length}
               />
               {next && (
                 <div className="graph-flow-arrow" aria-hidden="true">

@@ -367,7 +367,11 @@ def test_catalog_matches_the_compiled_builders():
         "G3": build_anomaly_graph(investigation_mode="legacy"),
     }
 
-    assert set(GRAPH_CATALOG) == set(builders)
+    # Only graphs compiled from a langgraph builder can drift from one. The
+    # catalog also describes G2_DIRECT, the plain-Python SQL runner behind
+    # "Run approved rules", which has no compiled graph to compare against.
+    langgraph_keys = {key for key, graph in GRAPH_CATALOG.items() if graph.get("langgraph", True)}
+    assert langgraph_keys == set(builders)
     for key, compiled in builders.items():
         catalog_names = {node["name"] for node in GRAPH_CATALOG[key]["nodes"]}
         assert catalog_names == _builder_node_names(compiled), f"{key} catalog drifted from its builder"

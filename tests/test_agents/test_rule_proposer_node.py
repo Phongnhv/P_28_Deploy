@@ -792,7 +792,25 @@ async def test_propose_for_table_deepagent_fallback_to_structured_llm():
             structured_llm=mock_structured_llm,
             semaphore=semaphore,
             max_retries=1,
-            candidates=[{"candidate_id": "cand-fallback", "column": "total_amount", "rule_type": "NOT_NULL"}],
+            # Real candidates always come through _attach_evidence_items, so they
+            # carry evidence_items; the binder rejects any candidate without one
+            # so no rule can be proposed without a traceable reference. This
+            # fixture was hand-built and skipped that step.
+            candidates=[
+                {
+                    "candidate_id": "cand-fallback",
+                    "column": "total_amount",
+                    "rule_type": "NOT_NULL",
+                    "evidence_items": [
+                        {
+                            "id": "profile:total_amount:non_null_count",
+                            "source_type": "DATA_PROFILE",
+                            "metric": "non_null_count",
+                            "value": 100,
+                        }
+                    ],
+                }
+            ],
             mode="deepagent",
             raw_llm=MagicMock(),
         )

@@ -48,10 +48,11 @@ class TestGraphCatalog:
 
         body = response.json()
         keys = {graph["key"] for graph in body["graphs"]}
-        # The six builders in src/agents/graph.py -- the document describes only
-        # three, which is precisely why the UI needs the catalog to be complete.
-        assert keys == {"G1A", "G1B", "G1_FULL", "G_DASHBOARD", "G2", "G3"}
-        assert body["totals"]["graphs"] == 6
+        # The six langgraph builders in src/agents/graph.py plus G2_DIRECT, the
+        # bounded SQL runner that "Run approved rules" actually executes. The UI
+        # needs every execution path here, not only the compiled graphs.
+        assert keys == {"G1A", "G1B", "G1_FULL", "G_DASHBOARD", "G2", "G2_DIRECT", "G3"}
+        assert body["totals"]["graphs"] == 7
 
     async def test_graph_1a_matches_the_documented_three_nodes(self, steward_client):
         body = (await steward_client.get("/api/v1/graph/catalog")).json()
