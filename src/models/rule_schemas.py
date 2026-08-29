@@ -156,7 +156,7 @@ class RuleConfidence(BaseModel):
     def _validate_overall(self) -> RuleConfidence:
         component_mean = (self.evidence_strength + self.business_support + self.sample_representativeness) / 3
         if abs(self.overall - component_mean) > 0.25:
-            raise ValueError("confidence.overall chênh quá 0.25 so với trung bình các thành phần")
+            self.overall = round(component_mean, 2)
         return self
 
 

@@ -716,3 +716,87 @@ def test_parse_and_stamp_cross_field_comparison_from_llm_response():
             target_column="tpep_dropoff_datetime",
             operator="UNSAFE_OPERATOR",
         )
+
+
+@pytest.mark.asyncio
+async def test_propose_for_table_deepagent_success():
+    from src.agents.nodes.rule_proposer_node import (
+        CandidateProposedRule,
+        CandidateTableRuleProposal,
+        _propose_for_table,
+    )
+
+    mock_rule = CandidateProposedRule(
+        candidate_id="cand-1",
+        column="fare_amount",
+        rule_type=RuleType.RANGE,
+        parameters=RuleParameters(min=0, max=500),
+        confidence_score=0.95,
+        severity=Severity.HIGH,
+        dimension=DataQualityDimension.VALIDITY,
+        rule_description="Khống chế cước phí từ 0 đến 500.",
+        ai_reasoning="Dry-run 100% pass trên 1000 dòng.",
+    )
+    expected = CandidateTableRuleProposal(table="trips", rules=[mock_rule])
+
+    mock_agent = AsyncMock()
+    mock_agent.ainvoke.return_value = {"structured_response": expected}
+
+    with patch("deepagents.create_deep_agent", return_value=mock_agent):
+        semaphore = asyncio.Semaphore(1)
+        res = await _propose_for_table(
+            table_name="trips",
+            table_digest={"table": "trips", "columns": [{"name": "fare_amount", "type": "FLOAT"}]},
+            structured_llm=MagicMock(),
+            semaphore=semaphore,
+            max_retries=1,
+            candidates=[{"candidate_id": "cand-1", "column": "fare_amount", "rule_type": "RANGE"}],
+            mode="deepagent",
+            raw_llm=MagicMock(),
+        )
+        assert res.table == "trips"
+        assert len(res.rules) == 1
+        assert res.rules[0].candidate_id == "cand-1"
+
+
+@pytest.mark.asyncio
+async def test_propose_for_table_deepagent_fallback_to_structured_llm():
+    from src.agents.nodes.rule_proposer_node import (
+        CandidateProposedRule,
+        CandidateTableRuleProposal,
+        _propose_for_table,
+    )
+
+    mock_rule = CandidateProposedRule(
+        candidate_id="cand-fallback",
+        column="total_amount",
+        rule_type=RuleType.NOT_NULL,
+        parameters=RuleParameters(),
+        confidence_score=0.9,
+        severity=Severity.HIGH,
+        dimension=DataQualityDimension.COMPLETENESS,
+        rule_description="Không được rỗng.",
+        ai_reasoning="Fallback reasoning.",
+    )
+    expected = CandidateTableRuleProposal(table="trips", rules=[mock_rule])
+
+    mock_structured_llm = AsyncMock()
+    mock_structured_llm.ainvoke.return_value = expected
+
+    # Force deep agent creation to fail so it exercises fallback
+    with patch("deepagents.create_deep_agent", side_effect=RuntimeError("DeepAgent initialization error")):
+        semaphore = asyncio.Semaphore(1)
+        res = await _propose_for_table(
+            table_name="trips",
+            table_digest={"table": "trips", "columns": [{"name": "total_amount", "type": "FLOAT"}]},
+            structured_llm=mock_structured_llm,
+            semaphore=semaphore,
+            max_retries=1,
+            candidates=[{"candidate_id": "cand-fallback", "column": "total_amount", "rule_type": "NOT_NULL"}],
+            mode="deepagent",
+            raw_llm=MagicMock(),
+        )
+        assert res.table == "trips"
+        assert len(res.rules) == 1
+        assert res.rules[0].candidate_id == "cand-fallback"
+

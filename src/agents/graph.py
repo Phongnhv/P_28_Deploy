@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+import inspect
 from collections.abc import Awaitable, Callable
 from typing import Literal
 
@@ -90,6 +91,28 @@ def build_rule_proposal_graph() -> StateGraph:
     return graph.compile()
 
 
+def _timed_node(node_name: str, node_func: Callable) -> Callable:
+    """Wrap a graph node to track its execution duration and set current node for token attribution."""
+    import time
+    from src.utils.metrics_tracker import get_metrics_tracker
+
+    async def _wrapped(state: AgentState) -> dict:
+        tracker = get_metrics_tracker()
+        token = tracker.set_current_node(node_name)
+        start_ts = time.perf_counter()
+        try:
+            res = node_func(state)
+            if inspect.isawaitable(res):
+                res = await res
+            return res
+        finally:
+            duration = time.perf_counter() - start_ts
+            tracker.record_node_time(node_name, duration)
+            tracker.reset_current_node(token)
+
+    return _wrapped
+
+
 def build_proposal_graph() -> StateGraph:
     """Xây dựng graph cho Run 1 — kết thúc sau khi persist rules vào DB và ghi trace.
 
@@ -127,27 +150,15 @@ def build_proposal_graph() -> StateGraph:
 
     graph = StateGraph(AgentState)
 
-    graph.add_node("raw_profiler", instrument("G1_FULL", "raw_profiler", DETERMINISTIC)(raw_profiler_node))
-    graph.add_node("profiler_digest", instrument("G1_FULL", "profiler_digest", DETERMINISTIC)(profiler_digest_node))
-    graph.add_node(
-        "dataset_understanding",
-        instrument("G1_FULL", "dataset_understanding", LLM)(dataset_understanding_node),
-    )
-    graph.add_node(
-        "data_dictionary_generator",
-        instrument("G1_FULL", "data_dictionary_generator", LLM)(data_dictionary_generator_node),
-    )
-    graph.add_node(
-        "hitl_semantic_gate",
-        instrument("G1_FULL", "hitl_semantic_gate", GATE)(hitl_semantic_gate_node),
-    )
-    graph.add_node(
-        "rule_candidate_builder",
-        instrument("G1_FULL", "rule_candidate_builder", DETERMINISTIC)(rule_candidate_builder_node),
-    )
-    graph.add_node("prompt_customizer", instrument("G1_FULL", "prompt_customizer", LLM)(prompt_customizer_node))
-    graph.add_node("rule_proposer", instrument("G1_FULL", "rule_proposer", LLM)(rule_proposer_node))
-    graph.add_node("hitl_gate", instrument("G1_FULL", "hitl_gate", GATE)(hitl_gate_node))
+    graph.add_node("raw_profiler", _timed_node("raw_profiler", raw_profiler_node))
+    graph.add_node("profiler_digest", _timed_node("profiler_digest", profiler_digest_node))
+    graph.add_node("dataset_understanding", _timed_node("dataset_understanding", dataset_understanding_node))
+    graph.add_node("data_dictionary_generator", _timed_node("data_dictionary_generator", data_dictionary_generator_node))
+    graph.add_node("hitl_semantic_gate", _timed_node("hitl_semantic_gate", hitl_semantic_gate_node))
+    graph.add_node("rule_candidate_builder", _timed_node("rule_candidate_builder", rule_candidate_builder_node))
+    graph.add_node("prompt_customizer", _timed_node("prompt_customizer", prompt_customizer_node))
+    graph.add_node("rule_proposer", _timed_node("rule_proposer", rule_proposer_node))
+    graph.add_node("hitl_gate", _timed_node("hitl_gate", hitl_gate_node))
 
     # Entry point động
     graph.set_conditional_entry_point(
@@ -584,6 +595,10 @@ async def run_proposal_graph(
     create_run(run_id=run_id, dataset_id=dataset_id)
     update_run_status(run_id=run_id, status="RUNNING")
 
+    from src.utils.metrics_tracker import get_metrics_tracker
+    tracker = get_metrics_tracker()
+    tracker.reset()
+
     proposal_graph = build_proposal_graph()
     initial_state = {
         "dataset_id": dataset_id,
@@ -597,6 +612,8 @@ async def run_proposal_graph(
 
     try:
         final_state = await proposal_graph.ainvoke(initial_state)
+        tracker.finish()
+        tracker.print_report(title=f"GRAPH 1 (PROPOSAL) REPORT — DATASET: {dataset_id}")
 
         pause_reason = final_state.get("pause_reason")
         graph_error = final_state.get("error")
@@ -628,6 +645,8 @@ async def run_proposal_graph(
         return {"run_id": run_id, "status": "DONE", "rules": rules, "summary": summary}
 
     except Exception as exc:
+        tracker.finish()
+        tracker.print_report(title=f"GRAPH 1 (PROPOSAL) FAILED REPORT — DATASET: {dataset_id}")
         logger.error("Run 1 thất bại: %s", exc, exc_info=True)
         update_run_status(run_id=run_id, status="FAILED", error=str(exc))
         raise
@@ -776,17 +795,12 @@ async def run_anomaly_graph(
         },
     }
 
-<<<<<<< HEAD
-    logger.info("Bắt đầu Run 3 (Anomaly Analysis) | anomaly_run_id=%s | execution_run_id=%s | stream_id=%s",
-                anomaly_run_id, execution_run_id, stream_id)
-=======
     logger.info(
         "Bắt đầu Run 3 (Anomaly Analysis) [Mode: %s] | anomaly_run_id=%s | execution_run_id=%s",
         active_mode,
         anomaly_run_id,
         execution_run_id,
     )
->>>>>>> 31ce6cc36876dca6cccbf119748aea84bd9135c9
 
     try:
         if stream_id:

@@ -90,12 +90,29 @@ async def anomaly_investigation_node(state: AnomalyGraphState) -> dict:
     except ImportError as exc:
         raise RuntimeError("Install deepagents before running anomaly investigation") from exc
 
+    if TodoListMiddleware is None or ToolCallLimitMiddleware is None:
+        raise RuntimeError("DeepAgent middleware is unavailable; install compatible langchain/deepagents packages")
+    middlewares = [
+        TodoListMiddleware(),
+        ToolCallLimitMiddleware(
+            thread_limit=settings.anomaly_investigation_thread_tool_call_limit,
+            run_limit=settings.anomaly_investigation_tool_call_limit,
+            exit_behavior="continue",
+        ),
+    ]
+
+    skill_path = str(Path(__file__).resolve().parents[1] / "skills"/ "anomaly_investigator")
+
+
     agent = create_deep_agent(
         model=model,
         tools=ANOMALY_INVESTIGATION_TOOLS,
         system_prompt=ANOMALY_INVESTIGATION_SYSTEM_PROMPT,
         response_format=AnomalyInvestigationResponse,
+        middleware=middlewares,
+        skills=[skill_path]
     )
+
     prompt = ANOMALY_INVESTIGATION_USER_PROMPT.format(
         anomaly_run_id=state.get("anomaly_run_id", ""),
         execution_run_id=state.get("execution_run_id", ""),
@@ -119,6 +136,19 @@ async def anomaly_investigation_node(state: AnomalyGraphState) -> dict:
             response = AnomalyInvestigationResponse.model_validate(json.loads(content))
     else:
         response = AnomalyInvestigationResponse.model_validate(content)
+
+    # Deterministic citation integrity: the model may not invent signal IDs.
+    known_signal_ids = {
+        str(item.get("signal_id"))
+        for item in (state.get("signal_observations") or [])
+        if isinstance(item, dict) and item.get("signal_id") is not None
+    }
+    for hypothesis in response.hypotheses:
+        for field in ("supporting_signal_ids", "contradicting_signal_ids"):
+            ids = getattr(hypothesis, field)
+            unknown = [signal_id for signal_id in ids if str(signal_id) not in known_signal_ids]
+            if unknown:
+                raise ValueError(f"Hypothesis cites unknown signal IDs: {unknown}")
 
     anomaly_run_id = state.get("anomaly_run_id") or "anomaly_run"
     output_result = {

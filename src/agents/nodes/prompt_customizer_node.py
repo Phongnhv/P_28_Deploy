@@ -32,7 +32,12 @@ async def _generate_business_context_for_table(
             table_name=table_name, semantic_contract=json.dumps(semantic_contract, ensure_ascii=False)
         )
         res = await llm.ainvoke(messages)
-        content = res.content.strip()
+        if isinstance(res.content, list):
+            content = "".join(
+                [c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in res.content]
+            ).strip()
+        else:
+            content = str(res.content).strip()
 
         # Dọn dẹp nếu LLM vô tình bọc trong markdown block
         if content.startswith("```"):
