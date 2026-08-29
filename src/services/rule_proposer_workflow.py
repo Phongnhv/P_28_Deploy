@@ -787,19 +787,12 @@ def run_analysis_report(workflow_run_id: str, job_id: str, session_id: str | Non
         db.commit()
 
     try:
-<<<<<<< HEAD
-        asyncio.run(asyncio.wait_for(
-            run_anomaly_graph(execution_run_id=dq_run_id, dataset_id=dataset_id, stream_id=workflow_run_id),
-            timeout=90,
-        ))
-=======
         asyncio.run(
             asyncio.wait_for(
-                run_anomaly_graph(execution_run_id=dq_run_id, dataset_id=dataset_id),
+                run_anomaly_graph(execution_run_id=dq_run_id, dataset_id=dataset_id, stream_id=workflow_run_id),
                 timeout=90,
             )
         )
->>>>>>> 31ce6cc36876dca6cccbf119748aea84bd9135c9
         analysis_error = None
     except Exception as exc:  # the DQ result remains valuable even when analysis fails
         analysis_error = str(exc)

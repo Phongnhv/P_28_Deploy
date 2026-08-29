@@ -30,7 +30,7 @@ from src.models.database import (
     SemanticContractModel,
 )
 from src.models.rule_schemas import RuleStatus
-from src.services.session_service import ensure_default_users, ensure_demo_steward
+from src.services.session_service import ensure_default_users, ensure_default_workspace, ensure_demo_steward
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -333,6 +333,10 @@ def init_db() -> None:
     try:
         with Session(engine) as session:
             ensure_default_users(session)
+            # Seeded after the accounts exist: the workspace row needs a real
+            # owner, and the versioned import route needs an ACTIVE membership.
+            ensure_demo_steward(session)
+            ensure_default_workspace(session)
             demo_dataset = session.get(DatasetModel, "dataset-nyc-yellow-taxi-50k")
             if not demo_dataset:
                 demo_dataset = DatasetModel(

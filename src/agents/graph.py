@@ -743,6 +743,7 @@ async def run_anomaly_graph(
     execution_run_id: str | None = None,
     dataset_id: str = DEFAULT_CLI_DATASET_ID,
     investigation_mode: Literal["deepagent", "legacy"] | None = None,
+    stream_id: str | None = None,
 ) -> dict:
     """Chạy toàn bộ pipeline Run 3 (Anomaly Analysis & Hypothesis).
 

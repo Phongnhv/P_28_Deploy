@@ -113,6 +113,11 @@ function getErrorMessage(error: unknown, fallback: string) {
     return "The request is not valid for the current workflow state.";
   if (error.status === 429)
     return "The demo quota has been reached. Please try again later.";
+  // A client-side configuration failure is raised locally with a 5xx status and
+  // never reached the server, so reporting it as an outage sends the operator
+  // to the wrong place. Surface its own message instead.
+  if (error.code === "WORKSPACE_NOT_CONFIGURED")
+    return error.message;
   if (error.status >= 500)
     return "The service is temporarily unavailable. Retry when it is ready.";
   return error.message || fallback;
@@ -467,6 +472,7 @@ function SemanticContractPanel({
   busy: boolean;
   onStartUnderstand: (datasetId: string) => void;
 }) {
+  const { t } = useI18n();
   const activeArtifact = workflow && dataset && workflow.dataset_id === dataset.id
     ? workflowArtifactForStep(workflow, artifacts, "UNDERSTAND_DATA")
     : undefined;
@@ -2295,7 +2301,7 @@ function App() {
               )}
             </div>
           )}
-          {activeJob && (
+          {activeJob ? (
             <ProgressPanel
               job={activeJob}
               title={
@@ -2306,21 +2312,13 @@ function App() {
                     : "Running approved checks"
               }
             />
-          ) : showGraph1Studio ? (
-            <Graph1Studio
-              onExit={() => {
-                sessionStorage.removeItem("ridepulse.graph1.open");
-                setShowGraph1Studio(false);
-                setGraph1Dataset(null);
-                setWizardStep(1);
-                const runId = sessionStorage.getItem("ridepulse.graph1.run");
-                if (runId) void refreshGraph1(runId);
-              }}
-              onDatasetImported={() => void refreshWorkspace()}
-              onAnalyze={openAnalysisForGraph1}
-              onRerun={prepareGraph1Rerun}
-              onRunChange={setGraph1Run}
-              initialDataset={graph1Dataset ?? dataset}
+          ) : showGraphs ? (
+            <GraphStagePanel
+              catalog={graphCatalog}
+              runs={nodeRuns}
+              graphKeys={["G1A", "G1B", "G2", "G3"]}
+              language={language}
+              loadNodeDetail={loadNodeDetail}
             />
           ) : showAdmin && canAdmin ? (
             <AdminPage
@@ -2525,39 +2523,41 @@ function App() {
                     canOperate={canOperate}
                     onRun={() => void runApprovedRules()}
                     graphPanel={
-                      <GraphStagePanel
-                        catalog={graphCatalog}
-                        runs={nodeRuns}
-                        graphKeys={["G2"]}
-                        language={language}
-                        loadNodeDetail={loadNodeDetail}
-                      />
-                      {/* Graph 3: ANOMALY_REPORT from workflow artifacts */}
-                      {workflowArtifacts.filter((a) => a.type === "ANOMALY_REPORT").slice(-1).map((anomalyArtifact) => {
-                        const p = anomalyArtifact.payload as Record<string, unknown>;
-                        const dec = String(p.decision ?? "UNAVAILABLE");
-                        const hyps = Array.isArray(p.hypotheses) ? (p.hypotheses as Record<string, unknown>[]) : [];
-                        const tone: "danger" | "success" | "warning" = dec === "ANOMALY" || dec === "CRITICAL" ? "danger" : dec === "NORMAL" ? "success" : "warning";
-                        return (
-                          <div key={anomalyArtifact.id} style={{ marginTop: "24px", padding: "24px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px" }}>
-                            <span className="eyebrow">GRAPH 3 — AI ANOMALY ANALYSIS</span>
-                            <h3 style={{ fontSize: "16px", fontWeight: 700, margin: "8px 0 16px" }}>Steward Insights</h3>
-                            <div style={{ display: "flex", gap: "12px", alignItems: "center", marginBottom: "16px", flexWrap: "wrap" }}>
-                              <StatusPill label={dec === "INSUFFICIENT_HISTORY" ? "NOT ENOUGH HISTORY" : dec} tone={tone} />
-                              {typeof p.score === "number" && <span style={{ fontSize: "13px", color: "var(--muted)" }}>Score: <strong>{(p.score as number).toFixed(1)}</strong></span>}
-                              {typeof p.confidence === "number" && <span style={{ fontSize: "13px", color: "var(--muted)" }}>Confidence: <strong>{Math.round((p.confidence as number) * 100)}%</strong></span>}
-                            </div>
-                            {hyps.map((h, i) => (
-                              <div key={i} style={{ padding: "10px 14px", background: "var(--surface-muted, #f8fafc)", borderRadius: "8px", border: "1px solid var(--border)", marginBottom: "8px" }}>
-                                <p style={{ margin: 0, fontWeight: 600, fontSize: "14px" }}>{String(h.summary ?? "No hypothesis.")}</p>
-                                {typeof h.confidence === "number" && <span style={{ fontSize: "12px", color: "var(--muted)" }}>Confidence: {Math.round((h.confidence as number) * 100)}%</span>}
+                      <>
+                        <GraphStagePanel
+                          catalog={graphCatalog}
+                          runs={nodeRuns}
+                          graphKeys={["G2"]}
+                          language={language}
+                          loadNodeDetail={loadNodeDetail}
+                        />
+                        {/* Graph 3: ANOMALY_REPORT from workflow artifacts */}
+                        {workflowArtifacts.filter((a) => a.type === "ANOMALY_REPORT").slice(-1).map((anomalyArtifact) => {
+                          const p = anomalyArtifact.payload as Record<string, unknown>;
+                          const dec = String(p.decision ?? "UNAVAILABLE");
+                          const hyps = Array.isArray(p.hypotheses) ? (p.hypotheses as Record<string, unknown>[]) : [];
+                          const tone: "danger" | "success" | "warning" = dec === "ANOMALY" || dec === "CRITICAL" ? "danger" : dec === "NORMAL" ? "success" : "warning";
+                          return (
+                            <div key={anomalyArtifact.id} style={{ marginTop: "24px", padding: "24px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px" }}>
+                              <span className="eyebrow">GRAPH 3 — AI ANOMALY ANALYSIS</span>
+                              <h3 style={{ fontSize: "16px", fontWeight: 700, margin: "8px 0 16px" }}>Steward Insights</h3>
+                              <div style={{ display: "flex", gap: "12px", alignItems: "center", marginBottom: "16px", flexWrap: "wrap" }}>
+                                <StatusPill label={dec === "INSUFFICIENT_HISTORY" ? "NOT ENOUGH HISTORY" : dec} tone={tone} />
+                                {typeof p.score === "number" && <span style={{ fontSize: "13px", color: "var(--muted)" }}>Score: <strong>{(p.score as number).toFixed(1)}</strong></span>}
+                                {typeof p.confidence === "number" && <span style={{ fontSize: "13px", color: "var(--muted)" }}>Confidence: <strong>{Math.round((p.confidence as number) * 100)}%</strong></span>}
                               </div>
-                            ))}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                              {hyps.map((h, i) => (
+                                <div key={i} style={{ padding: "10px 14px", background: "var(--surface-muted, #f8fafc)", borderRadius: "8px", border: "1px solid var(--border)", marginBottom: "8px" }}>
+                                  <p style={{ margin: 0, fontWeight: 600, fontSize: "14px" }}>{String(h.summary ?? "No hypothesis.")}</p>
+                                  {typeof h.confidence === "number" && <span style={{ fontSize: "12px", color: "var(--muted)" }}>Confidence: {Math.round((h.confidence as number) * 100)}%</span>}
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })}
+                      </>
+                    }
+                  />
                   {dataset && <ActiveRulesPanel datasetId={dataset.id} />}
                   <div style={{ marginTop: "32px" }}>
                     <AuditPage logs={auditLogs} />
@@ -2640,26 +2640,23 @@ function App() {
                 <button
                   type="button"
                   className="button primary"
-                  disabled={wizardNextDisabled}
+                  disabled={wizardStep === 5 || (!dataset && wizardStep === 1) || (wizardStep === 1 && !profile)}
                   title={
                     !dataset && wizardStep === 1
                       ? (t("wizard.selectDatasetTooltip") || "Vui lòng chọn hoặc tải lên một bộ dữ liệu ở Bước 1")
                       : wizardStep === 1 && !profile
                         ? (language === "vi" ? "Hãy tạo profile cho tập dữ liệu trước" : "Build the dataset profile first")
-                        : wizardStep === 4
-                          : ""
+                        : ""
                   }
                   onClick={() => {
-                    if (wizardStep === 1 && dataset) {
-                      void openGraph1ForDataset(dataset.id);
-                      return;
-                    }
-                    navigateWizardStep(Math.min(4, wizardStep + 1));
+                    setWizardStep((prev) => Math.min(5, prev + 1));
                   }}
-=======
+                >
                   {t("wizard.next")}
                 </button>
               </div>
+            </>
+          )}
       {showDataExplorer && dataset && (
         <DataExplorerDialog
           dataset={dataset}
@@ -2683,6 +2680,8 @@ function App() {
           onSave={(input) => void createManualRule(input)}
         />
       )}
+        </div>
+      </main>
     </div>
   );
 }
@@ -3136,7 +3135,7 @@ function RulesPage({
     ["PROPOSED", "EDITED"].includes(proposal.status),
   );
   const { t, language } = useI18n();
-  const approved = safeProposals.filter(
+  const approved = proposals.filter(
     (proposal) => proposal && proposal.status === "APPROVED",
   );
   return (
@@ -3188,21 +3187,6 @@ function RulesPage({
               disabled={!approved.length || busy || !canOperate}
             >
               Run approved rules <span>→</span>
-            </button>
-          )}
-        </div>
-      </div>
-      {!profileReady ? (
-        <section className="empty-state">
-          <div className="empty-illustration">✦</div>
-          <h2>Profile first, proposals second</h2>
-          <p>
-            Complete the dataset analysis before asking the guarded Agent for
-            proposals.
-          </p>
-          {canOperate && (
-            <button className="button secondary" onClick={onCreateManual}>
-              Add manual rule anyway
             </button>
           )}
         </section>

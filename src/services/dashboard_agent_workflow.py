@@ -1062,17 +1062,11 @@ def _complete_with_policy_candidates(
         present_types.add(candidate.dashboard_rule_type)
         if len(completed) == 2:
             break
-<<<<<<< HEAD
     priority_by_type: dict[str, int] = {}
     for candidate in _build_dashboard_rule_candidates(evidence):
         priority_by_type[candidate.dashboard_rule_type] = max(
             priority_by_type.get(candidate.dashboard_rule_type, 0), candidate.priority
         )
-=======
-    priority_by_type = {
-        candidate.dashboard_rule_type: candidate.priority for candidate in _build_dashboard_rule_candidates(evidence)
-    }
->>>>>>> 31ce6cc36876dca6cccbf119748aea84bd9135c9
     return sorted(completed, key=lambda proposal: priority_by_type.get(proposal.rule_type, 0), reverse=True)
 
 
