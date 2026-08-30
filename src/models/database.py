@@ -68,6 +68,20 @@ class UserAccountModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
 
+class LoginAttemptModel(Base):
+    __tablename__ = "login_attempts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(32), nullable=False)
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempted_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+
+    __table_args__ = (
+        Index("ix_login_attempts_scope_key_time", "scope", "key_hash", "attempted_at"),
+        Index("ix_login_attempts_attempted_at", "attempted_at"),
+    )
+
+
 class DatasetModel(Base):
     __tablename__ = "datasets"
 

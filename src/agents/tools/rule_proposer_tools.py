@@ -48,7 +48,7 @@ def query_historical_approved_rules(
     limit: int = 5,
 ) -> dict[str, Any]:
     """Tra cứu các quy tắc kiểm thử chất lượng dữ liệu (Data Quality Rules) đã được Data Steward phê duyệt từ PostgreSQL.
-    
+
     Sử dụng tool này để tham khảo các tiêu chuẩn, dải ngưỡng (parameters), mức độ nghiêm trọng (severity),
     và giải thích nghiệp vụ (business rationale) đã được chuẩn hóa trong hệ thống cho bảng hoặc cột tương tự.
     """
@@ -145,10 +145,10 @@ def dry_run_rule_candidate(
     sample_limit: int = 1000,
 ) -> dict[str, Any]:
     """Chạy thử nghiệm (Dry-Run) một rule dự kiến trên dữ liệu thực tế để kiểm tra tỉ lệ vi phạm (violation rate).
-    
+
     Tool này giúp Agent kiểm tra xem ngưỡng đề xuất (ví dụ min/max của RANGE, accepted_values, regex)
     có quá chặt (gây fail nhiều dòng hợp lệ) hoặc quá lỏng không, trước khi đưa ra quyết định cuối cùng.
-    
+
     Args:
         table_name: Tên bảng cần kiểm tra.
         column_name: Tên cột kiểm tra (để trống nếu là rule cấp bảng ROW_COUNT).
@@ -190,7 +190,7 @@ def dry_run_rule_candidate(
 
             if norm_rule_type == "NOT_NULL":
                 sql = f"""
-                SELECT 
+                SELECT
                     COUNT(*) AS total_checked,
                     SUM(CASE WHEN "{col_safe}" IS NULL THEN 1 ELSE 0 END) AS failed_count
                 FROM (SELECT * FROM "{target_table}" {where_base} LIMIT {sample_limit}) t
@@ -201,7 +201,7 @@ def dry_run_rule_candidate(
 
             elif norm_rule_type == "UNIQUE":
                 sql = f"""
-                SELECT 
+                SELECT
                     COUNT(*) AS total_checked,
                     COUNT(DISTINCT "{col_safe}") AS distinct_count
                 FROM (SELECT * FROM "{target_table}" {where_base} LIMIT {sample_limit}) t
@@ -211,8 +211,8 @@ def dry_run_rule_candidate(
                 distinct = int(res["distinct_count"] or 0)
                 failed = max(0, total - distinct)
                 sample_violations_sql = f"""
-                SELECT "{col_safe}", COUNT(*) as cnt 
-                FROM "{target_table}" {where_base} AND "{col_safe}" IS NOT NULL 
+                SELECT "{col_safe}", COUNT(*) as cnt
+                FROM "{target_table}" {where_base} AND "{col_safe}" IS NOT NULL
                 GROUP BY "{col_safe}" HAVING COUNT(*) > 1 LIMIT 3
                 """
                 viol_rows = conn.execute(text(sample_violations_sql), query_params).mappings().all()
@@ -246,7 +246,7 @@ def dry_run_rule_candidate(
 
                 fail_expr = " OR ".join(conds) if conds else "1=0"
                 sql = f"""
-                SELECT 
+                SELECT
                     COUNT(*) AS total_checked,
                     SUM(CASE WHEN "{col_safe}" IS NOT NULL AND ({fail_expr}) THEN 1 ELSE 0 END) AS failed_count
                 FROM (SELECT * FROM "{target_table}" {where_base} LIMIT {sample_limit}) t
@@ -275,7 +275,7 @@ def dry_run_rule_candidate(
                 # Format string literals safely
                 escaped_allowed = ", ".join(["'" + str(v).replace("'", "''") + "'" for v in allowed])
                 sql = f"""
-                SELECT 
+                SELECT
                     COUNT(*) AS total_checked,
                     SUM(CASE WHEN "{col_safe}" IS NOT NULL AND CAST("{col_safe}" AS VARCHAR) NOT IN ({escaped_allowed}) THEN 1 ELSE 0 END) AS failed_count
                 FROM (SELECT * FROM "{target_table}" {where_base} LIMIT {sample_limit}) t
@@ -311,7 +311,7 @@ def dry_run_rule_candidate(
                 sql_op = "=" if operator == "==" else operator
 
                 sql = f"""
-                SELECT 
+                SELECT
                     COUNT(*) AS total_checked,
                     SUM(CASE WHEN "{col_safe}" IS NOT NULL AND "{target_col}" IS NOT NULL AND NOT ("{col_safe}" {sql_op} "{target_col}") THEN 1 ELSE 0 END) AS failed_count
                 FROM (SELECT * FROM "{target_table}" {where_base} LIMIT {sample_limit}) t
@@ -323,7 +323,7 @@ def dry_run_rule_candidate(
             elif norm_rule_type == "NULL_RATE":
                 max_null_pct = float(params.get("max_null_pct", 5.0))
                 sql = f"""
-                SELECT 
+                SELECT
                     COUNT(*) AS total_checked,
                     SUM(CASE WHEN "{col_safe}" IS NULL THEN 1 ELSE 0 END) AS null_count
                 FROM (SELECT * FROM "{target_table}" {where_base} LIMIT {sample_limit}) t
@@ -396,9 +396,9 @@ def inspect_data_samples(
     limit: int = 10,
 ) -> dict[str, Any]:
     """Truy vấn mẫu dữ liệu an toàn (Read-Only) để khảo sát các trường hợp bất thường (ví dụ: tiền âm, null, hoặc quan hệ liên cột).
-    
+
     Tool này cho phép Agent xem các dòng dữ liệu thực tế thỏa mãn một điều kiện cụ thể.
-    
+
     Args:
         table_name: Tên bảng dữ liệu.
         columns: Danh sách cột cần lấy (mặc định lấy tất cả hoặc tối đa 10 cột).
@@ -477,7 +477,7 @@ def get_column_deep_stats(
     dataset_id: str = "",
 ) -> dict[str, Any]:
     """Lấy số liệu phân phối thống kê chuyên sâu của một cột (quantiles p1..p99, tỷ lệ null, top categories, min/max, độ dài chuỗi).
-    
+
     Tool này cung cấp căn cứ số học chính xác để Agent tính toán dải ngưỡng RANGE hoặc danh sách ACCEPTED_VALUES.
     """
     col_name = column_name.strip()
@@ -522,7 +522,7 @@ def get_column_deep_stats(
             where_ds = "WHERE dataset_id = :dataset_id" if dataset_id else ""
 
             stats_q = text(f"""
-            SELECT 
+            SELECT
                 COUNT(*) as total_rows,
                 COUNT("{col_safe}") as non_null_count,
                 COUNT(DISTINCT "{col_safe}") as distinct_count,

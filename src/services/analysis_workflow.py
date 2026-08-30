@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from src.config import get_settings
 from src.models.database import (
     AnalysisNodeExecutionModel,
     AnalysisRunModel,
@@ -30,7 +31,6 @@ from src.services.rule_store import (
     get_test_results,
     update_test_run_status,
 )
-from src.config import get_settings
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)

@@ -375,7 +375,12 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
         with engine.connect() as conn:
             if dialect_name == "postgresql":
                 try:
-                    conn.execute(text("SET statement_timeout = 60000;"))
+                    has_regex = any(
+                        str((meta.get("rule") or {}).get("rule_type") or "").upper() == "REGEX_FORMAT"
+                        for meta in rules_meta
+                    )
+                    timeout_ms = 5000 if has_regex else 60000
+                    conn.execute(text(f"SET statement_timeout = {timeout_ms};"))
                 except Exception:
                     pass
             stmt = text(sql)

@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import re
 import uuid
 from datetime import UTC, datetime
 
@@ -26,13 +25,20 @@ from src.models.database import (
     DatasetModel,
     DqResultModel,
     JobModel,
-    SourceRowModel,
     RuleProposalModel,
     RuleVersionModel,
     SemanticContractModel,
+    SourceRowModel,
 )
 from src.models.rule_schemas import RuleStatus
-from src.services.session_service import ensure_default_users, ensure_default_workspace, ensure_demo_steward
+from src.services.safe_regex import safe_search, validate_regex
+from src.services.session_service import (
+    ensure_default_users,
+    ensure_default_workspace,
+    ensure_demo_steward,
+    reconcile_public_demo_security,
+    validate_security_settings,
+)
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -80,7 +86,7 @@ def get_engine():
                 def _sqlite_regexp(expr, item):
                     if item is None:
                         return False
-                    return re.search(expr, str(item)) is not None
+                    return safe_search(str(expr), item)
 
                 dbapi_conn.create_function("REGEXP", 2, _sqlite_regexp)
 
@@ -319,6 +325,7 @@ def init_db() -> None:
     """Tạo tất cả bảng nếu chưa tồn tại. Tự động đồng bộ legacy approved rules vào active_rules."""
     engine = get_engine()
     settings = get_settings()
+    validate_security_settings()
     if settings.app_env == "production":
         # Production schema changes are a controlled release operation. Running
         # create/alter DDL in every Cloud Run startup races active revisions,
@@ -337,6 +344,7 @@ def init_db() -> None:
     try:
         with Session(engine) as session:
             ensure_default_users(session)
+            reconcile_public_demo_security(session)
             # Seeded after the accounts exist: the workspace row needs a real
             # owner, and the versioned import route needs an ACTIVE membership.
             ensure_demo_steward(session)
@@ -1081,6 +1089,7 @@ def review_rule(
             elif row.rule_type == "REGEX_FORMAT":
                 if not isinstance(edited_parameters, dict) or "regex" not in edited_parameters:
                     raise ValueError("edited_parameters không hợp lệ cho rule REGEX_FORMAT")
+                validate_regex(str(edited_parameters["regex"]))
 
         db_status = "APPROVED" if status == "APPROVED" else "REJECTED"
         row.status = db_status
@@ -1399,7 +1408,7 @@ def publish_approved_rules(run_id: str) -> int:
                     params["accepted_values"] = spec["allowed_values"]
             elif rule_type == "REGEX_FORMAT":
                 if "regex" in spec:
-                    params["regex"] = spec["regex"]
+                    params["regex"] = validate_regex(str(spec["regex"]))
             elif rule_type == "CROSS_FIELD_COMPARISON":
                 if "target_column" in spec:
                     params["target_column"] = spec["target_column"]

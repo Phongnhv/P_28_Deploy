@@ -90,10 +90,31 @@ async def client():
 
 
 def _seed_run(run_id: str, dataset_id: str = "yellow_tripdata") -> None:
+    from sqlalchemy.orm import Session
+
+    import src.services.rule_store as rs
+    from src.models.database import DatasetAccessModel
     from src.services.rule_store import create_run, update_run_status
 
     create_run(run_id, dataset_id)
     update_run_status(run_id, "DONE")
+
+    with Session(rs._engine) as db_session:
+        existing = db_session.query(DatasetAccessModel).filter_by(
+            dataset_id=dataset_id,
+            username="steward",
+        ).first()
+        if not existing:
+            db_session.add(
+                DatasetAccessModel(
+                    id=f"access-{uuid.uuid4().hex[:12]}",
+                    dataset_id=dataset_id,
+                    username="steward",
+                    access_level="MANAGE",
+                    granted_by="system",
+                )
+            )
+            db_session.commit()
 
 
 def _seed_rules(run_id: str, rules_specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -145,10 +166,26 @@ async def test_list_rules_unknown_run_returns_404(steward_client):
 @pytest.mark.asyncio
 async def test_list_rules_returns_empty_when_running(steward_client):
     """Run còn RUNNING → trả [] không phải 404."""
+    from sqlalchemy.orm import Session
+
+    import src.services.rule_store as rs
+    from src.models.database import DatasetAccessModel
     from src.services.rule_store import create_run
 
     run_id = uuid.uuid4().hex
     create_run(run_id, "yellow_tripdata")  # status=QUEUED, không có rules
+
+    with Session(rs._engine) as db_session:
+        db_session.add(
+            DatasetAccessModel(
+                id=f"access-{uuid.uuid4().hex[:12]}",
+                dataset_id="yellow_tripdata",
+                username="steward",
+                access_level="MANAGE",
+                granted_by="system",
+            )
+        )
+        db_session.commit()
 
     r = await steward_client.get(f"/api/v1/dq/runs/{run_id}/rules")
     assert r.status_code == 200
@@ -275,7 +312,7 @@ async def test_patch_rule_approve_success(steward_client):
     assert r.status_code == 200
     data = r.json()
     assert data["status"] == "APPROVED"
-    assert data["reviewer"] == "steward@ridepulse.vn"
+    assert data["reviewer"] == "steward"
     assert data["reviewed_at"] is not None
 
 

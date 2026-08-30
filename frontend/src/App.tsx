@@ -283,8 +283,8 @@ function LoginScreen({
   busy: boolean;
   error: string;
 }) {
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const submit = (event: FormEvent) => {
     event.preventDefault();
     onLogin(username, password);

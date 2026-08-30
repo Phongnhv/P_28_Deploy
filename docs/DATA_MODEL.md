@@ -47,8 +47,8 @@ business state and node outputs.
 - `USER` can read data granted to the user.
 - `STEWARD` can profile datasets, review typed rules and run approved checks.
 - `ADMIN` provisions users and manages dataset access.
-- The public `demo-steward` account has the Steward role and a bounded backend
-  write quota for judge demonstrations.
+- An optional `demo-steward` account is seeded only when public demo mode is
+  explicitly enabled with an operator-provided password in non-production.
 
 The agent receives an allow-listed aggregate profile and semantic contract, not
 raw rows, private object keys, credentials or arbitrary browser prompts. DQ

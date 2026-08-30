@@ -1,16 +1,24 @@
+import hashlib
+import hmac
+import ipaddress
 import logging
 import os
 import secrets
 import uuid
-from collections import defaultdict, deque
 from datetime import timedelta
 from hashlib import pbkdf2_hmac
-from time import monotonic
 
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
-from src.models.database import SessionModel, UserAccountModel, WorkspaceMembershipModel, WorkspaceModel
+from src.config import get_settings
+from src.models.database import (
+    LoginAttemptModel,
+    SessionModel,
+    UserAccountModel,
+    WorkspaceMembershipModel,
+    WorkspaceModel,
+)
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -24,13 +32,10 @@ DEFAULT_USERS = (
 )
 DEMO_STEWARD_USERNAME = "demo-steward"
 DEMO_STEWARD_DISPLAY_NAME = "Demo Steward"
-# This credential is intentionally public in the frontend for judge access.
-# It is protected by the backend quota guard in ``demo_quota.py``.
-DEMO_STEWARD_PUBLIC_PASSWORD = "ridepulse-demo-2026"
 DEMO_STEWARD_WORKSPACE_ID = (os.getenv("DEMO_WORKSPACE_ID") or "ws-browser").strip()
 LOGIN_WINDOW_SECONDS = 15 * 60
-MAX_LOGIN_ATTEMPTS = 5
-_login_attempts: dict[str, deque[float]] = defaultdict(deque)
+MAX_IP_ACCOUNT_ATTEMPTS = 5
+MAX_ACCOUNT_ATTEMPTS = 10
 
 
 def hash_password(password: str, salt: bytes | None = None) -> str:
@@ -132,9 +137,15 @@ def ensure_default_workspace(db: Session, *, created_by: str | None = None) -> W
 
 
 def ensure_demo_steward(db: Session) -> None:
-    """Seed the bounded, judge-facing Steward account and its workspace seat."""
-    configured_password = (os.getenv("DEMO_STEWARD_DEMO_PASSWORD") or "").strip()
-    password = configured_password or DEMO_STEWARD_PUBLIC_PASSWORD
+    """Seed the explicitly enabled non-production demo Steward."""
+    settings = get_settings()
+    if not settings.enable_public_demo:
+        return
+    if settings.app_env == "production":
+        raise RuntimeError("Public demo access is not permitted in production")
+    password = (settings.demo_steward_password or "").strip()
+    if not password:
+        raise RuntimeError("DEMO_STEWARD_PASSWORD is required when ENABLE_PUBLIC_DEMO=true")
     account = db.query(UserAccountModel).filter(UserAccountModel.username == DEMO_STEWARD_USERNAME).first()
     if not account:
         account = UserAccountModel(
@@ -148,8 +159,9 @@ def ensure_demo_steward(db: Session) -> None:
         )
         db.add(account)
         db.flush()
-    elif account.created_by == "system-seed-demo" and configured_password:
-        account.password_hash = hash_password(configured_password)
+    elif account.created_by == "system-seed-demo":
+        account.password_hash = hash_password(password)
+        account.status = "ACTIVE"
 
     db.commit()
     try:
@@ -180,36 +192,108 @@ def ensure_demo_steward(db: Session) -> None:
         logger.warning("Demo Steward workspace membership could not be seeded", exc_info=True)
 
 
-def _login_attempt_key(request: Request, username: str) -> str:
-    forwarded_for = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
-    client_host = forwarded_for or (request.client.host if request.client else "unknown")
-    return f"{client_host}:{username}"
+def reconcile_public_demo_security(db: Session) -> None:
+    """Deactivate legacy public demo identities whenever public demo is disabled."""
+    settings = get_settings()
+    if settings.enable_public_demo and settings.app_env != "production":
+        return
+    accounts = db.query(UserAccountModel).filter(UserAccountModel.created_by == "system-seed-demo").all()
+    usernames = [account.username for account in accounts]
+    for account in accounts:
+        account.status = "DISABLED"
+    if usernames:
+        db.query(SessionModel).filter(SessionModel.username.in_(usernames)).delete(synchronize_session=False)
+    db.flush()
 
 
-def _enforce_login_rate_limit(key: str) -> None:
-    now = monotonic()
-    attempts = _login_attempts[key]
-    while attempts and now - attempts[0] >= LOGIN_WINDOW_SECONDS:
-        attempts.popleft()
-    if len(attempts) >= MAX_LOGIN_ATTEMPTS:
-        raise HTTPException(status_code=429, detail={"code": "LOGIN_RATE_LIMITED", "message": "Too many sign-in attempts. Try again later."})
+def validate_security_settings() -> None:
+    settings = get_settings()
+    if settings.app_env == "production" and settings.enable_public_demo:
+        raise RuntimeError("ENABLE_PUBLIC_DEMO must be false in production")
+    if settings.app_env == "production" and not settings.rate_limit_hash_key:
+        raise RuntimeError("RATE_LIMIT_HASH_KEY is required in production")
 
 
-def _record_failed_login(key: str) -> None:
-    _login_attempts[key].append(monotonic())
+def _trusted_proxy_networks() -> list[ipaddress._BaseNetwork]:
+    networks = []
+    for raw in get_settings().trusted_proxy_cidrs.split(","):
+        value = raw.strip()
+        if value:
+            networks.append(ipaddress.ip_network(value, strict=False))
+    return networks
+
+
+def _client_ip(request: Request) -> str:
+    peer = request.client.host if request.client else "unknown"
+    try:
+        trusted = any(ipaddress.ip_address(peer) in network for network in _trusted_proxy_networks())
+    except ValueError:
+        trusted = False
+    if trusted:
+        forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+        if forwarded:
+            try:
+                return str(ipaddress.ip_address(forwarded))
+            except ValueError:
+                pass
+    return peer
+
+
+def _attempt_hash(scope: str, value: str) -> str:
+    settings = get_settings()
+    key = settings.rate_limit_hash_key or "local-login-rate-limit-key"
+    return hmac.new(key.encode(), f"{scope}:{value}".encode(), hashlib.sha256).hexdigest()
+
+
+def _rate_limit_keys(request: Request, username: str) -> dict[str, tuple[str, int]]:
+    return {
+        "IP_ACCOUNT": (_attempt_hash("IP_ACCOUNT", f"{_client_ip(request)}:{username}"), MAX_IP_ACCOUNT_ATTEMPTS),
+        "ACCOUNT": (_attempt_hash("ACCOUNT", username), MAX_ACCOUNT_ATTEMPTS),
+    }
+
+
+def _enforce_login_rate_limit(db: Session, keys: dict[str, tuple[str, int]]) -> None:
+    now = utc_now()
+    cutoff = now - timedelta(seconds=LOGIN_WINDOW_SECONDS)
+    db.query(LoginAttemptModel).filter(LoginAttemptModel.attempted_at < cutoff).delete(synchronize_session=False)
+    for scope, (key_hash, limit) in keys.items():
+        attempts = (
+            db.query(LoginAttemptModel)
+            .filter_by(scope=scope, key_hash=key_hash)
+            .filter(LoginAttemptModel.attempted_at >= cutoff)
+            .order_by(LoginAttemptModel.attempted_at.asc())
+            .all()
+        )
+        if len(attempts) >= limit:
+            retry_after = max(1, int((attempts[0].attempted_at + timedelta(seconds=LOGIN_WINDOW_SECONDS) - now).total_seconds()))
+            db.commit()
+            raise HTTPException(
+                status_code=429,
+                detail={"code": "LOGIN_RATE_LIMITED", "message": "Too many sign-in attempts. Try again later."},
+                headers={"Retry-After": str(retry_after)},
+            )
+    db.flush()
+
+
+def _record_failed_login(db: Session, keys: dict[str, tuple[str, int]]) -> None:
+    now = utc_now()
+    for scope, (key_hash, _limit) in keys.items():
+        db.add(LoginAttemptModel(id=f"login-{uuid.uuid4().hex}", scope=scope, key_hash=key_hash, attempted_at=now))
+    db.commit()
 
 
 def create_user_session(request: Request, username: str, password: str, db: Session) -> SessionModel:
     """Authenticate an active persisted account and create its cookie session."""
     normalized_username = username.strip().lower()
-    attempt_key = _login_attempt_key(request, normalized_username)
-    _enforce_login_rate_limit(attempt_key)
-    account = db.query(UserAccountModel).filter(UserAccountModel.username == normalized_username).first()
+    attempt_keys = _rate_limit_keys(request, normalized_username)
+    account = db.query(UserAccountModel).filter(UserAccountModel.username == normalized_username).with_for_update().first()
+    _enforce_login_rate_limit(db, attempt_keys)
     if not account or account.status != "ACTIVE" or not verify_password(password, account.password_hash):
-        _record_failed_login(attempt_key)
+        _record_failed_login(db, attempt_keys)
         raise HTTPException(status_code=401, detail={"code": "UNAUTHORIZED", "message": "Invalid username or password"})
 
-    _login_attempts.pop(attempt_key, None)
+    hashes = [key_hash for key_hash, _limit in attempt_keys.values()]
+    db.query(LoginAttemptModel).filter(LoginAttemptModel.key_hash.in_(hashes)).delete(synchronize_session=False)
 
     # A user may have the workspace open in multiple tabs/devices.  Creating
     # a new session must not revoke those still-valid sessions, otherwise a

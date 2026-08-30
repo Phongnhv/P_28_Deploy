@@ -104,7 +104,7 @@ Production hiện chạy `PROVIDER=openai`, `AGENT_MODE=graph` và
 `DQ_EXECUTION_BACKEND=supabase`. Khi không đặt `OPENAI_MODEL`, adapter OpenAI
 dùng mặc định `gpt-5.6-luna`.
 
-Production yêu cầu ba demo-account secret độc lập:
+Production yêu cầu các secret tài khoản độc lập:
 
 ```text
 DEMO_USER_PASSWORD
@@ -112,13 +112,8 @@ DEMO_STEWARD_PASSWORD
 DEMO_ADMIN_PASSWORD
 ```
 
-Ngoài ba tài khoản nội bộ trên, hệ thống seed tài khoản công khai dành cho
-giám khảo: `demo-steward` / `ridepulse-demo-2026`. Đây không phải secret và bị
-giới hạn trong rolling window 24 giờ: 40 mutation API, 3 upload, 3 lần bắt đầu
-profiling và 2 lần bắt đầu analysis. Quota được ghi trong `audit_events`, nên
-dùng nhiều tab hoặc máy khác vẫn dùng chung hạn mức. Có thể đổi mật khẩu demo
-bằng `DEMO_STEWARD_DEMO_PASSWORD`, đồng thời phải cập nhật
-`VITE_DEMO_STEWARD_PASSWORD` cho frontend.
+Tài khoản công khai `demo-steward` chỉ được seed khi `ENABLE_PUBLIC_DEMO=true`
+ở môi trường không production và `DEMO_STEWARD_PASSWORD` được cấu hình rõ ràng.
 
 Local có thể dùng username làm password cho database mới; production fail-fast nếu thiếu secret.
 
