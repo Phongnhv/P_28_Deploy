@@ -178,15 +178,27 @@ async def anomaly_investigation_node(state: AnomalyGraphState) -> dict:
     except Exception as agent_exc:
         import logging
         logger = logging.getLogger(__name__)
-        logger.warning(
+        logger.error(
             "DeepAgent anomaly investigation thất bại (%s). Tự động kích hoạt fallback sang steward_insights_node.",
             agent_exc,
+            exc_info=True,
         )
         from src.agents.nodes.steward_insights_node import steward_insights_node
+
         fallback_result = await steward_insights_node(state)
+        metadata = dict(fallback_result.get("metadata") or state.get("metadata") or {})
+        metadata["deepagent_investigation_error"] = str(agent_exc)
+        metadata["deepagent_fallback"] = True
+
+        signal_errors = list(state.get("signal_errors") or [])
+        signal_errors.append(f"DeepAgent investigation failed: {agent_exc}")
+
         return {
             **fallback_result,
             "hypothesis_status": "FALLBACK_FROM_DEEPAGENT",
+            "deepagent_investigation_error": str(agent_exc),
+            "signal_errors": signal_errors,
+            "metadata": metadata,
         }
 
 

@@ -143,7 +143,7 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
             if h_row.test_run_id in excluded_run_ids:
                 continue
             if h_row.total_rows and h_row.total_rows > 0:
-                rate = h_row.violation_count / h_row.total_rows
+                rate = float(h_row.violation_count or 0) / float(h_row.total_rows)
                 arr = history_by_rule.setdefault(h_row.rule_id, [])
                 if len(arr) < _HISTORY_WINDOW:
                     arr.append(rate)
@@ -169,7 +169,7 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
             if h_row.id in excluded_run_ids:
                 continue
             if h_row.checked_count and h_row.checked_count > 0:
-                rate = h_row.failed_count / h_row.checked_count
+                rate = float(h_row.failed_count or 0) / float(h_row.checked_count)
                 arr = history_by_rule.setdefault(h_row.rule_id, [])
                 if len(arr) < _HISTORY_WINDOW:
                     arr.append(rate)
@@ -184,7 +184,7 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
             checked_count = res.checked_count
             failed_count = res.failed_count
 
-        current_rate = (failed_count / checked_count) if checked_count and checked_count > 0 else 0.0
+        current_rate = (float(failed_count or 0) / float(checked_count)) if checked_count and checked_count > 0 else 0.0
 
         history_rates = history_by_rule.get(rule_id, [])
         sufficient_history = len(history_rates) >= config.min_history_size_robust

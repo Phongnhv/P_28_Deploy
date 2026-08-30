@@ -755,8 +755,9 @@ async def run_anomaly_graph(
 
     from src.config import get_settings
     from src.models.database import DqRunModel
-    from src.services.rule_store import get_engine
+    from src.services.rule_store import get_engine, init_db
 
+    init_db()
     settings = get_settings()
     active_mode = investigation_mode or settings.anomaly_investigation_mode
 

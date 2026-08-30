@@ -11,6 +11,15 @@ import logging
 import uuid
 from typing import Any
 
+try:
+    import numpy as np
+    from sklearn.ensemble import IsolationForest
+    _ML_DEPS_AVAILABLE = True
+except ImportError:
+    np = None  # type: ignore
+    IsolationForest = None  # type: ignore
+    _ML_DEPS_AVAILABLE = False
+
 from src.config.detector_config import DetectorConfig
 from src.services.anomaly_features import RuleFeatureFrame
 
@@ -93,10 +102,28 @@ def run_isolation_forest_rule_detector(
         }
 
     # 3. Model Training & Scoring with Fault Isolation
-    try:
-        import numpy as np
-        from sklearn.ensemble import IsolationForest
+    if not _ML_DEPS_AVAILABLE or np is None or IsolationForest is None:
+        return {
+            "signal_id": f"sig-{uuid.uuid4().hex[:12]}",
+            "family": "ML",
+            "target_type": "RULE",
+            "target_id": rule_id,
+            "score": 0.0,
+            "reliability": 0.0,
+            "observed_value": "ERROR",
+            "baseline": {
+                "history_size": history_size,
+                "feature_schema_version": feature_schema_version,
+                "error": "scikit-learn or numpy is not installed",
+            },
+            "sufficient_history": False,
+            "detector_name": "ISOLATION_FOREST",
+            "detector_version": "iforest-v1",
+            "explanation_code": "Thư viện scikit-learn hoặc numpy chưa được cài đặt.",
+            "evidence_refs": evidence_refs,
+        }
 
+    try:
         x_train = np.array(history_vectors, dtype=np.float64)
         x_current = np.array([current_vector], dtype=np.float64)
 
