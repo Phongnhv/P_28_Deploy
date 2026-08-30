@@ -750,6 +750,8 @@ export interface GraphEdgeSpec {
   from: string;
   to: string;
   condition?: string;
+  condition_en?: string;
+  condition_vi?: string;
 }
 
 export interface GraphSpec {

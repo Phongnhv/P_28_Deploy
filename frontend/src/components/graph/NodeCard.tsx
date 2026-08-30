@@ -10,11 +10,11 @@ export function formatDuration(ms: number): string {
   return `${minutes}m ${seconds}s`;
 }
 
-const kindLabel: Record<GraphNodeSpec["kind"], string> = {
-  LLM: "LLM",
-  DETERMINISTIC: "Deterministic",
-  GATE: "HITL gate",
-};
+export function getKindLabel(kind: GraphNodeSpec["kind"], vi: boolean): string {
+  if (kind === "DETERMINISTIC") return vi ? "Tất định" : "Deterministic";
+  if (kind === "GATE") return vi ? "Cổng HITL" : "HITL gate";
+  return "LLM";
+}
 
 const statusGlyph: Record<string, string> = {
   SUCCEEDED: "✓",
@@ -41,8 +41,10 @@ export function NodeCard({
   step?: number;
   totalSteps?: number;
 }) {
-  const label = language === "vi" ? node.label_vi : node.label_en;
-  const purpose = language === "vi" ? node.purpose_vi : node.purpose_en;
+  const vi = language === "vi";
+  const label = vi ? node.label_vi : node.label_en;
+  const purpose = vi ? node.purpose_vi : node.purpose_en;
+  const kindText = getKindLabel(node.kind, vi);
   // A node with no run has not executed in this context. That is information,
   // not an error, so it gets its own muted state rather than looking broken.
   const state = run ? run.status.toLowerCase() : "idle";
@@ -52,7 +54,7 @@ export function NodeCard({
       type="button"
       className={`graph-node-card kind-${node.kind.toLowerCase()} state-${state} ${isSelected ? "selected" : ""}`}
       onClick={() => onSelect(node, run)}
-      aria-label={`${label} — ${kindLabel[node.kind]}`}
+      aria-label={`${label} — ${kindText}`}
     >
       <div className="graph-node-top">
         {step !== undefined && (
@@ -61,7 +63,7 @@ export function NodeCard({
             {totalSteps ? <i>/{totalSteps}</i> : null}
           </span>
         )}
-        <span className={`graph-node-kind kind-${node.kind.toLowerCase()}`}>{kindLabel[node.kind]}</span>
+        <span className={`graph-node-kind kind-${node.kind.toLowerCase()}`}>{kindText}</span>
         {run && (
           <span className={`graph-node-status state-${state}`} title={run.status}>
             {statusGlyph[run.status] ?? "•"}

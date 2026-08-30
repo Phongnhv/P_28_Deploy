@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { GraphNodeSpec, NodeRun, NodeRunDetail } from "../../types";
-import { formatDuration } from "./NodeCard";
+import { formatDuration, getKindLabel } from "./NodeCard";
 
 /**
  * `summarize()` in src/services/node_telemetry.py replaces every container it
@@ -207,7 +207,7 @@ export function NodeDetailDrawer({
       <aside className="graph-drawer" role="dialog" aria-modal="true" aria-label={vi ? node.label_vi : node.label_en}>
         <header className="graph-drawer-head">
           <div>
-            <span className={`graph-node-kind kind-${node.kind.toLowerCase()}`}>{node.kind}</span>
+            <span className={`graph-node-kind kind-${node.kind.toLowerCase()}`}>{getKindLabel(node.kind, vi)}</span>
             <h3>{vi ? node.label_vi : node.label_en}</h3>
             <code>{node.name}</code>
           </div>

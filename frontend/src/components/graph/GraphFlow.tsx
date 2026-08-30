@@ -41,8 +41,13 @@ export function GraphFlow({
 
   // Conditional edges are what make these graphs interesting -- fail-closed
   // routing, the dictionary bypass. Label them so the branch is legible.
-  const conditionFor = (fromName: string, toName: string) =>
-    graph.edges.find((edge) => edge.from === fromName && edge.to === toName)?.condition;
+  const conditionFor = (fromName: string, toName: string) => {
+    const edge = graph.edges.find((item) => item.from === fromName && item.to === toName);
+    if (!edge) return undefined;
+    if (language === "vi" && edge.condition_vi) return edge.condition_vi;
+    if (edge.condition_en) return edge.condition_en;
+    return edge.condition;
+  };
 
   return (
     <section className={`graph-flow ${compact ? "compact" : ""}`} aria-label={graph.label_en}>

@@ -770,7 +770,8 @@ export const mockApi: ApiClient = {
   },
   async listNodeRuns(filter) {
     const key = filter.graphKey;
-    return mockNodeRuns.filter((run) => (key ? run.graph_key === key : true)).map((run) => structuredClone(run));
+    const datasetFilter = filter.datasetId;
+    return mockNodeRuns.filter((run) => (key ? run.graph_key === key : true)).filter((run) => !datasetFilter || run.dataset_id === datasetFilter).map((run) => structuredClone(run));
   },
   async getNodeRun(nodeRunId) {
     const run = mockNodeRuns.find((item) => item.id === nodeRunId);
@@ -798,13 +799,15 @@ const mockNode = (
   labelEn: string,
   labelVi: string,
   kind: NodeKind,
+  purposeEn?: string,
+  purposeVi?: string,
 ): GraphNodeSpec => ({
   name,
   label_en: labelEn,
   label_vi: labelVi,
   kind,
-  purpose_en: `${labelEn} step of the pipeline.`,
-  purpose_vi: `Bước ${labelVi} trong pipeline.`,
+  purpose_en: purposeEn ?? `${labelEn} step of the pipeline.`,
+  purpose_vi: purposeVi ?? `Bước ${labelVi} trong pipeline.`,
   inputs: [],
   outputs: [],
   db_tables: [],
@@ -818,16 +821,50 @@ const mockGraphCatalog: GraphCatalog = {
       builder: "build_understanding_graph",
       label_en: "Graph 1A · Dataset understanding",
       label_vi: "Graph 1A · Hiểu ngữ nghĩa dữ liệu",
-      run_en: "Run 1", run_vi: "Run 1",
-      summary_en: "Profile evidence becomes a draft semantic contract.",
-      summary_vi: "Hồ sơ dữ liệu thành hợp đồng ngữ nghĩa nháp.",
+      run_en: "Run 1 — Proposal engine", run_vi: "Run 1 — Bộ máy đề xuất",
+      summary_en: "Turns persisted profile evidence into a draft semantic contract, then stops for steward review.",
+      summary_vi: "Biến hồ sơ dữ liệu đã lưu thành hợp đồng ngữ nghĩa nháp, rồi dừng chờ Steward duyệt.",
       nodes: [
-        mockNode("build_profile_digest", "Profile digest", "Nén hồ sơ", "DETERMINISTIC"),
-        mockNode("data_dictionary_generator", "Data dictionary", "Sinh từ điển dữ liệu", "LLM"),
-        mockNode("dataset_understanding", "Dataset understanding", "Hiểu tập dữ liệu", "LLM"),
+        mockNode(
+          "build_profile_digest",
+          "Profile digest",
+          "Nén hồ sơ",
+          "DETERMINISTIC",
+          "Compress raw profile statistics into a compact JSON digest.",
+          "Nén số liệu hồ sơ thô thành JSON digest tinh gọn.",
+        ),
+        mockNode(
+          "data_dictionary_generator",
+          "Data dictionary",
+          "Sinh từ điển dữ liệu",
+          "LLM",
+          "Normalise field names and descriptions into a data dictionary.",
+          "Chuẩn hoá tên và mô tả trường theo Data Dictionary.",
+        ),
+        mockNode(
+          "dataset_understanding",
+          "Dataset understanding",
+          "Hiểu tập dữ liệu",
+          "LLM",
+          "Infer business role and semantic type of every column.",
+          "Suy luận vai trò nghiệp vụ và kiểu ngữ nghĩa của từng cột.",
+        ),
       ],
       edges: [
-        { from: "build_profile_digest", to: "data_dictionary_generator" },
+        {
+          from: "build_profile_digest",
+          to: "data_dictionary_generator",
+          condition: "no dictionary supplied",
+          condition_en: "no dictionary supplied",
+          condition_vi: "chưa có từ điển",
+        },
+        {
+          from: "build_profile_digest",
+          to: "dataset_understanding",
+          condition: "dictionary already supplied",
+          condition_en: "dictionary already supplied",
+          condition_vi: "đã có từ điển",
+        },
         { from: "data_dictionary_generator", to: "dataset_understanding" },
         { from: "dataset_understanding", to: "END" },
       ],
@@ -927,7 +964,7 @@ const mockNodeRun = (
   error_message: status === "FAILED" ? "Mock failure for demonstration." : null,
   model_name: kind === "LLM" ? "gpt-4o-mini" : null,
   workflow_run_id: "wf-mock",
-  dataset_id: "yellow_tripdata",
+  dataset_id: datasetId,
   dq_run_id: graphKey === "G2" || graphKey === "G3" ? "dq-mock" : null,
   anomaly_run_id: graphKey === "G3" ? "anom-mock" : null,
 });

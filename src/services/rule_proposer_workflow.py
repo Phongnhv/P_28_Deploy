@@ -526,6 +526,13 @@ def _agent_semantic_payload(db: Session, dataset_id: str, *, workflow_run_id: st
         fallback["agent_mode"] = "deterministic-fallback"
         return fallback
 
+    dataset_obj = db.get(DatasetModel, dataset_id)
+    domain_hint = (
+        (dataset_obj.description or dataset_obj.name)
+        if dataset_obj and (dataset_obj.description or dataset_obj.name)
+        else dataset_id
+    )
+
     from src.agents.graph import build_understanding_graph
 
     async def _invoke() -> dict[str, Any]:
@@ -537,7 +544,7 @@ def _agent_semantic_payload(db: Session, dataset_id: str, *, workflow_run_id: st
                     "dataset_id": dataset_id,
                     "dataset_profile": _raw_profile_for_graph(db, dataset_id, fallback),
                     "target_tables": [dataset_id],
-                    "metadata": {"domain_hint": "NYC Yellow Taxi trip operations"},
+                    "metadata": {"domain_hint": domain_hint},
                 }
             ),
             timeout=UNDERSTANDING_GRAPH_TIMEOUT_SECONDS,

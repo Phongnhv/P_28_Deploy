@@ -96,8 +96,8 @@ GRAPH_CATALOG: dict[str, dict[str, Any]] = {
             ),
         ],
         "edges": [
-            {"from": "build_profile_digest", "to": "data_dictionary_generator", "condition": "no dictionary supplied"},
-            {"from": "build_profile_digest", "to": "dataset_understanding", "condition": "dictionary already supplied"},
+            {"from": "build_profile_digest", "to": "data_dictionary_generator", "condition": "no dictionary supplied", "condition_en": "no dictionary supplied", "condition_vi": "chưa có từ điển"},
+            {"from": "build_profile_digest", "to": "dataset_understanding", "condition": "dictionary already supplied", "condition_en": "dictionary already supplied", "condition_vi": "đã có từ điển"},
             {"from": "data_dictionary_generator", "to": "dataset_understanding"},
             {"from": "dataset_understanding", "to": "END"},
         ],

@@ -280,7 +280,15 @@ export function Step1DataPreparation({
                   <div className="prep-dataset-top">
                     <span className={`prep-status ${isSelected ? "selected" : ""}`}>
                       <span className="prep-status-dot" />
-                      {isSelected ? "SELECTED" : item.status.replaceAll("_", " ")}
+                      {isSelected
+                        ? vi ? "ĐÃ CHỌN" : "SELECTED"
+                        : vi
+                          ? item.status === "REGISTERED"
+                            ? "ĐÃ ĐĂNG KÝ"
+                            : item.status === "PROFILE_READY"
+                              ? "ĐÃ PROFILE"
+                              : item.status.replaceAll("_", " ")
+                          : item.status.replaceAll("_", " ")}
                     </span>
                     <code>{item.manifest_version}</code>
                   </div>
@@ -340,42 +348,52 @@ export function Step1DataPreparation({
             </p>
           </div>
           <button
-            className="button"
+            className="button secondary"
             disabled={!dataset || profiling}
+            aria-expanded={showProfile}
             onClick={() => {
-              setShowProfile(true);
-              if (!profileReady) onProfileDataset();
+              setShowProfile((prev) => {
+                const next = !prev;
+                if (next && !profileReady) onProfileDataset();
+                return next;
+              });
             }}
           >
-            {profiling ? (vi ? "Đang profile…" : "Profiling…") : vi ? "Profile dataset" : "Profile dataset"}
+            {profiling
+              ? (vi ? "Đang profile…" : "Profiling…")
+              : showProfile
+                ? (vi ? "Ẩn Profile dữ liệu" : "Hide profile")
+                : (vi ? "Profile dữ liệu" : "Profile dataset")}
           </button>
         </header>
         {showProfile && <div className="prep-reveal">{profilePanel}</div>}
       </section>
 
-      {/* ---- The observatory, collapsed until asked for ---- */}
-      <section className="prep-section">
-        <header className="prep-section-head">
-          <span className="prep-section-index">5</span>
-          <div className="prep-section-title">
-            <h2>Data Quality Observability</h2>
-            <p>
-              {vi
-                ? "Theo dõi sức khoẻ run, độ trôi của rule và các tín hiệu cần chú ý."
-                : "Monitor run health, rule drift, and the signals that need attention."}
-            </p>
-          </div>
-          <button
-            className="button secondary"
-            disabled={!dataset}
-            aria-expanded={showObservatory}
-            onClick={() => setShowObservatory((prev) => !prev)}
-          >
-            {showObservatory ? (vi ? "Ẩn bảng" : "Hide panel") : vi ? "Mở bảng" : "Open panel"}
-          </button>
-        </header>
-        {showObservatory && <div className="prep-reveal">{observatoryPanel}</div>}
-      </section>
+      {/* ---- The observatory, collapsed until asked for (Temporarily hidden per user request) ---- */}
+      {false && (
+        <section className="prep-section">
+          <header className="prep-section-head">
+            <span className="prep-section-index">5</span>
+            <div className="prep-section-title">
+              <h2>{vi ? "Giám sát chất lượng dữ liệu" : "Data Quality Observability"}</h2>
+              <p>
+                {vi
+                  ? "Theo dõi sức khoẻ run, độ trôi của rule và các tín hiệu cần chú ý."
+                  : "Monitor run health, rule drift, and the signals that need attention."}
+              </p>
+            </div>
+            <button
+              className="button secondary"
+              disabled={!dataset}
+              aria-expanded={showObservatory}
+              onClick={() => setShowObservatory((prev) => !prev)}
+            >
+              {showObservatory ? (vi ? "Ẩn bảng" : "Hide panel") : vi ? "Mở bảng" : "Open panel"}
+            </button>
+          </header>
+          {showObservatory && <div className="prep-reveal">{observatoryPanel}</div>}
+        </section>
+      )}
     </div>
   );
 }
