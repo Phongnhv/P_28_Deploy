@@ -1,6 +1,6 @@
 """Integration tests cho HITL REST API — /dq/runs/{run_id}/rules/*
 
-Dùng fixture client (ASGITransport, không boot lifespan → gọi init_db() thủ công).
+Dùng fixture steward_client (ASGITransport, không boot lifespan → gọi init_db() thủ công).
 Seed dữ liệu trực tiếp qua service layer, không mock toàn bộ stack.
 """
 
@@ -31,9 +31,30 @@ def _patch_engine(tmp_path):
     test_engine = create_engine(f"sqlite:///{db_file}", connect_args={"check_same_thread": False})
     Base.metadata.create_all(test_engine)
 
+    # create_all() builds the tables but seeds nothing, so the steward account the
+    # client fixture signs in with would not exist and every request would stop at
+    # 401 before reaching the route under test.
+    from sqlalchemy.orm import Session as SASession
+
+    from src.services.session_service import ensure_default_users
+
+    with SASession(test_engine) as seed_session:
+        ensure_default_users(seed_session)
+
     # Set _engine trực tiếp — thread pool workers cũng thấy engine đúng
     original = rs._engine
     rs._engine = test_engine
+
+    # create_all() dựng bảng nhưng không seed tài khoản. Trước đây không sao vì
+    # dq_router không yêu cầu đăng nhập; giờ nó có, nên fixture client cần một
+    # tài khoản thật để đăng nhập.
+    from sqlalchemy.orm import Session as _Session
+
+    from src.services.session_service import ensure_default_users
+
+    with _Session(test_engine) as _seed_session:
+        ensure_default_users(_seed_session)
+
     yield
     rs._engine = original
     test_engine.dispose()
@@ -41,8 +62,30 @@ def _patch_engine(tmp_path):
 
 @pytest_asyncio.fixture
 async def client():
+    """Authenticated client.
+
+    Every ``dq_router`` endpoint now requires a session: the router is mounted with
+    a role dependency in ``src/main.py``. Before that, publish, review and
+    bulk-review were reachable with no credentials at all, which made the
+    human-in-the-loop control unenforceable on a public deployment.
+
+    These tests exercise the endpoints' behaviour, not their authentication, so the
+    fixture signs in once. Authentication itself is covered in ``test_session.py``,
+    which deliberately keeps an anonymous client.
+    """
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.post(
+            "/api/v1/session",
+            json={"username": "steward", "password": "steward"},
+        )
+        assert response.status_code == 200, (
+            f"fixture could not sign in: {response.status_code} {response.text}"
+        )
+        # get_session verifies CSRF on every authenticated request, so the token has
+        # to ride along or every mutating call comes back 422 instead of its real
+        # status. Setting it on the client applies it to all subsequent requests.
+        ac.headers["X-CSRF-Token"] = response.json()["csrf_token"]
         yield ac
 
 
@@ -94,31 +137,31 @@ def _seed_rule(run_id: str, rule_id: str, **kwargs) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_list_rules_unknown_run_returns_404(client):
-    r = await client.get("/api/v1/dq/runs/nonexistent_run/rules")
+async def test_list_rules_unknown_run_returns_404(steward_client):
+    r = await steward_client.get("/api/v1/dq/runs/nonexistent_run/rules")
     assert r.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_list_rules_returns_empty_when_running(client):
+async def test_list_rules_returns_empty_when_running(steward_client):
     """Run còn RUNNING → trả [] không phải 404."""
     from src.services.rule_store import create_run
 
     run_id = uuid.uuid4().hex
     create_run(run_id, "yellow_tripdata")  # status=QUEUED, không có rules
 
-    r = await client.get(f"/api/v1/dq/runs/{run_id}/rules")
+    r = await steward_client.get(f"/api/v1/dq/runs/{run_id}/rules")
     assert r.status_code == 200
     assert r.json() == []
 
 
 @pytest.mark.asyncio
-async def test_list_rules_returns_rules_with_all_fields(client):
+async def test_list_rules_returns_rules_with_all_fields(steward_client):
     run_id = uuid.uuid4().hex
     _seed_run(run_id)
     _seed_rule(run_id, "t.vendor_id.NOT_NULL", dimension="COMPLETENESS")
 
-    r = await client.get(f"/api/v1/dq/runs/{run_id}/rules")
+    r = await steward_client.get(f"/api/v1/dq/runs/{run_id}/rules")
     assert r.status_code == 200
     data = r.json()
     assert len(data) == 1
@@ -130,7 +173,7 @@ async def test_list_rules_returns_rules_with_all_fields(client):
 
 
 @pytest.mark.asyncio
-async def test_list_rules_filter_by_status(client):
+async def test_list_rules_filter_by_status(steward_client):
     run_id = uuid.uuid4().hex
     _seed_run(run_id)
     _seed_rules(
@@ -141,7 +184,7 @@ async def test_list_rules_filter_by_status(client):
         ],
     )
 
-    r = await client.get(f"/api/v1/dq/runs/{run_id}/rules?status=PENDING")
+    r = await steward_client.get(f"/api/v1/dq/runs/{run_id}/rules?status=PENDING")
     assert r.status_code == 200
     data = r.json()
     assert len(data) == 1
@@ -149,7 +192,7 @@ async def test_list_rules_filter_by_status(client):
 
 
 @pytest.mark.asyncio
-async def test_list_rules_filter_by_dimension(client):
+async def test_list_rules_filter_by_dimension(steward_client):
     run_id = uuid.uuid4().hex
     _seed_run(run_id)
     _seed_rules(
@@ -160,7 +203,7 @@ async def test_list_rules_filter_by_dimension(client):
         ],
     )
 
-    r = await client.get(f"/api/v1/dq/runs/{run_id}/rules?dimension=COMPLETENESS")
+    r = await steward_client.get(f"/api/v1/dq/runs/{run_id}/rules?dimension=COMPLETENESS")
     assert r.status_code == 200
     data = r.json()
     assert len(data) == 1
@@ -173,8 +216,8 @@ async def test_list_rules_filter_by_dimension(client):
 
 
 @pytest.mark.asyncio
-async def test_patch_rule_unknown_run_returns_404(client):
-    r = await client.patch(
+async def test_patch_rule_unknown_run_returns_404(steward_client):
+    r = await steward_client.patch(
         "/api/v1/dq/runs/unknown_run/rules/some.rule.NOT_NULL",
         json={"status": "APPROVED"},
     )
@@ -182,11 +225,11 @@ async def test_patch_rule_unknown_run_returns_404(client):
 
 
 @pytest.mark.asyncio
-async def test_patch_rule_unknown_rule_returns_404(client):
+async def test_patch_rule_unknown_rule_returns_404(steward_client):
     run_id = uuid.uuid4().hex
     _seed_run(run_id)
 
-    r = await client.patch(
+    r = await steward_client.patch(
         f"/api/v1/dq/runs/{run_id}/rules/nonexistent.rule.NOT_NULL",
         json={"status": "APPROVED"},
     )
@@ -194,12 +237,12 @@ async def test_patch_rule_unknown_rule_returns_404(client):
 
 
 @pytest.mark.asyncio
-async def test_patch_rule_invalid_status_returns_422(client):
+async def test_patch_rule_invalid_status_returns_422(steward_client):
     run_id = uuid.uuid4().hex
     _seed_run(run_id)
     _seed_rule(run_id, "t.col_a.NOT_NULL")
 
-    r = await client.patch(
+    r = await steward_client.patch(
         f"/api/v1/dq/runs/{run_id}/rules/t.col_a.NOT_NULL",
         json={"status": "MAYBE"},  # không hợp lệ
     )
@@ -207,12 +250,12 @@ async def test_patch_rule_invalid_status_returns_422(client):
 
 
 @pytest.mark.asyncio
-async def test_patch_rule_rejected_without_note_returns_422(client):
+async def test_patch_rule_rejected_without_note_returns_422(steward_client):
     run_id = uuid.uuid4().hex
     _seed_run(run_id)
     _seed_rule(run_id, "t.col_a.NOT_NULL")
 
-    r = await client.patch(
+    r = await steward_client.patch(
         f"/api/v1/dq/runs/{run_id}/rules/t.col_a.NOT_NULL",
         json={"status": "REJECTED"},  # thiếu review_note
     )
@@ -220,12 +263,12 @@ async def test_patch_rule_rejected_without_note_returns_422(client):
 
 
 @pytest.mark.asyncio
-async def test_patch_rule_approve_success(client):
+async def test_patch_rule_approve_success(steward_client):
     run_id = uuid.uuid4().hex
     _seed_run(run_id)
     _seed_rule(run_id, "t.col_a.NOT_NULL")
 
-    r = await client.patch(
+    r = await steward_client.patch(
         f"/api/v1/dq/runs/{run_id}/rules/t.col_a.NOT_NULL",
         json={"status": "APPROVED", "reviewer": "steward@ridepulse.vn"},
     )
@@ -237,18 +280,18 @@ async def test_patch_rule_approve_success(client):
 
 
 @pytest.mark.asyncio
-async def test_patch_rule_status_persists_after_get(client):
+async def test_patch_rule_status_persists_after_get(steward_client):
     """PATCH approve → GET rules xác nhận status đổi."""
     run_id = uuid.uuid4().hex
     _seed_run(run_id)
     _seed_rule(run_id, "t.col_a.NOT_NULL")
 
-    await client.patch(
+    await steward_client.patch(
         f"/api/v1/dq/runs/{run_id}/rules/t.col_a.NOT_NULL",
         json={"status": "APPROVED", "reviewer": "s@t.vn"},
     )
 
-    r = await client.get(f"/api/v1/dq/runs/{run_id}/rules?status=APPROVED")
+    r = await steward_client.get(f"/api/v1/dq/runs/{run_id}/rules?status=APPROVED")
     assert r.status_code == 200
     assert len(r.json()) == 1
 
@@ -259,8 +302,8 @@ async def test_patch_rule_status_persists_after_get(client):
 
 
 @pytest.mark.asyncio
-async def test_bulk_review_unknown_run_returns_404(client):
-    r = await client.post(
+async def test_bulk_review_unknown_run_returns_404(steward_client):
+    r = await steward_client.post(
         "/api/v1/dq/runs/nonexistent/rules/bulk-review",
         json={"decisions": [{"rule_id": "x", "status": "APPROVED"}]},
     )
@@ -268,12 +311,12 @@ async def test_bulk_review_unknown_run_returns_404(client):
 
 
 @pytest.mark.asyncio
-async def test_bulk_review_with_bad_id_returns_not_found_list(client):
+async def test_bulk_review_with_bad_id_returns_not_found_list(steward_client):
     run_id = uuid.uuid4().hex
     _seed_run(run_id)
     _seed_rule(run_id, "t.col_a.NOT_NULL")
 
-    r = await client.post(
+    r = await steward_client.post(
         f"/api/v1/dq/runs/{run_id}/rules/bulk-review",
         json={
             "decisions": [
@@ -294,13 +337,13 @@ async def test_bulk_review_with_bad_id_returns_not_found_list(client):
 
 
 @pytest.mark.asyncio
-async def test_review_summary_unknown_run_returns_404(client):
-    r = await client.get("/api/v1/dq/runs/nonexistent/review-summary")
+async def test_review_summary_unknown_run_returns_404(steward_client):
+    r = await steward_client.get("/api/v1/dq/runs/nonexistent/review-summary")
     assert r.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_review_summary_counts_match(client):
+async def test_review_summary_counts_match(steward_client):
     run_id = uuid.uuid4().hex
     _seed_run(run_id)
     _seed_rules(
@@ -312,12 +355,12 @@ async def test_review_summary_counts_match(client):
     )
 
     # Approve 1
-    await client.patch(
+    await steward_client.patch(
         f"/api/v1/dq/runs/{run_id}/rules/t.col_a.NOT_NULL",
         json={"status": "APPROVED"},
     )
 
-    r = await client.get(f"/api/v1/dq/runs/{run_id}/review-summary")
+    r = await steward_client.get(f"/api/v1/dq/runs/{run_id}/review-summary")
     assert r.status_code == 200
     data = r.json()
     assert data["total"] == 2
@@ -332,7 +375,7 @@ async def test_review_summary_counts_match(client):
 
 
 @pytest.mark.asyncio
-async def test_approved_rules_only_returns_approved(client):
+async def test_approved_rules_only_returns_approved(steward_client):
     run_id = uuid.uuid4().hex
     _seed_run(run_id)
     _seed_rules(
@@ -344,12 +387,12 @@ async def test_approved_rules_only_returns_approved(client):
     )
 
     # Approve 1
-    await client.patch(
+    await steward_client.patch(
         f"/api/v1/dq/runs/{run_id}/rules/t.col_a.NOT_NULL",
         json={"status": "APPROVED"},
     )
 
-    r = await client.get(f"/api/v1/dq/runs/{run_id}/approved-rules")
+    r = await steward_client.get(f"/api/v1/dq/runs/{run_id}/approved-rules")
     assert r.status_code == 200
     data = r.json()
     assert data["count"] == 1

@@ -1,8 +1,10 @@
+import os
 from typing import Literal
 
 from langchain.chat_models import init_chat_model
 
 from src.config import get_settings
+from src.services.eval_telemetry import EvalTelemetryCallback
 
 Provider_type = Literal["openai", "anthropic", "mistral", "google"]
 
@@ -21,6 +23,14 @@ def get_llm(provider: Provider_type, temperature: float | None = None, callbacks
     settings = get_settings()
     temp = temperature if temperature is not None else settings.llm_temperature
     cb_list = callbacks if callbacks is not None else [get_metrics_tracker()]
+
+    model_names = {
+        "openai": settings.openai_model_name,
+        "anthropic": settings.anthropic_model_name,
+        "mistral": settings.mistral_model_name,
+        "google": settings.google_model_name,
+    }
+    callbacks = [EvalTelemetryCallback(provider=provider, model=model_names[provider])]
 
     if provider == "openai":
         return init_chat_model(

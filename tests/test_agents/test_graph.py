@@ -10,8 +10,11 @@ import src.services.rule_store as rule_store_module
 from src.agents.graph import (
     _should_run_or_fail,
     build_anomaly_graph,
+    build_dashboard_proposal_graph,
     build_execution_graph,
     build_proposal_graph,
+    build_rule_proposal_graph,
+    build_understanding_graph,
     run_execution_graph,
     run_proposal_graph,
 )
@@ -338,3 +341,45 @@ async def test_runners(monkeypatch, tmp_path):
     assert exec_res["test_run_id"] is not None
     assert len(exec_res["results"]) >= 1
     assert exec_res["results"][0]["status"] in ("PASS", "FAIL")
+
+
+# ---------------------------------------------------------------------------
+# Catalog / builder agreement
+#
+# graph_catalog.py is a hand-written mirror of the builders. Nothing forces the
+# two to stay aligned, and a stale catalog would silently draw a graph the
+# backend no longer runs -- so assert the agreement here instead.
+# ---------------------------------------------------------------------------
+def _builder_node_names(compiled) -> set[str]:
+    """Node names LangGraph actually compiled, minus its own bookkeeping nodes."""
+    return {name for name in compiled.get_graph().nodes if name not in {"__start__", "__end__"}}
+
+
+def test_catalog_matches_the_compiled_builders():
+    from src.agents.graph_catalog import GRAPH_CATALOG
+
+    builders = {
+        "G1A": build_understanding_graph(),
+        "G1B": build_rule_proposal_graph(),
+        "G1_FULL": build_proposal_graph(),
+        "G_DASHBOARD": build_dashboard_proposal_graph(),
+        "G2": build_execution_graph(),
+        "G3": build_anomaly_graph(investigation_mode="legacy"),
+    }
+
+    # Only graphs compiled from a langgraph builder can drift from one. The
+    # catalog also describes G2_DIRECT, the plain-Python SQL runner behind
+    # "Run approved rules", which has no compiled graph to compare against.
+    langgraph_keys = {key for key, graph in GRAPH_CATALOG.items() if graph.get("langgraph", True)}
+    assert langgraph_keys == set(builders)
+    for key, compiled in builders.items():
+        catalog_names = {node["name"] for node in GRAPH_CATALOG[key]["nodes"]}
+        assert catalog_names == _builder_node_names(compiled), f"{key} catalog drifted from its builder"
+
+
+def test_catalog_node_kinds_are_valid():
+    from src.agents.graph_catalog import DETERMINISTIC, GATE, GRAPH_CATALOG, LLM
+
+    for graph in GRAPH_CATALOG.values():
+        for node in graph["nodes"]:
+            assert node["kind"] in {LLM, DETERMINISTIC, GATE}

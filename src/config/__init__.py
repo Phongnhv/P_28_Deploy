@@ -74,9 +74,11 @@ class Settings(BaseSettings):
 
     # Output
     output_dir: str = "./output"
-    results_dir: str = "./output"
+    results_dir: str = "./output" # Backwards-compatible alias
+    upload_dir: str = "./data/uploads"
 
-    # Generated dbt artifacts
+    # Generated dbt artifacts (GCS/Cloud Run, AWS S3, or MinIO locally)
+    object_storage_enabled: bool = True
     object_storage_provider: Literal["s3", "gcs"] = "s3"
     object_storage_bucket: str = "ridepulse-dbt-artifacts"
     object_storage_prefix: str = "dbt-tests"

@@ -36,6 +36,9 @@ SUPPORTED_RULE_TYPES = {
     "duplicate_fingerprint",
 }
 SAFE_OPERATORS = {"<", "<=", ">", ">=", "==", "!="}
+
+logger = logging.getLogger(__name__)
+
 RULE_POLICY_PATH = Path(__file__).resolve().parents[1] / "resources" / "rule_policies.json"
 
 
@@ -69,6 +72,30 @@ class RulePolicyDocument(BaseModel):
 
 @lru_cache(maxsize=1)
 def _load_rule_policy_document() -> RulePolicyDocument:
+    """Đọc policy tuỳ chọn theo dataset. Thiếu file KHÔNG phải lỗi.
+
+    Mọi nơi gọi ``get_dataset_rule_policy`` đều đã xử lý ``None``
+    (``routes.py:1000``, ``:319``, ``:505``, ``:798``, ``job_runner.py:124``), tức
+    thiết kế ban đầu coi policy là **phần ghi đè tuỳ chọn cho từng dataset**: dataset
+    nào không có policy thì bỏ qua kiểm tra governed value, chứ không phải dừng lại.
+
+    Chỉ hàm này phá vỡ hợp đồng đó. Khi ``ac4b663`` xoá mất file, một tệp cấu hình
+    vắng mặt đã làm chết 7 điểm gọi — trong đó có Data explorer — dù mọi caller đều
+    sẵn sàng chạy tiếp mà không cần policy.
+
+    Điều này còn chặn chính mục tiêu sản phẩm: người dùng upload dataset bất kỳ sẽ
+    không bao giờ có entry viết tay trong ``rule_policies.json``. Nếu thiếu file là
+    lỗi chí mạng thì **không dataset mới nào chạy được**.
+
+    File hỏng thì vẫn báo lỗi: đó là cấu hình sai, khác với cấu hình không có.
+    """
+    if not RULE_POLICY_PATH.exists():
+        logger.info(
+            "Không có %s — chạy không kèm policy theo dataset. "
+            "Kiểm tra governed value sẽ được bỏ qua.",
+            RULE_POLICY_PATH.name,
+        )
+        return RulePolicyDocument(datasets={})
     try:
         return RulePolicyDocument.model_validate_json(RULE_POLICY_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -431,7 +458,15 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
 def generate_dashboard_proposals(
     db: Session, dataset_id: str, semantic_contract: dict[str, Any] | None = None
 ) -> list[DashboardProposal]:
-    """Return two to five validated proposals in the configured local agent mode."""
+    """Return two to five validated proposals in the configured local agent mode.
+
+    The parameter and the whole tail of this function were lost in a merge: the
+    body still referenced ``semantic_contract`` as if it were an argument, so
+    every call raised NameError inside the try, was swallowed by the except, and
+    silently returned ``_mock_proposals``. The agent's own rules never reached a
+    caller, and the fallback in rule_proposer_workflow -- which passes the
+    contract as a third argument -- could not even be called.
+    """
     evidence = build_proposal_evidence(db, dataset_id)
     settings = get_settings()
     if settings.agent_mode == "mock":
@@ -459,6 +494,106 @@ def generate_dashboard_proposals(
         return proposals
 
     return _mock_proposals(evidence)
+
+
+def generate_rule_proposals_via_graph_1b(
+    db: Session,
+    dataset_id: str,
+    semantic_contract: dict[str, Any],
+    *,
+    workflow_run_id: str | None = None,
+) -> list[DashboardProposal]:
+    """Return proposals produced by the full Graph 1B (three nodes).
+
+    ``generate_dashboard_proposals`` runs a single-node shortcut, so
+    ``rule_candidate_builder`` and ``prompt_customizer`` -- both documented parts
+    of Run 1 -- never executed from the wizard.  This entrypoint drives the real
+    graph while reusing the same validation, normalisation and policy-completion
+    pipeline, so the proposals it returns are indistinguishable in shape.
+
+    Raises ``AgentWorkflowError`` like its sibling; the caller decides whether to
+    fall back to the shortcut.
+    """
+    evidence = build_proposal_evidence(db, dataset_id)
+    if get_settings().agent_mode == "mock":
+        return _mock_proposals(evidence)
+
+    if len(_build_dashboard_rule_candidates(evidence)) < 2:
+        raise AgentWorkflowError("The aggregate profile has fewer than two evidence-backed dashboard candidates.")
+
+    raw_rules = _invoke_rule_proposal_graph(evidence, semantic_contract, workflow_run_id=workflow_run_id)
+    proposals = _normalise_graph_rules(raw_rules, evidence)
+    if not proposals:
+        raise AgentWorkflowError("Graph 1B did not return enough valid, evidence-backed rules.")
+    proposals = _complete_with_policy_candidates(proposals, evidence)
+    # Only a lower bound here. The 2..5 window belongs to the dashboard shortcut,
+    # where five tiles is a layout budget; this path feeds the step-3 review
+    # queue, which routinely holds dozens. Enforcing the upper bound threw away
+    # complete, evidence-backed sets for being too useful -- measured as 14 valid
+    # rules rejected outright.
+    if len(proposals) < 2:
+        raise AgentWorkflowError(
+            f"Graph 1B produced only {len(proposals)} evidence-backed rule(s); at least 2 are required."
+        )
+    return proposals
+
+
+def _table_keyed_contract(semantic_contract: dict[str, Any], dataset_id: str) -> dict[str, Any]:
+    """Return the contract in the ``{"tables": {name: contract}}`` shape nodes expect.
+
+    The workflow stores a *flattened* contract in its artifact -- columns and
+    assumptions at the top level, no table key -- because the wizard only ever
+    handles one dataset.  ``rule_candidate_builder`` and ``prompt_customizer``
+    both iterate ``contract["tables"]`` and return empty when it is missing, so
+    passing the artifact payload through unchanged makes them no-ops that still
+    report success.  Re-wrapping here is what makes them do real work.
+    """
+    if isinstance(semantic_contract.get("tables"), dict) and semantic_contract["tables"]:
+        return semantic_contract
+    return {**semantic_contract, "tables": {dataset_id: semantic_contract}}
+
+
+def _invoke_rule_proposal_graph(
+    evidence: ProposalEvidence,
+    semantic_contract: dict[str, Any],
+    *,
+    workflow_run_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Run Graph 1B: rule_candidate_builder ➔ prompt_customizer ➔ rule_proposer."""
+    from src.agents.graph import build_rule_proposal_graph
+    from src.services.node_telemetry import start_graph_run
+
+    contract = _table_keyed_contract(semantic_contract, evidence.dataset_id)
+
+    async def invoke() -> list[dict[str, Any]]:
+        start_graph_run(workflow_run_id=workflow_run_id, dataset_id=evidence.dataset_id)
+        graph = build_rule_proposal_graph()
+        digest = evidence.to_agent_digest()
+        tables = contract["tables"]
+        for table_name, table_digest in digest.items():
+            if isinstance(table_digest, dict):
+                table_digest["confirmed_semantic_contract"] = tables.get(table_name, semantic_contract)
+        result = await graph.ainvoke(
+            {
+                "dataset_id": evidence.dataset_id,
+                "rule_run_id": f"graph1b-proposal-{uuid.uuid4().hex}",
+                "dataset_profile_digest": digest,
+                "semantic_contract": contract,
+                "normalized_data_dictionary": {"tables": tables},
+                "target_tables": [evidence.dataset_id],
+                "metadata": {
+                    "workflow": "graph_1b",
+                    "evidence_source": "persisted_aggregate_profile",
+                    "max_retries": 0,
+                },
+            }
+        )
+        errors = result.get("rule_proposal_errors", [])
+        if errors:
+            raise AgentWorkflowError("Graph 1B could not produce a valid structured response.")
+        return result.get("proposed_rules", [])
+
+    return _run_coroutine_safely(invoke())
 
 
 def _invoke_dashboard_proposal_graph(
@@ -576,7 +711,7 @@ def _normalise_graph_rules(raw_rules: list[dict[str, Any]], evidence: ProposalEv
     candidates = _build_dashboard_rule_candidates(evidence)
     accepted: list[tuple[DashboardProposal, DashboardRuleCandidate]] = []
     candidate_ids: set[str] = set()
-    rule_types: set[str] = set()
+
 
     for raw in raw_rules:
         matched_candidate = _match_dashboard_candidate(raw, candidates, evidence)
@@ -585,13 +720,10 @@ def _normalise_graph_rules(raw_rules: list[dict[str, Any]], evidence: ProposalEv
         proposal = _normalise_graph_rule(raw, evidence, matched_candidate)
         if not proposal:
             continue
-        if matched_candidate.id in candidate_ids or proposal.rule_type in rule_types:
+        if matched_candidate.id in candidate_ids:
             continue
         candidate_ids.add(matched_candidate.id)
-        rule_types.add(proposal.rule_type)
         accepted.append((proposal, matched_candidate))
-        if len(accepted) == 5:
-            break
     # The model chooses candidates; server policy owns stable display order.
     accepted.sort(key=lambda item: item[1].priority, reverse=True)
     return [proposal for proposal, _candidate in accepted]
@@ -700,7 +832,6 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
                 confidence_ceiling=0.85,
             )
         )
-        break
 
     for column_name in policy.nonnegative_columns:
         column = columns.get(column_name)
@@ -739,7 +870,6 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
                 confidence_ceiling=0.9,
             )
         )
-        break
 
     for column, allowed_values in policy.governed_value_sets.items():
         profile = columns.get(column)
@@ -815,10 +945,11 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
             )
         )
 
-    if not candidates:
-        for col in evidence.columns:
-            if col.name in ("source_row_id", "id"):
-                continue
+    existing_column_rules = {candidate.column for candidate in candidates}
+    for col in evidence.columns:
+        if col.name in ("source_row_id", "id"):
+            continue
+        if col.name not in existing_column_rules:
             candidates.append(
                 DashboardRuleCandidate(
                     id=f"not-null:{col.name}", rule_type="NOT_NULL", column=col.name, parameters={},
@@ -830,7 +961,7 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
                     severity="HIGH", confidence_ceiling=0.9,
                 )
             )
-            if col.data_type == "numeric" and col.min_value is not None:
+            if col.data_type in ("numeric", "float", "integer", "real") and col.min_value is not None:
                 min_val = 0.0 if col.min_value >= 0 else float(col.min_value)
                 candidates.append(
                     DashboardRuleCandidate(
@@ -957,9 +1088,11 @@ def _complete_with_policy_candidates(
         present_types.add(candidate.dashboard_rule_type)
         if len(completed) == 2:
             break
-    priority_by_type = {
-        candidate.dashboard_rule_type: candidate.priority for candidate in _build_dashboard_rule_candidates(evidence)
-    }
+    priority_by_type: dict[str, int] = {}
+    for candidate in _build_dashboard_rule_candidates(evidence):
+        priority_by_type[candidate.dashboard_rule_type] = max(
+            priority_by_type.get(candidate.dashboard_rule_type, 0), candidate.priority
+        )
     return sorted(completed, key=lambda proposal: priority_by_type.get(proposal.rule_type, 0), reverse=True)
 
 
@@ -978,22 +1111,38 @@ def _policy_severity(candidate: DashboardRuleCandidate) -> str:
 def _mock_proposals(evidence: ProposalEvidence) -> list[DashboardProposal]:
     """Explicit offline mode for deterministic UI and automated tests."""
     available = {column.name for column in evidence.columns}
-    result = [
-        DashboardProposal(
-            id=f"proposal-{uuid.uuid4().hex}",
-            title=candidate.title,
-            description=candidate.description,
-            severity=candidate.severity,
-            rule_type=candidate.dashboard_rule_type,
-            rule_spec=candidate.rule_spec,
-            evidence_refs=candidate.evidence_refs,
-            evidence_summary=_safe_evidence_summary(evidence, candidate.evidence_refs),
-            confidence=candidate.confidence_ceiling,
-            model_name="agent-mock-v1",
-            **_fallback_core_fields(candidate, evidence, candidate.confidence_ceiling),
+    mock_ids = {
+        "not_null": "proposal-not-null",
+        "numeric_range": "proposal-range",
+        "accepted_values": "proposal-accepted-values",
+        "cross_field_comparison": "proposal-cross-field",
+    }
+    used_ids: set[str] = set()
+
+    result: list[DashboardProposal] = []
+    for candidate in _build_dashboard_rule_candidates(evidence):
+        primary_id = mock_ids.get(candidate.dashboard_rule_type)
+        if primary_id and primary_id not in used_ids:
+            proposal_id = primary_id
+        else:
+            proposal_id = f"proposal-{candidate.id.replace(':', '-')}"
+        used_ids.add(proposal_id)
+
+        result.append(
+            DashboardProposal(
+                id=proposal_id,
+                title=candidate.title,
+                description=candidate.description,
+                severity=candidate.severity,
+                rule_type=candidate.dashboard_rule_type,
+                rule_spec=candidate.rule_spec,
+                evidence_refs=candidate.evidence_refs,
+                evidence_summary=_safe_evidence_summary(evidence, candidate.evidence_refs),
+                confidence=candidate.confidence_ceiling,
+                model_name="agent-mock-v1",
+                **_fallback_core_fields(candidate, evidence, candidate.confidence_ceiling),
+            )
         )
-        for candidate in _build_dashboard_rule_candidates(evidence)
-    ]
 
     policy = get_dataset_rule_policy(evidence.dataset_id, evidence.columns)
     fingerprint_columns = policy.duplicate_fingerprint_columns if policy else []
@@ -1034,7 +1183,7 @@ def _mock_proposals(evidence: ProposalEvidence) -> list[DashboardProposal]:
                 },
             )
         )
-    if not 2 <= len(result) <= 5:
+    if not result:
         raise AgentWorkflowError("The completed profile does not contain enough supported fields for mock proposals.")
     return result
 

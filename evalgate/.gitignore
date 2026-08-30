@@ -1,0 +1,7 @@
+# EvalGate-local artefacts. Does not affect the repository-root .gitignore.
+evidence/**
+!evidence/.gitkeep
+reports/*.json
+reports/*.md
+__pycache__/
+runs/**

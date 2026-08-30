@@ -1,0 +1,12 @@
+version: "1.0"
+mutations:
+  - {id: MUT-AUTH-REMOVED, severity: CRITICAL, detector_test: test_a_mutating_endpoint_without_a_dependency_is_a_violation}
+  - {id: MUT-CROSS-TENANT, severity: CRITICAL, detector_test: test_a_cross_tenant_leak_is_detected}
+  - {id: MUT-MOCK-SERVED, severity: CRITICAL, detector_test: test_an_unset_switch_falls_back_to_the_code_default_and_blocks}
+  - {id: MUT-SECRET-EXAMPLE, severity: CRITICAL, detector_test: test_secret_scanner_does_not_exempt_example_files}
+  - {id: MUT-RAW-SELECT, severity: CRITICAL, detector_test: test_static_signals_read_from_the_given_source_root}
+  - {id: MUT-AUDIT-REMOVED, severity: CRITICAL, detector_test: test_hitl_probe_detects_unaudited_transitions}
+  - {id: MUT-EVALUATOR-REMOVED, severity: CRITICAL, detector_test: test_removing_an_evaluator_blocks_as_coverage_regression}
+  - {id: MUT-EMPTY-OUTPUT, severity: CRITICAL, detector_test: test_a_run_that_produced_nothing_blocks_the_release}
+  - {id: MUT-METRIC-COLLISION, severity: CRITICAL, detector_test: test_metric_collision_invalidates_verdict}
+  - {id: MUT-STALE-ARTIFACT, severity: CRITICAL, detector_test: test_manifest_rejects_wrong_revision}

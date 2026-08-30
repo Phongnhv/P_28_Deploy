@@ -211,6 +211,137 @@ def test_node8_assigns_stable_ids_to_legacy_candidates():
     assert first["candidate_id"] == second["candidate_id"]
 
 
+def test_node8_restores_row_count_parameters_from_server_candidate():
+    """A missing LLM parameter must not erase the deterministic candidate contract."""
+    from src.agents.nodes.rule_proposer_node import (
+        CandidateTableRuleDraft,
+        _bind_proposal_to_candidates,
+    )
+
+    draft_rule = _make_table_proposal("source_rows", n_rules=1).rules[0].model_dump()
+    draft_rule.update({
+        "candidate_id": "candidate-row-count",
+        "parameters": {},
+    })
+    draft = CandidateTableRuleDraft.model_validate({
+        "table": "hallucinated_table",
+        "rules": [draft_rule],
+    })
+    candidate = {
+        "candidate_id": "candidate-row-count",
+        "table": "source_rows",
+        "column": None,
+        "rule_type": "ROW_COUNT",
+        "parameters": {"min_row_count": 712},
+        "evidence_items": [{
+            "id": "profile:_table:profile:observed_row_count",
+            "source_type": "DATA_PROFILE",
+        }],
+    }
+
+    result = _bind_proposal_to_candidates("source_rows", draft, [candidate])
+
+    assert result.table == "source_rows"
+    assert len(result.rules) == 1
+    rule = result.rules[0]
+    assert rule.candidate_id == "candidate-row-count"
+    assert rule.column is None
+    assert rule.rule_type == RuleType.ROW_COUNT
+    assert rule.parameters.min_row_count == 712
+    assert rule.selected_evidence_refs == ["profile:_table:profile:observed_row_count"]
+    assert [item.parameter_name for item in rule.parameter_provenance] == ["min_row_count"]
+
+
+def test_node8_rebinds_duplicate_ids_and_ignores_extra_narratives():
+    """Duplicated IDs and an extra narrative cannot corrupt the candidate batch."""
+    from src.agents.nodes.rule_proposer_node import (
+        CandidateTableRuleDraft,
+        _bind_proposal_to_candidates,
+    )
+
+    raw_rules = [
+        rule.model_dump()
+        for rule in _make_table_proposal("source_rows", n_rules=3).rules
+    ]
+    for raw_rule in raw_rules:
+        raw_rule["candidate_id"] = "candidate-1"
+        raw_rule["column"] = "col_0"
+    draft = CandidateTableRuleDraft.model_validate({
+        "table": "source_rows",
+        "rules": raw_rules,
+    })
+    candidates = [
+        {
+            "candidate_id": "candidate-1",
+            "table": "source_rows",
+            "column": "col_0",
+            "rule_type": "NOT_NULL",
+            "parameters": {},
+            "evidence_items": [{"id": "profile:col_0:null_pct"}],
+        },
+        {
+            "candidate_id": "candidate-2",
+            "table": "source_rows",
+            "column": "col_1",
+            "rule_type": "NOT_NULL",
+            "parameters": {},
+            "evidence_items": [{"id": "profile:col_1:null_pct"}],
+        },
+    ]
+
+    result = _bind_proposal_to_candidates("source_rows", draft, candidates)
+
+    assert [rule.candidate_id for rule in result.rules] == ["candidate-1", "candidate-2"]
+    assert [rule.column for rule in result.rules] == ["col_0", "col_1"]
+    assert [rule.selected_evidence_refs for rule in result.rules] == [
+        ["profile:col_0:null_pct"],
+        ["profile:col_1:null_pct"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_node8_preserves_candidate_guardrail_when_node7_prompt_is_present():
+    """Node 7 context augments rather than replaces the copy-exact system prompt."""
+    from src.agents.nodes.rule_proposer_node import (
+        CandidateTableRuleDraft,
+        _propose_for_table,
+    )
+
+    candidate = {
+        "candidate_id": "candidate-row-count",
+        "table": "source_rows",
+        "column": None,
+        "rule_type": "ROW_COUNT",
+        "parameters": {"min_row_count": 712},
+        "evidence_items": [{
+            "id": "profile:_table:profile:observed_row_count",
+            "source_type": "DATA_PROFILE",
+        }],
+    }
+    draft_rule = _make_table_proposal("source_rows", n_rules=1).rules[0].model_dump()
+    draft_rule.update({"candidate_id": "candidate-row-count", "parameters": {}})
+    draft = CandidateTableRuleDraft.model_validate({"table": "source_rows", "rules": [draft_rule]})
+    structured_llm = MagicMock()
+    structured_llm.ainvoke = AsyncMock(return_value=draft)
+
+    result = await _propose_for_table(
+        table_name="source_rows",
+        table_digest={"dashboard_candidate_mode": True, "rows": 890, "columns": []},
+        structured_llm=structured_llm,
+        semaphore=asyncio.Semaphore(1),
+        max_retries=0,
+        candidates=[candidate],
+        dataset_id="dataset-import-test",
+        specialized_system_prompt="NODE 7 TITANIC DOMAIN CONTEXT",
+    )
+
+    system_prompt = str(structured_llm.ainvoke.await_args.args[0][0].content)
+    assert "Return every supplied candidate exactly once" in system_prompt
+    assert "NODE 7 TITANIC DOMAIN CONTEXT" in system_prompt
+    assert "SERVER CANDIDATE CONTRACT" in system_prompt
+    assert result.rules[0].parameters.min_row_count == 712
+
+
 def test_split_digest_by_table_unwrap_key():
     """Tự động bỏ bọc dataset_profile_digest key (dạng file debug)."""
     inner_digest = _make_digest(["orders"])
@@ -661,7 +792,25 @@ async def test_propose_for_table_deepagent_fallback_to_structured_llm():
             structured_llm=mock_structured_llm,
             semaphore=semaphore,
             max_retries=1,
-            candidates=[{"candidate_id": "cand-fallback", "column": "total_amount", "rule_type": "NOT_NULL"}],
+            # Real candidates always come through _attach_evidence_items, so they
+            # carry evidence_items; the binder rejects any candidate without one
+            # so no rule can be proposed without a traceable reference. This
+            # fixture was hand-built and skipped that step.
+            candidates=[
+                {
+                    "candidate_id": "cand-fallback",
+                    "column": "total_amount",
+                    "rule_type": "NOT_NULL",
+                    "evidence_items": [
+                        {
+                            "id": "profile:total_amount:non_null_count",
+                            "source_type": "DATA_PROFILE",
+                            "metric": "non_null_count",
+                            "value": 100,
+                        }
+                    ],
+                }
+            ],
             mode="deepagent",
             raw_llm=MagicMock(),
         )

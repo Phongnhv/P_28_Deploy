@@ -10,7 +10,9 @@ from typing import Literal
 from dotenv import load_dotenv
 from langgraph.graph import END, StateGraph
 
+from src.agents.graph_catalog import DETERMINISTIC, GATE, LLM
 from src.agents.state import AgentState
+from src.services.node_telemetry import instrument, start_graph_run
 
 load_dotenv()
 
@@ -47,9 +49,18 @@ def build_understanding_graph() -> StateGraph:
     from src.agents.nodes.profiler_node import profiler_digest_node
 
     graph = StateGraph(AgentState)
-    graph.add_node("build_profile_digest", profiler_digest_node)
-    graph.add_node("data_dictionary_generator", data_dictionary_generator_node)
-    graph.add_node("dataset_understanding", dataset_understanding_node)
+    graph.add_node(
+        "build_profile_digest",
+        instrument("G1A", "build_profile_digest", DETERMINISTIC)(profiler_digest_node),
+    )
+    graph.add_node(
+        "data_dictionary_generator",
+        instrument("G1A", "data_dictionary_generator", LLM)(data_dictionary_generator_node),
+    )
+    graph.add_node(
+        "dataset_understanding",
+        instrument("G1A", "dataset_understanding", LLM)(dataset_understanding_node),
+    )
     graph.set_entry_point("build_profile_digest")
     graph.add_conditional_edges("build_profile_digest", lambda state: END if state.get("error") else ("dataset_understanding" if state.get("normalized_data_dictionary") else "data_dictionary_generator"), {"dataset_understanding": "dataset_understanding", "data_dictionary_generator": "data_dictionary_generator", END: END})
     graph.add_edge("data_dictionary_generator", "dataset_understanding")
@@ -64,9 +75,15 @@ def build_rule_proposal_graph() -> StateGraph:
     from src.agents.nodes.rule_proposer_node import rule_proposer_node
 
     graph = StateGraph(AgentState)
-    graph.add_node("rule_candidate_builder", rule_candidate_builder_node)
-    graph.add_node("prompt_customizer", prompt_customizer_node)
-    graph.add_node("rule_proposer", rule_proposer_node)
+    graph.add_node(
+        "rule_candidate_builder",
+        instrument("G1B", "rule_candidate_builder", DETERMINISTIC)(rule_candidate_builder_node),
+    )
+    graph.add_node(
+        "prompt_customizer",
+        instrument("G1B", "prompt_customizer", LLM)(prompt_customizer_node),
+    )
+    graph.add_node("rule_proposer", instrument("G1B", "rule_proposer", LLM)(rule_proposer_node))
     graph.set_entry_point("rule_candidate_builder")
     graph.add_edge("rule_candidate_builder", "prompt_customizer")
     graph.add_edge("prompt_customizer", "rule_proposer")
@@ -310,11 +327,17 @@ def build_execution_graph(observer: NodeObserver | None = None) -> StateGraph:
 
     graph = StateGraph(AgentState)
 
-    graph.add_node("test_generator", _observed_node("GRAPH2", "test_generator", test_generator_node, observer))
-    graph.add_node("validate_dbt_project", _observed_node("GRAPH2", "validate_dbt_project", validate_dbt_project_node, observer))
-    graph.add_node("dbt_validation_failed", _observed_node("GRAPH2", "dbt_validation_failed", _fail_dbt_validation_node, observer))
-    graph.add_node("test_runner", _observed_node("GRAPH2", "test_runner", test_runner_node, observer))
-    graph.add_node("persist_report", _observed_node("GRAPH2", "persist_report", persist_report_node, observer))
+    graph.add_node("test_generator", instrument("G2", "test_generator", DETERMINISTIC)(test_generator_node))
+    graph.add_node(
+        "validate_dbt_project",
+        instrument("G2", "validate_dbt_project", DETERMINISTIC)(validate_dbt_project_node),
+    )
+    graph.add_node(
+        "dbt_validation_failed",
+        instrument("G2", "dbt_validation_failed", DETERMINISTIC)(_fail_dbt_validation_node),
+    )
+    graph.add_node("test_runner", instrument("G2", "test_runner", DETERMINISTIC)(test_runner_node))
+    graph.add_node("persist_report", instrument("G2", "persist_report", DETERMINISTIC)(persist_report_node))
 
     graph.set_entry_point("test_generator")
 
@@ -367,10 +390,10 @@ def build_anomaly_graph(
 
     graph = StateGraph(AnomalyGraphState)
 
-    graph.add_node("anomaly_detector", _observed_node("GRAPH3", "anomaly_detector", anomaly_detector_node, observer))
-    graph.add_node("hypothesis_agent", _observed_node("GRAPH3", "hypothesis_agent", hypothesis_agent, observer))
-    graph.add_node("persist_analysis", _observed_node("GRAPH3", "persist_analysis", persist_analysis_node, observer))
-    graph.add_node("report_writer", _observed_node("GRAPH3", "report_writer", report_writer_node, observer))
+    graph.add_node("anomaly_detector", instrument("G3", "anomaly_detector", DETERMINISTIC)(anomaly_detector_node))
+    graph.add_node("hypothesis_agent", instrument("G3", "hypothesis_agent", LLM)(hypothesis_agent))
+    graph.add_node("persist_analysis", instrument("G3", "persist_analysis", DETERMINISTIC)(persist_analysis_node))
+    graph.add_node("report_writer", instrument("G3", "report_writer", LLM)(report_writer_node))
 
     graph.set_entry_point("anomaly_detector")
     graph.add_edge("anomaly_detector", "hypothesis_agent")
@@ -657,6 +680,7 @@ async def run_execution_graph(
     logger.info("Bắt đầu Run 2 (Execution) | test_run_id=%s | rules_count=%d", test_run_id, len(rules_to_test))
 
     execution_graph = build_execution_graph()
+    start_graph_run(dataset_id=dataset_id, dq_run_id=test_run_id)
     initial_state = {
         "dataset_id": dataset_id,
         "test_run_id": test_run_id,
@@ -691,8 +715,18 @@ async def run_execution_graph(
             "test_run_id": test_run_id,
             "results": results,
             "anomalies": anomalies,
-            "dq_score": final_state.get("dq_score", 100.0),
-            "anomaly_decision": decision_data,
+            # No default. Nothing in the graph currently assigns dq_score, so a
+            # default of 100.0 reported flawless quality on a dataset that had just
+            # failed 8 of 31 rules with 7,672 rows missing passenger_count -- while
+            # persist_report_node wrote None and the Steward report said the data had
+            # serious problems. Three contradictory answers from one run.
+            #
+            # None is the honest answer for a computation that no longer happens: a
+            # caller can see the score is absent, but cannot see that 100.0 was
+            # invented. Restoring the computation is the real fix; until then the
+            # absence must be visible.
+            "dq_score": final_state.get("dq_score"),
+            "anomaly_decision": decision_data
         }
 
     except Exception as exc:
@@ -706,6 +740,7 @@ async def run_anomaly_graph(
     execution_run_id: str | None = None,
     dataset_id: str = DEFAULT_CLI_DATASET_ID,
     investigation_mode: Literal["deepagent", "legacy"] | None = None,
+    stream_id: str | None = None,
 ) -> dict:
     """Chạy toàn bộ pipeline Run 3 (Anomaly Analysis & Hypothesis).
 
@@ -747,6 +782,7 @@ async def run_anomaly_graph(
     anomaly_run_id = f"anom-{uuid.uuid4().hex[:12]}"
 
     anomaly_graph = build_anomaly_graph(investigation_mode=active_mode)
+    start_graph_run(dataset_id=dataset_id, dq_run_id=execution_run_id, anomaly_run_id=anomaly_run_id)
     initial_state = {
         "anomaly_run_id": anomaly_run_id,
         "execution_run_id": execution_run_id,
@@ -765,7 +801,11 @@ async def run_anomaly_graph(
     )
 
     try:
-        final_state = await anomaly_graph.ainvoke(initial_state)
+        if stream_id:
+            from src.services.node_event_stream import run_graph_streamed
+            final_state = await run_graph_streamed(anomaly_graph, initial_state, stream_id)
+        else:
+            final_state = await anomaly_graph.ainvoke(initial_state)
         decision_data = final_state.get("anomaly_decision", {})
         signals = final_state.get("signal_observations", [])
         hypotheses = final_state.get("hypotheses", [])

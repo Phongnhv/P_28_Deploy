@@ -69,6 +69,41 @@ class CandidateTableRuleProposal(BaseModel):
     table: str
     rules: list[CandidateProposedRule] = Field(default_factory=list)
 
+
+class CandidateProposedRuleDraft(BaseModel):
+    """LLM-facing schema before server-owned candidate fields are restored.
+
+    Rule-specific parameter validation intentionally does not run here. Models can
+    omit or alter a parameter even when the allow-listed candidate already contains
+    the authoritative value. The server binds those fields back from the candidate
+    before validating the strict ``CandidateProposedRule`` contract.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str | None = Field(default=None, min_length=1)
+    column: str | None = None
+    rule_type: RuleType
+    parameters: RuleParameters = Field(default_factory=RuleParameters)
+    rule_name: str = Field(min_length=1)
+    business_rationale: str = Field(min_length=1)
+    proposal_basis: ProposalBasis
+    selected_evidence_refs: list[str] = Field(default_factory=list)
+    parameter_provenance: list[ParameterProvenance] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    confidence: RuleConfidence
+    severity: Severity
+    dimension: DataQualityDimension
+    rule_description: str = Field(min_length=1)
+    ai_reasoning: str = Field(min_length=1)
+
+
+class CandidateTableRuleDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    table: str
+    rules: list[CandidateProposedRuleDraft] = Field(default_factory=list)
+
 # ---------------------------------------------------------------------------
 # Domain context & Data dictionary injected vào mỗi lần gọi LLM
 # ---------------------------------------------------------------------------
@@ -427,6 +462,153 @@ def _dedupe_candidates(candidates: list[dict]) -> list[dict]:
     return list(merged.values())
 
 
+def _bind_proposal_to_candidates(
+    table_name: str,
+    proposal: BaseModel | dict,
+    candidates: list[dict],
+) -> CandidateTableRuleProposal | TableRuleProposal:
+    """Restore the server-owned rule contract before strict validation.
+
+    Candidate identity, scope, type, parameters, and evidence references are
+    deterministic inputs created by Node 6. The LLM may write the steward-facing
+    narrative and confidence fields, but it cannot remove or mutate those core
+    execution fields.
+    """
+
+    # Preserve the legacy/internal test seam. Production calls this helper with
+    # CandidateTableRuleDraft because ``with_structured_output`` is configured
+    # with that schema below; an already-strict TableRuleProposal has therefore
+    # already passed the old public contract and needs no candidate repair.
+    if isinstance(proposal, TableRuleProposal) and not isinstance(
+        proposal, CandidateTableRuleProposal
+    ):
+        return proposal
+
+    proposal_payload = (
+        proposal.model_dump()
+        if isinstance(proposal, BaseModel)
+        else dict(proposal)
+    )
+    raw_rules = proposal_payload.get("rules") or []
+    if len(raw_rules) < len(candidates):
+        # Not fatal. Demanding one narrative per candidate discarded the entire
+        # batch when the model covered 19 of 20 -- measured on gpt-4o-mini as
+        # "expected 20, received 5" and "expected 10, received 9", both ending in
+        # 0 rules -- and the DeepAgent loop then retried the whole batch, which
+        # is where the minutes and the rate-limit storm came from. Bind what was
+        # covered; the uncovered candidates are simply not proposed this round.
+        logger.warning(
+            "[%s] Model covered %d of %d candidates; proposing the covered ones.",
+            table_name,
+            len(raw_rules),
+            len(candidates),
+        )
+    raw_payloads = [
+        raw_rule.model_dump() if isinstance(raw_rule, BaseModel) else dict(raw_rule)
+        for raw_rule in raw_rules
+    ]
+    unused_payload_indexes = set(range(len(raw_payloads)))
+    ordered_payloads: list[dict] = []
+    # Kept aligned with ordered_payloads, since a candidate with no narrative is
+    # skipped rather than bound.
+    covered_candidates: list[dict] = []
+    uncovered: list[str] = []
+
+    # Associate one model narrative with every server candidate. Correct IDs win;
+    # then an exact column/type match; finally checklist order. This tolerates the
+    # provider duplicating IDs or emitting an extra narrative without ever trusting
+    # model-owned execution fields.
+    for candidate in candidates:
+        candidate_id = str(candidate.get("candidate_id") or "")
+        selected_index = next(
+            (
+                index
+                for index in sorted(unused_payload_indexes)
+                if str(raw_payloads[index].get("candidate_id") or "") == candidate_id
+            ),
+            None,
+        )
+        if selected_index is None:
+            selected_index = next(
+                (
+                    index
+                    for index in sorted(unused_payload_indexes)
+                    if raw_payloads[index].get("column") == candidate.get("column")
+                    and str(
+                        raw_payloads[index].get("rule_type").value
+                        if isinstance(raw_payloads[index].get("rule_type"), RuleType)
+                        else raw_payloads[index].get("rule_type")
+                    ) == str(candidate.get("rule_type"))
+                ),
+                None,
+            )
+        if selected_index is None and unused_payload_indexes:
+            selected_index = min(unused_payload_indexes)
+        if selected_index is None:
+            uncovered.append(candidate_id)
+            continue
+        ordered_payloads.append(raw_payloads[selected_index])
+        covered_candidates.append(candidate)
+        unused_payload_indexes.remove(selected_index)
+
+    if uncovered and not ordered_payloads:
+        # Nothing at all came back for this batch; that is a real failure.
+        raise ValueError(
+            f"No LLM narrative for any of the {len(candidates)} server candidates"
+        )
+    if uncovered:
+        logger.info(
+            "[%s] %d candidate(s) had no narrative and were left unproposed: %s",
+            table_name,
+            len(uncovered),
+            ", ".join(uncovered[:5]) + ("…" if len(uncovered) > 5 else ""),
+        )
+
+    if unused_payload_indexes:
+        logger.warning(
+            "[%s] Ignoring %d extra LLM rule narrative(s); server checklist has %d candidates",
+            table_name,
+            len(unused_payload_indexes),
+            len(candidates),
+        )
+
+    bound_rules: list[CandidateProposedRule] = []
+    used_candidate_ids: set[str] = set()
+
+    for payload, candidate in zip(ordered_payloads, covered_candidates):
+        candidate_id = str(candidate.get("candidate_id") or "")
+        if not candidate_id:
+            raise ValueError("Server candidate is missing candidate_id after deduplication")
+        if candidate_id in used_candidate_ids:
+            raise ValueError(
+                f"Server candidate binding reused candidate_id={candidate_id!r}"
+            )
+
+        evidence_refs = [
+            str(item.get("id"))
+            for item in candidate.get("evidence_items") or []
+            if isinstance(item, dict) and item.get("id")
+        ]
+        if not evidence_refs:
+            raise ValueError(f"Candidate {candidate_id!r} has no evidence reference")
+
+        # These fields are owned by the server-side candidate. Clearing provenance
+        # lets ProposedRule's bounded compatibility adapter recreate one exact entry
+        # per active candidate parameter from the deterministic evidence refs.
+        payload.update({
+            "candidate_id": candidate_id,
+            "column": candidate.get("column"),
+            "rule_type": candidate.get("rule_type"),
+            "parameters": candidate.get("parameters") or {},
+            "selected_evidence_refs": evidence_refs,
+            "parameter_provenance": [],
+        })
+        bound_rules.append(CandidateProposedRule.model_validate(payload))
+        used_candidate_ids.add(candidate_id)
+
+    return CandidateTableRuleProposal(table=table_name, rules=bound_rules)
+
+
 def _candidate_batches(candidates: list[dict], batch_size: int) -> list[list[dict]]:
     return [candidates[index:index + batch_size] for index in range(0, len(candidates), batch_size)]
 
@@ -535,6 +717,12 @@ async def _propose_for_table_deepagent(
             ToolCallLimitMiddleware(
                 thread_limit=settings.rule_proposer_thread_tool_call_limit,
                 run_limit=settings.rule_proposer_max_tool_calls,
+                # Must stay "continue". "end" is far faster (33s / 5 calls versus
+                # ten minutes / 75 calls) but it stops the run the moment the
+                # tool budget is spent, before the agent emits its structured
+                # answer -- measured at budgets 6 and 15, both failed with
+                # "could not produce a valid structured response". Speed is not
+                # worth returning nothing.
                 exit_behavior="continue",
             ),
         ]
@@ -710,17 +898,32 @@ async def _propose_for_table(
                         coverage_requirements=coverage_requirements,
                         few_shot_examples=_RULE_PROPOSER_FEW_SHOT,
                     )
+                system_additions: list[str] = []
                 if specialized_system_prompt:
-                    guardrails = (
-                        "\n\nReturn only a valid TableRuleProposal. Propose rules only from the "
-                        "provided candidates, keep candidate_id and evidence references exact, "
-                        "and do not invent columns, metrics, thresholds, or evidence."
+                    system_additions.append(
+                        "=== NODE 7 DOMAIN CONTEXT ===\n" + specialized_system_prompt
                     )
+                if candidates is not None:
+                    system_additions.append(
+                        "=== SERVER CANDIDATE CONTRACT ===\n"
+                        "Return every provided candidate exactly once. Copy candidate_id, column, "
+                        "rule_type, parameters, and evidence item IDs exactly. These fields are "
+                        "server-owned; do not omit, alter, or invent them."
+                    )
+                if last_exc is not None:
+                    system_additions.append(
+                        "=== PREVIOUS OUTPUT REJECTED ===\n"
+                        f"Validation error: {str(last_exc)[:1200]}\n"
+                        "Correct the structured output and return the complete candidate batch."
+                    )
+                if system_additions:
+                    original_system = str(messages[0].content)
                     messages = [
-                        SystemMessage(content=specialized_system_prompt + guardrails),
+                        SystemMessage(content=original_system + "\n\n" + "\n\n".join(system_additions)),
                         *messages[1:],
                     ]
-                result: CandidateTableRuleProposal = await structured_llm.ainvoke(messages)
+                draft: CandidateTableRuleDraft = await structured_llm.ainvoke(messages)
+                result = _bind_proposal_to_candidates(table_name, draft, candidates or [])
                 exit_ts = datetime.now()
                 duration = (exit_ts - entry_ts).total_seconds()
                 logger.info(
@@ -1051,7 +1254,7 @@ async def rule_proposer_node(state: AgentState) -> dict:
 
     # 3. Chuẩn bị LLM với structured output
     llm = get_llm(settings.llm_provider, temperature=0.1)
-    structured_llm = llm.with_structured_output(CandidateTableRuleProposal)
+    structured_llm = llm.with_structured_output(CandidateTableRuleDraft)
 
     # 4. Fan-out in bounded batches. Each request sees only relevant columns.
     semaphore = asyncio.Semaphore(settings.rule_proposer_concurrency)

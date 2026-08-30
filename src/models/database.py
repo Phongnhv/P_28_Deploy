@@ -98,8 +98,14 @@ class DatasetAccessModel(Base):
 class SourceRowModel(Base):
     __tablename__ = "source_rows"
 
+    # Row ids restart at row-00001 for every dataset, so the id alone is not
+    # unique across the table. With source_row_id as the sole primary key, the
+    # second dataset ever ingested collided on row-00001 and the whole ingest
+    # died with an IntegrityError. The natural key is the pair.
     source_row_id: Mapped[str] = mapped_column(String(256), primary_key=True)
-    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    dataset_id: Mapped[str] = mapped_column(
+        String(256), ForeignKey("datasets.id"), primary_key=True, nullable=False, index=True
+    )
 
     vendor_id: Mapped[str | None] = mapped_column(String(64))
     pickup_at: Mapped[str | None] = mapped_column(String(64))
@@ -787,3 +793,73 @@ class GovernanceAuditEventModel(Base):
     detail_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="API")
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class GraphNodeRunModel(Base):
+    """One execution of one LangGraph node.
+
+    The graph builders in ``src/agents/graph.py`` wrap every node so a row lands
+    here on entry and is completed on exit.  This is the only place node-level
+    timing and failure detail is durable: LangGraph itself keeps nothing once
+    ``ainvoke`` returns, and workflow artifacts are recorded per *step*, which is
+    coarser than a node.
+
+    ``input_summary_json`` / ``output_summary_json`` hold a redacted summary
+    produced by ``src.services.node_telemetry.summarize`` -- key names, counts
+    and short scalars only.  Raw source rows must never reach this table: the
+    platform's central privacy claim is that row values stay out of the agent
+    tier, and a telemetry table is exactly the sort of place that claim quietly
+    breaks.
+    """
+
+    __tablename__ = "graph_node_runs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    graph_run_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    graph_key: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    node_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    node_kind: Mapped[str] = mapped_column(String(32), nullable=False)  # LLM, DETERMINISTIC, GATE
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="RUNNING")
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_summary_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    output_summary_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # Correlation back to the business context the run belongs to.  All optional:
+    # a graph may be driven from the CLI with no workflow or job attached.
+    workflow_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    dataset_id: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    dq_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    anomaly_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+
+
+class DatasetDataDictionaryModel(Base):
+    """The data dictionary a Steward supplied for a dataset.
+
+    Graph 1A already branches on whether a dictionary exists: with one it skips
+    ``data_dictionary_generator`` and uses what it was given, without one it asks
+    the LLM to infer it. Nothing persisted the supplied side of that branch, so
+    the generator always ran. This table is that missing half — only uploads are
+    stored here, the inferred variant stays a workflow artifact.
+    """
+
+    __tablename__ = "dataset_data_dictionaries"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "dataset_version_id", name="uq_data_dictionary_dataset_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="UPLOADED")
+    source_filename: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    column_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    uploaded_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)

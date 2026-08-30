@@ -1,4 +1,3 @@
-
 import logging
 import os
 import sys
@@ -7,7 +6,7 @@ from contextlib import asynccontextmanager
 from urllib.parse import urlsplit, urlunsplit
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -16,7 +15,7 @@ from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.api.data_access_routes import router as data_access_router
-from src.api.routes import dq_router, router
+from src.api.routes import dq_router, require_role, router
 from src.config import get_settings
 from src.services.rule_store import get_engine, init_db
 
@@ -38,7 +37,9 @@ if (
         phoenix_host = "localhost" if os.name == "nt" or not os.path.exists("/.dockerenv") else "host.docker.internal"
         phoenix_endpoint = os.getenv("PHOENIX_COLLECTOR_ENDPOINT") or f"http://{phoenix_host}:6006/v1/traces"
         tracer_provider = TracerProvider()
-        tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=phoenix_endpoint)))
+        tracer_provider.add_span_processor(
+            BatchSpanProcessor(OTLPSpanExporter(endpoint=phoenix_endpoint))
+        )
         trace.set_tracer_provider(tracer_provider)
         LangChainInstrumentor().instrument()
     except Exception:
@@ -147,7 +148,11 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(router, prefix="/api/v1")
-app.include_router(dq_router, prefix="/api/v1")
+app.include_router(
+    dq_router,
+    prefix="/api/v1",
+    dependencies=[Depends(require_role(["USER", "STEWARD", "ADMIN"]))],
+)
 app.include_router(data_access_router)
 
 

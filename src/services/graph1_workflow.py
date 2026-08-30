@@ -21,6 +21,7 @@ from src.models.database import (
 )
 from src.services.rule_store import ProposedRuleModel, create_run, get_engine, save_semantic_contract
 from src.services.versioned_dataset import validate_rule_spec
+from src.services.data_dictionary_store import load_supplied_dictionary_payload
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -190,6 +191,10 @@ def create_graph1_run(
     else:
         profile = _uploaded_profile(db, dataset_id)
     run_id = f"g1-{uuid.uuid4().hex[:20]}"
+    # A Steward-supplied dictionary is what makes the graph take its existing
+    # bypass around ``data_dictionary_generator``. Seed it here, or leave the key
+    # absent so the agent infers one.
+    supplied_dictionary = load_supplied_dictionary_payload(db, dataset_id)
     run = Graph1RunModel(
         id=run_id,
         dataset_id=dataset_id,
@@ -207,6 +212,7 @@ def create_graph1_run(
             "dataset_version_id": dataset_version_id,
             "profile_run_id": profile_run_id,
             "source_checksum": (db.get(DatasetVersionModel, dataset_version_id).checksum if dataset_version_id else None),
+            **({"normalized_data_dictionary": supplied_dictionary, "data_dictionary_source": "supplied"} if supplied_dictionary else {}),
             "metadata": {
                 "uploaded_dataset_profile": profile,
                 "workflow": "graph1-studio",

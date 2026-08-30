@@ -144,7 +144,16 @@ def test_legacy_demo_dataset_requires_explicit_production_opt_in(monkeypatch):
 
 def test_publish_api_endpoints():
     """Kiểm tra các REST API endpoints mới cho Active Rules và Publish."""
+    # Publish and deactivate now require a STEWARD session, so sign in first.
     client = TestClient(app)
+
+    # dq_router yeu cau session (mount voi require_role trong src/main.py) va
+    # get_session kiem CSRF tren moi request da xac thuc.
+    _login = client.post(
+        "/api/v1/session", json={"username": "steward", "password": "steward"}
+    )
+    assert _login.status_code == 200, f"khong dang nhap duoc: {_login.text}"
+    client.headers["X-CSRF-Token"] = _login.json()["csrf_token"]
     run_id = f"api_prop_{uuid.uuid4().hex[:8]}"
     dataset_id = "yellow_tripdata"
 

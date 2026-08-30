@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import uuid
 from typing import Any
 
@@ -21,19 +22,33 @@ from src.models.database import (
     AnomalyRunModel,
     ColumnProfileModel,
     DatasetModel,
+    DatasetVersionModel,
     DqResultModel,
     DqRunModel,
     JobModel,
     ProfileModel,
+    ProfileRunSnapshotModel,
     RuleProposalModel,
     RulesetVersionModel,
     RuleVersionModel,
     WorkflowArtifactModel,
     WorkflowRunModel,
 )
-from src.services.dashboard_agent_workflow import generate_dashboard_proposals
+from src.services.dashboard_agent_workflow import (
+    generate_dashboard_proposals,
+    generate_rule_proposals_via_graph_1b,
+)
+from src.services.node_telemetry import start_graph_run
 from src.services.rule_store import get_engine
 from src.time_utils import utc_now
+
+logger = logging.getLogger(__name__)
+
+# Graph 1A and 1B each run three nodes, two of which call an LLM.  The old
+# single-node shortcut needed 90s; three nodes need proportionally more headroom
+# before the workflow gives up on the agent.
+UNDERSTANDING_GRAPH_TIMEOUT_SECONDS = 180
+RULE_PROPOSAL_GRAPH_TIMEOUT_SECONDS = 240
 
 STEP_KEYS = (
     "UPLOAD_PROFILE",
@@ -143,9 +158,99 @@ def _dictionary_snapshot(semantic_payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _versioned_profile_snapshot_row(db: Session, dataset_id: str) -> ProfileRunSnapshotModel | None:
+    """The completed aggregate snapshot a versioned import produces.
+
+    ``POST /workspaces/{id}/datasets/import`` never writes a ``ProfileModel``
+    row: it records an immutable ``profile_runs`` snapshot keyed by dataset
+    version instead. ``GET /datasets/{id}/profile`` already adapts that shape
+    for the dashboard, but this module did not, so a versioned dataset looked
+    unprofiled to the workflow no matter how complete its profile was.
+    """
+    latest_version = (
+        db.query(DatasetVersionModel)
+        .filter_by(dataset_id=dataset_id, status="READY")
+        .order_by(DatasetVersionModel.version_number.desc())
+        .first()
+    )
+    if not latest_version:
+        return None
+    return (
+        db.query(ProfileRunSnapshotModel)
+        .filter_by(dataset_version_id=latest_version.id, status="COMPLETED")
+        .order_by(ProfileRunSnapshotModel.completed_at.desc())
+        .first()
+    )
+
+
+def _has_completed_profile(db: Session, dataset_id: str) -> bool:
+    """True for either profiling path, legacy or versioned."""
+    if db.get(ProfileModel, dataset_id) is not None:
+        return True
+    return _versioned_profile_snapshot_row(db, dataset_id) is not None
+
+
+def _snapshot_from_versioned_profile(snapshot: ProfileRunSnapshotModel) -> dict[str, Any]:
+    """Render a versioned snapshot in the shape Graph 1A already consumes."""
+    metrics = json.loads(snapshot.metrics_json or "{}")
+    raw_columns = metrics.get("columns") or json.loads(snapshot.schema_json or "[]")
+    columns: list[dict[str, Any]] = []
+    for column in raw_columns:
+        if not isinstance(column, dict) or not column.get("name"):
+            continue
+        null_rate = float(column.get("null_rate") or 0.0)
+        columns.append({
+            "name": str(column["name"]),
+            "data_type": str(column.get("logical_type") or column.get("physical_type") or "string"),
+            "null_rate": null_rate,
+            "null_percentage": null_rate * 100,
+            "distinct_count": int(column.get("distinct_count") or 0),
+            "full_distinct_count": int(column.get("distinct_count") or 0),
+            "non_null_count": int(column.get("non_null_count") or 0),
+            "uniqueness_rate": float(column.get("uniqueness_rate") or 0.0),
+            "is_unique_full_table": column.get("is_unique_full_table"),
+            # An aggregate snapshot carries no per-row detail; say so with
+            # nulls rather than inventing zeroes the agent would treat as facts.
+            "quantiles": column.get("quantiles"),
+            "negative_rate": column.get("negative_rate"),
+            "out_of_domain_rate": column.get("out_of_domain_rate"),
+            "sample_value": column.get("sample_value"),
+            "min_value": column.get("min_value"),
+            "max_value": column.get("max_value"),
+        })
+    row_count = int(snapshot.row_count or 0)
+    duplicate_rate = float(snapshot.duplicate_rate or metrics.get("duplicate_rate") or 0.0)
+    evidence_keys = [
+        "profile.row_count",
+        "profile.completeness_score",
+        "profile.validity_score",
+        "profile.duplicate_rate",
+    ]
+    evidence_keys.extend(f"profile.column.{column['name']}.null_rate" for column in columns)
+    completed = snapshot.completed_at or snapshot.created_at
+    return {
+        "dataset_id": snapshot.dataset_id,
+        "row_count": row_count,
+        "column_count": len(columns),
+        "duplicate_rate": duplicate_rate,
+        "duplicate_count": round(row_count * duplicate_rate / 100),
+        "completeness_score": float(snapshot.completeness_score or metrics.get("completeness_score") or 0.0),
+        "validity_score": float(snapshot.validity_score or metrics.get("validity_score") or 0.0),
+        "evidence_keys": evidence_keys,
+        "profile_generated_at": completed.isoformat() if completed else None,
+        "columns": columns,
+    }
+
+
 def _profile_snapshot(db: Session, dataset_id: str) -> dict[str, Any]:
     profile = db.get(ProfileModel, dataset_id)
     if not profile:
+        versioned = _versioned_profile_snapshot_row(db, dataset_id)
+        if versioned:
+            snapshot = _snapshot_from_versioned_profile(versioned)
+            if not snapshot["columns"]:
+                raise WorkflowError("The completed profile has no column profiles.")
+            return snapshot
         raise WorkflowError("A completed profile is required before understanding data.")
     columns = db.query(ColumnProfileModel).filter_by(profile_dataset_id=dataset_id).all()
     if not columns:
@@ -225,7 +330,7 @@ def get_or_create_run(db: Session, dataset: DatasetModel, *, force_new: bool = F
         if (
             run.current_step == "UPLOAD_PROFILE"
             and dataset.status == "PROFILE_READY"
-            and db.get(ProfileModel, dataset.id)
+            and _has_completed_profile(db, dataset.id)
         ):
             steps = _decode_steps(run)
             _complete(steps, "UPLOAD_PROFILE")
@@ -233,7 +338,7 @@ def get_or_create_run(db: Session, dataset: DatasetModel, *, force_new: bool = F
             run.current_step = "UNDERSTAND_DATA"
             _encode_steps(run, steps)
         return run
-    profile_ready = dataset.status == "PROFILE_READY" and db.get(ProfileModel, dataset.id) is not None
+    profile_ready = dataset.status == "PROFILE_READY" and _has_completed_profile(db, dataset.id)
     run = WorkflowRunModel(
         id=f"workflow-{uuid.uuid4().hex[:20]}",
         dataset_id=dataset.id,
@@ -304,46 +409,113 @@ def _add_artifact(
 
 
 def _semantic_payload(db: Session, dataset_id: str) -> dict[str, Any]:
-    profile = db.get(ProfileModel, dataset_id)
-    if not profile:
-        raise WorkflowError("A completed profile is required before understanding data.")
-    columns = db.query(ColumnProfileModel).filter_by(profile_dataset_id=dataset_id).all()
+    """Deterministic contract built from whichever profile the dataset has.
+
+    Reads the unified snapshot rather than ``ColumnProfileModel`` directly: a
+    versioned import has no rows in that table, and querying it straight meant
+    Graph 1A refused to start for every dataset uploaded through the canonical
+    import path.
+    """
+    snapshot = _profile_snapshot(db, dataset_id)
     semantic_columns = []
-    for column in columns:
-        data_type = column.data_type.lower()
+    for column in snapshot["columns"]:
+        name = str(column.get("name") or "")
+        data_type = str(column.get("data_type") or "").lower()
         semantic_type = (
             "event_time"
-            if "time" in data_type or "date" in column.name.lower()
+            if "time" in data_type or "date" in name.lower()
             else "measure"
-            if data_type in {"numeric", "float", "integer", "number"}
+            if data_type in {"numeric", "float", "integer", "number", "int", "double", "decimal"}
             else "identifier"
-            if column.name.endswith("_id")
+            if name.endswith("_id")
             else "category"
         )
         semantic_columns.append(
             {
-                "name": column.name,
+                "name": name,
+                "data_type": column.get("data_type"),
                 "semantic_type": semantic_type,
                 "confidence": 0.9,
-                "null_rate": column.null_rate,
-                "distinct_count": column.distinct_count,
-                "sample_value": column.sample_value,
-                "range": [column.min_value, column.max_value],
+                "null_rate": column.get("null_rate"),
+                "distinct_count": column.get("distinct_count"),
+                "full_distinct_count": column.get("full_distinct_count"),
+                "is_unique_full_table": column.get("is_unique_full_table"),
+                "negative_rate": column.get("negative_rate"),
+                "quantiles": column.get("quantiles"),
+                "sample_value": column.get("sample_value"),
+                "range": [column.get("min_value"), column.get("max_value")],
             }
         )
     return {
         "summary": "Profile-backed semantic contract. Review the inferred roles before requesting rules.",
-        "rows": profile.row_count,
-        "completeness_score": profile.completeness_score,
-        "validity_score": profile.validity_score,
-        "duplicate_rate": profile.duplicate_rate,
+        "rows": snapshot["row_count"],
+        "completeness_score": snapshot["completeness_score"],
+        "validity_score": snapshot["validity_score"],
+        "duplicate_rate": snapshot["duplicate_rate"],
         "columns": semantic_columns,
-        "evidence": json.loads(profile.evidence_keys),
+        "evidence": snapshot["evidence_keys"],
     }
 
 
-def _agent_semantic_payload(db: Session, dataset_id: str) -> dict[str, Any]:
-    """Use the Dataset Understanding Agent over aggregate profile evidence.
+def _raw_profile_for_graph(db: Session, dataset_id: str, fallback: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild a raw-profile document from the persisted aggregate profile.
+
+    Graph 1A begins at ``build_profile_digest``, which expects the shape the
+    database-wide profiler emits (``table_metadata`` + ``columns``) rather than
+    the flattened contract shape this module works in.  Reconstructing it here
+    lets the wizard drive the documented three-node graph instead of calling the
+    understanding node on its own.
+
+    Only aggregate statistics are read -- counts, rates, quantile bounds.  No
+    source row ever enters this document, which is what keeps the digest handed
+    to the LLM free of real values.
+    """
+    # Everything needed is already on the contract columns, which are built from
+    # the unified snapshot. Re-reading ColumnProfileModel here would reintroduce
+    # the legacy-only assumption this function is downstream of.
+    total_rows = int(fallback["rows"] or 0)
+
+    columns: dict[str, Any] = {}
+    for column in fallback["columns"]:
+        name = column["name"]
+        entry: dict[str, Any] = {
+            "type": column.get("data_type") or "unknown",
+            "null_pct": float(column["null_rate"] or 0.0),
+            "distinct_in_sample": int(column["distinct_count"] or 0),
+        }
+        value_range = column.get("range")
+        if isinstance(value_range, list | tuple) and len(value_range) == 2:
+            entry["min"], entry["max"] = value_range[0], value_range[1]
+        if column.get("full_distinct_count") is not None:
+            entry["distinct_full_table"] = column["full_distinct_count"]
+        if column.get("is_unique_full_table") is not None:
+            entry["is_unique_full_table"] = column["is_unique_full_table"]
+        if column.get("negative_rate") is not None:
+            entry["negative_pct"] = column["negative_rate"]
+        if column.get("quantiles"):
+            entry["percentiles"] = column["quantiles"]
+        # The contract's own semantic guess is the best categorical signal here;
+        # the raw profiler's cardinality measurement is not persisted.
+        if column.get("semantic_type") == "category":
+            entry["is_categorical"] = True
+        columns[name] = entry
+
+    return {
+        dataset_id: {
+            "table_metadata": {
+                "table_name": dataset_id,
+                "total_rows": total_rows,
+                "sampled_rows": total_rows,
+                "sampling_rate": 1.0,
+                "is_sampled": False,
+            },
+            "columns": columns,
+        }
+    }
+
+
+def _agent_semantic_payload(db: Session, dataset_id: str, *, workflow_run_id: str | None = None) -> dict[str, Any]:
+    """Run Graph 1A over aggregate profile evidence.
 
     No source rows are exposed to the model: the agent receives names, types,
     aggregate counts/rates and bounded value/range metadata only.
@@ -354,63 +526,45 @@ def _agent_semantic_payload(db: Session, dataset_id: str) -> dict[str, Any]:
         fallback["agent_mode"] = "deterministic-fallback"
         return fallback
 
-    profiles_by_name = {
-        item.name: item for item in db.query(ColumnProfileModel).filter_by(profile_dataset_id=dataset_id).all()
-    }
-    digest = {
-        "dataset": {
-            "table": dataset_id,
-            "rows": fallback["rows"],
-            "columns": [
+    dataset_obj = db.get(DatasetModel, dataset_id)
+    domain_hint = (
+        (dataset_obj.description or dataset_obj.name)
+        if dataset_obj and (dataset_obj.description or dataset_obj.name)
+        else dataset_id
+    )
+
+    from src.agents.graph import build_understanding_graph
+
+    async def _invoke() -> dict[str, Any]:
+        start_graph_run(workflow_run_id=workflow_run_id, dataset_id=dataset_id)
+        graph = build_understanding_graph()
+        return await asyncio.wait_for(
+            graph.ainvoke(
                 {
-                    "name": column["name"],
-                    "type": profiles_by_name.get(column["name"]).data_type
-                    if column["name"] in profiles_by_name
-                    else "unknown",
-                    "role": column["semantic_type"],
-                    "null_pct": round(float(column["null_rate"]) * 100, 4),
-                    "range": column["range"],
-                    "distinct_count": column["distinct_count"],
+                    "dataset_id": dataset_id,
+                    "dataset_profile": _raw_profile_for_graph(db, dataset_id, fallback),
+                    "target_tables": [dataset_id],
+                    "metadata": {"domain_hint": domain_hint},
                 }
-                for column in fallback["columns"]
-            ],
-        }
-    }
-    from src.agents.nodes.data_dictionary_generator_node import data_dictionary_generator_node
-    from src.agents.nodes.dataset_understanding_node import dataset_understanding_node
-
-    dataset = db.get(DatasetModel, dataset_id)
-    domain_hint = " ".join(
-        part for part in (
-            dataset.name if dataset else "",
-            dataset.description if dataset else "",
-            dataset.source_label if dataset else "",
-        ) if part
-    )[:800]
-
-    async def run_understanding_stage() -> dict[str, Any]:
-        state: dict[str, Any] = {
-            "dataset_id": dataset_id,
-            "dataset_profile_digest": digest,
-            "normalized_data_dictionary": {},
-            "metadata": {
-                "domain_hint": domain_hint or "NYC Yellow Taxi trip operations",
-                "workflow": "dashboard-graph-1-understanding",
-            },
-        }
-        dictionary = await asyncio.wait_for(
-            data_dictionary_generator_node(state), timeout=90
+            ),
+            timeout=UNDERSTANDING_GRAPH_TIMEOUT_SECONDS,
         )
-        if dictionary.get("error"):
-            return {"error": "data_dictionary_unavailable"}
-        state.update(dictionary)
-        return await asyncio.wait_for(dataset_understanding_node(state), timeout=90)
 
     try:
-        result = asyncio.run(run_understanding_stage())
+        result = asyncio.run(_invoke())
     except Exception:
+        # A timeout or transport failure is the same outcome as a node error:
+        # no contract.  Treat it the same way rather than letting it escape.
         result = {"error": "understanding_agent_unavailable"}
     if result.get("error") or not result.get("semantic_contract", {}).get("tables"):
+        # An unreachable model provider must not strand the workflow: the
+        # deterministic profile already carries enough evidence for a steward to
+        # review, so degrade to it and say so rather than failing the stage.
+        logger.warning(
+            "Graph 1A did not return a contract for %s (%s); using the deterministic profile.",
+            dataset_id,
+            result.get("error", "no semantic contract returned"),
+        )
         fallback["summary"] = (
             "Profile-backed semantic contract. The language-model enrichment "
             "was unavailable, so only deterministic aggregate evidence is shown."
@@ -425,7 +579,7 @@ def _agent_semantic_payload(db: Session, dataset_id: str) -> dict[str, Any]:
         "columns": contract.get("columns", []),
         "relationships": contract.get("relationships", []),
         "assumptions": contract.get("business_assumptions", []),
-        "agent_mode": "openai-dataset-understanding-agent",
+        "agent_mode": "graph-1a-dataset-understanding",
     }
 
 
@@ -485,10 +639,21 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
         raise WorkflowError("Run checks is queued through the execution worker.")
     if step_key == "ANALYZE_REPORT":
         raise WorkflowError("Analysis starts automatically after checks finish.")
-    if run.current_step != step_key:
-        raise WorkflowError("Complete the current workflow step before continuing.")
     steps = _decode_steps(run)
-    if _step(steps, step_key)["status"] not in {"READY", "FAILED", "COMPLETED", "RUNNING"}:
+    step_status = _step(steps, step_key)["status"]
+    # Re-running a stage that has already produced something is regeneration and
+    # is allowed wherever the cursor happens to sit; jumping to a stage that has
+    # never run is not. Requiring `current_step == step_key` outright blocked
+    # regeneration, because confirming the contract leaves the cursor behind the
+    # stage whose output is being replaced.
+    # RUNNING is included because the route flips the step to RUNNING just before
+    # dispatching this job, so by the time we get here the status that authorised
+    # the run has already been overwritten. The route is the gate that refuses a
+    # LOCKED step, so anything reaching this point was authorised there.
+    already_ran = step_status in {"COMPLETED", "WAITING_APPROVAL", "FAILED", "RUNNING"}
+    if run.current_step != step_key and not already_ran:
+        raise WorkflowError("Complete the current workflow step before continuing.")
+    if step_status not in {"READY", "FAILED", "COMPLETED", "RUNNING", "WAITING_APPROVAL"}:
         raise WorkflowError("This workflow step is not ready to run.")
     if step_key == "UPLOAD_PROFILE":
         raise WorkflowError(
@@ -496,7 +661,7 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
         )
     if step_key == "UNDERSTAND_DATA":
         snapshot_payload = _profile_snapshot(db, run.dataset_id)
-        semantic = _agent_semantic_payload(db, run.dataset_id)
+        semantic = _agent_semantic_payload(db, run.dataset_id, workflow_run_id=run.id)
         _mark_downstream_stale(db, run, step_key)
         _mark_stage_artifacts_stale(db, run, step_key)
         snapshot = _add_artifact(db, run, step_key, "PROFILE_SNAPSHOT", snapshot_payload)
@@ -514,7 +679,18 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
             raise WorkflowError("Confirm the current semantic contract before proposing rules.")
         if contract.get("source_profile_artifact_id") != profile_artifact.id or contract.get("source_dictionary_artifact_id") != dictionary_artifact.id:
             raise WorkflowError("The confirmed contract references stale understanding artifacts.")
-        proposals = generate_dashboard_proposals(db, run.dataset_id, contract)
+        # Graph 1B is the documented path (candidates ➔ prompt ➔ proposer).  The
+        # single-node shortcut stays as a fallback so a Graph 1B failure degrades
+        # to the previous behaviour instead of blocking the steward.
+        try:
+            proposals = generate_rule_proposals_via_graph_1b(
+                db, run.dataset_id, contract, workflow_run_id=run.id
+            )
+        except Exception as exc:
+            logger.warning(
+                "Graph 1B failed for workflow %s, falling back to the single-node proposer: %s", run.id, exc
+            )
+            proposals = generate_dashboard_proposals(db, run.dataset_id, contract)
         if not proposals:
             raise WorkflowError("No usable rule proposals were produced.")
         _mark_downstream_stale(db, run, step_key)
@@ -671,29 +847,17 @@ def run_checks_and_prepare_analysis(
             db.commit()
             return
         rows = db.query(DqResultModel).filter_by(run_id=dq_run.id).all()
-        _add_artifact(
-            db,
-            run,
-            "RUN_CHECKS",
-            "DQ_RUN",
-            {
-                "run_id": dq_run.id,
-                "ruleset_version_id": dq_run.ruleset_version_id,
-                "status": dq_run.status,
-                "total_checked": dq_run.total_checked,
-                "total_failed": dq_run.total_failed,
-                "results": [
-                    {
-                        "rule_id": row.rule_id,
-                        "title": row.rule_title,
-                        "status": row.status,
-                        "checked_count": row.checked_count,
-                        "failed_count": row.failed_count,
-                    }
-                    for row in rows
-                ],
-            },
-        )
+        total_checked = dq_run.total_checked
+        total_failed = dq_run.total_failed
+        dq_score = round((1.0 - (total_failed / total_checked if total_checked > 0 else 0.0)) * 100, 1)
+        dq_grade = "A" if dq_score >= 90 else ("B" if dq_score >= 80 else ("C" if dq_score >= 70 else "D"))
+        _add_artifact(db, run, "RUN_CHECKS", "DQ_RUN", {
+            "run_id": dq_run.id, "ruleset_version_id": dq_run.ruleset_version_id, "status": dq_run.status,
+            "total_checked": total_checked, "total_failed": total_failed,
+            "dq_score": dq_score, "dq_grade": dq_grade,
+            "results": [{"rule_id": row.rule_id, "title": row.rule_title, "status": row.status,
+                         "checked_count": row.checked_count, "failed_count": row.failed_count} for row in rows],
+        })
         steps = _decode_steps(run)
         _complete(steps, "RUN_CHECKS")
         _step(steps, "ANALYZE_REPORT")["status"] = "READY"
@@ -740,7 +904,7 @@ def run_analysis_report(workflow_run_id: str, job_id: str, session_id: str | Non
     try:
         asyncio.run(
             asyncio.wait_for(
-                run_anomaly_graph(execution_run_id=dq_run_id, dataset_id=dataset_id),
+                run_anomaly_graph(execution_run_id=dq_run_id, dataset_id=dataset_id, stream_id=workflow_run_id),
                 timeout=90,
             )
         )

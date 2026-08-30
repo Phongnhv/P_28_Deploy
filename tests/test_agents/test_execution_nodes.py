@@ -379,7 +379,20 @@ async def test_api_execute_tests_endpoint():
     proposal_run_id = f"prop_api_{uuid.uuid4().hex[:8]}"
     create_run(proposal_run_id, "mock_trips")
 
+    # dq_router sits behind a session dependency, so an anonymous client answers
+    # 401 before reaching the route under test.
     client = TestClient(app)
+    login = client.post("/api/v1/session", json={"username": "steward", "password": "steward"})
+    assert login.status_code == 200
+    client.headers["X-CSRF-Token"] = login.json()["csrf_token"]
+
+    # dq_router yeu cau session (mount voi require_role trong src/main.py) va
+    # get_session kiem CSRF tren moi request da xac thuc.
+    _login = client.post(
+        "/api/v1/session", json={"username": "steward", "password": "steward"}
+    )
+    assert _login.status_code == 200, f"khong dang nhap duoc: {_login.text}"
+    client.headers["X-CSRF-Token"] = _login.json()["csrf_token"]
 
     # 1. Trigger Run 2
     res = client.post(f"/api/v1/dq/runs/{proposal_run_id}/execute-tests")

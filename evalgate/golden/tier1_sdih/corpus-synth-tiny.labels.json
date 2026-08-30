@@ -1,0 +1,171 @@
+{
+  "dataset_id": "corpus-synth-tiny",
+  "seed": 20260819,
+  "applicable_classes": [
+    "DUPLICATE_ROW",
+    "FORMAT_VIOLATION",
+    "INVALID_CATEGORY",
+    "MISSING_VALUE",
+    "OUTLIER",
+    "OUT_OF_RANGE",
+    "SIGN_FLIP",
+    "TYPE_VIOLATION"
+  ],
+  "injected_classes": [
+    "DUPLICATE_ROW",
+    "FORMAT_VIOLATION",
+    "INVALID_CATEGORY",
+    "MISSING_VALUE",
+    "OUTLIER",
+    "OUT_OF_RANGE",
+    "SIGN_FLIP",
+    "TYPE_VIOLATION"
+  ],
+  "not_applicable_classes": [
+    "CROSS_FIELD_VIOLATION",
+    "STALE_TIMESTAMP"
+  ],
+  "counts_by_class": {
+    "DUPLICATE_ROW": 2,
+    "FORMAT_VIOLATION": 2,
+    "INVALID_CATEGORY": 2,
+    "MISSING_VALUE": 2,
+    "OUTLIER": 2,
+    "OUT_OF_RANGE": 2,
+    "SIGN_FLIP": 2,
+    "TYPE_VIOLATION": 2
+  },
+  "total_labels": 16,
+  "total_dirty_rows": 16,
+  "notes": [],
+  "labels": [
+    {
+      "row_id": "tiny-000023",
+      "column": "row_key",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 23,
+      "detail": "key copied from row 1"
+    },
+    {
+      "row_id": "tiny-000004",
+      "column": "row_key",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 4,
+      "detail": "key copied from row 28"
+    },
+    {
+      "row_id": "tiny-000041",
+      "column": "label",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 41,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "tiny-000030",
+      "column": "label",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 30,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "tiny-000048",
+      "column": "label",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 48,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "tiny-000013",
+      "column": "label",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 13,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "tiny-000012",
+      "column": "label",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 12,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "tiny-000028",
+      "column": "label",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 28,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "tiny-000035",
+      "column": "amount",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 35,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "tiny-000038",
+      "column": "amount",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 38,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "tiny-000003",
+      "column": "amount",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 3,
+      "detail": "set to 333.84000000000003"
+    },
+    {
+      "row_id": "tiny-000034",
+      "column": "amount",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 34,
+      "detail": "set to 333.84000000000003"
+    },
+    {
+      "row_id": "tiny-000022",
+      "column": "amount",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 22,
+      "detail": "negated"
+    },
+    {
+      "row_id": "tiny-000019",
+      "column": "amount",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 19,
+      "detail": "negated"
+    },
+    {
+      "row_id": "tiny-000002",
+      "column": "amount",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 2,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "tiny-000008",
+      "column": "amount",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 8,
+      "detail": "non-castable"
+    }
+  ]
+}

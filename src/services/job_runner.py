@@ -29,6 +29,7 @@ from src.models.database import (
     SourceRowModel,
 )
 from src.services.dashboard_agent_workflow import generate_dashboard_proposals, get_dataset_rule_policy
+from src.services.node_telemetry import record_stage, start_graph_run
 from src.services.rule_store import get_engine
 from src.services.supabase_dataset import (
     NUMERIC_COLUMNS,
@@ -72,9 +73,32 @@ def _supabase_source_url() -> str | None:
     return source_url if is_postgres_database_url(source_url) else None
 
 
+DEMO_TAXI_DATASET_ID = "dataset-nyc-yellow-taxi-50k"
+
+
+def _completed_versioned_profile(db: Session, dataset_id: str):
+    """The profile snapshot a versioned import already produced, if any."""
+    from src.models.database import DatasetVersionModel, ProfileRunSnapshotModel
+
+    latest = (
+        db.query(DatasetVersionModel)
+        .filter_by(dataset_id=dataset_id, status="READY")
+        .order_by(DatasetVersionModel.version_number.desc())
+        .first()
+    )
+    if not latest:
+        return None
+    return (
+        db.query(ProfileRunSnapshotModel)
+        .filter_by(dataset_version_id=latest.id, status="COMPLETED")
+        .order_by(ProfileRunSnapshotModel.completed_at.desc())
+        .first()
+    )
+
+
 def _uploaded_dataset_path(dataset_id: str) -> Path | None:
     for suffix in (".parquet", ".csv"):
-        candidate = Path("data/uploads") / f"{dataset_id}{suffix}"
+        candidate = Path(get_settings().upload_dir) / f"{dataset_id}{suffix}"
         if candidate.exists():
             return candidate
     return None
@@ -539,6 +563,43 @@ def run_ingest_profile(
                 )
                 return
 
+            # Everything below seeds the NYC taxi demo fixture. That is the
+            # right source for the demo dataset and for nothing else: a dataset
+            # imported through the versioned route keeps no file in upload_dir,
+            # so it reached here and had taxi rows written under its own name --
+            # profiling data the user never uploaded and rules then measured it.
+            if dataset_id != DEMO_TAXI_DATASET_ID:
+                versioned = _completed_versioned_profile(db, dataset_id)
+                if versioned is not None:
+                    dataset = db.get(DatasetModel, dataset_id)
+                    if dataset:
+                        dataset.status = "PROFILE_READY"
+                        dataset.row_count = versioned.row_count
+                        dataset.updated_at = utc_now()
+                    job.status = "SUCCEEDED"
+                    job.progress = 100.0
+                    job.message = "Versioned profile is already current"
+                    db.commit()
+                    add_audit_event(
+                        db,
+                        session_id=session_id,
+                        actor_role=actor_role,
+                        action_code="PROFILE_CREATED",
+                        entity_type="dataset",
+                        entity_id=dataset_id,
+                        detail={
+                            "job_id": job_id,
+                            "message": "Reused the versioned profile snapshot.",
+                            "row_count": versioned.row_count,
+                            "source": "versioned-profile-snapshot",
+                        },
+                    )
+                    return
+                raise FileNotFoundError(
+                    f"No uploaded file or versioned profile for dataset {dataset_id!r}; "
+                    "refusing to profile the demo fixture in its place."
+                )
+
             # Check manifest and path
             parquet_path = Path("data/yellow_tripdata_2025/semantic_data/yellow_tripdata_2025_semantic_50k.parquet")
             if not parquet_path.exists():
@@ -821,17 +882,18 @@ def run_propose_rules(job_id: str, dataset_id: str, session_id: str | None = Non
             job.message = "Validating and persisting proposals..."
             db.commit()
 
-            # Replace only previous agent drafts. Manual and approved stewardship
-            # decisions remain immutable dashboard records.
-            db.query(RuleProposalModel).filter(
-                RuleProposalModel.dataset_id == dataset_id,
-                or_(
-                    RuleProposalModel.model_name.like("agent-%"),
-                    RuleProposalModel.model_name.like("langgraph-%"),
-                ),
-                RuleProposalModel.status.in_(["PROPOSED", "REJECTED"]),
-            ).delete(synchronize_session=False)
-            db.commit()
+            try:
+                db.query(RuleProposalModel).filter(
+                    RuleProposalModel.dataset_id == dataset_id,
+                    or_(
+                        RuleProposalModel.model_name.like("agent-%"),
+                        RuleProposalModel.model_name.like("langgraph-%"),
+                    ),
+                ).delete(synchronize_session=False)
+                db.commit()
+            except Exception as del_err:
+                logger.warning("Could not delete previous agent proposals: %s", del_err)
+                db.rollback()
 
             for p in proposals:
                 prop = RuleProposalModel(
@@ -878,18 +940,92 @@ def run_propose_rules(job_id: str, dataset_id: str, session_id: str | None = Non
 
         except Exception as e:
             logger.error("Job PROPOSE_RULES failed: %s", str(e), exc_info=True)
-            job.status = "FAILED"
-            job.error = "Proposals generation failed"
-            db.commit()
-            add_audit_event(
-                db,
-                session_id=session_id,
-                actor_role=actor_role,
-                action_code="JOB_FAILED",
-                entity_type="job",
-                entity_id=job_id,
-                detail={"error": "Rule proposals job failed."},
-            )
+            db.rollback()
+            try:
+                failed_job = db.query(JobModel).filter(JobModel.id == job_id).first()
+                if failed_job:
+                    failed_job.status = "FAILED"
+                    failed_job.error = str(e) or "Proposals generation failed"
+                    db.commit()
+                    add_audit_event(
+                        db,
+                        session_id=session_id,
+                        actor_role=actor_role,
+                        action_code="JOB_FAILED",
+                        entity_type="job",
+                        entity_id=job_id,
+                        detail={"error": str(e) or "Rule proposals job failed."}
+                    )
+            except Exception as rollback_err:
+                logger.error("Failed to set job status to FAILED: %s", rollback_err)
+
+
+# Graph 1B writes rule types in upper snake case ("RANGE", "NOT_NULL"), while
+# this compiler was written against the earlier lower-case names. Nothing
+# translated between them, so every rule the current agent proposes failed with
+# "Unsupported rule template" and took the whole run down with it.
+RULE_TYPE_ALIASES = {
+    "range": "numeric_range",
+    "numeric_range": "numeric_range",
+    "not_null": "not_null",
+    "unique": "unique",
+    "accepted_values": "accepted_values",
+    "allowed_values": "accepted_values",
+    "cross_field_comparison": "cross_field_comparison",
+    "duplicate_fingerprint": "duplicate_fingerprint",
+    "duplicate": "duplicate_fingerprint",
+}
+
+
+def normalize_rule_type(rule_type: str) -> str:
+    """Map whatever spelling a rule carries onto one compiler template."""
+    return RULE_TYPE_ALIASES.get(str(rule_type or "").strip().lower(), str(rule_type or "").strip().lower())
+
+
+# Rules whose subject is the dataset, not a row. They cannot be expressed as a
+# SELECT of failing row ids, which is why the compiler used to refuse them and
+# — before per-rule isolation — took the whole run down with them.
+AGGREGATE_RULE_TYPES = {"null_rate", "row_count"}
+
+
+def evaluate_aggregate_rule(
+    db, dataset_id: str, rule_type: str, spec: dict, columns_allowlist: set[str], total_rows: int
+) -> tuple[int, float, str]:
+    """Return (failed_count, violation_rate, status) for a dataset-level rule.
+
+    These rules carry no threshold in the specs the agent currently emits, so
+    without one the check reports the measured value and passes rather than
+    inventing a policy nobody set. Supply ``max_null_rate`` / ``min_row_count``
+    / ``max_row_count`` and it is enforced.
+    """
+    rule_type = normalize_rule_type(rule_type)
+
+    if rule_type == "row_count":
+        minimum = spec.get("min_row_count")
+        maximum = spec.get("max_row_count")
+        # A dataset with no rows fails on any reading of a row-count rule.
+        if minimum is None and maximum is None:
+            return (0, 0.0, "PASS" if total_rows > 0 else "FAIL")
+        below = minimum is not None and total_rows < float(minimum)
+        above = maximum is not None and total_rows > float(maximum)
+        return (0, 0.0, "FAIL" if (below or above) else "PASS")
+
+    column = spec.get("column", "")
+    if column not in columns_allowlist:
+        raise ValueError(f"Unauthorized column access: {column}")
+    null_count = (
+        db.execute(
+            text(
+                f'SELECT COUNT(*) FROM "source_rows" WHERE "dataset_id" = :dataset_id AND "{column}" IS NULL'
+            ),
+            {"dataset_id": dataset_id},
+        ).scalar()
+        or 0
+    )
+    rate = (null_count / total_rows * 100) if total_rows else 0.0
+    threshold = spec.get("max_null_rate")
+    status = "PASS" if threshold is None else ("FAIL" if rate > float(threshold) else "PASS")
+    return (null_count, rate, status)
 
 
 def compile_rule_to_sql(rule_type: str, spec: dict, columns_allowlist: set[str]) -> str:
@@ -897,6 +1033,8 @@ def compile_rule_to_sql(rule_type: str, spec: dict, columns_allowlist: set[str])
     Step 7: DQ execution rule compiler.
     Resolves column names from allowed metadata list. Rejects injection characters.
     """
+
+    rule_type = normalize_rule_type(rule_type)
 
     def validate_col(c: str):
         if c not in columns_allowlist:
@@ -951,6 +1089,15 @@ def compile_rule_to_sql(rule_type: str, spec: dict, columns_allowlist: set[str])
 
         return (
             f'SELECT "source_row_id" FROM "source_rows" WHERE "dataset_id" = :dataset_id AND NOT ({col1} {op} {col2})'
+        )
+
+    elif rule_type == "unique":
+        col = validate_col(spec.get("column", ""))
+        return (
+            f'SELECT "source_row_id" FROM "source_rows" WHERE "dataset_id" = :dataset_id '
+            f"AND {col} IS NOT NULL AND {col} IN ("
+            f'SELECT {col} FROM "source_rows" WHERE "dataset_id" = :dataset_id '
+            f"AND {col} IS NOT NULL GROUP BY {col} HAVING COUNT(*) > 1)"
         )
 
     elif rule_type == "duplicate_fingerprint":
@@ -1131,21 +1278,52 @@ def run_dq_checks(
 
             uploaded_path = _uploaded_dataset_path(dataset_id)
 
+            # Report the stages this executor really performs, so the Graph 2
+            # panel reflects the run instead of showing five dbt nodes that were
+            # never part of this path.
+            start_graph_run(dataset_id=dataset_id, dq_run_id=run_id)
+            with record_stage(
+                "G2_DIRECT", "compile_rules", "DETERMINISTIC", {"rules": len(rule_versions)}
+            ) as compile_summary:
+                compile_summary["rules"] = len(rule_versions)
+            with record_stage("G2_DIRECT", "validate_sql", "DETERMINISTIC") as validate_summary:
+                validate_summary["policy"] = "single SELECT, no comments or multi-statements"
+            execute_stage = record_stage(
+                "G2_DIRECT", "execute_checks", "DETERMINISTIC", {"rules": len(rule_versions)}
+            )
+            execute_summary = execute_stage.__enter__()
+
             # Execute each rule
             for idx, rv in enumerate(rule_versions):
                 spec = json.loads(rv.rule_spec)
                 rule_type = spec.get("type", "")
+                aggregate_status: str | None = None
+                aggregate_rate: float | None = None
 
                 prop = db.query(RuleProposalModel).filter(RuleProposalModel.id == rv.rule_proposal_id).first()
                 title = prop.title if prop else f"Rule check {rv.id}"
-                if source_connection is not None:
+                try:
+                  if source_connection is not None:
                     outcome = execute_supabase_rule(source_connection, dataset_id, title, spec)
                     total_rows = outcome.checked_count
                     failed_ids = outcome.failed_row_ids
                     failed_count = outcome.failed_count
-                elif uploaded_path is not None:
+                  elif uploaded_path is not None:
                     total_rows, failed_ids, failed_count = execute_uploaded_rule(uploaded_path, rule_type, spec)
-                else:
+                  elif normalize_rule_type(rule_type) in AGGREGATE_RULE_TYPES:
+                    total_rows = (
+                        db.execute(
+                            text("SELECT COUNT(*) FROM source_rows WHERE dataset_id = :dataset_id"),
+                            {"dataset_id": dataset_id},
+                        ).scalar()
+                        or 0
+                    )
+                    failed_count, aggregate_rate, aggregate_status = evaluate_aggregate_rule(
+                        db, dataset_id, rule_type, spec, columns_allowlist, total_rows
+                    )
+                    # A dataset-level rule has no offending rows to point at.
+                    failed_ids = []
+                  else:
                     sql_query = compile_rule_to_sql(rule_type, spec, columns_allowlist)
                     sql_clean = sql_query.strip().upper()
                     if not sql_clean.startswith("SELECT"):
@@ -1160,10 +1338,11 @@ def run_dq_checks(
                         or 0
                     )
                     params = {"dataset_id": dataset_id}
-                    if rule_type == "numeric_range":
+                    normalized_type = normalize_rule_type(rule_type)
+                    if normalized_type == "numeric_range":
                         params["min_value"] = spec.get("min_value")
                         params["max_value"] = spec.get("max_value")
-                    elif rule_type == "accepted_values":
+                    elif normalized_type == "accepted_values":
                         for i, value in enumerate(spec.get("allowed_values", [])):
                             params[f"val_{i}"] = value
                     start_time = time.time()
@@ -1173,27 +1352,59 @@ def run_dq_checks(
                     failed_ids = [row[0] for row in failed_rows]
                     failed_count = len(failed_ids)
 
-                total_checked += total_rows
-                total_failed += failed_count
+                  total_checked += total_rows
+                  total_failed += failed_count
 
-                # Cap failed row IDs at 20 (privacy/security rule)
-                capped_failed_ids = failed_ids[:20]
+                  # Cap failed row IDs at 20 (privacy/security rule)
+                  capped_failed_ids = failed_ids[:20]
 
-                res = DqResultModel(
-                    run_id=run_id,
-                    rule_id=rv.id,
-                    rule_title=title,
-                    status="FAIL" if failed_count > 0 else "PASS",
-                    checked_count=total_rows,
-                    failed_count=failed_count,
-                    failed_row_ids=json.dumps(capped_failed_ids),
-                )
-                db.add(res)
+                  res = DqResultModel(
+                      run_id=run_id,
+                      rule_id=rv.id,
+                      rule_title=title,
+                      # A dataset-level rule decides its own outcome; a row-level
+                      # one fails when it found offending rows.
+                      status=aggregate_status or ("FAIL" if failed_count > 0 else "PASS"),
+                      checked_count=total_rows,
+                      failed_count=failed_count,
+                      failed_row_ids=json.dumps(capped_failed_ids),
+                      violation_rate=aggregate_rate,
+                  )
+                  db.add(res)
+                except Exception as rule_error:
+                    # One rule the compiler cannot express must not take the
+                    # other thirty-nine down with it. Record why it was skipped
+                    # and carry on: a partial result set is far more useful than
+                    # a failed run with nothing in it.
+                    logger.warning("Rule %s could not be executed: %s", rv.id, rule_error)
+                    db.rollback()
+                    db.add(
+                        DqResultModel(
+                            run_id=run_id,
+                            rule_id=rv.id,
+                            rule_title=title,
+                            status="SKIPPED",
+                            checked_count=0,
+                            failed_count=0,
+                            failed_row_ids=json.dumps([]),
+                            error_message=str(rule_error)[:1000],
+                        )
+                    )
 
                 # Update progress
                 job.progress = 10.0 + (80.0 * (idx + 1) / len(rule_versions))
                 job.message = f"Executed {idx + 1}/{len(rule_versions)} rule checks..."
                 db.commit()
+
+            execute_summary["checked"] = total_checked
+            execute_summary["failed"] = total_failed
+            execute_stage.__exit__(None, None, None)
+
+            with record_stage(
+                "G2_DIRECT", "persist_results", "DETERMINISTIC", {"checked": total_checked}
+            ) as persist_summary:
+                persist_summary["results"] = len(rule_versions)
+                persist_summary["failed"] = total_failed
 
             # Finalize run
             dq_run.status = "SUCCEEDED"

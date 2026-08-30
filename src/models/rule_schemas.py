@@ -11,6 +11,7 @@ from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +156,10 @@ class RuleConfidence(BaseModel):
     def _validate_overall(self) -> RuleConfidence:
         component_mean = (self.evidence_strength + self.business_support + self.sample_representativeness) / 3
         if abs(self.overall - component_mean) > 0.25:
-            self.overall = round(component_mean, 2)
+            # Reject rather than quietly rewrite. Overwriting the model's own
+            # figure would present a confidence it never gave, and hide the very
+            # inconsistency this guardrail exists to catch.
+            raise ValueError("confidence.overall chênh quá 0.25 so với trung bình các thành phần")
         return self
 
 
@@ -398,8 +402,15 @@ class TableRuleProposal(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    table: str = Field(..., description="Tên bảng trong database.")
+    table: str = Field(default="source_rows", description="Tên bảng trong database.")
     rules: list[ProposedRule] = Field(
         default_factory=list,
         description="Danh sách các rule đề xuất cho bảng này.",
     )
+    #: Rule bị validator từ chối, giữ lại để báo cáo chứ không đưa vào ruleset.
+    #:
+    #: SkipJsonSchema là bắt buộc, không phải trang trí: ``with_structured_output``
+    #: sinh prompt từ JSON schema của model này, nên một trường thừa sẽ bảo LLM tự
+    #: điền "rejected_rules" — vừa vô nghĩa vừa làm nhiễu hướng dẫn. exclude=True
+    #: chỉ tác động lúc serialize, không loại nó khỏi schema.
+    rejected_rules: SkipJsonSchema[list[dict]] = Field(default_factory=list, exclude=True)
