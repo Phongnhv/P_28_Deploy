@@ -104,6 +104,56 @@ def _uploaded_dataset_path(dataset_id: str) -> Path | None:
     return None
 
 
+def _versioned_dataset_execution_path(db: Session, dataset_id: str) -> tuple[Path | None, bool]:
+    """Materialize the latest verified source artifact for Graph 2.
+
+    Returns ``(path, temporary)``. Local artifacts are reused in place; object
+    storage artifacts are downloaded to a temporary file that the caller owns.
+    """
+    version = (
+        db.query(DatasetVersionModel)
+        .filter_by(dataset_id=dataset_id, status="READY")
+        .order_by(DatasetVersionModel.version_number.desc())
+        .first()
+    )
+    if not version:
+        return None, False
+    metadata = json.loads(version.source_metadata_json or "{}")
+    artifact_id = metadata.get("source_artifact_id")
+    artifact = (
+        db.query(GovernedArtifactModel)
+        .filter_by(
+            id=artifact_id,
+            dataset_id=dataset_id,
+            dataset_version_id=version.id,
+            artifact_type="SOURCE_DATASET",
+        )
+        .first()
+        if artifact_id
+        else None
+    )
+    if not artifact or artifact.checksum != version.checksum:
+        raise ValueError("READY dataset version has no matching SOURCE_DATASET artifact")
+    source_ref = {
+        "bucket": metadata.get("bucket"),
+        "object_key": metadata.get("object_key") or artifact.storage_locator,
+        "checksum": version.checksum,
+        "size_bytes": int(metadata.get("size_bytes") or 0),
+        "format": metadata.get("format") or "csv",
+        "filename": metadata.get("filename") or "dataset.csv",
+        "storage_locator": artifact.storage_locator,
+        "version_id": metadata.get("version_id"),
+    }
+    path = materialize_source_artifact(source_ref)
+    read_verified_frame(
+        path,
+        checksum=version.checksum,
+        size_bytes=source_ref["size_bytes"],
+        schema=metadata.get("schema"),
+    )
+    return path, source_ref["storage_locator"].startswith("object://")
+
+
 def _profile_uploaded_dataset(db: Session, dataset_id: str, path: Path) -> dict:
     """Profile an imported CSV/Parquet without exposing its source rows to agents."""
     existing_profile = db.query(ProfileModel).filter_by(dataset_id=dataset_id).first()
@@ -1207,6 +1257,7 @@ def run_dq_checks(
     engine = get_engine()
     source_engine = None
     source_connection = None
+    temporary_source_path: Path | None = None
     with Session(engine) as db:
         job = db.query(JobModel).filter(JobModel.id == job_id).first()
         if not job:
@@ -1219,15 +1270,23 @@ def run_dq_checks(
         job.status = "RUNNING"
         job.progress = 10.0
         job.message = "Claiming approved rule set..."
+        job.error = None
         dq_run.status = "RUNNING"
+        dq_run.error_message = None
         db.commit()
 
         try:
+            dataset_id = dq_run.dataset_id
+            versioned_path, versioned_path_is_temporary = _versioned_dataset_execution_path(db, dataset_id)
+            if versioned_path_is_temporary:
+                temporary_source_path = versioned_path
             source_url = _supabase_source_url()
-            if source_url:
+            # The canonical PostgreSQL adapter is deliberately taxi-specific.
+            # A versioned upload must execute against its own immutable source,
+            # even when application metadata also lives in PostgreSQL.
+            if versioned_path is None and dataset_id == DEMO_TAXI_DATASET_ID and source_url:
                 source_engine = create_supabase_engine(source_url)
                 source_connection = source_engine.connect()
-            dataset_id = dq_run.dataset_id
             rule_ids = json.loads(dq_run.rule_ids)
 
             # Get approved rule versions
@@ -1276,7 +1335,7 @@ def run_dq_checks(
             total_checked = 0
             total_failed = 0
 
-            uploaded_path = _uploaded_dataset_path(dataset_id)
+            uploaded_path = versioned_path or _uploaded_dataset_path(dataset_id)
 
             # Report the stages this executor really performs, so the Graph 2
             # panel reflects the run instead of showing five dbt nodes that were
@@ -1411,6 +1470,7 @@ def run_dq_checks(
             dq_run.total_failed = total_failed
             dq_run.total_checked = total_checked
             dq_run.completed_at = utc_now()
+            dq_run.error_message = None
 
             # The steward workflow owns the subsequent anomaly analysis.  Its
             # single visible job must remain running until the report artifact
@@ -1418,6 +1478,7 @@ def run_dq_checks(
             job.status = "SUCCEEDED" if finalize_job else "RUNNING"
             job.progress = 100.0 if finalize_job else 90.0
             job.message = "Completed" if finalize_job else "Checks completed; preparing analysis report..."
+            job.error = None
             completed_at = utc_now()
             db.query(RuleConfigurationModel).filter(
                 RuleConfigurationModel.rule_proposal_id.in_([rule.rule_proposal_id for rule in rule_versions])
@@ -1502,3 +1563,5 @@ def run_dq_checks(
                 source_connection.close()
             if source_engine is not None:
                 source_engine.dispose()
+            if temporary_source_path is not None:
+                temporary_source_path.unlink(missing_ok=True)

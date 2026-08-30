@@ -40,26 +40,26 @@ export function StewardReportPanel({
   }
 
   return (
-    <section className="steward-report-panel">
-      <div className="steward-report-head">
+    <section className="panel steward-report-panel">
+      <div className="panel-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
-          <span className="eyebrow">{vi ? "BÁO CÁO ĐIỀU TRA" : "INVESTIGATION REPORT"}</span>
-          <strong>{vi ? "Báo cáo Steward từ Graph 3" : "Steward report from Graph 3"}</strong>
-          <p>
+          <span className="eyebrow">{vi ? "GRAPH 3 · BÁO CÁO ĐIỀU TRA" : "GRAPH 3 · INVESTIGATION REPORT"}</span>
+          <h2>{vi ? "Báo cáo Steward từ Graph 3" : "Steward Report from Graph 3"}</h2>
+          <p className="muted">
             {vi
-              ? "Do node report_writer sinh ra sau khi điều tra nguyên nhân gốc."
-              : "Written by the report_writer node after root-cause investigation."}
+              ? "Do node report_writer sinh ra sau khi hoàn tất điều tra nguyên nhân gốc."
+              : "Written by the report_writer node after completing root-cause investigation."}
           </p>
         </div>
-        <button className="button ghost" onClick={open} disabled={state === "loading"}>
+        <button className="button secondary" onClick={open} disabled={state === "loading"}>
           {state === "loading"
             ? vi
               ? "Đang tải…"
               : "Loading…"
             : report
               ? vi
-                ? "Ẩn"
-                : "Hide"
+                ? "Ẩn báo cáo"
+                : "Hide report"
               : vi
                 ? "Xem báo cáo"
                 : "View report"}

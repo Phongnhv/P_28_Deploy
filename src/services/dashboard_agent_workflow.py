@@ -368,30 +368,68 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
         except Exception as err:
             logger.warning("Could not auto-profile uploaded dataset: %s", err)
 
-    if not profile or not columns:
-        raise AgentWorkflowError("A completed aggregate profile is required before requesting proposals.")
+    safe_columns: list[ProposalColumnEvidence] = []
+    cross_field_metrics: list[ProposalCrossFieldEvidence] = []
 
-    safe_columns = [
-        ProposalColumnEvidence(
-            name=column.name,
-            data_type=column.data_type,
-            null_rate=column.null_rate,
-            distinct_count=column.distinct_count,
-            non_null_count=column.non_null_count,
-            negative_rate=column.negative_rate,
-            quantiles=_parse_json_dict(column.quantiles_json),
-            out_of_domain_rate=column.out_of_domain_rate,
-            full_distinct_count=column.full_distinct_count,
-            uniqueness_rate=column.uniqueness_rate,
-            is_unique_full_table=column.is_unique_full_table,
-            min_value=column.min_value,
-            max_value=column.max_value,
-        )
-        for column in columns
-        if column.name != "source_row_id"
-    ]
+    if profile and columns:
+        if dataset.status != "PROFILE_READY":
+            dataset.status = "PROFILE_READY"
+            db.commit()
+        safe_columns = [
+            ProposalColumnEvidence(
+                name=column.name,
+                data_type=column.data_type,
+                null_rate=column.null_rate,
+                distinct_count=column.distinct_count,
+                non_null_count=column.non_null_count,
+                negative_rate=column.negative_rate,
+                quantiles=_parse_json_dict(column.quantiles_json),
+                out_of_domain_rate=column.out_of_domain_rate,
+                full_distinct_count=column.full_distinct_count,
+                uniqueness_rate=column.uniqueness_rate,
+                is_unique_full_table=column.is_unique_full_table,
+                min_value=column.min_value,
+                max_value=column.max_value,
+            )
+            for column in columns
+            if column.name != "source_row_id"
+        ]
+        cross_field_metrics = [
+            ProposalCrossFieldEvidence.model_validate(item) for item in _parse_json_list(profile.cross_field_metrics_json)
+        ]
+    else:
+        try:
+            from src.services.rule_proposer_workflow import _versioned_profile_snapshot_row, _snapshot_from_versioned_profile
+            versioned_row = _versioned_profile_snapshot_row(db, dataset_id)
+            if versioned_row:
+                snap = _snapshot_from_versioned_profile(versioned_row)
+                raw_cols = snap.get("columns") or []
+                safe_columns = [
+                    ProposalColumnEvidence(
+                        name=col["name"],
+                        data_type=col.get("data_type", "string"),
+                        null_rate=float(col.get("null_rate") or 0.0),
+                        distinct_count=col.get("distinct_count"),
+                        non_null_count=col.get("non_null_count"),
+                        negative_rate=col.get("negative_rate"),
+                        quantiles=_parse_json_dict(json.dumps(col.get("quantiles"))) if isinstance(col.get("quantiles"), (dict, list)) else {},
+                        out_of_domain_rate=col.get("out_of_domain_rate"),
+                        full_distinct_count=col.get("full_distinct_count"),
+                        uniqueness_rate=col.get("uniqueness_rate"),
+                        is_unique_full_table=col.get("is_unique_full_table"),
+                        min_value=col.get("min_value"),
+                        max_value=col.get("max_value"),
+                    )
+                    for col in raw_cols
+                    if isinstance(col, dict) and col.get("name") and col.get("name") != "source_row_id"
+                ]
+                dataset.status = "PROFILE_READY"
+                db.commit()
+        except Exception as err:
+            logger.warning("Could not build proposal evidence from versioned profile: %s", err)
+
     if not safe_columns:
-        raise AgentWorkflowError("The completed profile has no eligible columns for proposal generation.")
+        raise AgentWorkflowError("A completed aggregate profile is required before requesting proposals.")
 
     evidence_keys = [
         "profile.row_count",
@@ -422,13 +460,14 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
                 ]
             )
 
-    cross_field_metrics = [
-        ProposalCrossFieldEvidence.model_validate(item) for item in _parse_json_list(profile.cross_field_metrics_json)
-    ]
-    evidence_keys.extend(
-        f"profile.cross_field.{metric.left_column}.{metric.operator}.{metric.right_column}.violation_rate"
-        for metric in cross_field_metrics
-    )
+    if profile and profile.cross_field_metrics_json:
+        cross_field_metrics = [
+            ProposalCrossFieldEvidence.model_validate(item) for item in _parse_json_list(profile.cross_field_metrics_json)
+        ]
+        evidence_keys.extend(
+            f"profile.cross_field.{metric.left_column}.{metric.operator}.{metric.right_column}.violation_rate"
+            for metric in cross_field_metrics
+        )
 
     policy = get_dataset_rule_policy(dataset_id, safe_columns)
     if policy:
@@ -442,13 +481,18 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
         if policy.duplicate_fingerprint_columns:
             evidence_keys.append("policy.duplicate_fingerprint")
 
+    row_count = profile.row_count if profile else dataset.row_count
+    completeness_score = profile.completeness_score if profile else 100.0
+    validity_score = profile.validity_score if profile else 100.0
+    duplicate_rate = profile.duplicate_rate if profile else 0.0
+
     return ProposalEvidence(
         dataset_id=dataset_id,
         manifest_version=dataset.manifest_version,
-        row_count=profile.row_count,
-        completeness_score=profile.completeness_score,
-        validity_score=profile.validity_score,
-        duplicate_rate=profile.duplicate_rate,
+        row_count=row_count,
+        completeness_score=completeness_score,
+        validity_score=validity_score,
+        duplicate_rate=duplicate_rate,
         evidence_keys=list(dict.fromkeys(evidence_keys)),
         columns=safe_columns,
         cross_field_metrics=cross_field_metrics,

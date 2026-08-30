@@ -50,7 +50,7 @@ export function GraphFlow({
   };
 
   return (
-    <section className={`graph-flow ${compact ? "compact" : ""}`} aria-label={graph.label_en}>
+    <section className={`graph-flow ${compact ? "compact" : ""}`} aria-label={language === "vi" ? graph.label_vi : graph.label_en}>
       <header className="graph-flow-head">
         <div>
           <span className="eyebrow">{language === "vi" ? graph.run_vi : graph.run_en}</span>
