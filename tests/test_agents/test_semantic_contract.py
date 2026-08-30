@@ -7,6 +7,25 @@ from src.agents.state import AgentState
 from src.models.semantic_contract import TableSemanticContract
 
 
+def test_prompt_customizer_context_merge_preserves_legacy_missing_tables():
+    from src.agents.nodes.prompt_customizer_node import _merge_table_business_contexts
+
+    state: AgentState = {
+        "specialized_system_prompts": {
+            "orders": "legacy orders",
+            "customers": "legacy customers",
+        },
+        "table_business_contexts": {
+            "orders": "current orders",
+        },
+    }
+
+    assert _merge_table_business_contexts(state) == {
+        "orders": "current orders",
+        "customers": "legacy customers",
+    }
+
+
 @pytest.mark.asyncio
 async def test_dataset_understanding_node(monkeypatch):
     """Kiểm tra xem dataset_understanding_node có phân tích và trả về Semantic Contract đúng định dạng."""
@@ -21,7 +40,7 @@ async def test_dataset_understanding_node(monkeypatch):
                 "business_role": "primary_key",
                 "nullable_expected": False,
                 "confidence": 0.95,
-                "description": "Mã đơn hàng duy nhất"
+                "description": "Mã đơn hàng duy nhất",
             },
             {
                 "name": "order_total",
@@ -29,11 +48,11 @@ async def test_dataset_understanding_node(monkeypatch):
                 "business_role": "total_amount",
                 "nullable_expected": False,
                 "confidence": 0.9,
-                "description": "Tổng số tiền thanh toán"
-            }
+                "description": "Tổng số tiền thanh toán",
+            },
         ],
         relationships=[],
-        business_assumptions=[]
+        business_assumptions=[],
     )
 
     class MockStructuredLLM:
@@ -53,11 +72,11 @@ async def test_dataset_understanding_node(monkeypatch):
                 "rows": 100,
                 "columns": [
                     {"name": "order_id", "type": "TEXT", "null_pct": 0.0},
-                    {"name": "order_total", "type": "REAL", "null_pct": 0.0}
-                ]
+                    {"name": "order_total", "type": "REAL", "null_pct": 0.0},
+                ],
             }
         },
-        "metadata": {}
+        "metadata": {},
     }
 
     result = await dataset_understanding_node(state)
@@ -72,18 +91,12 @@ async def test_dataset_understanding_node(monkeypatch):
 @pytest.mark.asyncio
 async def test_hitl_semantic_gate_node(tmp_path):
     """Kiểm tra cổng hitl_semantic_gate tạm dừng khi contract là nháp và đi tiếp khi đã confirmed."""
-    draft_contract = {
-        "dataset_id": "test_dataset",
-        "tables": {},
-        "status": "draft"
-    }
+    draft_contract = {"dataset_id": "test_dataset", "tables": {}, "status": "draft"}
 
     state_draft: AgentState = {
         "rule_run_id": "test_run_123",
         "semantic_contract": draft_contract,
-        "metadata": {
-            "auto_confirm_semantic": False
-        }
+        "metadata": {"auto_confirm_semantic": False},
     }
 
     # Trường hợp draft -> Tạm dừng có chủ đích: báo qua `pause_reason`, KHÔNG phải `error`.
@@ -100,7 +113,7 @@ async def test_hitl_semantic_gate_node(tmp_path):
     state_confirmed: AgentState = {
         "rule_run_id": "test_run_123",
         "semantic_contract": confirmed_contract,
-        "metadata": {}
+        "metadata": {},
     }
 
     res_confirmed = await hitl_semantic_gate_node(state_confirmed)
@@ -130,11 +143,11 @@ def test_rule_candidate_builder_node():
                         "semantic_type": "currency",
                         "business_role": "total_amount",
                         "nullable_expected": False,
-                    }
+                    },
                 ],
-                "relationships": []
+                "relationships": [],
             }
-        }
+        },
     }
 
     state: AgentState = {
@@ -143,20 +156,11 @@ def test_rule_candidate_builder_node():
             "orders": {
                 "rows": 100,
                 "columns": [
-                    {
-                        "name": "order_id",
-                        "role": "id",
-                        "signals": ["has_pk_constraint", "no_nulls"]
-                    },
-                    {
-                        "name": "order_total",
-                        "role": "numeric",
-                        "signals": [],
-                        "quantiles": {"p5": 10.0, "p95": 100.0}
-                    }
-                ]
+                    {"name": "order_id", "role": "id", "signals": ["has_pk_constraint", "no_nulls"]},
+                    {"name": "order_total", "role": "numeric", "signals": [], "quantiles": {"p5": 10.0, "p95": 100.0}},
+                ],
             }
-        }
+        },
     }
 
     res = rule_candidate_builder_node(state)
@@ -181,7 +185,7 @@ def test_rule_candidate_builder_node():
 
 @pytest.mark.asyncio
 async def test_prompt_customizer_node(monkeypatch):
-    """Kiểm tra xem prompt_customizer_node có tạo ra prompt chuyên biệt đúng như thiết kế."""
+    """Kiểm tra xem prompt_customizer_node có tạo ra table business context đúng như thiết kế."""
     from src.agents.nodes.prompt_customizer_node import prompt_customizer_node
 
     class MockLLMResponse:
@@ -190,29 +194,22 @@ async def test_prompt_customizer_node(monkeypatch):
 
     class MockLLM:
         async def ainvoke(self, messages):
-            return MockLLMResponse("Đây là system prompt tùy chỉnh cho bảng orders.")
+            return MockLLMResponse("Đây là ngữ cảnh nghiệp vụ chi tiết cho bảng orders.")
 
     monkeypatch.setattr("src.agents.nodes.prompt_customizer_node.get_llm", lambda provider, temperature: MockLLM())
 
     contract = {
         "dataset_id": "test_dataset",
         "status": "confirmed",
-        "tables": {
-            "orders": {
-                "table_name": "orders",
-                "domain": "e-commerce",
-                "table_purpose": "orders table"
-            }
-        }
+        "tables": {"orders": {"table_name": "orders", "domain": "e-commerce", "table_purpose": "orders table"}},
     }
 
-    state: AgentState = {
-        "semantic_contract": contract,
-        "specialized_system_prompts": {}
-    }
+    state: AgentState = {"semantic_contract": contract, "table_business_contexts": {}, "specialized_system_prompts": {}}
 
     res = await prompt_customizer_node(state)
+    contexts = res.get("table_business_contexts", {})
     prompts = res.get("specialized_system_prompts", {})
+    assert "orders" in contexts
+    assert contexts["orders"] == "Đây là ngữ cảnh nghiệp vụ chi tiết cho bảng orders."
     assert "orders" in prompts
-    assert prompts["orders"] == "Đây là system prompt tùy chỉnh cho bảng orders."
-
+    assert prompts["orders"] == "Đây là ngữ cảnh nghiệp vụ chi tiết cho bảng orders."

@@ -24,18 +24,54 @@ from src.models.database import (
     Base,
     DatasetAccessModel,
     DatasetModel,
+    DqResultModel,
     JobModel,
     RuleProposalModel,
     RuleVersionModel,
     SemanticContractModel,
+    SourceRowModel,
 )
 from src.models.rule_schemas import RuleStatus
-from src.services.session_service import ensure_default_users, ensure_demo_steward
+from src.services.session_service import ensure_default_users, ensure_default_workspace, ensure_demo_steward
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
 _engine = None  # lazy-initialised
+
+
+def _audit_fields(
+    *,
+    actor_role: str,
+    action_code: str,
+    entity_id: str,
+    detail: dict,
+    entity_type: str = "rule_proposal",
+    session_id: str | None = None,
+) -> dict:
+    """Shape one audit row's fields; the caller constructs and adds the model.
+
+    PRODUCT_SPEC safety rule 5 requires every rule state transition to leave a
+    record. The row is written inside the transition rather than in the API layer
+    because review and publication are reachable from the worker, from scripts and
+    from tests without any HTTP session -- a trail that exists on only one of those
+    paths cannot answer "who approved this rule" months later.
+
+    Only the boilerplate lives here. Each transition still constructs its own
+    ``AuditEventModel`` and adds it to the session holding the state change, so the
+    audit row and the change it describes commit together, and so a reader of the
+    transition can see that it records itself.
+    """
+    return {
+        "id": f"evt_{uuid.uuid4().hex}",
+        "session_id": session_id,
+        "actor_role": actor_role,
+        "action_code": action_code,
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "detail_json": json.dumps(detail, ensure_ascii=False, default=str),
+        "created_at": utc_now(),
+    }
 
 
 def should_seed_legacy_demo_dataset(app_env: str) -> bool:
@@ -325,64 +361,57 @@ def init_db() -> None:
     else:
         Base.metadata.create_all(engine)
         _migrate_local_profile_columns(engine)
+        _migrate_local_dq_result_ids(engine)
+        _migrate_local_source_row_key(engine)
         _migrate_local_proposal_columns(engine)
         _migrate_local_workflow_columns(engine)
     logger.info("Database đã được khởi tạo tại: %s", get_settings().database_url)
 
-    # The legacy taxi fixture is useful for local compatibility tests, but a
-    # production restart must never recreate data that an operator deleted.
-    if should_seed_legacy_demo_dataset(settings.app_env):
-        try:
-            with Session(engine) as session:
-                ensure_default_users(session)
-                ensure_demo_steward(session)
-                demo_dataset = session.get(DatasetModel, "dataset-nyc-yellow-taxi-50k")
-                if not demo_dataset:
-                    demo_dataset = DatasetModel(
-                        id="dataset-nyc-yellow-taxi-50k",
-                        name="NYC Yellow Taxi 50k Sample",
-                        description="Sample trip data for DQ profiling",
-                        status="REGISTERED",
-                        row_count=50000,
-                        source_label="semantic",
-                        manifest_version="1.0.0",
-                        checksum="dummy",
-                    )
-                    session.add(demo_dataset)
-                    session.commit()
-                    logger.info("Seeded default demo dataset 'dataset-nyc-yellow-taxi-50k'")
-                for username, access_level in (("user", "READ"), ("steward", "MANAGE"), ("demo-steward", "MANAGE")):
-                    existing_access = (
-                        session.query(DatasetAccessModel)
-                        .filter(
-                            DatasetAccessModel.dataset_id == demo_dataset.id,
-                            DatasetAccessModel.username == username,
-                        )
-                        .first()
-                    )
-                    if not existing_access:
-                        session.add(
-                            DatasetAccessModel(
-                                id=f"access-{demo_dataset.id}-{username}",
-                                dataset_id=demo_dataset.id,
-                                username=username,
-                                access_level=access_level,
-                                granted_by="system-seed",
-                            )
-                        )
+    # Seed default demo dataset if not present
+    try:
+        with Session(engine) as session:
+            ensure_default_users(session)
+            # Seeded after the accounts exist: the workspace row needs a real
+            # owner, and the versioned import route needs an ACTIVE membership.
+            ensure_demo_steward(session)
+            ensure_default_workspace(session)
+            demo_dataset = session.get(DatasetModel, "dataset-nyc-yellow-taxi-50k")
+            if not demo_dataset:
+                demo_dataset = DatasetModel(
+                    id="dataset-nyc-yellow-taxi-50k",
+                    name="NYC Yellow Taxi 50k Sample",
+                    description="Sample trip data for DQ profiling",
+                    status="REGISTERED",
+                    row_count=50000,
+                    source_label="semantic",
+                    manifest_version="1.0.0",
+                    checksum="dummy",
+                )
+                session.add(demo_dataset)
                 session.commit()
-        except Exception as e:
-            logger.warning("Failed to seed default dataset: %s", e)
-    else:
-        # Accounts are independent from the legacy fixture and remain required
-        # for the bounded judge login in production.
-        try:
-            with Session(engine) as session:
-                ensure_default_users(session)
-                ensure_demo_steward(session)
-            logger.info("Legacy demo dataset seeding is disabled for %s.", settings.app_env)
-        except Exception as e:
-            logger.warning("Failed to seed default accounts: %s", e)
+                logger.info("Seeded default demo dataset 'dataset-nyc-yellow-taxi-50k'")
+            for username, access_level in (("user", "READ"), ("steward", "MANAGE")):
+                existing_access = (
+                    session.query(DatasetAccessModel)
+                    .filter(
+                        DatasetAccessModel.dataset_id == demo_dataset.id,
+                        DatasetAccessModel.username == username,
+                    )
+                    .first()
+                )
+                if not existing_access:
+                    session.add(
+                        DatasetAccessModel(
+                            id=f"access-{demo_dataset.id}-{username}",
+                            dataset_id=demo_dataset.id,
+                            username=username,
+                            access_level=access_level,
+                            granted_by="system-seed",
+                        )
+                    )
+            session.commit()
+    except Exception as e:
+        logger.warning("Failed to seed default dataset: %s", e)
 
     # Migration helper: nếu active_rules đang trống nhưng có proposed_rules APPROVED, tự động publish
     try:
@@ -410,6 +439,88 @@ def init_db() -> None:
                     logger.info("Đã tự động migrate %d legacy approved rules sang active_rules.", len(legacy_approved))
     except Exception as exc:
         logger.warning("Không thể chạy migration helper cho active_rules: %s", exc)
+
+
+def _migrate_local_source_row_key(engine) -> None:
+    """Rebuild ``source_rows`` when its primary key is still source_row_id alone.
+
+    Every dataset numbers its rows from row-00001, so a single-column key made
+    the second dataset's ingest fail with ``UNIQUE constraint failed:
+    source_rows.source_row_id``. The key is (source_row_id, dataset_id); an
+    existing file keeps the old definition because create_all never alters.
+    """
+    if engine.dialect.name != "sqlite":
+        return
+    inspector = inspect(engine)
+    if "source_rows" not in inspector.get_table_names():
+        return
+    pk = inspector.get_pk_constraint("source_rows").get("constrained_columns") or []
+    if set(pk) == {"source_row_id", "dataset_id"}:
+        return
+
+    logger.info("Rebuilding source_rows: primary key is missing dataset_id.")
+    columns = [column["name"] for column in inspector.get_columns("source_rows")]
+    column_list = ", ".join(f'"{name}"' for name in columns)
+    # SQLite keeps an index attached to the renamed table under its original
+    # name, so creating the new table's index collides unless the old one is
+    # dropped first. Getting this wrong leaves the rows stranded in the renamed
+    # table with an empty table in their place.
+    index_names = [index["name"] for index in inspector.get_indexes("source_rows") if index.get("name")]
+    with engine.begin() as connection:
+        connection.exec_driver_sql("ALTER TABLE source_rows RENAME TO source_rows_legacy_pk")
+        for name in index_names:
+            connection.exec_driver_sql(f'DROP INDEX IF EXISTS "{name}"')
+        SourceRowModel.__table__.create(bind=connection)
+        connection.exec_driver_sql(
+            f"INSERT INTO source_rows ({column_list}) SELECT {column_list} FROM source_rows_legacy_pk"
+        )
+        connection.exec_driver_sql("DROP TABLE source_rows_legacy_pk")
+
+
+def _migrate_local_dq_result_ids(engine) -> None:
+    """Rebuild ``dq_results`` when it still carries the old integer primary key.
+
+    ``DqResultModel.id`` is a VARCHAR(36) filled with a UUID by the application,
+    but a database file created before that change has ``id INTEGER NOT NULL
+    PRIMARY KEY``. ``create_all`` only creates missing tables, so the stale
+    definition survived and every Graph 2 run died on
+    ``sqlite3.IntegrityError: datatype mismatch`` when it tried to store a UUID
+    string in an integer column. ``rule_id`` was widened in the same change.
+    """
+    if engine.dialect.name != "sqlite":
+        return
+    inspector = inspect(engine)
+    if "dq_results" not in inspector.get_table_names():
+        return
+    columns = {column["name"]: column for column in inspector.get_columns("dq_results")}
+    id_type = str(columns.get("id", {}).get("type", "")).upper()
+    if "INT" not in id_type:
+        return
+
+    logger.info("Rebuilding dq_results: primary key is still INTEGER, model expects VARCHAR(36).")
+    carried = [
+        name
+        for name in (
+            "run_id", "rule_id", "rule_title", "status", "checked_count", "failed_count",
+            "failed_row_ids", "violation_rate", "duration_ms", "dbt_status", "metrics_status",
+            "error_message",
+        )
+        if name in columns
+    ]
+    column_list = ", ".join(carried)
+    index_names = [index["name"] for index in inspector.get_indexes("dq_results") if index.get("name")]
+    with engine.begin() as connection:
+        connection.exec_driver_sql("ALTER TABLE dq_results RENAME TO dq_results_legacy_int_pk")
+        for name in index_names:
+            connection.exec_driver_sql(f'DROP INDEX IF EXISTS "{name}"')
+        DqResultModel.__table__.create(bind=connection)
+        # Existing rows keep their history; their integer ids become the string
+        # form of the same number, which stays unique.
+        connection.exec_driver_sql(
+            f"INSERT INTO dq_results (id, {column_list}) "
+            f"SELECT CAST(id AS TEXT), {column_list} FROM dq_results_legacy_int_pk"
+        )
+        connection.exec_driver_sql("DROP TABLE dq_results_legacy_int_pk")
 
 
 def _migrate_local_profile_columns(engine) -> None:
@@ -558,10 +669,13 @@ def _migrate_local_workflow_columns(engine) -> None:
                 "ALTER TABLE ruleset_versions ADD COLUMN IF NOT EXISTS stale BOOLEAN NOT NULL DEFAULT FALSE",
                 "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS workflow_run_id VARCHAR(64)",
                 "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS stale BOOLEAN NOT NULL DEFAULT FALSE",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS trigger_type VARCHAR(32) NOT NULL DEFAULT 'MANUAL'",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS started_at TIMESTAMP",
                 "ALTER TABLE rule_configurations ADD COLUMN IF NOT EXISTS model_name VARCHAR(128) NOT NULL DEFAULT 'unspecified'",
                 "ALTER TABLE rule_configurations ADD COLUMN IF NOT EXISTS created_at TIMESTAMP",
                 "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS compiler_version VARCHAR(64)",
                 "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS ruleset_version_id VARCHAR(64)",
+                "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS ruleset_hash VARCHAR(256)",
                 "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS artifact_hash VARCHAR(256)",
                 "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS retry_history_json TEXT",
                 "ALTER TABLE dq_runs ADD COLUMN IF NOT EXISTS error_message TEXT",
@@ -632,7 +746,10 @@ def _migrate_local_workflow_columns(engine) -> None:
         "dq_runs": {
             "workflow_run_id": "VARCHAR(64)",
             "stale": "BOOLEAN NOT NULL DEFAULT 0",
+            "trigger_type": "VARCHAR(32) NOT NULL DEFAULT 'MANUAL'",
+            "started_at": "DATETIME",
             "ruleset_version_id": "VARCHAR(64)",
+            "ruleset_hash": "VARCHAR(256)",
             "compiler_version": "VARCHAR(64)",
             "artifact_hash": "VARCHAR(256)",
             "retry_history_json": "TEXT",
@@ -1044,6 +1161,21 @@ def review_rule(
             if proposed_row.parameters:
                 orig_params = json.loads(proposed_row.parameters)
 
+        session.add(AuditEventModel(**_audit_fields(
+            actor_role=reviewer or "SYSTEM",
+            action_code="RULE_APPROVED" if db_status == "APPROVED" else "RULE_REJECTED",
+            entity_id=row.id,
+            detail={
+                "run_id": run_id,
+                "dataset_id": row.dataset_id,
+                "rule_type": row.rule_type,
+                "reviewer": reviewer,
+                "severity": row.severity,
+                "edited_parameters": edited_parameters,
+                "review_note": review_note,
+            },
+        )))
+
         session.commit()
 
         if db_status == "APPROVED":
@@ -1109,6 +1241,28 @@ def bulk_review(run_id: str, decisions: list[dict]) -> tuple[list[dict], list[st
             updated.append(res)
         else:
             not_found.append(d["rule_id"])
+
+    # Each rule already carries its own AuditEventModel row from review_rule. This
+    # second record is for the batch itself: a steward who approved forty rules in
+    # one action took one decision, and reconstructing that from forty separate rows
+    # loses the fact that they were decided together.
+    if updated:
+        reviewers = {d.get("reviewer") for d in decisions if d.get("reviewer")}
+        with Session(get_engine()) as session:
+            session.add(AuditEventModel(**_audit_fields(
+                actor_role=next(iter(reviewers)) if len(reviewers) == 1 else "SYSTEM",
+                action_code="RULE_BULK_REVIEWED",
+                entity_id=run_id,
+                entity_type="rule_run",
+                detail={
+                    "run_id": run_id,
+                    "reviewed_rule_ids": [r["rule_id"] for r in updated],
+                    "not_found_rule_ids": not_found,
+                    "reviewers": sorted(reviewers),
+                },
+            )))
+            session.commit()
+
     return updated, not_found
 
 
@@ -1329,14 +1483,18 @@ def publish_approved_rules(run_id: str) -> int:
             clean_params = _extract_clean_parameters(p.rule_type, spec)
             params_str = json.dumps(clean_params, ensure_ascii=False)
 
-            table_name = spec.get("table_name") or (p.id.split(".")[0] if "." in p.id else "source_rows")
-            column_name = spec.get("column")
             proposed_source = (
                 session.query(ProposedRuleModel)
                 .filter(ProposedRuleModel.rule_id == p.id)
                 .order_by(ProposedRuleModel.created_at.desc())
                 .first()
             )
+            table_name = (
+                spec.get("table_name")
+                or (proposed_source.table_name if proposed_source and proposed_source.table_name != "source_rows" else None)
+                or (p.dataset_id if p.dataset_id else (p.id.split(".")[0] if "." in p.id else "source_rows"))
+            )
+            column_name = spec.get("column")
             dimension = proposed_source.dimension if proposed_source else "VALIDITY"
 
             active_rule = session.get(ActiveRuleModel, p.id)
@@ -1379,8 +1537,28 @@ def publish_approved_rules(run_id: str) -> int:
             if rv:
                 rv.status = "MERGED"
 
+            # One record per rule, keyed on the rule id, because publication is the
+            # transition that makes a rule able to run against real data. A single
+            # event for the whole run would not let anyone ask of a given active rule
+            # "when did this become active, and on whose approval".
+            session.add(AuditEventModel(**_audit_fields(
+                actor_role=(proposed_source.reviewer if proposed_source and proposed_source.reviewer else "SYSTEM"),
+                action_code="RULE_PUBLISHED",
+                entity_id=p.id,
+                detail={
+                    "run_id": run_id,
+                    "dataset_id": p.dataset_id,
+                    "table_name": table_name,
+                    "rule_type": p.rule_type,
+                    "parameters": clean_params,
+                    "approved_by": proposed_source.reviewer if proposed_source else None,
+                },
+            )))
+
             merged_count += 1
 
+        # One commit for the whole publication: the active rules, the MERGED status
+        # changes and their audit rows land together or not at all.
         session.commit()
 
     logger.info("Đã publish %d rules vào active_rules từ run_id=%s", merged_count, run_id)

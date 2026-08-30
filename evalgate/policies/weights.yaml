@@ -1,0 +1,6 @@
+# Compatibility marker only. Runtime code must not read score policy from this
+# file. Keeping values in two YAML files allowed score and release decisions to
+# drift independently.
+version: "4.0"
+deprecated: true
+canonical_source: evalgate/policies/evaluation_policy.yaml

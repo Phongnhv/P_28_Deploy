@@ -13,16 +13,10 @@ async def test_job_idempotency_conflict(client):
     assert login_res.status_code == 200
     csrf_token = login_res.json()["csrf_token"]
 
-    headers = {
-        "X-CSRF-Token": csrf_token,
-        "Idempotency-Key": "unique-idempotency-key-1"
-    }
+    headers = {"X-CSRF-Token": csrf_token, "Idempotency-Key": "unique-idempotency-key-1"}
 
     # Trigger first job (expect 202)
-    response1 = await client.post(
-        "/api/v1/datasets/dataset-nyc-yellow-taxi-50k/ingestions",
-        headers=headers
-    )
+    response1 = await client.post("/api/v1/datasets/dataset-nyc-yellow-taxi-50k/ingestions", headers=headers)
     assert response1.status_code == status.HTTP_202_ACCEPTED
     job_id1 = response1.json()["job_id"]
     assert response1.json()["status"] == "PENDING"
@@ -35,12 +29,10 @@ async def test_job_idempotency_conflict(client):
             db_sess.commit()
 
     # Trigger second job with SAME idempotency key (expect 409)
-    response2 = await client.post(
-        "/api/v1/datasets/dataset-nyc-yellow-taxi-50k/ingestions",
-        headers=headers
-    )
+    response2 = await client.post("/api/v1/datasets/dataset-nyc-yellow-taxi-50k/ingestions", headers=headers)
     assert response2.status_code == status.HTTP_409_CONFLICT
     assert response2.json()["code"] == "CONFLICT"
+
 
 @pytest.mark.asyncio
 async def test_job_state_polling(client):
@@ -49,16 +41,10 @@ async def test_job_state_polling(client):
     assert login_res.status_code == 200
     csrf_token = login_res.json()["csrf_token"]
 
-    headers = {
-        "X-CSRF-Token": csrf_token,
-        "Idempotency-Key": "unique-idempotency-key-2"
-    }
+    headers = {"X-CSRF-Token": csrf_token, "Idempotency-Key": "unique-idempotency-key-2"}
 
     # Trigger job
-    response = await client.post(
-        "/api/v1/datasets/dataset-nyc-yellow-taxi-50k/ingestions",
-        headers=headers
-    )
+    response = await client.post("/api/v1/datasets/dataset-nyc-yellow-taxi-50k/ingestions", headers=headers)
     assert response.status_code == 202
     job_id = response.json()["job_id"]
 

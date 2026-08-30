@@ -6,13 +6,16 @@ def _get_project_root() -> Path:
 
 
 def test_pr12_evaluation_report_exists_and_valid():
-    """Kiểm tra sự tồn tại và tính đầy đủ của báo cáo 5 kịch bản E1-E5."""
-    root = _get_project_root()
-    eval_file = root / "eval" / "results" / "E1_E5_EVALUATION.md"
-    master_report = root / "eval" / "results" / "report.md"
+    """Kiểm tra sự tồn tại và tính đầy đủ của báo cáo 5 kịch bản E1-E5.
 
-    assert eval_file.exists(), "Tệp eval/results/E1_E5_EVALUATION.md không tồn tại."
-    assert master_report.exists(), "Tệp eval/results/report.md không tồn tại."
+    Bằng chứng E1–E5 đã chuyển từ ``eval/results/`` sang ``docs/`` khi thư mục
+    ``eval/`` bị gỡ bỏ; nội dung không đổi, chỉ đổi chỗ. Test kiểm tra nội dung
+    chứ không kiểm tra bố cục thư mục, nên nó theo file tới vị trí mới.
+    """
+    root = _get_project_root()
+    eval_file = root / "docs" / "EVAL_EVIDENCES_E1_E5.md"
+
+    assert eval_file.exists(), "Tệp docs/EVAL_EVIDENCES_E1_E5.md không tồn tại."
 
     content = eval_file.read_text(encoding="utf-8")
     assert "numeric_range" in content
@@ -52,6 +55,3 @@ def test_pr12_video_rehearsal_script_checkpoints():
     assert "1:20 – 1:55" in content or "1:20–1:55" in content
     assert "1:55 – 2:30" in content or "1:55–2:30" in content
     assert "2:30 – 3:00" in content or "2:30–3:00" in content
-
-
-

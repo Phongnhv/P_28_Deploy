@@ -81,6 +81,56 @@ def ensure_default_users(db: Session) -> None:
     db.commit()
 
 
+def ensure_default_workspace(db: Session, *, created_by: str | None = None) -> WorkspaceModel | None:
+    """Create the default workspace and seat every managing account in it.
+
+    The versioned import route (``POST /workspaces/{id}/datasets/import``)
+    refuses any caller without an ACTIVE membership. Nothing else in the
+    application creates a workspace, so without this seed the route answers
+    404 for every request and the UI reports the upload as a server outage.
+    """
+    workspace = db.get(WorkspaceModel, DEMO_STEWARD_WORKSPACE_ID)
+    if not workspace:
+        owner = created_by
+        if not owner:
+            admin = db.query(UserAccountModel).filter(UserAccountModel.role == "ADMIN").first()
+            owner = admin.id if admin else None
+        if not owner:
+            # The workspace row requires a real owner; the caller seeds users first.
+            return None
+        workspace = WorkspaceModel(
+            id=DEMO_STEWARD_WORKSPACE_ID,
+            name="Default workspace",
+            status="ACTIVE",
+            created_by=owner,
+        )
+        db.add(workspace)
+        db.flush()
+
+    # Any account that may manage datasets needs a seat, because the UI signs in
+    # as whichever demo account the operator chooses, not only ``demo-steward``.
+    managers = db.query(UserAccountModel).filter(UserAccountModel.role.in_(("STEWARD", "ADMIN"))).all()
+    for manager in managers:
+        membership = db.query(WorkspaceMembershipModel).filter_by(
+            workspace_id=DEMO_STEWARD_WORKSPACE_ID,
+            user_id=manager.id,
+        ).first()
+        if not membership:
+            db.add(
+                WorkspaceMembershipModel(
+                    id=f"wm-{manager.username}-{DEMO_STEWARD_WORKSPACE_ID}"[:64],
+                    workspace_id=DEMO_STEWARD_WORKSPACE_ID,
+                    user_id=manager.id,
+                    role=manager.role,
+                    status="ACTIVE",
+                )
+            )
+        elif membership.status != "ACTIVE":
+            membership.status = "ACTIVE"
+    db.commit()
+    return workspace
+
+
 def ensure_demo_steward(db: Session) -> None:
     """Seed the bounded, judge-facing Steward account and its workspace seat."""
     configured_password = (os.getenv("DEMO_STEWARD_DEMO_PASSWORD") or "").strip()
@@ -103,7 +153,7 @@ def ensure_demo_steward(db: Session) -> None:
 
     db.commit()
     try:
-        workspace = db.get(WorkspaceModel, DEMO_STEWARD_WORKSPACE_ID)
+        workspace = ensure_default_workspace(db, created_by=account.id)
         if workspace:
             membership = db.query(WorkspaceMembershipModel).filter_by(
                 workspace_id=DEMO_STEWARD_WORKSPACE_ID,

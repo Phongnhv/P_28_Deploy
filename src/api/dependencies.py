@@ -21,7 +21,7 @@ def verify_idempotency_key(idempotency_key: str = Header(..., alias="Idempotency
                 detail={
                     "message": "Request already processed or in progress",
                     "job_id": existing_job.id,
-                    "status": existing_job.status
-                }
+                    "status": existing_job.status,
+                },
             )
     return idempotency_key

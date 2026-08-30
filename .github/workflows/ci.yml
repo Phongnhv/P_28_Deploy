@@ -9,6 +9,8 @@ on:
 jobs:
   lint-and-test:
     runs-on: self-hosted
+    env:
+      LANGCHAIN_TRACING_V2: "false"
 
     steps:
       # This is a self-hosted runner.  Remove files left behind by another
@@ -41,3 +43,73 @@ jobs:
           # credential and prevents an unrelated optional dbt test from
           # depending on runner-local secrets.
           DBT_PASSWORD: ci-placeholder-not-a-secret
+
+  evalgate:
+    # The quality gate is deliberately a separate job. It grades the product; a
+    # failure here means "this revision should not ship", not "the build broke",
+    # and mixing the two makes both harder to read.
+    runs-on: self-hosted
+    needs: lint-and-test
+    env:
+      LANGCHAIN_TRACING_V2: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Remove residual workspace files
+        run: git clean -ffdx
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyyaml
+
+      - name: Lint EvalGate
+        run: ruff check evalgate/
+
+      - name: EvalGate self-tests
+        # The gate blocks releases, so its own tests run before its verdict is
+        # believed. A broken evaluator that reports zero violations is worse than
+        # no evaluator at all.
+        run: pytest evalgate/tests/ -q
+        env:
+          APP_ENV: test
+          OPENAI_API_KEY: test-key
+
+      - name: Verify golden labels have not drifted
+        run: python -m evalgate.golden.freeze --verify
+
+      - name: Run served-path product benchmark
+        id: product-run
+        shell: pwsh
+        run: |
+          $manifest = python -m evalgate.product_run --profile ci --suite frozen-v1 --out output/evalgate-runs
+          if ($LASTEXITCODE -ne 0 -or -not $manifest) { throw "Product benchmark did not finalize a manifest" }
+          "manifest=$manifest" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Run EvalGate
+        run: >-
+          python -m evalgate.run --mode ci --manifest "${{ steps.product-run.outputs.manifest }}"
+          --out evalgate/reports
+        env:
+          APP_ENV: test
+          OPENAI_API_KEY: test-key
+
+      - name: Publish EvalGate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evalgate-report
+          path: |
+            evalgate/reports/report.md
+            evalgate/reports/result.json
+            evalgate/evidence/
+            output/evalgate-runs/

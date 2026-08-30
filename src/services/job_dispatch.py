@@ -165,7 +165,18 @@ def dispatch_job(job_id: str, job_type: str) -> bool:
     # the same lease/idempotency path as a deployed worker.
     if settings.app_env == "test" or os.getenv("PYTEST_CURRENT_TEST") or os.getenv("WORKER_DISPATCH_MODE") == "inline":
         return _run_persisted_job(job_id, job_type)
-    return dispatch_cloud_run_job(job_id, job_type)
+    if dispatch_cloud_run_job(job_id, job_type):
+        return True
+    # Outside production a failed hand-off is almost always the developer having
+    # no worker container: LOCAL_WORKER_URL defaults to the compose hostname
+    # ``worker``, which does not resolve when the backend runs straight on the
+    # host. Marking the job FAILED_RETRYABLE there left every import stuck at
+    # "profiling" with nothing to retry it, so run it here instead. Production
+    # keeps failing loudly, because there a missing worker is a real outage.
+    if settings.app_env != "production":
+        logger.warning("Worker dispatch failed for job %s; running it in-process.", job_id)
+        return _run_persisted_job(job_id, job_type)
+    return False
 
 
 def dispatch_or_mark_failed(db: Session, job: JobModel) -> bool:

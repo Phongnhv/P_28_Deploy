@@ -1,0 +1,34 @@
+version: "1.0"
+evaluation_schema_version: "2.0"
+corpus_version: "1.0"
+normalizer_version: "1.0"
+hard_gates:
+  source: hard_gates.yaml
+  version: "6.0"
+minimum_measured_weight: 0.60
+non_suppressible:
+  - HG-S2
+  - HG-S3
+  - HG-S6
+  - HG-S7
+  - HG-D1
+  - HG-D2
+score:
+  weights:
+    ai_quality: 0.36
+    ai_security: 0.29
+    input_data: 0.20
+    governance: 0.15
+  decision_bands:
+    pass: 85.0
+    warning: 70.0
+runtime:
+  trace_coverage_min_pct: 95.0
+  nightly_budget_usd: 5.0
+  pre_release_budget_usd: 10.0
+  critical_node_error_rate_max: 0.0
+mandatory_hard_gates:
+  local: []
+  ci: [HG-A1, HG-A2, HG-A7, HG-S1, HG-S2, HG-S3, HG-S4, HG-S6, HG-S7, HG-D1, HG-D2, HG-G1, HG-G2, HG-G5, HG-A3, HG-A6, HG-A5, HG-S8, HG-G4, HG-R1]
+  nightly: [HG-A1, HG-A2, HG-A7, HG-S1, HG-S2, HG-S3, HG-S4, HG-S5, HG-S6, HG-S7, HG-D1, HG-D2, HG-G1, HG-G2, HG-G5, HG-A3, HG-A6, HG-A5, HG-S8, HG-G4, HG-R1]
+  pre_release: [HG-A1, HG-A2, HG-A7, HG-S1, HG-S2, HG-S3, HG-S4, HG-S5, HG-S6, HG-S7, HG-D1, HG-D2, HG-G1, HG-G2, HG-G5, HG-A3, HG-A6, HG-A5, HG-S8, HG-G4, HG-R1]

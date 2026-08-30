@@ -18,7 +18,9 @@ def test_dbt_project_files_exist():
     assert (dbt_dir / "dbt_project.yml").exists(), "Tệp dbt_project.yml không tồn tại."
     assert (dbt_dir / "profiles.yml").exists(), "Tệp profiles.yml không tồn tại."
     assert (dbt_dir / "models" / "staging" / "stg_trips.sql").exists(), "Staging model stg_trips.sql không tồn tại."
-    assert (dbt_dir / "models" / "analytics" / "profile_input.sql").exists(), "Analytics model profile_input.sql không tồn tại."
+    assert (dbt_dir / "models" / "analytics" / "profile_input.sql").exists(), (
+        "Analytics model profile_input.sql không tồn tại."
+    )
     assert (dbt_dir / "models" / "schema.yml").exists(), "Tệp schema.yml không tồn tại."
 
 
@@ -53,7 +55,6 @@ def test_dbt_models_sql_structure():
     assert "select *" in profile_sql.lower()
 
 
-
 def test_dbt_schema_yml_tests():
     """Kiểm tra schema.yml chứa đầy đủ khai báo source và data contract tests."""
     root = _get_project_root()
@@ -83,6 +84,6 @@ def test_dbt_parse_if_installed():
     result = subprocess.run(
         [dbt_cmd, "parse", "--project-dir", str(dbt_dir), "--profiles-dir", str(dbt_dir)],
         capture_output=True,
-        text=True
+        text=True,
     )
     assert result.returncode == 0, f"dbt parse thất bại: {result.stderr}"

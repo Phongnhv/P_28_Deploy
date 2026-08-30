@@ -44,10 +44,17 @@ class Settings(BaseSettings):
 
     # Rule Proposer tunables
     agent_mode: Literal["mock", "graph"] = os.getenv("AGENT_MODE") or "mock"
-    rule_proposer_concurrency: int = 10
+    rule_proposer_concurrency: int = 2
     rule_proposer_max_retries: int = 2
-    rule_proposer_batch_size: int = Field(default=8, ge=1, le=20)
+    rule_proposer_batch_size: int = Field(default=20, ge=1, le=20)
+    rule_proposer_mode: Literal["deepagent", "legacy"] = os.getenv("RULE_PROPOSER_MODE") or "deepagent"
+    rule_proposer_max_tool_calls: int = 6
+    rule_proposer_thread_tool_call_limit: int = Field(default=15, ge=1, le=200)
+    rule_proposer_allow_legacy_fallback: bool = True
     debug_dump_table_digests: bool = False
+    anomaly_investigation_mode: Literal["deepagent", "legacy"] = os.getenv("ANOMALY_INVESTIGATION_MODE") or "deepagent"
+    anomaly_investigation_tool_call_limit: int = Field(default=10, ge=1, le=100)
+    anomaly_investigation_thread_tool_call_limit: int = Field(default=20, ge=1, le=200)
 
     # Database
     # ``DATABASE_URL`` is the explicit control-plane database.  When it is not
@@ -70,14 +77,13 @@ class Settings(BaseSettings):
     database_max_overflow: int = Field(default=5, ge=0, le=20)
     database_pool_timeout_seconds: int = Field(default=30, ge=1, le=120)
 
-    # Vector Store
-    chroma_persist_dir: str = "./data/chroma" # Change to .env later
-
     # Output
     output_dir: str = "./output"
     results_dir: str = "./output" # Backwards-compatible alias
+    upload_dir: str = "./data/uploads"
 
     # Generated dbt artifacts (GCS/Cloud Run, AWS S3, or MinIO locally)
+    object_storage_enabled: bool = True
     object_storage_provider: Literal["s3", "gcs"] = "s3"
     object_storage_bucket: str = "ridepulse-dbt-artifacts"
     object_storage_prefix: str = "dbt-tests"

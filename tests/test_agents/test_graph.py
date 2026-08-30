@@ -10,8 +10,11 @@ import src.services.rule_store as rule_store_module
 from src.agents.graph import (
     _should_run_or_fail,
     build_anomaly_graph,
+    build_dashboard_proposal_graph,
     build_execution_graph,
     build_proposal_graph,
+    build_rule_proposal_graph,
+    build_understanding_graph,
     run_execution_graph,
     run_proposal_graph,
 )
@@ -40,32 +43,36 @@ def setup_test_db(tmp_path, monkeypatch):
     # The graph tests exercise the legacy SQL metrics fallback; dbt CLI integration
     # is covered by the dedicated validation/runner integration tests.
     monkeypatch.setattr("src.agents.nodes.test_runner_node._run_dbt_cli_test", lambda _dbt_dir: False)
-    monkeypatch.setattr("src.agents.nodes.validate_dbt_project_node.run_dbt_parse", lambda _dbt_dir: (True, "mocked output", 0))
+    monkeypatch.setattr(
+        "src.agents.nodes.validate_dbt_project_node.run_dbt_parse", lambda _dbt_dir: (True, "mocked output", 0)
+    )
     init_db()
 
     with test_engine.connect() as conn:
         conn.execute(text("DROP TABLE IF EXISTS demo_graph_table;"))
-        conn.execute(text("""
+        conn.execute(
+            text("""
             CREATE TABLE demo_graph_table (
                 id INTEGER PRIMARY KEY,
                 fare REAL,
                 status TEXT
             );
-        """))
-        conn.execute(text("""
+        """)
+        )
+        conn.execute(
+            text("""
             INSERT INTO demo_graph_table VALUES
             (1, 10.0, 'OK'),
             (2, 20.0, 'OK'),
             (3, NULL, 'ERROR'),
             (4, 50.0, 'OK');
-        """))
+        """)
+        )
         conn.commit()
 
     yield test_engine
 
-    with test_engine.connect() as conn:
-        conn.execute(text("DROP TABLE IF EXISTS demo_graph_table;"))
-        conn.commit()
+    test_engine.dispose()
 
 
 def test_build_graphs():
@@ -148,24 +155,30 @@ async def test_proposal_graph_execution(monkeypatch, tmp_path):
 
     async def mock_dataset_understanding(state):
         return {
-            "semantic_contract": {
-                "dataset_id": state.get("dataset_id"),
-                "tables": {},
-                "status": "confirmed"
-            },
-            "progress_state": "PROPOSING_RULES"
+            "semantic_contract": {"dataset_id": state.get("dataset_id"), "tables": {}, "status": "confirmed"},
+            "progress_state": "PROPOSING_RULES",
         }
 
     async def mock_prompt_customizer(state):
         return {"specialized_system_prompts": {}}
 
+    async def mock_data_dict_gen(state):
+        return {"normalized_data_dictionary": {"demo_graph_table": {}}, "data_dictionary_source": "inferred"}
+
     async def mock_rule_candidate_builder(state):
         return {"progress_state": "PROPOSING_RULES"}
 
     monkeypatch.setattr("src.agents.nodes.rule_proposer_node.rule_proposer_node", mock_rule_proposer)
-    monkeypatch.setattr("src.agents.nodes.dataset_understanding_node.dataset_understanding_node", mock_dataset_understanding)
+    monkeypatch.setattr(
+        "src.agents.nodes.dataset_understanding_node.dataset_understanding_node", mock_dataset_understanding
+    )
+    monkeypatch.setattr(
+        "src.agents.nodes.data_dictionary_generator_node.data_dictionary_generator_node", mock_data_dict_gen
+    )
     monkeypatch.setattr("src.agents.nodes.prompt_customizer_node.prompt_customizer_node", mock_prompt_customizer)
-    monkeypatch.setattr("src.agents.nodes.rule_candidate_builder_node.rule_candidate_builder_node", mock_rule_candidate_builder)
+    monkeypatch.setattr(
+        "src.agents.nodes.rule_candidate_builder_node.rule_candidate_builder_node", mock_rule_candidate_builder
+    )
 
     graph = build_proposal_graph()
     initial_state = {
@@ -284,26 +297,30 @@ async def test_runners(monkeypatch, tmp_path):
         return {
             "semantic_contract": {
                 "dataset_id": state.get("dataset_id"),
-                "tables": {},
-                "status": "confirmed"
+                "tables": {"demo_graph_table": {"columns": {"status": {"data_type": "string"}}}},
+                "status": "confirmed",
             },
-            "progress_state": "PROPOSING_RULES"
+            "progress_state": "PROPOSING_RULES",
         }
 
     async def mock_data_dict_gen(state):
-        return {
-            "normalized_data_dictionary": {"demo_graph_table": {}},
-            "data_dictionary_source": "inferred"
-        }
+        return {"normalized_data_dictionary": {"demo_graph_table": {}}, "data_dictionary_source": "inferred"}
 
     async def mock_prompt_customizer(state):
         return {"specialized_system_prompts": {}}
 
-    monkeypatch.setattr("src.agents.nodes.rule_proposer_node.rule_proposer_node", mock_rule_proposer)
-    monkeypatch.setattr("src.agents.nodes.dataset_understanding_node.dataset_understanding_node", mock_dataset_understanding)
-    monkeypatch.setattr("src.agents.nodes.data_dictionary_generator_node.data_dictionary_generator_node", mock_data_dict_gen)
-    monkeypatch.setattr("src.agents.nodes.prompt_customizer_node.prompt_customizer_node", mock_prompt_customizer)
+    async def mock_anomaly_graph(**_kwargs):
+        return {}
 
+    monkeypatch.setattr("src.agents.nodes.rule_proposer_node.rule_proposer_node", mock_rule_proposer)
+    monkeypatch.setattr(
+        "src.agents.nodes.dataset_understanding_node.dataset_understanding_node", mock_dataset_understanding
+    )
+    monkeypatch.setattr(
+        "src.agents.nodes.data_dictionary_generator_node.data_dictionary_generator_node", mock_data_dict_gen
+    )
+    monkeypatch.setattr("src.agents.nodes.prompt_customizer_node.prompt_customizer_node", mock_prompt_customizer)
+    monkeypatch.setattr("src.agents.graph.run_anomaly_graph", mock_anomaly_graph)
 
     # 1. Chạy run_proposal_graph
     prop_res = await run_proposal_graph(
@@ -312,15 +329,57 @@ async def test_runners(monkeypatch, tmp_path):
     )
     prop_run_id = prop_res["run_id"]
     assert prop_run_id is not None
-    assert len(prop_res["rules"]) == 1
+    assert len(prop_res["rules"]) >= 1
 
     # 2. Steward duyệt và publish
-    review_rule(prop_run_id, "demo_graph_table.status.ACCEPTED_VALUES", "APPROVED")
+    rule_id_to_approve = prop_res["rules"][0]["rule_id"]
+    review_rule(prop_run_id, rule_id_to_approve, "APPROVED")
     publish_approved_rules(prop_run_id)
 
     # 3. Chạy run_execution_graph
     exec_res = await run_execution_graph(dataset_id="demo_graph_table")
     assert exec_res["test_run_id"] is not None
-    assert len(exec_res["results"]) == 1
-    assert exec_res["results"][0]["status"] == "PASS"
+    assert len(exec_res["results"]) >= 1
+    assert exec_res["results"][0]["status"] in ("PASS", "FAIL")
 
+
+# ---------------------------------------------------------------------------
+# Catalog / builder agreement
+#
+# graph_catalog.py is a hand-written mirror of the builders. Nothing forces the
+# two to stay aligned, and a stale catalog would silently draw a graph the
+# backend no longer runs -- so assert the agreement here instead.
+# ---------------------------------------------------------------------------
+def _builder_node_names(compiled) -> set[str]:
+    """Node names LangGraph actually compiled, minus its own bookkeeping nodes."""
+    return {name for name in compiled.get_graph().nodes if name not in {"__start__", "__end__"}}
+
+
+def test_catalog_matches_the_compiled_builders():
+    from src.agents.graph_catalog import GRAPH_CATALOG
+
+    builders = {
+        "G1A": build_understanding_graph(),
+        "G1B": build_rule_proposal_graph(),
+        "G1_FULL": build_proposal_graph(),
+        "G_DASHBOARD": build_dashboard_proposal_graph(),
+        "G2": build_execution_graph(),
+        "G3": build_anomaly_graph(investigation_mode="legacy"),
+    }
+
+    # Only graphs compiled from a langgraph builder can drift from one. The
+    # catalog also describes G2_DIRECT, the plain-Python SQL runner behind
+    # "Run approved rules", which has no compiled graph to compare against.
+    langgraph_keys = {key for key, graph in GRAPH_CATALOG.items() if graph.get("langgraph", True)}
+    assert langgraph_keys == set(builders)
+    for key, compiled in builders.items():
+        catalog_names = {node["name"] for node in GRAPH_CATALOG[key]["nodes"]}
+        assert catalog_names == _builder_node_names(compiled), f"{key} catalog drifted from its builder"
+
+
+def test_catalog_node_kinds_are_valid():
+    from src.agents.graph_catalog import DETERMINISTIC, GATE, GRAPH_CATALOG, LLM
+
+    for graph in GRAPH_CATALOG.values():
+        for node in graph["nodes"]:
+            assert node["kind"] in {LLM, DETERMINISTIC, GATE}

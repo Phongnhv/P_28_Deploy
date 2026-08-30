@@ -102,10 +102,10 @@ def generate_profile_digest(dataset_profile: dict) -> dict:
             has_min_max = col_data.get("min") is not None or col_data.get("max") is not None
 
             type_upper = type_str.upper()
-            is_numeric_type = any(
-                kw in type_upper
-                for kw in ["INT", "REAL", "FLOAT", "DOUBLE", "DECIMAL", "NUMERIC", "NUMBER"]
-            ) or has_min_max
+            is_numeric_type = (
+                any(kw in type_upper for kw in ["INT", "REAL", "FLOAT", "DOUBLE", "DECIMAL", "NUMERIC", "NUMBER"])
+                or has_min_max
+            )
             is_text_type = any(kw in type_upper for kw in ["TEXT", "CHAR", "VARCHAR", "STRING"])
 
             # Infer role
@@ -120,10 +120,14 @@ def generate_profile_digest(dataset_profile: dict) -> dict:
                 # Profiler đã xác định cardinality thấp → categorical, kể cả khi tên kết thúc _id
                 # (vd vendor_id có 3 giá trị, rate_code_id có ~5 giá trị)
                 role = "categorical"
-            elif col_name.lower() == "id" or col_name.lower().endswith("_id") or (
-                distinct_in_sample == sampled_rows
-                and sampled_rows > 0
-                and not any(kw in type_upper for kw in ["REAL", "FLOAT", "DOUBLE", "DECIMAL"])
+            elif (
+                col_name.lower() == "id"
+                or col_name.lower().endswith("_id")
+                or (
+                    distinct_in_sample == sampled_rows
+                    and sampled_rows > 0
+                    and not any(kw in type_upper for kw in ["REAL", "FLOAT", "DOUBLE", "DECIMAL"])
+                )
             ):
                 role = "id"
             elif is_numeric_type:
@@ -133,9 +137,7 @@ def generate_profile_digest(dataset_profile: dict) -> dict:
             else:
                 role = "generic"
 
-            null_pct = round(
-                col_data.get("null_pct", col_data.get("null_pct_sampled", 0.0)) * 100, 1
-            )
+            null_pct = round(col_data.get("null_pct", col_data.get("null_pct_sampled", 0.0)) * 100, 1)
 
             col_digest: dict = {
                 "name": col_name,

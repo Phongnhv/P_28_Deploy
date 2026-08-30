@@ -21,14 +21,8 @@ async def test_audit_trail_recorded(client):
         assert events[0].entity_type == "session"
 
     # Start and run ingestion job
-    headers = {
-        "X-CSRF-Token": csrf_token,
-        "Idempotency-Key": "audit-ingest-key"
-    }
-    ingest_res = await client.post(
-        "/api/v1/datasets/dataset-nyc-yellow-taxi-50k/ingestions",
-        headers=headers
-    )
+    headers = {"X-CSRF-Token": csrf_token, "Idempotency-Key": "audit-ingest-key"}
+    ingest_res = await client.post("/api/v1/datasets/dataset-nyc-yellow-taxi-50k/ingestions", headers=headers)
     assert ingest_res.status_code == 202
     job_id = ingest_res.json()["job_id"]
 
@@ -60,4 +54,4 @@ async def test_audit_trail_recorded(client):
     logs_res = await client.get("/api/v1/audit-logs?limit=50")
     assert logs_res.status_code == 200
     logs = logs_res.json()
-    assert len(logs) >= 3 # login, job, logout, etc.
+    assert len(logs) >= 3  # login, job, logout, etc.

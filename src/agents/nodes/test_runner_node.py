@@ -259,9 +259,7 @@ def _assert_safe_predicate(predicate: str) -> None:
     sẽ biến mất đúng lúc cần nhất.
     """
     if "--" in predicate or ";" in predicate or "/*" in predicate or "*/" in predicate:
-        raise ValueError(
-            "Security violation: potential SQL injection detected in predicate"
-        )
+        raise ValueError("Security violation: potential SQL injection detected in predicate")
 
 
 def _fetch_sample_failures(
@@ -287,17 +285,12 @@ def _fetch_sample_failures(
 
     identity_column = _resolve_identity_column(table_name)
     if not identity_column:
-        logger.warning(
-            "Bỏ qua lấy mẫu vi phạm cho %s: không xác định được cột định danh", table_name
-        )
+        logger.warning("Bỏ qua lấy mẫu vi phạm cho %s: không xác định được cột định danh", table_name)
         return []
 
     quoted_table = _quote_ident(table_name, dialect_name)
     quoted_id = _quote_ident(identity_column, dialect_name)
-    sample_sql = (
-        f"SELECT {quoted_id} FROM {quoted_table} WHERE {predicate} "
-        f"ORDER BY {quoted_id} LIMIT {limit}"
-    )
+    sample_sql = f"SELECT {quoted_id} FROM {quoted_table} WHERE {predicate} ORDER BY {quoted_id} LIMIT {limit}"
 
     engine = get_engine()
     try:
@@ -318,9 +311,7 @@ def _fetch_unique_samples(
     """Lấy tối đa `limit` ID của các dòng có giá trị bị trùng lặp (rule UNIQUE)."""
     identity_column = _resolve_identity_column(table_name)
     if not identity_column:
-        logger.warning(
-            "Bỏ qua lấy mẫu trùng lặp cho %s: không xác định được cột định danh", table_name
-        )
+        logger.warning("Bỏ qua lấy mẫu trùng lặp cho %s: không xác định được cột định danh", table_name)
         return []
 
     quoted_table = _quote_ident(table_name, dialect_name)
@@ -354,22 +345,24 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
     if not test.get("valid"):
         for meta in rules_meta:
             rule = meta.get("rule", {})
-            results.append({
-                "rule_id": rule.get("rule_id", ""),
-                "table_name": table_name,
-                "column": rule.get("column"),
-                "rule_type": rule.get("rule_type", ""),
-                "severity": rule.get("severity", "MEDIUM"),
-                "dimension": rule.get("dimension", "VALIDITY"),
-                "status": "ERROR",
-                "violation_count": 0,
-                "total_rows": 0,
-                "violation_rate": 0.0,
-                "sample_failures": None,
-                "sql_text": test.get("sql_text", ""),
-                "duration_ms": 0.0,
-                "error": test.get("error", "SQL validation failed"),
-            })
+            results.append(
+                {
+                    "rule_id": rule.get("rule_id", ""),
+                    "table_name": table_name,
+                    "column": rule.get("column"),
+                    "rule_type": rule.get("rule_type", ""),
+                    "severity": rule.get("severity", "MEDIUM"),
+                    "dimension": rule.get("dimension", "VALIDITY"),
+                    "status": "ERROR",
+                    "violation_count": 0,
+                    "total_rows": 0,
+                    "violation_rate": 0.0,
+                    "sample_failures": None,
+                    "sql_text": test.get("sql_text", ""),
+                    "duration_ms": 0.0,
+                    "error": test.get("error", "SQL validation failed"),
+                }
+            )
         return results
 
     sql = test.get("sql_text", "")
@@ -390,22 +383,24 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
         logger.error("Lỗi thực thi SQL test query [%s]: %s", sql, exc)
         for meta in rules_meta:
             rule = meta.get("rule", {})
-            results.append({
-                "rule_id": rule.get("rule_id", ""),
-                "table_name": table_name,
-                "column": rule.get("column"),
-                "rule_type": rule.get("rule_type", ""),
-                "severity": rule.get("severity", "MEDIUM"),
-                "dimension": rule.get("dimension", "VALIDITY"),
-                "status": "ERROR",
-                "violation_count": 0,
-                "total_rows": 0,
-                "violation_rate": 0.0,
-                "sample_failures": None,
-                "sql_text": sql,
-                "duration_ms": round(duration_ms, 2),
-                "error": str(exc),
-            })
+            results.append(
+                {
+                    "rule_id": rule.get("rule_id", ""),
+                    "table_name": table_name,
+                    "column": rule.get("column"),
+                    "rule_type": rule.get("rule_type", ""),
+                    "severity": rule.get("severity", "MEDIUM"),
+                    "dimension": rule.get("dimension", "VALIDITY"),
+                    "status": "ERROR",
+                    "violation_count": 0,
+                    "total_rows": 0,
+                    "violation_rate": 0.0,
+                    "sample_failures": None,
+                    "sql_text": sql,
+                    "duration_ms": round(duration_ms, 2),
+                    "error": str(exc),
+                }
+            )
         return results
 
     duration_ms = (time.perf_counter() - start_t) * 1000
@@ -438,22 +433,24 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
             if v_count > 0 and pred:
                 samples = _fetch_sample_failures(table_name, pred, params, dialect_name)
 
-            results.append({
-                "rule_id": rule.get("rule_id", ""),
-                "table_name": table_name,
-                "column": rule.get("column"),
-                "rule_type": r_type,
-                "severity": rule.get("severity", "MEDIUM"),
-                "dimension": rule.get("dimension", "VALIDITY"),
-                "status": status,
-                "violation_count": v_count,
-                "total_rows": total_rows,
-                "violation_rate": v_rate,
-                "sample_failures": samples,
-                "sql_text": sql,
-                "duration_ms": round(duration_ms, 2),
-                "error": None,
-            })
+            results.append(
+                {
+                    "rule_id": rule.get("rule_id", ""),
+                    "table_name": table_name,
+                    "column": rule.get("column"),
+                    "rule_type": r_type,
+                    "severity": rule.get("severity", "MEDIUM"),
+                    "dimension": rule.get("dimension", "VALIDITY"),
+                    "status": status,
+                    "violation_count": v_count,
+                    "total_rows": total_rows,
+                    "violation_rate": v_rate,
+                    "sample_failures": samples,
+                    "sql_text": sql,
+                    "duration_ms": round(duration_ms, 2),
+                    "error": None,
+                }
+            )
 
     # 2. UNIQUE
     elif query_type == "unique":
@@ -468,22 +465,24 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
         if v_count > 0:
             samples = _fetch_unique_samples(table_name, col, dialect_name)
 
-        results.append({
-            "rule_id": rule.get("rule_id", ""),
-            "table_name": table_name,
-            "column": col,
-            "rule_type": rule.get("rule_type", "UNIQUE"),
-            "severity": rule.get("severity", "CRITICAL"),
-            "dimension": rule.get("dimension", "UNIQUENESS"),
-            "status": status,
-            "violation_count": v_count,
-            "total_rows": total_rows,
-            "violation_rate": v_rate,
-            "sample_failures": samples,
-            "sql_text": sql,
-            "duration_ms": round(duration_ms, 2),
-            "error": None,
-        })
+        results.append(
+            {
+                "rule_id": rule.get("rule_id", ""),
+                "table_name": table_name,
+                "column": col,
+                "rule_type": rule.get("rule_type", "UNIQUE"),
+                "severity": rule.get("severity", "CRITICAL"),
+                "dimension": rule.get("dimension", "UNIQUENESS"),
+                "status": status,
+                "violation_count": v_count,
+                "total_rows": total_rows,
+                "violation_rate": v_rate,
+                "sample_failures": samples,
+                "sql_text": sql,
+                "duration_ms": round(duration_ms, 2),
+                "error": None,
+            }
+        )
 
     # 3. ROW COUNT
     elif query_type == "row_count":
@@ -495,22 +494,24 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
         v_count = 0 if is_pass else 1
         v_rate = 0.0 if is_pass else 1.0
 
-        results.append({
-            "rule_id": rule.get("rule_id", ""),
-            "table_name": table_name,
-            "column": None,
-            "rule_type": rule.get("rule_type", "ROW_COUNT"),
-            "severity": rule.get("severity", "HIGH"),
-            "dimension": rule.get("dimension", "COMPLETENESS"),
-            "status": status,
-            "violation_count": v_count,
-            "total_rows": total_rows,
-            "violation_rate": v_rate,
-            "sample_failures": None,
-            "sql_text": sql,
-            "duration_ms": round(duration_ms, 2),
-            "error": None,
-        })
+        results.append(
+            {
+                "rule_id": rule.get("rule_id", ""),
+                "table_name": table_name,
+                "column": None,
+                "rule_type": rule.get("rule_type", "ROW_COUNT"),
+                "severity": rule.get("severity", "HIGH"),
+                "dimension": rule.get("dimension", "COMPLETENESS"),
+                "status": status,
+                "violation_count": v_count,
+                "total_rows": total_rows,
+                "violation_rate": v_rate,
+                "sample_failures": None,
+                "sql_text": sql,
+                "duration_ms": round(duration_ms, 2),
+                "error": None,
+            }
+        )
 
     # 4. FRESHNESS
     elif query_type == "freshness":
@@ -559,31 +560,31 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
             except Exception as exc:
                 logger.warning("Không thể parse timestamp freshness: %s", exc)
 
-        results.append({
-            "rule_id": rule.get("rule_id", ""),
-            "table_name": table_name,
-            "column": col,
-            "rule_type": rule.get("rule_type", "FRESHNESS"),
-            "severity": rule.get("severity", "MEDIUM"),
-            "dimension": rule.get("dimension", "FRESHNESS"),
-            "status": status,
-            "violation_count": v_count,
-            "total_rows": total_rows,
-            "violation_rate": v_rate,
-            # Freshness là kiểm tra cấp bảng, không có dòng vi phạm cụ thể. Mốc thời gian
-            # đã nằm trong `error`; giữ danh sách rỗng để đúng hợp đồng list[str].
-            "sample_failures": [],
-            "sql_text": sql,
-            "duration_ms": round(duration_ms, 2),
-            "error": err_msg,
-        })
+        results.append(
+            {
+                "rule_id": rule.get("rule_id", ""),
+                "table_name": table_name,
+                "column": col,
+                "rule_type": rule.get("rule_type", "FRESHNESS"),
+                "severity": rule.get("severity", "MEDIUM"),
+                "dimension": rule.get("dimension", "FRESHNESS"),
+                "status": status,
+                "violation_count": v_count,
+                "total_rows": total_rows,
+                "violation_rate": v_rate,
+                # Freshness là kiểm tra cấp bảng, không có dòng vi phạm cụ thể. Mốc thời gian
+                # đã nằm trong `error`; giữ danh sách rỗng để đúng hợp đồng list[str].
+                "sample_failures": [],
+                "sql_text": sql,
+                "duration_ms": round(duration_ms, 2),
+                "error": err_msg,
+            }
+        )
 
     return results
 
 
-
 def _run_dbt_cli_test(dbt_dir: Path) -> bool:
-
     """Thực thi lệnh CLI dbt test đối với dự án dbt_project chứa file YML đã sinh."""
     dbt_cmd = shutil.which("dbt")
     settings = get_settings()
@@ -594,7 +595,16 @@ def _run_dbt_cli_test(dbt_dir: Path) -> bool:
         raise RuntimeError("dbt executable is required in production")
     try:
         res = subprocess.run(
-            [dbt_cmd, "test", "--project-dir", str(dbt_dir), "--profiles-dir", str(dbt_dir), "--select", "generated_dq_tests"],
+            [
+                dbt_cmd,
+                "test",
+                "--project-dir",
+                str(dbt_dir),
+                "--profiles-dir",
+                str(dbt_dir),
+                "--select",
+                "generated_dq_tests",
+            ],
             capture_output=True,
             text=True,
             timeout=60,
@@ -753,13 +763,23 @@ async def test_runner_node(state: AgentState) -> dict:
     normalized_results = []
     for r in all_results:
         status_raw = r.get("status", "PASSED")
-        status = "PASS" if status_raw in ("PASSED", "PASS") else "FAIL" if status_raw in ("FAILED", "FAIL") else "ERROR" if status_raw == "ERROR" else "SKIPPED"
+        status = (
+            "PASS"
+            if status_raw in ("PASSED", "PASS")
+            else "FAIL"
+            if status_raw in ("FAILED", "FAIL")
+            else "ERROR"
+            if status_raw == "ERROR"
+            else "SKIPPED"
+        )
 
         checked_count = r.get("total_rows", 0)
         failed_count = r.get("violation_count", 0)
         violation_rate = r.get("violation_rate", 0.0)
 
-        dbt_status = "PASS" if dbt_executed and status == "PASS" else "FAIL" if dbt_executed and status == "FAIL" else "NOT_RUN"
+        dbt_status = (
+            "PASS" if dbt_executed and status == "PASS" else "FAIL" if dbt_executed and status == "FAIL" else "NOT_RUN"
+        )
         metrics_status = "PASS" if status == "PASS" else "FAIL" if status == "FAIL" else "ERROR"
 
         normalized_results.append({
@@ -807,8 +827,11 @@ async def test_runner_node(state: AgentState) -> dict:
         "test_results": normalized_results,
         "metadata": {**state.get("metadata", {}), "dbt_execution_mode": execution_mode},
     }
+
+
 # Standalone Test Harness (Chạy từ file output thực tế)
 # ---------------------------------------------------------------------------
+
 
 async def main():
     """Hàm chạy test độc lập cho test_runner_node từ file output validated_tests.
@@ -872,14 +895,20 @@ async def main():
     failed_count = sum(1 for r in results if r["status"] == "FAIL")
     error_count = sum(1 for r in results if r["status"] == "ERROR")
 
-    print(f"\n📊 Kết quả thực thi ({len(results)} rules): {passed_count} PASSED | {failed_count} FAILED | {error_count} ERROR")
+    print(
+        f"\n📊 Kết quả thực thi ({len(results)} rules): {passed_count} PASSED | {failed_count} FAILED | {error_count} ERROR"
+    )
     for idx, r in enumerate(results[:10], 1):
         status_icon = "PASS" if r["status"] == "PASS" else ("FAIL" if r["status"] == "FAIL" else "ERROR")
         print(f"\n[{idx}] Rule: {r['rule_id']} -> {status_icon}")
-        print(f"    Tong dong: {r['checked_count']} | Vi pham: {r['failed_count']} | Ty le loi: {r['violation_rate']:.2%}")
+        print(
+            f"    Tong dong: {r['checked_count']} | Vi pham: {r['failed_count']} | Ty le loi: {r['violation_rate']:.2%}"
+        )
         print(f"    Thoi gian: {r['duration_ms']} ms")
         if r.get("sample_refs"):
-            print(f"    ID dong loi mau (toi da {SAMPLE_FAILURE_LIMIT}): {json.dumps(r['sample_refs'], ensure_ascii=False, default=str)}")
+            print(
+                f"    ID dong loi mau (toi da {SAMPLE_FAILURE_LIMIT}): {json.dumps(r['sample_refs'], ensure_ascii=False, default=str)}"
+            )
 
     if len(results) > 10:
         print(f"\n... và còn {len(results) - 10} kết quả khác được lưu trong file trace.")
@@ -889,7 +918,5 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(main())
-
-
-

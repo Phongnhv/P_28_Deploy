@@ -44,9 +44,7 @@ async def test_validate_dbt_project_captures_dbt_parse_error(monkeypatch, tmp_pa
         "src.agents.nodes.validate_dbt_project_node.get_settings",
         lambda: MagicMock(output_dir=str(tmp_path), app_env="test"),
     )
-    result = await validate_dbt_project_node(
-        {"test_run_id": "parse-error", "generated_dbt_yaml": VALID_YAML}
-    )
+    result = await validate_dbt_project_node({"test_run_id": "parse-error", "generated_dbt_yaml": VALID_YAML})
     assert result["dbt_validation_valid"] is False
     assert "undefined macro" in result["dbt_validation_error"]
     assert result["dbt_validation_attempts"] == 0

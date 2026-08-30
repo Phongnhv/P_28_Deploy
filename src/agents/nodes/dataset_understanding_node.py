@@ -11,6 +11,7 @@ from src.services.llm import get_llm
 
 logger = logging.getLogger(__name__)
 
+
 async def _understand_table(
     table_name: str,
     table_digest: dict,
@@ -25,12 +26,13 @@ async def _understand_table(
             table_name=table_name,
             table_digest=json.dumps(table_digest, ensure_ascii=False),
             domain_hint=domain_hint or "None",
-            data_dictionary=data_dictionary or "None"
+            data_dictionary=data_dictionary or "None",
         )
         result: TableSemanticContract = await structured_llm.ainvoke(messages)
         # Gán lại chính xác table_name
         result.table_name = table_name
         return result
+
 
 async def dataset_understanding_node(state: AgentState) -> dict:
     """Dataset Understanding Agent Node.
@@ -67,7 +69,7 @@ async def dataset_understanding_node(state: AgentState) -> dict:
             domain_hint=domain_hint,
             data_dictionary=data_dictionary,
             structured_llm=structured_llm,
-            semaphore=semaphore
+            semaphore=semaphore,
         )
         for t in table_names
     ]
@@ -87,23 +89,24 @@ async def dataset_understanding_node(state: AgentState) -> dict:
     if errors and not tables_contract:
         return {"error": f"Lỗi toàn bộ khi chạy Dataset Understanding: {'; '.join(errors)}"}
 
-    contract_payload = {
-        "dataset_id": state.get("dataset_id", "unknown"),
-        "tables": tables_contract,
-        "status": "draft"
-    }
+    contract_payload = {"dataset_id": state.get("dataset_id", "unknown"), "tables": tables_contract, "status": "draft"}
 
     logger.info(f"Hoàn thành dataset_understanding_node cho dataset: {state.get('dataset_id')}")
 
     # Xuất trace JSON
     from datetime import datetime
     from pathlib import Path
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_id = state.get("rule_run_id") or "test_run"
     try:
         out_dir = getattr(settings, "output_dir", None)
         res_dir = getattr(settings, "results_dir", None)
-        base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+        base_dir = (
+            out_dir
+            if isinstance(out_dir, (str, Path))
+            else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+        )
         semantic_dir = Path(base_dir) / "semantic"
         semantic_dir.mkdir(parents=True, exist_ok=True)
         dump_file = semantic_dir / f"debug_semantic_understanding_{timestamp}_{run_id}.json"
@@ -112,7 +115,4 @@ async def dataset_understanding_node(state: AgentState) -> dict:
     except Exception as e:
         logger.warning(f"Không thể ghi file trace dataset understanding: {e}")
 
-    return {
-        "semantic_contract": contract_payload,
-        "progress_state": "WAITING_FOR_SEMANTIC_REVIEW"
-    }
+    return {"semantic_contract": contract_payload, "progress_state": "WAITING_FOR_SEMANTIC_REVIEW"}

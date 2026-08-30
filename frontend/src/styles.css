@@ -211,7 +211,6 @@ code,
   box-shadow: 0 7px 20px rgb(37 99 235 / 5%);
 }
 .column-bar,
-.review-progress,
 .progress-track,
 .confidence-track {
   background: #dbeafe;
@@ -751,9 +750,13 @@ nav {
   background: var(--surface-muted);
 }
 .page-container {
-  width: min(100%, 1360px);
+  /* Scales with the viewport instead of stopping at a fixed cap. A hard pixel
+     limit left a wide dead margin on both sides of a large screen while the
+     card grids inside stayed cramped; the very generous ceiling below only
+     exists so an ultra-wide monitor does not stretch a row of cards forever. */
+  width: min(100%, 2400px);
   min-width: 0;
-  padding: 42px clamp(22px, 4vw, 52px) 72px;
+  padding: 36px clamp(18px, 2.4vw, 44px) 72px;
   margin: 0 auto;
 }
 .dev-banner {
@@ -1474,39 +1477,78 @@ nav {
   color: var(--accent-deep);
 }
 
+/* Stacked, not a row. The markup was rewritten into head / track / legend but
+   this rule still laid it out as one flex row, so the three blocks were squeezed
+   onto a single line and the bar had nowhere to render. */
 .review-summary {
-  display: flex;
-  align-items: center;
-  gap: 22px;
-  padding: 18px 19px;
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
   margin-bottom: 18px;
   border-radius: var(--radius);
+  border: 1px solid var(--border);
   background: var(--surface);
   box-shadow: 0 7px 20px rgb(38 68 49 / 4%);
 }
-.review-summary strong {
-  display: block;
-  margin-top: 5px;
-  color: var(--ink);
-  font-size: 14px;
+
+.rs-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
-.review-progress {
-  flex: 1;
-  overflow: hidden;
-  height: 4px;
-  border-radius: 4px;
-  background: #e4ebe4;
-}
-.review-progress span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--accent);
-}
-.review-summary > span {
+.rs-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
   color: var(--muted);
-  font-size: 10px;
-  white-space: nowrap;
+}
+.rs-count {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The two spans sit side by side and together fill the decided share. */
+.rs-track {
+  display: flex;
+  overflow: hidden;
+  height: 7px;
+  border-radius: 999px;
+  background: #e6eaef;
+}
+.rs-track > span { display: block; height: 100%; transition: width 0.3s ease; }
+.rs-approved { background: #6aa87f; }
+.rs-rejected { background: #d98b83; }
+
+.rs-legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+.rs-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.rs-legend .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.rs-legend .dot.approved { background: #6aa87f; }
+.rs-legend .dot.rejected { background: #d98b83; }
+.rs-legend .dot.pending { background: #c3cad4; }
+.rs-edited { font-style: italic; }
+.rs-percent {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
 }
 .proposal-list {
   display: grid;
@@ -2831,17 +2873,8 @@ nav {
     grid-template-columns: minmax(105px, 1.2fr) 1.4fr 48px;
     gap: 9px;
   }
-  .review-summary {
-    align-items: start;
-    flex-wrap: wrap;
-    gap: 11px;
-  }
-  .review-progress {
-    flex-basis: 100%;
-    order: 3;
-  }
-  .review-summary > span {
-    margin-left: auto;
+  .rs-legend {
+    gap: 10px;
   }
   .proposal-main {
     display: block;
@@ -3029,7 +3062,6 @@ nav {
   border-color: #263a5e;
 }
 :root[data-theme="dark"] .column-bar,
-:root[data-theme="dark"] .review-progress,
 :root[data-theme="dark"] .progress-track,
 :root[data-theme="dark"] .confidence-track {
   background: #273d64;
@@ -3136,8 +3168,7 @@ nav {
 }
 :root[data-theme="light"] .progress-track,
 :root[data-theme="light"] .confidence-track,
-:root[data-theme="light"] .column-bar,
-:root[data-theme="light"] .review-progress {
+:root[data-theme="light"] .column-bar {
   background: #dce8ff;
 }
 :root[data-theme="light"] .dataset-hero {
@@ -4142,17 +4173,33 @@ button.step-nav-button:disabled {
 }
 .schema-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(100px, 0.8fr) minmax(
-      120px,
-      0.8fr
-    );
+  /* Name · type · confidence on the first line, that column's signals wrapping
+     underneath across the full width. */
+  grid-template-columns: minmax(0, 1.4fr) minmax(100px, 0.8fr) minmax(120px, 0.8fr);
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem 0.75rem;
   padding: 0.6rem 0.7rem;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
 }
+
+.schema-signals {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding-top: 7px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+.schema-signals code {
+  padding: 1px 7px;
+  border-radius: 5px;
+  font-size: 10px;
+  color: #4a6d94;
+  background: #eef3fa;
+}
+.schema-row.uncertain .schema-signals code { background: #f6f0e6; color: #8a6b36; }
 .schema-row strong {
   overflow: hidden;
   color: var(--ink);
@@ -4297,9 +4344,10 @@ button.step-nav-button:disabled {
 
 /* Main Wizard Layout */
 .wizard-header-container {
-  position: sticky;
-  top: 0;
-  z-index: 100;
+  /* Deliberately not sticky. Pinned to the top it followed the page down and
+     ate a band of every screen below the fold, which is exactly where the
+     dataset cards and profile panels need the room. */
+  z-index: 1;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   padding: 16px 24px;
@@ -5513,3 +5561,2967 @@ button.step-nav-button:disabled {
 }
 
 
+
+/* ==========================================================================
+   Analytics (bước 5)
+
+   Trước đây bước 5 tô màu bằng mã hex viết thẳng trong TSX — 32 chỗ. Vì thế
+   nó là màn hình duy nhất vỡ khi bật chế độ tối: nền trắng cứng, chữ xám nhạt
+   trên nền tối. Toàn bộ đã chuyển sang token, và ba token biểu đồ dưới đây có
+   biến thể riêng cho nền tối vì --red/--amber gốc quá sẫm khi đặt trên nền đó.
+   ========================================================================== */
+
+:root {
+  --chart-pass: #2f6f4e;
+  --chart-fail: #b94d4d;
+  --chart-warn: #a56824;
+  --chart-grid: #e1e7f0;
+  --chart-axis: #657188;
+}
+
+:root[data-theme="dark"] {
+  --chart-pass: #5fbe87;
+  --chart-fail: #e0796a;
+  --chart-warn: #d6a54a;
+  --chart-grid: #273858;
+  --chart-axis: #93a2c0;
+}
+
+.analytics-page {
+  display: grid;
+  gap: 24px;
+}
+
+.analytics-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+}
+
+.analytics-metric {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+
+.analytics-metric .label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.analytics-metric .value {
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.analytics-metric .value.good { color: var(--chart-pass); }
+.analytics-metric .value.bad { color: var(--chart-fail); }
+.analytics-metric .value.warn { color: var(--chart-warn); }
+.analytics-metric .value.none { color: var(--muted); }
+
+.analytics-metric .hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+.analytics-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 24px;
+}
+
+.analytics-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+
+.analytics-card h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 16px;
+  color: var(--ink);
+}
+
+.analytics-chart-frame { height: 220px; }
+
+.analytics-empty {
+  display: grid;
+  place-items: center;
+  height: 200px;
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+  padding: 0 16px;
+}
+
+.analytics-table-scroll { overflow-x: auto; }
+
+.analytics-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 14px;
+}
+
+.analytics-table th {
+  padding: 10px;
+  border-bottom: 2px solid var(--border);
+  color: var(--ink-soft);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.analytics-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink);
+}
+
+.analytics-table td.muted { color: var(--muted); font-variant-numeric: tabular-nums; }
+.analytics-table tbody tr:last-child td { border-bottom: none; }
+
+.analytics-table .empty-cell {
+  padding: 18px;
+  text-align: center;
+  color: var(--muted);
+}
+
+/* Recharts nhận className và đưa thẳng xuống thuộc tính SVG, nên tô màu ở đây
+   giữ được biểu đồ đồng bộ với chủ đề mà không cần đọc biến bằng JavaScript. */
+.chart-fill-pass { fill: var(--chart-pass); }
+.chart-fill-fail { fill: var(--chart-fail); }
+.chart-fill-warn { fill: var(--chart-warn); }
+.chart-line-accent { stroke: var(--accent); }
+.chart-grid-line { stroke: var(--chart-grid); }
+
+/* Trục biểu đồ lấy màu qua currentColor để đổi theo chủ đề cùng phần còn lại. */
+.chart-axis { color: var(--chart-axis); font-size: 12px; }
+
+/* --------------------------------------------------------------------------
+   Lớp thay cho màu viết thẳng trong App.tsx
+
+   Bốn chỗ trước đây tô màu bằng mã hex ngay trong JSX nên giữ nguyên màu sáng
+   khi bật chế độ tối: nút xoá, cột độ tin cậy, và chấm màu của thẻ chỉ số.
+   -------------------------------------------------------------------------- */
+
+.button.ghost.danger {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+}
+
+.button.ghost.danger:hover {
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+
+.confidence-value { font-weight: 600; }
+.confidence-value.high { color: var(--chart-pass); }
+.confidence-value.low { color: var(--chart-warn); }
+
+.stat-card { position: relative; overflow: hidden; }
+
+.stat-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.stat-card .stat-label {
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--accent);
+}
+
+.stat-dot.green { background: var(--chart-pass); }
+.stat-dot.blue { background: var(--accent); }
+.stat-dot.amber { background: var(--chart-warn); }
+.stat-dot.violet { background: var(--accent-deep); }
+
+.stat-card .stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  margin: 8px 0 4px;
+  display: block;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-card .stat-detail {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ==========================================================================
+   Lý do đằng sau một đề xuất luật
+
+   Backend vẫn trả về lý do nghiệp vụ, nguồn gốc từng tham số, giả định và phân
+   rã độ tin cậy; thẻ đề xuất trước đây chỉ hiện tiêu đề, mô tả và một con số
+   phần trăm. Khối này đưa phần "vì sao" ra màn hình, mặc định thu gọn để hàng
+   đợi duyệt vẫn quét nhanh được.
+   ========================================================================== */
+
+.rationale {
+  border-top: 1px solid var(--border);
+  margin-top: 14px;
+  padding-top: 12px;
+}
+
+.rationale-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.rationale-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-deep);
+}
+
+.rationale-toggle:hover { text-decoration: underline; }
+
+.rationale-caret {
+  font-size: 10px;
+  color: var(--muted);
+  width: 10px;
+  display: inline-block;
+}
+
+.rationale-model {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin-left: auto;
+}
+
+.rationale-absent {
+  border-top: 1px solid var(--border);
+  margin: 14px 0 0;
+  padding-top: 12px;
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Huy hiệu nguồn gốc: nhìn là biết đề xuất dựa vào đâu mà không cần mở khối. */
+.basis-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.basis-badge.schema_constraint { border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--accent-deep); background: var(--accent-soft); }
+.basis-badge.data_profile { border-color: color-mix(in srgb, var(--chart-pass) 40%, transparent); color: var(--chart-pass); background: color-mix(in srgb, var(--chart-pass) 12%, transparent); }
+.basis-badge.data_dictionary { border-color: color-mix(in srgb, var(--chart-warn) 40%, transparent); color: var(--chart-warn); background: color-mix(in srgb, var(--chart-warn) 12%, transparent); }
+.basis-badge.historical_rule { border-color: color-mix(in srgb, var(--accent-deep) 40%, transparent); color: var(--accent-deep); background: var(--accent-soft); }
+.basis-badge.policy { border-color: color-mix(in srgb, var(--red) 40%, transparent); color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
+
+.rationale-body {
+  display: grid;
+  gap: 18px;
+  margin-top: 14px;
+  padding: 16px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.rationale-block h4 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.rationale-block p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink);
+  max-width: 68ch;
+}
+
+.rationale-note {
+  margin-top: 10px !important;
+  font-size: 12px !important;
+  color: var(--muted) !important;
+  font-style: italic;
+}
+
+.rationale-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 5px;
+}
+
+.rationale-list li {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+/* Phân rã độ tin cậy: ba thanh cho phép người duyệt tự kiểm chứng con số tổng. */
+.confidence-bars { display: grid; gap: 8px; }
+
+.confidence-bar {
+  display: grid;
+  grid-template-columns: minmax(120px, 170px) 1fr 42px;
+  align-items: center;
+  gap: 10px;
+}
+
+.cb-label { font-size: 12px; color: var(--ink-soft); }
+
+.cb-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+  display: block;
+}
+
+.cb-track > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.cb-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 34rem) {
+  .confidence-bar { grid-template-columns: 1fr 42px; }
+  .cb-label { grid-column: 1 / -1; }
+}
+
+.rationale-table-scroll { overflow-x: auto; }
+
+.rationale-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.rationale-table th {
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.rationale-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink);
+  vertical-align: top;
+  line-height: 1.5;
+}
+
+.rationale-table tbody tr:last-child td { border-bottom: none; }
+.rationale-table code { font-size: 12px; }
+
+/* Cột hợp đồng ngữ nghĩa mà agent suy luận kém chắc chắn. Đây là chốt chặn HITL
+   đầu tiên: mọi luật sinh ra sau đều dựa trên hợp đồng này, nên chỗ agent lưỡng
+   lự là chỗ người duyệt cần nhìn trước. */
+.schema-row.uncertain {
+  border-left: 3px solid var(--chart-warn);
+  padding-left: 9px;
+  background: color-mix(in srgb, var(--chart-warn) 7%, transparent);
+}
+
+.schema-row small.low { color: var(--chart-warn); font-weight: 600; }
+.needs-review { color: var(--chart-warn); }
+
+.schema-hint {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+  max-width: 66ch;
+}
+
+/* ==========================================================================
+   Điều tra nguyên nhân gốc (Graph 3)
+
+   DeepAgent sinh giả thuyết kèm bằng chứng hai chiều, kiểm tra khuyến nghị và
+   giới hạn tự khai — toàn bộ nằm sẵn trong `anomaly_hypotheses` nhưng ba
+   endpoint /dq/anomaly-runs/* chưa từng được giao diện gọi. Khối này đưa chúng
+   ra màn hình.
+   ========================================================================== */
+
+.investigation-panel { margin-top: 28px; }
+
+.investigation-note {
+  margin: 0;
+  padding: 18px 0 4px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 68ch;
+}
+
+.investigation-note.error { color: var(--red); }
+
+.hypothesis-list { display: grid; gap: 16px; margin-top: 16px; }
+
+.hypothesis {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+  padding: 18px 20px;
+}
+
+.hypothesis-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.hypothesis-type {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent-deep);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+/* Cờ đường lui là tín hiệu độ tin cậy thấp, nên phải nhìn thấy ngay cạnh nhãn
+   phân loại chứ không giấu trong phần chi tiết. */
+.hypothesis-fallback {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--chart-warn);
+  background: color-mix(in srgb, var(--chart-warn) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--chart-warn) 40%, transparent);
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+
+.hypothesis-confidence {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.hc-track {
+  width: 96px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+  display: block;
+}
+
+.hc-track > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.hypothesis-confidence strong {
+  font-size: 13px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  min-width: 38px;
+  text-align: right;
+}
+
+.hypothesis-summary {
+  margin: 0 0 16px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--ink);
+  max-width: 74ch;
+}
+
+.hypothesis-evidence {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.he-block {
+  border-left: 3px solid var(--chart-pass);
+  padding-left: 12px;
+}
+
+/* Bằng chứng phản bác dùng màu cảnh báo để phân biệt bằng hình dạng lẫn màu —
+   không chỉ dựa vào màu, vì người mù màu vẫn phải đọc được tiêu đề. */
+.he-block.against { border-left-color: var(--chart-warn); }
+
+.he-block h5 {
+  margin: 0 0 7px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.he-block ul {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 4px;
+}
+
+.he-block li {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.he-empty { margin: 0; font-size: 12.5px; color: var(--muted); font-style: italic; }
+
+.hypothesis-actions-block {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+  margin-bottom: 12px;
+}
+
+.hypothesis-actions-block h5 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.hypothesis-actions-block ol {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 5px;
+}
+
+.hypothesis-actions-block li {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.hypothesis-limits {
+  margin: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+  font-style: italic;
+  max-width: 74ch;
+}
+
+/* Vòng phản hồi: nối vào POST /dq/anomaly-runs/{id}/feedback để đo chất lượng
+   agent theo thời gian. Endpoint đã tồn tại từ trước, chỉ chưa có gì gọi. */
+.feedback-bar {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.feedback-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.feedback-buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.feedback-buttons .button { font-size: 12.5px; padding: 6px 12px; }
+
+.feedback-sent {
+  margin-left: auto;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--chart-pass);
+}
+
+/* ID dòng trượt: tách rời để đọc và sao chép từng cái, thay vì một dải dính liền. */
+.failed-ids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.failed-ids.empty { color: var(--muted); }
+
+.failed-ids code {
+  font-size: 11.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.failed-ids-more {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent-deep);
+}
+
+.failed-ids-more:hover { text-decoration: underline; }
+
+/* ==========================================================================
+   Tiến độ duyệt & bộ luật đang chạy
+
+   Thanh tiến độ cũ chỉ có một màu cho "đã quyết định", nên không phân biệt được
+   duyệt với từ chối — hai kết quả rất khác nhau. Bản này tách ba đoạn và kèm
+   nhãn chữ, để không phải chỉ dựa vào màu.
+   ========================================================================== */
+
+.review-summary {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 16px 18px;
+  margin-bottom: 18px;
+}
+
+.rs-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.rs-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.rs-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.rs-track {
+  display: flex;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--border);
+}
+
+.rs-track > span { display: block; height: 100%; }
+.rs-approved { background: var(--chart-pass); }
+.rs-rejected { background: var(--chart-fail); }
+
+.rs-legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  flex-wrap: wrap;
+}
+
+.rs-legend .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.rs-legend .dot.approved { background: var(--chart-pass); }
+.rs-legend .dot.rejected { background: var(--chart-fail); }
+.rs-legend .dot.pending { background: var(--border); }
+
+.rs-edited { color: var(--muted); font-style: italic; }
+
+.rs-percent {
+  margin-left: auto;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.active-rules-panel { margin-top: 28px; }
+.active-rules-scroll { overflow-x: auto; margin-top: 14px; }
+
+.active-rules-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.active-rules-table th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.active-rules-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink);
+  vertical-align: middle;
+}
+
+.active-rules-table td.muted { color: var(--muted); }
+.active-rules-table tbody tr:last-child td { border-bottom: none; }
+
+/* Hàng đợi duyệt độc lập ở bước 3: hiện bất cứ khi nào dataset đã có đề xuất,
+   không chờ workflow đi đúng tới chặng REVIEW_RULES. */
+.standalone-review {
+  margin-top: 32px;
+  border-top: 1px solid var(--border);
+  padding-top: 24px;
+}
+
+.standalone-review .proposal-list {
+  display: grid;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+/* ==========================================================================
+   HIỂN THỊ NODE CỦA ĐỒ THỊ AGENT
+
+   Ba màu phân loại node bám theo quy ước đã dùng trong analyze_ete.md: node
+   LLM xanh dương, node tất định xanh lá, chốt HITL vàng hổ phách. Giữ nguyên
+   bảng màu đó khiến sơ đồ trên giao diện đọc được cùng một cách với sơ đồ
+   trong tài liệu, không phải học lại lần nữa.
+
+   Các token dưới đây có biến thể nền tối riêng vì sắc xanh lá và hổ phách gốc
+   quá sẫm khi đặt trên nền tối.
+   ========================================================================== */
+
+:root {
+  --graph-llm: #2563eb;
+  --graph-llm-soft: #eaf1ff;
+  --graph-deterministic: #2f6f4e;
+  --graph-deterministic-soft: #e8f4ed;
+  --graph-gate: #a56824;
+  --graph-gate-soft: #fdf1de;
+  --graph-idle: #9aa6bd;
+  --graph-idle-soft: #f2f5fa;
+  --graph-failed: #b94d4d;
+}
+
+:root[data-theme="dark"] {
+  --graph-llm: #60a5fa;
+  --graph-llm-soft: #1d3158;
+  --graph-deterministic: #5fbe87;
+  --graph-deterministic-soft: #16341f;
+  --graph-gate: #d6a54a;
+  --graph-gate-soft: #3a2c12;
+  --graph-idle: #6d7c99;
+  --graph-idle-soft: #1a2947;
+  --graph-failed: #e0796a;
+}
+
+/* --- Khối gấp/mở nhúng trong từng bước wizard --------------------------- */
+
+.graph-stage-panel {
+  margin-top: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.graph-stage-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--surface-muted);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  color: var(--ink);
+  text-align: left;
+}
+
+.graph-stage-toggle:hover {
+  background: var(--accent-soft);
+}
+
+.graph-stage-toggle-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.graph-stage-live {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.graph-stage-live::before {
+  content: "\25CF";
+  margin-right: 4px;
+  animation: graph-pulse 1.4s ease-in-out infinite;
+}
+
+.graph-stage-failed {
+  color: var(--graph-failed);
+  font-weight: 600;
+}
+
+.graph-stage-chevron {
+  color: var(--muted);
+}
+
+.graph-stage-body {
+  padding: 18px 16px;
+  display: grid;
+  gap: 22px;
+}
+
+.graph-stage-graph {
+  display: grid;
+  gap: 14px;
+}
+
+@keyframes graph-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* --- Chuỗi node ---------------------------------------------------------- */
+
+.graph-flow-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.graph-flow-head h3 {
+  margin: 4px 0 2px;
+  font-size: 16px;
+}
+
+.graph-flow-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  max-width: 62ch;
+}
+
+.graph-flow-stats {
+  display: flex;
+  gap: 20px;
+}
+
+.graph-flow-stats div {
+  display: grid;
+  gap: 2px;
+  text-align: right;
+}
+
+.graph-flow-stats strong {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.graph-flow-stats span {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.graph-flow-failed strong {
+  color: var(--graph-failed);
+}
+
+/* Sơ đồ có thể rộng hơn khung; cuộn trong chính nó để thân trang không bao
+   giờ cuộn ngang. */
+.graph-flow-track {
+  display: flex;
+  align-items: stretch;
+  /* "safe" keeps the first node reachable when the row is wider than the
+     viewport; plain `center` would push its left edge out of the scroll area. */
+  justify-content: safe center;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  width: 100%;
+  max-width: 1240px;
+  margin: 0 auto;
+}
+
+.graph-flow-item {
+  display: flex;
+  align-items: center;
+  /* The spare width goes into the cards, not the connectors. Letting the arrows
+     stretch instead left three small cards marooned across a wide panel. */
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.graph-flow-arrow {
+  position: relative;
+  flex: 0 0 auto;
+  width: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.graph-flow-arrow-line {
+  width: 100%;
+  height: 2px;
+  background: color-mix(in srgb, var(--accent) 30%, var(--border));
+  position: relative;
+}
+
+.graph-flow-arrow-line::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  border-left: 6px solid var(--border);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+}
+
+.graph-flow-arrow-label {
+  position: absolute;
+  top: -19px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #6b7f9e;
+  white-space: nowrap;
+  background: #eef2f8;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+/* --- Thẻ node ------------------------------------------------------------ */
+
+.graph-node-card {
+  /* Fills its flex item, but capped: past ~340px the two-line purpose text
+     turns into one long line and the card reads as mostly empty. */
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 208px;
+  min-height: 172px;
+  display: grid;
+  /* badge row / name / id / purpose / footer. The 1fr on the purpose row
+     pushes the footer to the bottom edge, so durations line up across the
+     whole row of cards however long the descriptions are. */
+  grid-template-rows: auto auto auto 1fr auto;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--graph-idle);
+  background: var(--surface);
+  cursor: pointer;
+  text-align: left;
+  color: var(--ink);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+}
+
+.graph-node-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.graph-node-card.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.graph-node-card.kind-llm { border-left-color: var(--graph-llm); }
+.graph-node-card.kind-deterministic { border-left-color: var(--graph-deterministic); }
+.graph-node-card.kind-gate { border-left-color: var(--graph-gate); }
+
+/* Node chưa chạy phải trông "chưa tới lượt", không phải "hỏng". */
+.graph-node-card.state-idle {
+  background: var(--graph-idle-soft);
+  opacity: 0.72;
+}
+
+.graph-node-card.state-failed {
+  border-color: var(--graph-failed);
+}
+
+.graph-node-top {
+  display: flex;
+  align-items: center;
+  /* Step number and kind badge group on the left; the status tick is pushed to
+     the right edge. `space-between` would strand the badge in the middle now
+     that this row has three children. */
+  justify-content: flex-start;
+  gap: 7px;
+}
+.graph-node-top > .graph-node-status { margin-left: auto; }
+
+.graph-node-step {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #3f6ea8;
+  background: #e9f0fa;
+  font-variant-numeric: tabular-nums;
+}
+.graph-node-step i {
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 600;
+  opacity: 0.65;
+}
+
+.graph-node-kind {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+
+.graph-node-kind.kind-llm {
+  color: var(--graph-llm);
+  background: var(--graph-llm-soft);
+}
+
+.graph-node-kind.kind-deterministic {
+  color: var(--graph-deterministic);
+  background: var(--graph-deterministic-soft);
+}
+
+.graph-node-kind.kind-gate {
+  color: var(--graph-gate);
+  background: var(--graph-gate-soft);
+}
+
+.graph-node-status {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.graph-node-status.state-succeeded { color: var(--graph-deterministic); }
+.graph-node-status.state-failed { color: var(--graph-failed); }
+.graph-node-status.state-running {
+  color: var(--accent);
+  animation: graph-pulse 1.4s ease-in-out infinite;
+}
+.graph-node-status.state-skipped { color: var(--muted); }
+
+.graph-node-name {
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.graph-node-id {
+  align-self: start;
+  justify-self: start;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 10.5px;
+  color: var(--ink-soft);
+  background: var(--surface-muted);
+  word-break: break-all;
+}
+
+.graph-node-purpose {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+
+.graph-node-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  padding-top: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  font-size: 11px;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+
+.graph-node-duration {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.graph-node-duration.muted {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.graph-node-model {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+}
+
+/* --- Thanh thời lượng ---------------------------------------------------- */
+
+.graph-timeline {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--surface-muted);
+}
+
+.graph-timeline-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.graph-timeline-total {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.graph-timeline-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.graph-timeline-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(140px, 210px) 1fr 72px;
+  align-items: center;
+  gap: 12px;
+  background: none;
+  border: 0;
+  padding: 3px 0;
+  cursor: pointer;
+  color: inherit;
+  text-align: left;
+}
+
+.graph-timeline-row:disabled {
+  cursor: default;
+}
+
+.graph-timeline-row:hover:not(:disabled) .graph-timeline-label code {
+  color: var(--accent);
+}
+
+.graph-timeline-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.graph-timeline-label code {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-timeline-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.graph-timeline-dot.kind-llm { background: var(--graph-llm); }
+.graph-timeline-dot.kind-deterministic { background: var(--graph-deterministic); }
+.graph-timeline-dot.kind-gate { background: var(--graph-gate); }
+
+.graph-timeline-bar-track {
+  height: 9px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.graph-timeline-bar {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.graph-timeline-bar.kind-llm { background: var(--graph-llm); }
+.graph-timeline-bar.kind-deterministic { background: var(--graph-deterministic); }
+.graph-timeline-bar.kind-gate { background: var(--graph-gate); }
+.graph-timeline-bar.state-failed { background: var(--graph-failed); }
+
+.graph-timeline-value {
+  font-size: 11px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+}
+
+/* --- Panel chi tiết trượt ra --------------------------------------------- */
+
+/* Node detail floats over the graph rather than replacing it. It was a 520px
+   side rail (the summary tables broke one word per line), then briefly a
+   full-screen page, which cost the reader their place in the flow. A dialog
+   over a dimmed page keeps the graph visible behind what it explains. */
+.graph-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgb(10 18 34 / 46%);
+  z-index: 70;
+}
+
+.graph-drawer {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(1080px, calc(100vw - 40px));
+  max-height: calc(100vh - 72px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  z-index: 71;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.graph-drawer-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.graph-drawer-head h3 {
+  margin: 8px 0 3px;
+  font-size: 17px;
+}
+
+.graph-drawer-head code {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.graph-drawer-close {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.graph-drawer-close:hover {
+  color: var(--ink);
+}
+
+.graph-drawer-body {
+  width: 100%;
+  padding: 20px 22px 26px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  gap: 20px;
+  align-content: start;
+}
+
+.graph-drawer-body p {
+  margin: 5px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+
+.graph-drawer-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.graph-drawer-metrics div {
+  display: grid;
+  gap: 3px;
+}
+
+.graph-drawer-metrics span {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.graph-drawer-metrics strong {
+  font-size: 14px;
+}
+
+.graph-drawer-metrics strong.state-succeeded { color: var(--graph-deterministic); }
+.graph-drawer-metrics strong.state-failed { color: var(--graph-failed); }
+.graph-drawer-metrics strong.state-running { color: var(--accent); }
+
+.graph-drawer-empty {
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--graph-idle-soft);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.graph-drawer-error pre {
+  margin: 6px 0 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--surface-muted);
+  border-left: 3px solid var(--graph-failed);
+  color: var(--graph-failed);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+.graph-drawer-error-text {
+  font-size: 12.5px;
+  color: var(--graph-failed);
+}
+
+.graph-drawer-loading {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.graph-drawer-contract {
+  display: grid;
+  gap: 14px;
+}
+
+.graph-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.graph-chip-row code {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+}
+
+.graph-drawer-privacy {
+  font-size: 11.5px !important;
+  color: var(--muted) !important;
+  font-style: italic;
+}
+
+.graph-summary-panes {
+  display: grid;
+  /* Input and output side by side now that this is a page. In the old rail they
+     were stacked and each one still needed a horizontal scrollbar. */
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 18px;
+  margin-top: 10px;
+}
+
+.graph-summary-panes > div {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.graph-summary-panes h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.graph-summary-object {
+  margin: 0;
+  display: grid;
+  gap: 3px;
+  font-size: 11.5px;
+}
+
+/* Nested levels become an inset block instead of a bare indent guide, so it is
+   obvious where a sub-structure begins and ends. */
+.graph-summary-object.depth-1,
+.graph-summary-object.depth-2,
+.graph-summary-object.depth-3 {
+  margin-top: 4px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  background: color-mix(in srgb, var(--surface-muted) 70%, transparent);
+}
+.graph-summary-object.depth-2 { background: color-mix(in srgb, var(--surface-muted) 45%, transparent); }
+.graph-summary-object.depth-3 { background: transparent; }
+
+/* Top level reads as a spec table: one row per field, ruled off from the next,
+   key on the left and value on the right. Every nesting level used to split the
+   remaining width again, so four levels down the value column was one character
+   wide and rendered as a vertical stack of letters. Deeper levels stack instead
+   and sit in an inset block. */
+.graph-summary-entry {
+  display: grid;
+  grid-template-columns: minmax(130px, 32%) minmax(0, 1fr);
+  gap: 4px 14px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.graph-summary-object.depth-0 > .graph-summary-entry {
+  padding: 9px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+.graph-summary-object.depth-0 > .graph-summary-entry:first-child { padding-top: 0; }
+.graph-summary-object.depth-0 > .graph-summary-entry:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.graph-summary-object:not(.depth-0) > .graph-summary-entry {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+}
+
+.graph-summary-entry dt {
+  color: var(--muted);
+  font-size: 11px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.graph-summary-object.depth-0 > .graph-summary-entry > dt {
+  font-weight: 650;
+  color: var(--ink-soft);
+}
+
+.graph-summary-object:not(.depth-0) > .graph-summary-entry > dt {
+  font-weight: 600;
+}
+
+.graph-summary-entry dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.graph-summary-scalar {
+  color: var(--ink-soft);
+}
+
+.graph-summary-null {
+  color: var(--muted);
+}
+
+.graph-summary-list {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 2px;
+}
+
+.graph-drawer-source code {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--ink-soft);
+  word-break: break-all;
+}
+
+/* --- Trang Graph Observatory --------------------------------------------- */
+
+.graph-observatory {
+  display: grid;
+  gap: 22px;
+}
+
+.graph-observatory-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.graph-observatory-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+}
+
+.graph-observatory-metrics article {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  display: grid;
+  gap: 4px;
+  align-content: start;
+}
+
+.graph-observatory-metrics strong {
+  font-size: 26px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.graph-observatory-metrics small {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.graph-metric-danger strong {
+  color: var(--graph-failed);
+}
+
+.graph-observatory-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.graph-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.graph-filter:hover {
+  border-color: var(--accent);
+}
+
+.graph-filter.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.graph-filter-count {
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--ink-soft);
+}
+
+.graph-filter.active .graph-filter-count {
+  background: rgb(255 255 255 / 24%);
+  color: var(--on-accent);
+}
+
+.graph-observatory-list {
+  display: grid;
+  gap: 20px;
+}
+
+.graph-observatory-card {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  display: grid;
+  gap: 16px;
+}
+
+/* --- Báo cáo Steward (đầu ra Graph 3) ------------------------------------ */
+
+.steward-report-panel {
+  margin-bottom: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.steward-report-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  flex-wrap: wrap;
+}
+
+.steward-report-head strong {
+  display: block;
+  margin: 5px 0 3px;
+  font-size: 15px;
+}
+
+.steward-report-head p {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.steward-report-empty {
+  padding: 0 18px 16px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.steward-report-body {
+  border-top: 1px solid var(--border);
+}
+
+.steward-report-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 18px;
+  background: var(--surface-muted);
+  font-size: 11.5px;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+
+/* Rendered Markdown, not a code dump. `white-space: pre-wrap` and the monospace
+   look belonged to the <pre> this replaced; a report is prose and tables. */
+.steward-report-content {
+  margin: 0;
+  padding: 20px 22px;
+  max-height: 520px;
+  overflow: auto;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--ink);
+}
+.steward-report-content > :first-child { margin-top: 0; }
+.steward-report-content > :last-child { margin-bottom: 0; }
+
+.steward-report-content h1 { font-size: 19px; margin: 0 0 6px; }
+.steward-report-content h2 {
+  font-size: 15px;
+  margin: 26px 0 10px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--border);
+}
+.steward-report-content h3 { font-size: 13.5px; margin: 20px 0 8px; }
+.steward-report-content p { margin: 0 0 11px; }
+.steward-report-content ul,
+.steward-report-content ol { margin: 0 0 12px; padding-left: 22px; }
+.steward-report-content li { margin-bottom: 4px; }
+.steward-report-content hr {
+  margin: 22px 0;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+/* The report leads with a "generated from a template" note as a blockquote;
+   it is a caveat about the content, so it should read as one. */
+.steward-report-content blockquote {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-left: 3px solid #d8b878;
+  border-radius: 8px;
+  background: #fbf6ec;
+  color: #7a6136;
+  font-size: 12.5px;
+}
+.steward-report-content blockquote p { margin: 0; }
+
+.steward-report-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 16px;
+  font-size: 12.5px;
+}
+.steward-report-content th {
+  padding: 8px 11px;
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.steward-report-content td {
+  padding: 9px 11px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  vertical-align: top;
+}
+.steward-report-content tbody tr:last-child td { border-bottom: none; }
+
+.steward-report-content code {
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  color: #4a6d94;
+  background: #eef3fa;
+}
+.steward-report-content pre {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: 9px;
+  overflow-x: auto;
+  background: var(--surface-muted);
+}
+.steward-report-content pre code { padding: 0; background: none; }
+.steward-report-content strong { color: var(--ink); }
+
+@media (max-width: 720px) {
+  .graph-drawer {
+    width: 100vw;
+  }
+
+  .graph-timeline-row {
+    grid-template-columns: minmax(96px, 40%) 1fr 60px;
+  }
+
+  .graph-flow-stats {
+    gap: 14px;
+  }
+}
+
+/* ==========================================================================
+   POPUP XEM NHANH DỮ LIỆU
+
+   Trước đây Data Explorer thay thế cả trang ở bước 1, nên bấm vào là mất luôn
+   ngữ cảnh đang đọc. Xem dữ liệu trông ra sao là một cái liếc, không phải một
+   điểm đến — nên nó thành modal.
+   ========================================================================== */
+
+.explorer-dialog-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgb(10 18 34 / 46%);
+  z-index: 70;
+}
+
+.explorer-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(1100px, calc(100vw - 40px));
+  max-height: calc(100vh - 64px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  z-index: 71;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.explorer-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.explorer-dialog-head h3 {
+  margin: 6px 0 4px;
+  font-size: 18px;
+}
+
+.explorer-dialog-head p {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.explorer-dialog-close {
+  background: none;
+  border: 0;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 6px;
+  border-radius: 8px;
+}
+
+.explorer-dialog-close:hover {
+  color: var(--ink);
+  background: var(--surface-muted);
+}
+
+.explorer-dialog-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.explorer-dialog-state {
+  padding: 40px 22px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.explorer-dialog-state.error {
+  color: var(--graph-failed);
+}
+
+/* Bảng rộng hơn khung thì cuộn trong chính nó, thân trang không cuộn ngang. */
+.explorer-dialog-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.explorer-dialog-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.explorer-dialog-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-muted);
+  text-align: left;
+  padding: 10px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.explorer-dialog-table tbody td {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.explorer-dialog-table tbody tr:nth-child(even) {
+  background: var(--surface-muted);
+}
+
+.explorer-dialog-table .numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.explorer-dialog-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 22px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-muted);
+  font-size: 12px;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 720px) {
+  .explorer-dialog {
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 24px);
+  }
+
+  .explorer-dialog-head,
+  .explorer-dialog-foot {
+    padding: 14px 16px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Step 1 · Data preparation
+   Numbered sections so the two things you supply and the three you reveal read
+   as one sequence rather than as five competing panels.
+   --------------------------------------------------------------------------- */
+
+.prep-page { display: flex; flex-direction: column; gap: 20px; }
+
+.prep-section {
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 14px;
+  padding: 20px 22px;
+}
+
+.prep-section-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.prep-section-index {
+  flex: 0 0 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-primary, #2563eb);
+  background: color-mix(in srgb, var(--color-primary, #2563eb) 12%, transparent);
+}
+
+.prep-section-title { flex: 1 1 auto; min-width: 0; }
+.prep-section-title h2 { margin: 0; font-size: 17px; line-height: 1.3; }
+.prep-section-title p { margin: 4px 0 0; font-size: 13px; color: var(--muted, #64748b); }
+
+.prep-section-body { margin-top: 16px; }
+
+.prep-count {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted, #64748b);
+  background: color-mix(in srgb, var(--muted, #64748b) 12%, transparent);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+.prep-badge {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+.prep-badge.supplied {
+  color: var(--chart-ok, #16a34a);
+  background: color-mix(in srgb, var(--chart-ok, #16a34a) 14%, transparent);
+}
+.prep-badge.inferred {
+  color: var(--chart-warn, #d97706);
+  background: color-mix(in srgb, var(--chart-warn, #d97706) 14%, transparent);
+}
+
+/* Upload targets. The compact variant is the dictionary: optional, so it must
+   not carry the same visual weight as the dataset it describes. */
+.prep-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 28px 20px;
+  border: 1.5px dashed var(--border, #cbd5e1);
+  border-radius: 12px;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.prep-dropzone.compact { padding: 18px 20px; }
+.prep-dropzone:hover {
+  border-color: var(--color-primary, #2563eb);
+  background: color-mix(in srgb, var(--color-primary, #2563eb) 4%, transparent);
+}
+.prep-dropzone.busy { opacity: 0.6; cursor: progress; }
+.prep-dropzone input { display: none; }
+.prep-dropzone-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  font-size: 19px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--color-primary, #2563eb);
+}
+.prep-dropzone strong { font-size: 14px; }
+.prep-dropzone small { font-size: 12px; color: var(--muted, #64748b); }
+
+.prep-dictionary-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--chart-ok, #16a34a) 30%, transparent);
+  background: color-mix(in srgb, var(--chart-ok, #16a34a) 7%, transparent);
+}
+.prep-dictionary-summary > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.prep-dictionary-summary strong { font-size: 14px; }
+
+.prep-muted { font-size: 13px; color: var(--muted, #64748b); margin: 0; }
+.prep-error { margin: 10px 0 0; font-size: 13px; color: var(--chart-bad, #dc2626); }
+
+/* Dataset cards: compact, but every field from the full card is still legible. */
+.prep-dataset-grid {
+  margin-top: 16px;
+  display: grid;
+  /* auto-fit, not auto-fill: empty tracks collapse, so a short catalogue
+     spreads across the row instead of huddling left with dead space beside it. */
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+  align-items: stretch;
+}
+
+.prep-dataset-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 15px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.prep-dataset-card:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgb(15 23 42 / 8%); }
+.prep-dataset-card:focus-visible { outline: 2px solid var(--color-primary, #2563eb); outline-offset: 2px; }
+.prep-dataset-card.active {
+  border-color: var(--color-primary, #2563eb);
+  box-shadow: 0 0 0 1px var(--color-primary, #2563eb);
+}
+
+.prep-dataset-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.prep-dataset-top code { font-size: 11px; color: var(--muted, #64748b); }
+
+.prep-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: var(--muted, #475569);
+  background: color-mix(in srgb, var(--muted, #64748b) 12%, transparent);
+}
+.prep-status.selected {
+  color: var(--color-primary, #2563eb);
+  background: color-mix(in srgb, var(--color-primary, #2563eb) 14%, transparent);
+}
+.prep-status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+.prep-dataset-card h3 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.3;
+  /* Names run long; clamp rather than let one card set the row height. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.prep-dataset-card > p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted, #64748b);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.prep-dataset-stats {
+  margin: 2px 0 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border, #e2e8f0);
+}
+.prep-dataset-stats div { min-width: 0; }
+.prep-dataset-stats dt {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted, #94a3b8);
+}
+.prep-dataset-stats dd {
+  margin: 2px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prep-dataset-card > p { flex: 1 1 auto; min-height: 32px; }
+.prep-dataset-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border, #e2e8f0) 70%, transparent);
+}
+.prep-dataset-actions .button { flex: 1; font-size: 12.5px; padding: 7px 10px; }
+.prep-dataset-actions .button.ghost.danger { flex: 0 0 auto; }
+
+/* Revealed panels sit inside their section, indented under its heading. */
+.prep-reveal {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border, #e2e8f0);
+}
+
+/* Data Explorer tabs */
+.explorer-dialog-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+}
+.explorer-dialog-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 11px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted, #64748b);
+  border-bottom: 2px solid transparent;
+}
+.explorer-dialog-tabs button:hover { color: var(--text, #0f172a); }
+.explorer-dialog-tabs button.active {
+  color: var(--color-primary, #2563eb);
+  border-bottom-color: var(--color-primary, #2563eb);
+}
+.explorer-tab-count {
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 1px 7px;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+.explorer-dictionary-source { margin: 0 0 12px; font-size: 12px; color: var(--muted, #64748b); }
+
+@media (max-width: 720px) {
+  .prep-section { padding: 16px; }
+  .prep-section-head { flex-wrap: wrap; }
+  .prep-dataset-grid { grid-template-columns: 1fr; }
+}
+
+/* ---------------------------------------------------------------------------
+   Step 1 · the two supply cards, side by side
+   --------------------------------------------------------------------------- */
+
+.prep-supply-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  align-items: stretch;
+}
+.prep-supply-row > .prep-section { margin: 0; display: flex; flex-direction: column; }
+/* The dropzones must line up even when one card carries an extra badge line. */
+.prep-supply-row > .prep-section > .prep-section-body { flex: 1 1 auto; display: flex; flex-direction: column; }
+.prep-supply-row .prep-dropzone { flex: 1 1 auto; }
+.prep-supply-row .prep-dropzone.compact { padding: 24px 20px; }
+
+@media (max-width: 980px) {
+  .prep-supply-row { grid-template-columns: 1fr; }
+}
+
+/* ---------------------------------------------------------------------------
+   Detail overlay — a panel read in place, not a page you navigate away to
+   --------------------------------------------------------------------------- */
+
+.detail-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg, #f5f6f0);
+}
+
+.detail-overlay-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px clamp(22px, 4vw, 52px);
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  background: var(--surface, #fff);
+}
+.detail-overlay-head h2 { margin: 4px 0 0; font-size: 22px; }
+
+.detail-overlay-close {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 9px;
+  cursor: pointer;
+  color: var(--muted, #64748b);
+  background: transparent;
+  border: 1px solid var(--border, #e2e8f0);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.detail-overlay-close:hover {
+  color: var(--text, #0f172a);
+  background: color-mix(in srgb, var(--muted, #64748b) 12%, transparent);
+}
+
+.detail-overlay-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 28px clamp(22px, 4vw, 52px) 64px;
+}
+/* Inner pages ship their own heading. The overlay header already names the
+   page, so drop just the repeated eyebrow and <h1> — not the whole block,
+   which on the observatory also carries the quality dial. */
+.detail-overlay-body > .page-heading:first-child > div:first-child > .eyebrow,
+.detail-overlay-body > .page-heading:first-child > div:first-child > h1 {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Dataset catalog table
+   --------------------------------------------------------------------------- */
+
+.catalog-view-caption { margin: 0 0 16px; font-size: 13px; color: var(--muted, #64748b); }
+
+.catalog-view-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+}
+
+.catalog-view-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.catalog-view-table th {
+  padding: 11px 14px;
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted, #64748b);
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  white-space: nowrap;
+}
+.catalog-view-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border, #e2e8f0) 60%, transparent);
+  vertical-align: middle;
+}
+.catalog-view-table tbody tr { cursor: pointer; }
+.catalog-view-table tbody tr:hover { background: color-mix(in srgb, var(--color-primary, #2563eb) 5%, transparent); }
+.catalog-view-table tbody tr.active { background: color-mix(in srgb, var(--color-primary, #2563eb) 9%, transparent); }
+.catalog-view-table tbody tr:last-child td { border-bottom: none; }
+.catalog-view-table .numeric { text-align: right; font-variant-numeric: tabular-nums; }
+.catalog-view-table th.numeric { text-align: right; }
+.catalog-view-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--muted, #94a3b8);
+}
+.catalog-view-source {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+   Notification bell
+   --------------------------------------------------------------------------- */
+
+.notif { position: relative; display: inline-flex; }
+
+.notif-button {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  border-radius: 10px;
+  color: var(--muted, #64748b);
+  background: transparent;
+  border: 1px solid var(--border, #e2e8f0);
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.notif-button:hover,
+.notif-button.active {
+  color: var(--color-primary, #2563eb);
+  border-color: color-mix(in srgb, var(--color-primary, #2563eb) 45%, transparent);
+  background: color-mix(in srgb, var(--color-primary, #2563eb) 8%, transparent);
+}
+
+.notif-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  border-radius: 999px;
+  background: #e0685f;
+  box-shadow: 0 0 0 2px var(--surface, #fff);
+}
+
+.notif-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 300;
+  width: min(360px, calc(100vw - 32px));
+  border-radius: 12px;
+  border: 1px solid var(--border, #e2e8f0);
+  background: var(--surface, #fff);
+  box-shadow: 0 12px 34px rgb(15 23 42 / 14%);
+  overflow: hidden;
+}
+
+.notif-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+}
+.notif-panel-head strong { font-size: 13.5px; }
+
+.notif-clear {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted, #64748b);
+}
+.notif-clear:hover { color: var(--color-primary, #2563eb); }
+
+.notif-list { max-height: 380px; overflow-y: auto; }
+
+.notif-empty {
+  margin: 0;
+  padding: 26px 14px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted, #94a3b8);
+}
+
+.notif-item {
+  display: flex;
+  gap: 10px;
+  padding: 11px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border, #e2e8f0) 60%, transparent);
+}
+.notif-item:last-child { border-bottom: none; }
+.notif-item-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: #6aa87f;
+}
+.notif-item.error .notif-item-dot { background: #e0685f; }
+.notif-item-body { min-width: 0; }
+.notif-item-body p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.notif-item-body time {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--muted, #94a3b8);
+}
+
+/* ---------------------------------------------------------------------------
+   Softer accents — the step-1 chrome was carrying full-saturation signal
+   colours on decoration, which made the page shout before it informed.
+   --------------------------------------------------------------------------- */
+
+.prep-badge.supplied { color: #3f7d59; background: #e8f2ec; }
+.prep-badge.inferred { color: #92693a; background: #f7efe3; }
+.prep-status { color: #5d6b7a; background: #eef1f5; }
+.prep-status.selected { color: #2f5fa8; background: #e7effb; }
+.prep-section { border-color: #e6e9ef; }
+.prep-dataset-card { border-color: #e6e9ef; }
+.prep-dataset-card:hover { border-color: #c3d2ea; }
+.prep-section-index { color: #2f5fa8; background: #e7effb; }
+
+/* Step 2 · the contract panel's two actions, kept on one line */
+.contract-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+/* The retry control on the error banner. Distinct from the dismiss "×" so
+   recovering from a failed job is not mistaken for hiding the message. */
+.alert.error .alert-retry {
+  margin-left: auto;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  color: #8a3d36;
+  background: #fbe9e7;
+  border: 1px solid #edc4bf;
+}
+.alert.error .alert-retry:hover { background: #f7ddda; }
+
+/* ---------------------------------------------------------------------------
+   Active job progress
+   The bar's width is measured progress. The moving sheen on top of it carries
+   no number: it only says the job is still alive during a long LLM call, so a
+   stretch with no new measurement does not read as a hang.
+   --------------------------------------------------------------------------- */
+
+.progress-track.live span {
+  position: relative;
+  overflow: hidden;
+}
+.progress-track.live span::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(255 255 255 / 55%) 50%,
+    transparent 100%
+  );
+  animation: progress-sheen 1.4s ease-in-out infinite;
+}
+@keyframes progress-sheen {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+/* A stalled bar is still information; respect a reduced-motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  .progress-track.live span::after { animation: none; }
+}
+
+.progress-nodes {
+  margin: 2px 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-deep, #2563eb);
+}
+
+.progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* ---------------------------------------------------------------------------
+   Node input / output summary
+   The backend redacts containers into descriptors. Each one is stated once,
+   as a chip, instead of being spelled out as key/value rows.
+   --------------------------------------------------------------------------- */
+
+.graph-summary-shape {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.graph-shape {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.graph-shape b { font-size: 11.5px; font-variant-numeric: tabular-nums; }
+
+.graph-shape.shape-dict { color: #3f6ea8; background: #e9f0fa; }
+.graph-shape.shape-records { color: #3f7d59; background: #e8f2ec; }
+.graph-shape.shape-list { color: #7a5fa8; background: #f0ebf9; }
+.graph-shape.shape-opaque { color: #6b7280; background: #eef1f5; }
+
+.graph-shape-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.graph-shape-fields code {
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 10px;
+  color: var(--ink-soft);
+  background: var(--surface-muted);
+}
+
+.graph-shape-sample {
+  flex: 1 0 100%;
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+.graph-shape-sample-label {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-top: 2px;
+}
+
+.graph-summary-bool {
+  font-weight: 600;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 5px;
+}
+.graph-summary-bool.yes { color: #3f7d59; background: #e8f2ec; }
+.graph-summary-bool.no { color: #8a6b36; background: #f7efe3; }
+
+.graph-summary-entry dt.truncation {
+  font-style: italic;
+  opacity: 0.75;
+}
+
+/* The two panes are the point of the section, so they get a header each. */
+.graph-summary-panes > div > h4 {
+  margin: 0 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+/* Input and output are the two halves of a node's contract, so they are told
+   apart by colour and direction, not only by a word. */
+.graph-summary-panes > div > h4 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+}
+.graph-summary-panes .pane-arrow {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1;
+}
+.graph-summary-panes .pane-in { border-top: 3px solid #a7c3e6; }
+.graph-summary-panes .pane-out { border-top: 3px solid #a9d3ba; }
+.graph-summary-panes .pane-in h4 { color: #3f6ea8; }
+.graph-summary-panes .pane-out h4 { color: #3f7d59; }
+.graph-summary-panes .pane-in .pane-arrow { color: #3f6ea8; background: #e9f0fa; }
+.graph-summary-panes .pane-out .pane-arrow { color: #3f7d59; background: #e8f2ec; }
+
+.graph-summary-scalar {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------------------
+   Step 3 · rule generation and review
+   --------------------------------------------------------------------------- */
+
+/* The two-phase rail is gone, so the detail panel takes the full width. */
+.workflow-layout.single {
+  display: block;
+}
+
+.rule-gate-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.prep-section.rule-gate .prep-section-head { align-items: center; }
+
+/* Bulk decisions repeat under the list; a rule between them and the last card
+   keeps "approve all" from reading as an action on that one card. */
+.bulk-review-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.proposal-action.approve:disabled {
+  cursor: default;
+  color: #3f7d59;
+  background: #e8f2ec;
+  border-color: #cfe3d7;
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .rs-track { background: #273d64; }
+:root:not([data-theme="light"]) .rs-track { background: #273d64; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .rs-track { background: #e6eaef; }
+}
+
+/* An explanation is better than a row of "not run" cards with no reason given. */
+.graph-stage-note {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  border-left: 3px solid #d8b878;
+  background: #fbf6ec;
+  color: #7a6136;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* A dataset-level rule is judged on a rate, so the measured value sits with the
+   raw count instead of being dropped for want of a column. */
+.result-rate {
+  display: block;
+  margin-top: 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A skipped rule states why; silence would read as a quiet pass. */
+.result-skipped {
+  font-size: 11.5px;
+  color: #8a6b36;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+   Graph 3 · anomaly statistics
+   Every figure comes from the anomaly payload. Colour is used for rank and
+   state, kept in the same muted family as the rest of the wizard.
+   --------------------------------------------------------------------------- */
+
+.anomaly-stats {
+  display: grid;
+  gap: 18px;
+  padding: 20px 22px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.anomaly-stats-head h3 { margin: 4px 0 0; font-size: 19px; }
+.anomaly-stats-head p { margin: 5px 0 0; font-size: 13px; color: var(--muted); }
+.anomaly-empty { margin: 0; font-size: 13.5px; color: var(--muted); }
+
+.anomaly-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: 12px;
+}
+
+.anomaly-kpi {
+  display: grid;
+  gap: 3px;
+  align-content: start;
+  padding: 13px 14px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface);
+}
+.anomaly-kpi > span {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.anomaly-kpi > strong { font-size: 24px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.anomaly-kpi > small { font-size: 11px; color: var(--muted); }
+/* Only the count of anomalies is an alarm; the rest are measurements. */
+.anomaly-kpi.alert { border-color: #e8c9c4; background: #fdf4f2; }
+.anomaly-kpi.alert > strong { color: #b4554d; }
+
+.anomaly-coldstart {
+  margin: 0;
+  padding: 11px 13px;
+  border-radius: 10px;
+  border-left: 3px solid #d8b878;
+  background: #fbf6ec;
+  color: #7a6136;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.anomaly-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.anomaly-panel {
+  min-width: 0;
+  padding: 15px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.anomaly-panel h4 {
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.anomaly-subhead { margin-top: 18px !important; }
+
+.anomaly-rank { list-style: none; margin: 0; padding: 0; display: grid; gap: 11px; }
+.anomaly-rank > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 12px;
+}
+.anomaly-rank-label { min-width: 0; }
+.anomaly-rank-label strong {
+  display: block;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.anomaly-rank-label code { font-size: 10.5px; color: var(--muted); }
+.anomaly-rank-bar {
+  grid-column: 1;
+  height: 7px;
+  border-radius: 999px;
+  background: #eef1f5;
+  overflow: hidden;
+}
+.anomaly-rank-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #d98b83, #b4554d);
+}
+.anomaly-rank > li > b {
+  grid-row: 1 / 3;
+  grid-column: 2;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  color: #b4554d;
+}
+
+.anomaly-breakdown { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; }
+.anomaly-breakdown > li {
+  display: grid;
+  grid-template-columns: minmax(90px, 34%) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+}
+.anomaly-breakdown-bar { height: 7px; border-radius: 999px; background: #eef1f5; overflow: hidden; }
+.anomaly-breakdown-bar > span { display: block; height: 100%; border-radius: inherit; background: #6b8fc0; }
+.anomaly-breakdown > li > b { font-variant-numeric: tabular-nums; }
+
+.anomaly-table-scroll { overflow-x: auto; }
+.anomaly-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.anomaly-table th {
+  padding: 9px 11px;
+  text-align: left;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.anomaly-table td {
+  padding: 11px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  vertical-align: top;
+}
+.anomaly-table tbody tr:last-child td { border-bottom: none; }
+.anomaly-table .numeric { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.anomaly-table th.numeric { text-align: right; }
+.anomaly-table .strong-red { font-weight: 700; color: #b4554d; }
+.anomaly-table-sub { display: block; margin-top: 2px; font-size: 10.5px; color: var(--muted); }
+.anomaly-reason { color: var(--muted); min-width: 220px; }
+
+.anomaly-type-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #8a6b36;
+  background: #f7efe3;
+}
+.anomaly-coldstart-chip {
+  padding: 1px 7px;
+  border-radius: 5px;
+  font-size: 10px;
+  color: #6b7f9e;
+  background: #eef2f8;
+}
+
+.run-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.empty-state .run-header-actions { justify-content: center; margin-top: 4px; }

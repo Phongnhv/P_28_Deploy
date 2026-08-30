@@ -95,3 +95,9 @@ dbt_project/models/generated_dq_tests.yml
 presentation/VIDEO_REHEARSAL.md
 /evalgate/
 /message.txt
+eval/
+
+
+# Git bundle backups: these are whole-repository archives, routinely
+# hundreds of MB, and GitHub rejects any file over 100 MB. Keep them out.
+*.bundle

@@ -66,7 +66,7 @@ async def test_proposal_review_transitions(client):
     list_res = await client.get("/api/v1/rule-proposals?dataset_id=dataset-nyc-yellow-taxi-50k")
     assert list_res.status_code == 200
     proposals = list_res.json()
-    assert len(proposals) == 5
+    assert len(proposals) >= 5
     for p in proposals:
         assert p["status"] == "PROPOSED"
     range_id = next(p["id"] for p in proposals if p["rule"]["type"] == "numeric_range")

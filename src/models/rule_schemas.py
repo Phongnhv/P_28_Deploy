@@ -11,6 +11,7 @@ from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 logger = logging.getLogger(__name__)
 
@@ -19,19 +20,22 @@ logger = logging.getLogger(__name__)
 # Enums
 # ---------------------------------------------------------------------------
 
+
 class RuleType(StrEnum):
     NOT_NULL = "NOT_NULL"
     UNIQUE = "UNIQUE"
     RANGE = "RANGE"
-    ACCEPTED_VALUES = "ACCEPTED_VALUES"   # kiểm tra giá trị enum
+    ACCEPTED_VALUES = "ACCEPTED_VALUES"  # kiểm tra giá trị enum
     REGEX_FORMAT = "REGEX_FORMAT"
     FRESHNESS = "FRESHNESS"
-    ROW_COUNT = "ROW_COUNT"               # rule cấp bảng
-    NULL_RATE = "NULL_RATE"               # null_pct phải nhỏ hơn ngưỡng
+    ROW_COUNT = "ROW_COUNT"  # rule cấp bảng
+    NULL_RATE = "NULL_RATE"  # null_pct phải nhỏ hơn ngưỡng
     CROSS_FIELD_COMPARISON = "CROSS_FIELD_COMPARISON"
+
 
 class DataQualityDimension(StrEnum):
     """(Phần bổ sung cho HITL UI) Giúp Data Steward filter và nhóm các rule trên web"""
+
     COMPLETENESS = "COMPLETENESS"
     UNIQUENESS = "UNIQUENESS"
     VALIDITY = "VALIDITY"
@@ -39,11 +43,13 @@ class DataQualityDimension(StrEnum):
     CONSISTENCY = "CONSISTENCY"
     FRESHNESS = "FRESHNESS"
 
+
 class Severity(StrEnum):
     CRITICAL = "CRITICAL"
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"
     LOW = "LOW"
+
 
 class ProposalBasis(StrEnum):
     SCHEMA_CONSTRAINT = "SCHEMA_CONSTRAINT"
@@ -53,12 +59,14 @@ class ProposalBasis(StrEnum):
     POLICY = "POLICY"
     MIXED = "MIXED"
 
+
 class EvidenceSourceType(StrEnum):
     SCHEMA_CONSTRAINT = "SCHEMA_CONSTRAINT"
     DATA_PROFILE = "DATA_PROFILE"
     DATA_DICTIONARY = "DATA_DICTIONARY"
     HISTORICAL_RULE = "HISTORICAL_RULE"
     POLICY = "POLICY"
+
 
 class RuleStatus(StrEnum):
     PENDING = "PENDING"
@@ -67,8 +75,48 @@ class RuleStatus(StrEnum):
 
 
 # ---------------------------------------------------------------------------
+# Anomaly investigation structured output
+# ---------------------------------------------------------------------------
+
+
+class InvestigationHypothesis(BaseModel):
+    """Evidence-backed root-cause hypothesis returned by the investigator."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    hypothesis_type: Literal[
+        "SYSTEM_BUG",
+        "SCHEMA_CHANGE",
+        "UPSTREAM_DATA_DRIFT",
+        "ML_MODEL_DRIFT",
+        "OUTLIER",
+        "DATA_QUALITY_VIOLATION",
+        "UNKNOWN",
+    ] = "UNKNOWN"
+    summary: str = Field(min_length=1)
+    confidence: float = Field(ge=0.0, le=1.0)
+    supporting_signal_ids: list[str] = Field(default_factory=list)
+    contradicting_signal_ids: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    recommended_checks: list[str] = Field(default_factory=list)
+    missing_evidence: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class AnomalyInvestigationResponse(BaseModel):
+    """Structured response contract for the Deep Agent investigation node."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    overall_assessment: str = Field(min_length=1)
+    investigation_summary: str = Field(min_length=1)
+    hypotheses: list[InvestigationHypothesis] = Field(default_factory=list, max_length=3)
+
+
+# ---------------------------------------------------------------------------
 # Parameter bag (closed — tất cả field optional)
 # ---------------------------------------------------------------------------
+
 
 class RuleParameters(BaseModel):
     """Closed param bag — chỉ điền các field liên quan đến rule_type."""
@@ -106,10 +154,11 @@ class RuleConfidence(BaseModel):
 
     @model_validator(mode="after")
     def _validate_overall(self) -> RuleConfidence:
-        component_mean = (
-            self.evidence_strength + self.business_support + self.sample_representativeness
-        ) / 3
+        component_mean = (self.evidence_strength + self.business_support + self.sample_representativeness) / 3
         if abs(self.overall - component_mean) > 0.25:
+            # Reject rather than quietly rewrite. Overwriting the model's own
+            # figure would present a confidence it never gave, and hide the very
+            # inconsistency this guardrail exists to catch.
             raise ValueError("confidence.overall chênh quá 0.25 so với trung bình các thành phần")
         return self
 
@@ -129,6 +178,7 @@ class RuleEvidenceSnapshot(BaseModel):
 # ---------------------------------------------------------------------------
 # Proposed rule (one row in the HITL review table)
 # ---------------------------------------------------------------------------
+
 
 class ProposedRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -153,8 +203,7 @@ class ProposedRule(BaseModel):
     severity: Severity
 
     dimension: DataQualityDimension = Field(
-        ...,
-        description="Phân loại khía cạnh chất lượng dữ liệu để hiển thị cho Data Steward."
+        ..., description="Phân loại khía cạnh chất lượng dữ liệu để hiển thị cho Data Steward."
     )
     rule_description: str = Field(
         ...,
@@ -204,25 +253,37 @@ class ProposedRule(BaseModel):
                 if refs:
                     parsed = RuleParameters.model_validate(params).model_dump()
                     active = [
-                        name for name, parameter_value in parsed.items()
+                        name
+                        for name, parameter_value in parsed.items()
                         if parameter_value is not None
-                        and not (isinstance(parameter_value, (list, dict, set, tuple, str)) and len(parameter_value) == 0)
+                        and not (
+                            isinstance(parameter_value, (list, dict, set, tuple, str)) and len(parameter_value) == 0
+                        )
                     ]
                     supplied = upgraded.get("parameter_provenance")
-                    supplied_names = [
-                        item.get("parameter_name") for item in supplied
-                        if isinstance(item, dict) and isinstance(item.get("parameter_name"), str)
-                    ] if isinstance(supplied, list) else []
+                    supplied_names = (
+                        [
+                            item.get("parameter_name")
+                            for item in supplied
+                            if isinstance(item, dict) and isinstance(item.get("parameter_name"), str)
+                        ]
+                        if isinstance(supplied, list)
+                        else []
+                    )
                     # Keep valid LLM provenance untouched.  Only repair a missing,
                     # duplicate, malformed, or incomplete list in candidate mode.
                     if len(supplied_names) == len(set(supplied_names)) and set(supplied_names) == set(active):
                         return upgraded
                     source_ref = refs[0]
                     source_type = (
-                        EvidenceSourceType.POLICY if source_ref.startswith(("policy.", "policy:"))
-                        else EvidenceSourceType.SCHEMA_CONSTRAINT if source_ref.startswith(("schema.", "schema:"))
-                        else EvidenceSourceType.DATA_DICTIONARY if source_ref.startswith("dictionary.")
-                        else EvidenceSourceType.HISTORICAL_RULE if source_ref.startswith("history.")
+                        EvidenceSourceType.POLICY
+                        if source_ref.startswith(("policy.", "policy:"))
+                        else EvidenceSourceType.SCHEMA_CONSTRAINT
+                        if source_ref.startswith(("schema.", "schema:"))
+                        else EvidenceSourceType.DATA_DICTIONARY
+                        if source_ref.startswith("dictionary.")
+                        else EvidenceSourceType.HISTORICAL_RULE
+                        if source_ref.startswith("history.")
                         else EvidenceSourceType.DATA_PROFILE
                     )
                     upgraded["parameter_provenance"] = [
@@ -289,28 +350,21 @@ class ProposedRule(BaseModel):
 
         if rt == RuleType.RANGE and p.min is None and p.max is None:
             raise ValueError(
-                f"Rule RANGE yêu cầu ít nhất một trong min/max nhưng cả hai đều None "
-                f"(column={self.column!r})"
+                f"Rule RANGE yêu cầu ít nhất một trong min/max nhưng cả hai đều None (column={self.column!r})"
             )
         if rt == RuleType.ACCEPTED_VALUES and not p.accepted_values:
             raise ValueError(
-                f"Rule ACCEPTED_VALUES yêu cầu danh sách accepted_values không rỗng "
-                f"(column={self.column!r})"
+                f"Rule ACCEPTED_VALUES yêu cầu danh sách accepted_values không rỗng (column={self.column!r})"
             )
         if rt == RuleType.REGEX_FORMAT and not p.regex:
-            raise ValueError(
-                f"Rule REGEX_FORMAT yêu cầu trường regex không rỗng "
-                f"(column={self.column!r})"
-            )
+            raise ValueError(f"Rule REGEX_FORMAT yêu cầu trường regex không rỗng (column={self.column!r})")
         if rt == RuleType.FRESHNESS and p.max_age_hours is None:
             raise ValueError("FRESHNESS yêu cầu max_age_hours")
         if rt == RuleType.ROW_COUNT and p.min_row_count is None:
             raise ValueError("ROW_COUNT yêu cầu min_row_count")
         if rt == RuleType.NULL_RATE and p.max_null_pct is None:
             raise ValueError("NULL_RATE yêu cầu max_null_pct")
-        if rt == RuleType.CROSS_FIELD_COMPARISON and (
-            p.target_column is None or p.operator is None
-        ):
+        if rt == RuleType.CROSS_FIELD_COMPARISON and (p.target_column is None or p.operator is None):
             raise ValueError(
                 "Rule CROSS_FIELD_COMPARISON yêu cầu target_column và operator "
                 f"không được None (column={self.column!r})"
@@ -325,8 +379,7 @@ class ProposedRule(BaseModel):
         active_parameters = {
             name
             for name, value in p.model_dump().items()
-            if value is not None
-            and not (isinstance(value, (list, dict, set, tuple, str)) and len(value) == 0)
+            if value is not None and not (isinstance(value, (list, dict, set, tuple, str)) and len(value) == 0)
         }
 
         provenance_names = [item.parameter_name for item in self.parameter_provenance]
@@ -336,25 +389,28 @@ class ProposedRule(BaseModel):
         # nên phải bắt trùng lặp trước khi so khớp.
         if len(provenance_names) != len(provenance_parameters):
             duplicates = sorted({n for n in provenance_names if provenance_names.count(n) > 1})
-            raise ValueError(
-                "parameter_provenance có entry trùng tên cho cùng một parameter: "
-                + ", ".join(duplicates)
-            )
+            raise ValueError("parameter_provenance có entry trùng tên cho cùng một parameter: " + ", ".join(duplicates))
 
         if active_parameters != provenance_parameters:
-            raise ValueError(
-                "parameter_provenance phải chứa đúng một entry cho mỗi parameter đang sử dụng"
-            )
+            raise ValueError("parameter_provenance phải chứa đúng một entry cho mỗi parameter đang sử dụng")
 
         return self
+
 
 class TableRuleProposal(BaseModel):
     """Schema LLM trả về cho một bảng — one call per table."""
 
     model_config = ConfigDict(extra="forbid")
 
-    table: str = Field(..., description="Tên bảng trong database.")
+    table: str = Field(default="source_rows", description="Tên bảng trong database.")
     rules: list[ProposedRule] = Field(
         default_factory=list,
         description="Danh sách các rule đề xuất cho bảng này.",
     )
+    #: Rule bị validator từ chối, giữ lại để báo cáo chứ không đưa vào ruleset.
+    #:
+    #: SkipJsonSchema là bắt buộc, không phải trang trí: ``with_structured_output``
+    #: sinh prompt từ JSON schema của model này, nên một trường thừa sẽ bảo LLM tự
+    #: điền "rejected_rules" — vừa vô nghĩa vừa làm nhiễu hướng dẫn. exclude=True
+    #: chỉ tác động lúc serialize, không loại nó khỏi schema.
+    rejected_rules: SkipJsonSchema[list[dict]] = Field(default_factory=list, exclude=True)

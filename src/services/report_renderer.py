@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _safe_json(value: Any) -> list:
     """Parse a JSON string or return the value as-is if already a list."""
     if value is None:
@@ -108,6 +109,7 @@ def _load_execution_data(execution_run_id: str) -> tuple[dict | None, list[dict]
 # Vietnamese deterministic fallback (used by report_writer_node on LLM failure)
 # ---------------------------------------------------------------------------
 
+
 def render_steward_report_vi(
     execution_run_id: str,
     dataset_id: str,
@@ -139,10 +141,14 @@ def render_steward_report_vi(
     errors = sum(1 for r in dq_results if r["status"] == "ERROR")
     total_checked = dq_run["total_checked"] if dq_run else 0
 
-    severity_vi = {"LOW": "Thấp", "MEDIUM": "Trung bình", "HIGH": "Cao", "CRITICAL": "Nghiêm trọng"}.get(severity, severity)
+    severity_vi = {"LOW": "Thấp", "MEDIUM": "Trung bình", "HIGH": "Cao", "CRITICAL": "Nghiêm trọng"}.get(
+        severity, severity
+    )
     decision_vi = {
-        "NORMAL": "Bình thường", "WATCH": "Cần theo dõi",
-        "ANOMALY": "Bất thường", "CRITICAL": "Nghiêm trọng",
+        "NORMAL": "Bình thường",
+        "WATCH": "Cần theo dõi",
+        "ANOMALY": "Bất thường",
+        "CRITICAL": "Nghiêm trọng",
         "INSUFFICIENT_HISTORY": "Chưa đủ lịch sử",
     }.get(decision, decision)
 
@@ -284,8 +290,7 @@ def render_steward_report_vi(
         notes.append("Gọi LLM thất bại; đã dùng giả thuyết dự phòng deterministic.")
     if not dq_run:
         notes.append(
-            f"CẢNH BÁO: Không tìm thấy phiên thực thi `{execution_run_id}` trong database. "
-            "Báo cáo có thể chưa đầy đủ."
+            f"CẢNH BÁO: Không tìm thấy phiên thực thi `{execution_run_id}` trong database. Báo cáo có thể chưa đầy đủ."
         )
     notes.append("Báo cáo này được tạo tự động bằng template (fallback) do LLM không khả dụng.")
     for note in notes:

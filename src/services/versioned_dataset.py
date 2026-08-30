@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import tempfile
 from collections.abc import Iterable
@@ -236,6 +237,7 @@ def inspect_upload(content: bytes, filename: str, content_type: str | None = Non
 
 
 def verify_file(path: Path, expected_checksum: str, expected_size: int | None = None) -> None:
+    path = _to_extended_path(path)
     if not path.exists() or not path.is_file():
         raise SourceIntegrityError("Source artifact is missing")
     actual_size = path.stat().st_size
@@ -575,6 +577,14 @@ def _local_storage_root() -> Path:
     return Path(__file__).resolve().parents[2] / "data" / "source_artifacts"
 
 
+def _to_extended_path(path: Path) -> Path:
+    if os.name == "nt":
+        resolved = str(path.resolve())
+        if not resolved.startswith(("\\\\?\\", "\\\\")):
+            return Path(f"\\\\?\\{resolved}")
+    return path
+
+
 def store_source_artifact(content: bytes, inspected: InspectedUpload, *, workspace_id: str, dataset_id: str, dataset_version_id: str) -> SourceArtifactRef:
     """Store and verify a source artifact; production failures are fail-closed."""
     from src.services.dbt_artifact_store import get_dbt_artifact_store
@@ -583,7 +593,8 @@ def store_source_artifact(content: bytes, inspected: InspectedUpload, *, workspa
     key = safe_source_object_key(workspace_id, dataset_id, dataset_version_id, checksum, inspected.filename)
     settings = get_settings()
     if settings.app_env in {"local", "development", "test"}:
-        path = _local_storage_root() / key
+        raw_path = _local_storage_root() / key
+        path = _to_extended_path(raw_path)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.exists():

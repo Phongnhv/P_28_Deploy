@@ -55,8 +55,15 @@ NUMERIC_COLUMNS = {
     "cbd_congestion_fee",
 }
 DATA_EXPLORER_COLUMNS = (
-    "source_row_id", "vendor_id", "pickup_at", "dropoff_at", "passenger_count",
-    "trip_distance", "payment_type", "fare_amount", "total_amount",
+    "source_row_id",
+    "vendor_id",
+    "pickup_at",
+    "dropoff_at",
+    "passenger_count",
+    "trip_distance",
+    "payment_type",
+    "fare_amount",
+    "total_amount",
 )
 
 
@@ -108,7 +115,7 @@ def compile_supabase_rule(rule_spec: dict[str, Any]) -> tuple[str, dict[str, Any
     base = 'SELECT "source_row_id" FROM public.trips_canonical WHERE "dataset_id" = :dataset_id AND '
 
     if rule_type == "not_null":
-        return base + f'{_identifier(str(rule_spec.get("column", "")))} IS NULL', params
+        return base + f"{_identifier(str(rule_spec.get('column', '')))} IS NULL", params
 
     if rule_type == "numeric_range":
         column = _identifier(str(rule_spec.get("column", "")))
@@ -130,8 +137,7 @@ def compile_supabase_rule(rule_spec: dict[str, Any]) -> tuple[str, dict[str, Any
             raise ValueError("accepted_values requires a non-empty string list")
         params["allowed_values"] = json.dumps(allowed)
         return (
-            base
-            + f"{column} IS NOT NULL AND {column} NOT IN "
+            base + f"{column} IS NOT NULL AND {column} NOT IN "
             "(SELECT jsonb_array_elements_text(CAST(:allowed_values AS jsonb)))",
             params,
         )
@@ -230,14 +236,16 @@ def query_dataset_rows(
         params["max_distance"] = max_distance
 
     issue_clauses = [
-        '"vendor_id" IS NULL', '"trip_distance" < 0', '"fare_amount" < 0',
+        '"vendor_id" IS NULL',
+        '"trip_distance" < 0',
+        '"fare_amount" < 0',
         '("pickup_at" IS NOT NULL AND "dropoff_at" IS NOT NULL AND "pickup_at" > "dropoff_at")',
     ]
     if allowed_payments:
         params["allowed_payments"] = json.dumps(allowed_payments)
         issue_clauses.append(
             '"payment_type" IS NOT NULL AND "payment_type" NOT IN '
-            '(SELECT jsonb_array_elements_text(CAST(:allowed_payments AS jsonb)))'
+            "(SELECT jsonb_array_elements_text(CAST(:allowed_payments AS jsonb)))"
         )
     else:
         issue_clauses.append('"payment_type" IS NULL')
@@ -247,18 +255,22 @@ def query_dataset_rows(
     elif quality_status == "VALID":
         clauses.append("NOT " + issue_predicate)
     where_sql = " AND ".join(clauses)
-    total = int(connection.execute(
-        text("SELECT COUNT(*) FROM public.trips_canonical WHERE " + where_sql), params
-    ).scalar_one())
+    total = int(
+        connection.execute(text("SELECT COUNT(*) FROM public.trips_canonical WHERE " + where_sql), params).scalar_one()
+    )
     selected = ", ".join(f'"{column}"' for column in DATA_EXPLORER_COLUMNS)
-    rows = connection.execute(
-        text(
-            f"SELECT {selected} FROM public.trips_canonical WHERE {where_sql} "
-            f'ORDER BY "{sort_by}" {sort_direction.upper()}, "source_row_id" ASC '
-            "LIMIT :limit OFFSET :offset"
-        ),
-        params,
-    ).mappings().all()
+    rows = (
+        connection.execute(
+            text(
+                f"SELECT {selected} FROM public.trips_canonical WHERE {where_sql} "
+                f'ORDER BY "{sort_by}" {sort_direction.upper()}, "source_row_id" ASC '
+                "LIMIT :limit OFFSET :offset"
+            ),
+            params,
+        )
+        .mappings()
+        .all()
+    )
     serialized = []
     for row in rows:
         item = dict(row)
@@ -369,9 +381,7 @@ def profile_dataset(connection, dataset_id: str, governed_values: dict[str, list
         * next(item for item in columns if item["name"] == name)["non_null_count"]
         for name in ("trip_distance", "fare_amount")
     )
-    domain_defects = sum(
-        item.get("out_of_domain_rate", 0.0) * item["non_null_count"] for item in columns
-    )
+    domain_defects = sum(item.get("out_of_domain_rate", 0.0) * item["non_null_count"] for item in columns)
     total_defects = int(required_nulls + negative_defects + domain_defects + cross_violations + duplicate_count)
     completeness = 100.0 * (1.0 - total_null_cells / (row_count * len(columns))) if row_count else 0.0
     validity = max(0.0, 100.0 * (1.0 - total_defects / row_count)) if row_count else 0.0
@@ -382,14 +392,16 @@ def profile_dataset(connection, dataset_id: str, governed_values: dict[str, list
         "validity_score": round(validity, 2),
         "duplicate_rate": round(100.0 * duplicate_count / row_count, 2) if row_count else 0.0,
         "columns": columns,
-        "cross_field_metrics": [{
-            "left_column": "pickup_at",
-            "operator": "<=",
-            "right_column": "dropoff_at",
-            "checked_count": cross_checked_count,
-            "violation_count": cross_violations,
-            "violation_rate": cross_violations / cross_checked_count if cross_checked_count else 0.0,
-        }],
+        "cross_field_metrics": [
+            {
+                "left_column": "pickup_at",
+                "operator": "<=",
+                "right_column": "dropoff_at",
+                "checked_count": cross_checked_count,
+                "violation_count": cross_violations,
+                "violation_rate": cross_violations / cross_checked_count if cross_checked_count else 0.0,
+            }
+        ],
         "generated_at": datetime.now(UTC).isoformat(),
     }
 
@@ -413,9 +425,10 @@ def persist_profile(connection, profile: dict[str, Any]) -> None:
             "evidence_keys = EXCLUDED.evidence_keys, generated_at = EXCLUDED.generated_at"
         ),
         {
-            **{key: profile[key] for key in (
-                "dataset_id", "row_count", "completeness_score", "validity_score", "duplicate_rate"
-            )},
+            **{
+                key: profile[key]
+                for key in ("dataset_id", "row_count", "completeness_score", "validity_score", "duplicate_rate")
+            },
             "columns": json.dumps(profile["columns"]),
             "evidence_keys": json.dumps(evidence_keys),
         },

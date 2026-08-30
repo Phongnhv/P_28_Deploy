@@ -1,0 +1,3243 @@
+{
+  "dataset_id": "corpus-synth-iot",
+  "seed": 20260819,
+  "applicable_classes": [
+    "DUPLICATE_ROW",
+    "FORMAT_VIOLATION",
+    "MISSING_VALUE",
+    "OUTLIER",
+    "OUT_OF_RANGE",
+    "SIGN_FLIP",
+    "STALE_TIMESTAMP",
+    "TYPE_VIOLATION"
+  ],
+  "injected_classes": [
+    "DUPLICATE_ROW",
+    "FORMAT_VIOLATION",
+    "MISSING_VALUE",
+    "OUTLIER",
+    "OUT_OF_RANGE",
+    "SIGN_FLIP",
+    "STALE_TIMESTAMP",
+    "TYPE_VIOLATION"
+  ],
+  "not_applicable_classes": [
+    "CROSS_FIELD_VIOLATION",
+    "INVALID_CATEGORY"
+  ],
+  "counts_by_class": {
+    "DUPLICATE_ROW": 50,
+    "FORMAT_VIOLATION": 50,
+    "MISSING_VALUE": 50,
+    "OUTLIER": 50,
+    "OUT_OF_RANGE": 50,
+    "SIGN_FLIP": 50,
+    "STALE_TIMESTAMP": 50,
+    "TYPE_VIOLATION": 50
+  },
+  "total_labels": 400,
+  "total_dirty_rows": 400,
+  "notes": [],
+  "labels": [
+    {
+      "row_id": "rdg-009456",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 9456,
+      "detail": "key copied from row 13903"
+    },
+    {
+      "row_id": "rdg-016181",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 16181,
+      "detail": "key copied from row 17090"
+    },
+    {
+      "row_id": "rdg-010797",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 10797,
+      "detail": "key copied from row 19796"
+    },
+    {
+      "row_id": "rdg-014354",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 14354,
+      "detail": "key copied from row 11178"
+    },
+    {
+      "row_id": "rdg-007362",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 7362,
+      "detail": "key copied from row 18025"
+    },
+    {
+      "row_id": "rdg-001779",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1779,
+      "detail": "key copied from row 17713"
+    },
+    {
+      "row_id": "rdg-012923",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 12923,
+      "detail": "key copied from row 604"
+    },
+    {
+      "row_id": "rdg-011838",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 11838,
+      "detail": "key copied from row 3520"
+    },
+    {
+      "row_id": "rdg-004679",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 4679,
+      "detail": "key copied from row 16437"
+    },
+    {
+      "row_id": "rdg-017198",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 17198,
+      "detail": "key copied from row 19122"
+    },
+    {
+      "row_id": "rdg-002613",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 2613,
+      "detail": "key copied from row 15773"
+    },
+    {
+      "row_id": "rdg-008705",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 8705,
+      "detail": "key copied from row 19671"
+    },
+    {
+      "row_id": "rdg-012944",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 12944,
+      "detail": "key copied from row 1240"
+    },
+    {
+      "row_id": "rdg-010951",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 10951,
+      "detail": "key copied from row 8594"
+    },
+    {
+      "row_id": "rdg-019079",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 19079,
+      "detail": "key copied from row 12004"
+    },
+    {
+      "row_id": "rdg-010370",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 10370,
+      "detail": "key copied from row 17484"
+    },
+    {
+      "row_id": "rdg-018053",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 18053,
+      "detail": "key copied from row 10880"
+    },
+    {
+      "row_id": "rdg-016180",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 16180,
+      "detail": "key copied from row 5315"
+    },
+    {
+      "row_id": "rdg-015845",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 15845,
+      "detail": "key copied from row 19568"
+    },
+    {
+      "row_id": "rdg-011641",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 11641,
+      "detail": "key copied from row 7115"
+    },
+    {
+      "row_id": "rdg-010300",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 10300,
+      "detail": "key copied from row 10851"
+    },
+    {
+      "row_id": "rdg-017280",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 17280,
+      "detail": "key copied from row 6198"
+    },
+    {
+      "row_id": "rdg-011892",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 11892,
+      "detail": "key copied from row 19461"
+    },
+    {
+      "row_id": "rdg-009797",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 9797,
+      "detail": "key copied from row 17262"
+    },
+    {
+      "row_id": "rdg-017015",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 17015,
+      "detail": "key copied from row 15823"
+    },
+    {
+      "row_id": "rdg-004188",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 4188,
+      "detail": "key copied from row 1467"
+    },
+    {
+      "row_id": "rdg-007043",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 7043,
+      "detail": "key copied from row 19600"
+    },
+    {
+      "row_id": "rdg-000404",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 404,
+      "detail": "key copied from row 1572"
+    },
+    {
+      "row_id": "rdg-003967",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 3967,
+      "detail": "key copied from row 19668"
+    },
+    {
+      "row_id": "rdg-010825",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 10825,
+      "detail": "key copied from row 13819"
+    },
+    {
+      "row_id": "rdg-013070",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 13070,
+      "detail": "key copied from row 9941"
+    },
+    {
+      "row_id": "rdg-010191",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 10191,
+      "detail": "key copied from row 16483"
+    },
+    {
+      "row_id": "rdg-019264",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 19264,
+      "detail": "key copied from row 6674"
+    },
+    {
+      "row_id": "rdg-017760",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 17760,
+      "detail": "key copied from row 15863"
+    },
+    {
+      "row_id": "rdg-004697",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 4697,
+      "detail": "key copied from row 18023"
+    },
+    {
+      "row_id": "rdg-019153",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 19153,
+      "detail": "key copied from row 11189"
+    },
+    {
+      "row_id": "rdg-010439",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 10439,
+      "detail": "key copied from row 10362"
+    },
+    {
+      "row_id": "rdg-017497",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 17497,
+      "detail": "key copied from row 19236"
+    },
+    {
+      "row_id": "rdg-004859",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 4859,
+      "detail": "key copied from row 10093"
+    },
+    {
+      "row_id": "rdg-000640",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 640,
+      "detail": "key copied from row 13671"
+    },
+    {
+      "row_id": "rdg-000178",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 178,
+      "detail": "key copied from row 2076"
+    },
+    {
+      "row_id": "rdg-008824",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 8824,
+      "detail": "key copied from row 12598"
+    },
+    {
+      "row_id": "rdg-014936",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 14936,
+      "detail": "key copied from row 3707"
+    },
+    {
+      "row_id": "rdg-018219",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 18219,
+      "detail": "key copied from row 19087"
+    },
+    {
+      "row_id": "rdg-012196",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 12196,
+      "detail": "key copied from row 9605"
+    },
+    {
+      "row_id": "rdg-019077",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 19077,
+      "detail": "key copied from row 19902"
+    },
+    {
+      "row_id": "rdg-016009",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 16009,
+      "detail": "key copied from row 13949"
+    },
+    {
+      "row_id": "rdg-016220",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 16220,
+      "detail": "key copied from row 19194"
+    },
+    {
+      "row_id": "rdg-005247",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 5247,
+      "detail": "key copied from row 8246"
+    },
+    {
+      "row_id": "rdg-001064",
+      "column": "reading_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1064,
+      "detail": "key copied from row 1664"
+    },
+    {
+      "row_id": "rdg-013595",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 13595,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-000975",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 975,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-018537",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 18537,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-010181",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 10181,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-011383",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 11383,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-000788",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 788,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-005871",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 5871,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-000565",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 565,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-005271",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 5271,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-004160",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 4160,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-008915",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 8915,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-004616",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 4616,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-015998",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 15998,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-016261",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 16261,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-019995",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 19995,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-000315",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 315,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-016129",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 16129,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-004119",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 4119,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-019905",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 19905,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-006477",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 6477,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-015123",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 15123,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-016941",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 16941,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-017474",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 17474,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-009502",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 9502,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-018462",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 18462,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-006864",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 6864,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-014467",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 14467,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-001077",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1077,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-006846",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 6846,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-005219",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 5219,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-008266",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 8266,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-003931",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 3931,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-012659",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 12659,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-016396",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 16396,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-018439",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 18439,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-001256",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1256,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-008608",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 8608,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-017776",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 17776,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-001399",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1399,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-004951",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 4951,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-005263",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 5263,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-004339",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 4339,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-016002",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 16002,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-016585",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 16585,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-013691",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 13691,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-017898",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 17898,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-006192",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 6192,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-019399",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 19399,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-014988",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 14988,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-017476",
+      "column": "device_code",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 17476,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "rdg-002443",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 2443,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-007350",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 7350,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-009373",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 9373,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-016575",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 16575,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-009852",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 9852,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-010075",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 10075,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-017912",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 17912,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-005940",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 5940,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-002784",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 2784,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-005285",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 5285,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-010569",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 10569,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-016400",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 16400,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-017173",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 17173,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-015666",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 15666,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-013648",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 13648,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-001546",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1546,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-000718",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 718,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-003819",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 3819,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-015737",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 15737,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-000559",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 559,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-011435",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 11435,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-009945",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 9945,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-010553",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 10553,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-016817",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 16817,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-007346",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 7346,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-000466",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 466,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-006833",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 6833,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-009989",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 9989,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-006037",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 6037,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-010367",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 10367,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-008308",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 8308,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-008183",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 8183,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-014429",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 14429,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-019914",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 19914,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-003343",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 3343,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-019260",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 19260,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-010190",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 10190,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-018364",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 18364,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-015542",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 15542,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-001816",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1816,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-006565",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 6565,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-007750",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 7750,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-013860",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 13860,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-014185",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 14185,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-011067",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 11067,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-016737",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 16737,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-005596",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 5596,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-003936",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 3936,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-002196",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 2196,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-010845",
+      "column": "signal_dbm",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 10845,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "rdg-011374",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 11374,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-007547",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 7547,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-019115",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 19115,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-001798",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1798,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-000633",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 633,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-004424",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 4424,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-006421",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 6421,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-004121",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 4121,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-005427",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 5427,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-015553",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 15553,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-018592",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 18592,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-000456",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 456,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-008887",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 8887,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-013389",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 13389,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-014490",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 14490,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-002611",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 2611,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-019207",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 19207,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-011451",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 11451,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-012027",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 12027,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-001730",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1730,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-012841",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 12841,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-016192",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 16192,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-005487",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 5487,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-009634",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 9634,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-017733",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 17733,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-012322",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 12322,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-019814",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 19814,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-019720",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 19720,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-014966",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 14966,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-003390",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 3390,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-007649",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 7649,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-019136",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 19136,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-012265",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 12265,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-011863",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 11863,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-003228",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 3228,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-019354",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 19354,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-015769",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 15769,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-004750",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 4750,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-010908",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 10908,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-001841",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1841,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-006692",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 6692,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-000453",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 453,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-008585",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 8585,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-009807",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 9807,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-000179",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 179,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-001703",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1703,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-015482",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 15482,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-003283",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 3283,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-001835",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1835,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-009020",
+      "column": "battery_pct",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 9020,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "rdg-010165",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 10165,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-015719",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 15719,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-015609",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 15609,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-006705",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 6705,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-008479",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 8479,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-005643",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 5643,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-014632",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 14632,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-010400",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 10400,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-007752",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 7752,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-014280",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 14280,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-018243",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 18243,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-004410",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 4410,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-002093",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 2093,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-016989",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 16989,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-000204",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 204,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-002228",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 2228,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-004843",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 4843,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-008150",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 8150,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-012336",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 12336,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-019681",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 19681,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-011104",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 11104,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-007538",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 7538,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-000251",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 251,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-016005",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 16005,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-018069",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 18069,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-019091",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 19091,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-011725",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 11725,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-007164",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 7164,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-005421",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 5421,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-004784",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 4784,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-011421",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 11421,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-011878",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 11878,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-018257",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 18257,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-019551",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 19551,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-004098",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 4098,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-007684",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 7684,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-000682",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 682,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-006614",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 6614,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-005583",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 5583,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-001074",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1074,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-010372",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 10372,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-015107",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 15107,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-016652",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 16652,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-004758",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 4758,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-013259",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 13259,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-000672",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 672,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-007647",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 7647,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-017014",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 17014,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-002740",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 2740,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-010989",
+      "column": "humidity_pct",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 10989,
+      "detail": "set to 245.43"
+    },
+    {
+      "row_id": "rdg-006397",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 6397,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-008552",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 8552,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-016366",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 16366,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-000665",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 665,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-013921",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 13921,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-009209",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 9209,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-015886",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 15886,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-009097",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 9097,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-000158",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 158,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-008653",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 8653,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-010112",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 10112,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-013519",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 13519,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-014064",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 14064,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-003317",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 3317,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-015180",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 15180,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-007552",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 7552,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-004292",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 4292,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-014851",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 14851,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-015417",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 15417,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-011511",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 11511,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-015680",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 15680,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-002113",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 2113,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-019816",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 19816,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-011147",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 11147,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-010916",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 10916,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-005197",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 5197,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-006839",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 6839,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-007147",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 7147,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-015724",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 15724,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-000494",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 494,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-000351",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 351,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-000126",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 126,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-012415",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 12415,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-017353",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 17353,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-018253",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 18253,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-010044",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 10044,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-004581",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 4581,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-004086",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 4086,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-009791",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 9791,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-014395",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 14395,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-006260",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 6260,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-008418",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 8418,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-001248",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1248,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-007055",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 7055,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-012019",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 12019,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-002234",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 2234,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-010038",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 10038,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-002119",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 2119,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-006489",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 6489,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-004516",
+      "column": "temperature_c",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 4516,
+      "detail": "negated"
+    },
+    {
+      "row_id": "rdg-017717",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 17717,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-003837",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 3837,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-001959",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1959,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-017202",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 17202,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-010237",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 10237,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-019492",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 19492,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-013352",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 13352,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-016688",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 16688,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-003058",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 3058,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-018335",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 18335,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-018821",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 18821,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-017755",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 17755,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-008285",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 8285,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-003177",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 3177,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-011116",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 11116,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-000574",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 574,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-000669",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 669,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-018104",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 18104,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-008315",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 8315,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-000042",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 42,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-005584",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 5584,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-013042",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 13042,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-014673",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 14673,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-005098",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 5098,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-000554",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 554,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-011941",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 11941,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-017906",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 17906,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-019886",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 19886,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-016453",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 16453,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-019659",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 19659,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-003240",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 3240,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-015326",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 15326,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-013165",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 13165,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-005240",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 5240,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-011244",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 11244,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-008568",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 8568,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-017263",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 17263,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-004511",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 4511,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-013959",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 13959,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-014578",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 14578,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-019309",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 19309,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-010134",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 10134,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-013868",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 13868,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-018698",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 18698,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-019295",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 19295,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-005236",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 5236,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-012015",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 12015,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-015318",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 15318,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-000782",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 782,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-007161",
+      "column": "reading_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 7161,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "rdg-005505",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 5505,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-000539",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 539,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-005151",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 5151,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-006417",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 6417,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-015636",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 15636,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-009919",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 9919,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-009185",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 9185,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-015205",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 15205,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-006548",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 6548,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-007646",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 7646,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-001090",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1090,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-007200",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 7200,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-002364",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 2364,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-002580",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 2580,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-008097",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 8097,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-008152",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 8152,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-014965",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 14965,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-012948",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 12948,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-013498",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 13498,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-019213",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 19213,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-018179",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 18179,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-007812",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 7812,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-018887",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 18887,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-002808",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 2808,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-013592",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 13592,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-005599",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 5599,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-010422",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 10422,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-007270",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 7270,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-012100",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 12100,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-017630",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 17630,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-001504",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1504,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-002005",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 2005,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-011829",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 11829,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-001407",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1407,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-015842",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 15842,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-005965",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 5965,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-010197",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 10197,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-004272",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 4272,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-009143",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 9143,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-008445",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 8445,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-000663",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 663,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-013671",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 13671,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-019459",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 19459,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-002213",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 2213,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-019722",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 19722,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-004246",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 4246,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-003881",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 3881,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-014603",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 14603,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-016887",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 16887,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "rdg-007049",
+      "column": "reading_at",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 7049,
+      "detail": "non-castable"
+    }
+  ]
+}

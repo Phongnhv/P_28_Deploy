@@ -8,13 +8,13 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from src.time_utils import utc_now
 
 
-class TriggerTypeEnum(str, enum.Enum):
+class TriggerTypeEnum(enum.StrEnum):
     MANUAL = "MANUAL"
     PUBLISH_AND_RUN = "PUBLISH_AND_RUN"
     SCHEDULED = "SCHEDULED"
 
 
-class ExecutionRunStatusEnum(str, enum.Enum):
+class ExecutionRunStatusEnum(enum.StrEnum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
     DONE = "DONE"
@@ -22,7 +22,7 @@ class ExecutionRunStatusEnum(str, enum.Enum):
     FAILED_TO_START = "FAILED_TO_START"
 
 
-class DqResultStatusEnum(str, enum.Enum):
+class DqResultStatusEnum(enum.StrEnum):
     PASS = "PASS"
     FAIL = "FAIL"
     ERROR = "ERROR"
@@ -30,7 +30,7 @@ class DqResultStatusEnum(str, enum.Enum):
     RESULT_MISMATCH = "RESULT_MISMATCH"
 
 
-class AnomalyFeedbackEnum(str, enum.Enum):
+class AnomalyFeedbackEnum(enum.StrEnum):
     TRUE_ANOMALY = "TRUE_ANOMALY"
     FALSE_POSITIVE = "FALSE_POSITIVE"
     EXPECTED_CHANGE = "EXPECTED_CHANGE"
@@ -65,9 +65,7 @@ class UserAccountModel(Base):
     created_by: Mapped[str | None] = mapped_column(String(100))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=utc_now, onupdate=utc_now
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
 
 class DatasetModel(Base):
@@ -83,9 +81,7 @@ class DatasetModel(Base):
     source_label: Mapped[str] = mapped_column(String(256), nullable=False)
     manifest_version: Mapped[str] = mapped_column(String(64), nullable=False)
     checksum: Mapped[str] = mapped_column(String(256), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=utc_now, onupdate=utc_now
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
 
 class DatasetAccessModel(Base):
@@ -102,8 +98,14 @@ class DatasetAccessModel(Base):
 class SourceRowModel(Base):
     __tablename__ = "source_rows"
 
+    # Row ids restart at row-00001 for every dataset, so the id alone is not
+    # unique across the table. With source_row_id as the sole primary key, the
+    # second dataset ever ingested collided on row-00001 and the whole ingest
+    # died with an IntegrityError. The natural key is the pair.
     source_row_id: Mapped[str] = mapped_column(String(256), primary_key=True)
-    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    dataset_id: Mapped[str] = mapped_column(
+        String(256), ForeignKey("datasets.id"), primary_key=True, nullable=False, index=True
+    )
 
     vendor_id: Mapped[str | None] = mapped_column(String(64))
     pickup_at: Mapped[str | None] = mapped_column(String(64))
@@ -145,9 +147,7 @@ class JobModel(Base):
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=utc_now, onupdate=utc_now
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
 
 class ProfileModel(Base):
@@ -221,9 +221,7 @@ class RuleProposalModel(Base):
     confidence_breakdown: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=utc_now, onupdate=utc_now
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
 
 class WorkflowRunModel(Base):
@@ -379,11 +377,7 @@ class RuleConfigurationModel(Base):
     # Đặt default để insert hợp lệ trên cả schema cũ (đã NOT NULL) lẫn schema mới.
     model_name: Mapped[str] = mapped_column(String(128), nullable=False, default="unspecified")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=utc_now, onupdate=utc_now
-    )
-
-
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
 
 class DqRunModel(Base):
@@ -416,7 +410,9 @@ class DqRunModel(Base):
     dbt_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     metrics_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # Retain execution evidence when an upstream workflow revision supersedes it.
-    workflow_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workflow_runs.id"), nullable=True, index=True)
+    workflow_run_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("workflow_runs.id"), nullable=True, index=True
+    )
     stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
@@ -430,7 +426,6 @@ class SemanticContractModel(Base):
     contract_json: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
-
 
 
 class DqResultModel(Base):
@@ -479,7 +474,9 @@ class RulesetVersionModel(Base):
     dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     proposal_run_id: Mapped[str | None] = mapped_column(String(512), ForeignKey("rule_proposals.id"), nullable=True)
     # New dashboard rulesets are owned by a workflow batch, not one legacy proposal row.
-    workflow_run_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workflow_runs.id"), nullable=True, index=True)
+    workflow_run_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("workflow_runs.id"), nullable=True, index=True
+    )
     stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     semantic_contract_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ruleset_hash: Mapped[str] = mapped_column(String(256), nullable=False)
@@ -495,7 +492,9 @@ class AnomalyRunModel(Base):
     execution_run_id: Mapped[str] = mapped_column(String(64), ForeignKey("dq_runs.id"), nullable=False, index=True)
     detector_config_version: Mapped[str] = mapped_column(String(64), nullable=False, default="anomaly-v1")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
-    decision: Mapped[str] = mapped_column(String(32), nullable=False)  # NORMAL, WATCH, ANOMALY, CRITICAL, INSUFFICIENT_HISTORY
+    decision: Mapped[str] = mapped_column(
+        String(32), nullable=False
+    )  # NORMAL, WATCH, ANOMALY, CRITICAL, INSUFFICIENT_HISTORY
     score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     severity: Mapped[str] = mapped_column(String(32), nullable=False, default="LOW")
@@ -551,7 +550,9 @@ class AnomalyFeedbackModel(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     anomaly_run_id: Mapped[str] = mapped_column(String(64), ForeignKey("anomaly_runs.id"), nullable=False, index=True)
     username: Mapped[str] = mapped_column(String(100), ForeignKey("user_accounts.username"), nullable=False)
-    feedback_label: Mapped[str] = mapped_column(String(64), nullable=False)  # TRUE_ANOMALY, FALSE_POSITIVE, EXPECTED_CHANGE, RULE_MISCONFIGURATION, UNKNOWN
+    feedback_label: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )  # TRUE_ANOMALY, FALSE_POSITIVE, EXPECTED_CHANGE, RULE_MISCONFIGURATION, UNKNOWN
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
 
@@ -792,3 +793,73 @@ class GovernanceAuditEventModel(Base):
     detail_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="API")
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class GraphNodeRunModel(Base):
+    """One execution of one LangGraph node.
+
+    The graph builders in ``src/agents/graph.py`` wrap every node so a row lands
+    here on entry and is completed on exit.  This is the only place node-level
+    timing and failure detail is durable: LangGraph itself keeps nothing once
+    ``ainvoke`` returns, and workflow artifacts are recorded per *step*, which is
+    coarser than a node.
+
+    ``input_summary_json`` / ``output_summary_json`` hold a redacted summary
+    produced by ``src.services.node_telemetry.summarize`` -- key names, counts
+    and short scalars only.  Raw source rows must never reach this table: the
+    platform's central privacy claim is that row values stay out of the agent
+    tier, and a telemetry table is exactly the sort of place that claim quietly
+    breaks.
+    """
+
+    __tablename__ = "graph_node_runs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    graph_run_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    graph_key: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    node_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    node_kind: Mapped[str] = mapped_column(String(32), nullable=False)  # LLM, DETERMINISTIC, GATE
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="RUNNING")
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_summary_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    output_summary_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # Correlation back to the business context the run belongs to.  All optional:
+    # a graph may be driven from the CLI with no workflow or job attached.
+    workflow_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    dataset_id: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    dq_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    anomaly_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+
+
+class DatasetDataDictionaryModel(Base):
+    """The data dictionary a Steward supplied for a dataset.
+
+    Graph 1A already branches on whether a dictionary exists: with one it skips
+    ``data_dictionary_generator`` and uses what it was given, without one it asks
+    the LLM to infer it. Nothing persisted the supplied side of that branch, so
+    the generator always ran. This table is that missing half — only uploads are
+    stored here, the inferred variant stays a workflow artifact.
+    """
+
+    __tablename__ = "dataset_data_dictionaries"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "dataset_version_id", name="uq_data_dictionary_dataset_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(String(256), ForeignKey("datasets.id"), nullable=False, index=True)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="UPLOADED")
+    source_filename: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    column_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    uploaded_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)

@@ -1,0 +1,41 @@
+# Dependencies are declared here, deliberately apart from the product's
+# requirements.txt, so installing EvalGate can never change what the product ships.
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evalgate"
+version = "0.1.0"
+description = "Release gate for the RidePulse DQ agent"
+requires-python = ">=3.11"
+
+# Everything the currently implemented gates need is already installed.
+dependencies = [
+  "pydantic>=2.10",
+  "pyyaml>=6.0",
+  "pandas>=2.2",
+  "numpy>=1.26",
+  "pyarrow>=16.0",
+  "httpx>=0.28",
+]
+
+[project.optional-dependencies]
+# Not installed. Each unlocks the evaluators currently reported as
+# NOT_IMPLEMENTED / NOT_EXECUTED.
+gx      = ["great-expectations>=1.0"]      # Gate 4B
+judge   = ["deepeval>=2.0"]                # Gate 1E (paid model calls)
+tracing = ["langfuse>=2.0", "opentelemetry-sdk>=1.20",
+           "opentelemetry-exporter-otlp>=1.20"]  # Gate 3
+drift   = ["evidently>=0.4"]               # Gate 4C
+corpus  = ["faker>=25.0"]                  # optional; generator falls back to numpy
+live    = ["deepeval>=2.0", "langfuse>=2.0", "opentelemetry-sdk>=1.20",
+           "opentelemetry-exporter-otlp>=1.20"]
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["evalgate*"]
+exclude = ["evalgate.tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

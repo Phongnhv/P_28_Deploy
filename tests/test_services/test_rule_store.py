@@ -34,6 +34,7 @@ def setup_test_db(tmp_path, monkeypatch):
     monkeypatch.setattr(rule_store_module, "_engine", test_engine)
     init_db()
     yield test_engine
+    test_engine.dispose()
 
 
 def test_publish_approved_rules_workflow():
@@ -143,11 +144,40 @@ def test_legacy_demo_dataset_requires_explicit_production_opt_in(monkeypatch):
 
 def test_publish_api_endpoints():
     """Kiểm tra các REST API endpoints mới cho Active Rules và Publish."""
+    # Publish and deactivate now require a STEWARD session, so sign in first.
     client = TestClient(app)
+
+    # dq_router yeu cau session (mount voi require_role trong src/main.py) va
+    # get_session kiem CSRF tren moi request da xac thuc.
+    _login = client.post(
+        "/api/v1/session", json={"username": "steward", "password": "steward"}
+    )
+    assert _login.status_code == 200, f"khong dang nhap duoc: {_login.text}"
+    client.headers["X-CSRF-Token"] = _login.json()["csrf_token"]
     run_id = f"api_prop_{uuid.uuid4().hex[:8]}"
     dataset_id = "yellow_tripdata"
 
     create_run(run_id, dataset_id)
+
+    # The /dq run endpoints check dataset tenancy, and an import would have written
+    # this MANAGE grant for the uploader (routes.py:793). create_run alone does not,
+    # so without it the steward is a stranger to its own run and gets a 403.
+    from sqlalchemy.orm import Session as _SASession
+
+    from src.models.database import DatasetAccessModel
+    from src.services.rule_store import get_engine as _get_engine
+
+    with _SASession(_get_engine()) as _grant_session:
+        _grant_session.add(
+            DatasetAccessModel(
+                id=str(uuid.uuid4()),
+                dataset_id=dataset_id,
+                username="steward",
+                access_level="MANAGE",
+                granted_by="steward",
+            )
+        )
+        _grant_session.commit()
 
     mock_rules = [
         {

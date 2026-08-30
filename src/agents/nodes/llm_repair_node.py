@@ -122,6 +122,7 @@ async def llm_repair_node(state: AgentState) -> dict:
     # Xuất trace file
     try:
         from pathlib import Path
+
         settings = get_settings()
         base_dir = getattr(settings, "output_dir", None) or "./output"
         out_dir = Path(base_dir) / "llm_repair"
@@ -144,6 +145,7 @@ async def llm_repair_node(state: AgentState) -> dict:
 # ---------------------------------------------------------------------------
 # Standalone Test Harness (Chạy từ file output hoặc demo)
 # ---------------------------------------------------------------------------
+
 
 async def main():
     """Hàm chạy test độc lập cho llm_repair_node (Agentic Repair Loop).
@@ -221,8 +223,7 @@ async def main():
     print("\n" + "=" * 75 + "\n")
 
 
-
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(main())
 
+    asyncio.run(main())

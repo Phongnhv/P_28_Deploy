@@ -34,10 +34,17 @@ end-to-end course-project simulation of production practices.
 - OpenAI structured proposal, human-in-the-loop review and five typed rule templates.
 - Safe read-only runner, durable job persistence, workspace authorization,
   bounded demo access/quota, tests, architecture evidence and browser E2E.
+- Validated CSV/Parquet file upload through the authenticated import endpoints,
+  with content-type and size limits enforced server-side.
+- Server-sent-event progress streams for graph runs, so a reloaded browser can
+  recover a run in flight.
 
 ## Explicitly outside Gate 2
 
-- Arbitrary upload/URL/path input, arbitrary SQL, source-data mutation and streaming.
+- Arbitrary URL/path input, arbitrary SQL and source-data mutation. Note that
+  *validated* file upload and *server-sent-event* progress streaming were adopted
+  deliberately and are listed under must-have scope above; only unconstrained
+  URL/path input remains out of scope.
 - Dagster, Firebase, Render, VPS hosting, scheduler, ML anomaly model, RAG, dbt Cloud,
   enterprise account/RBAC, HA/SLA and post-course operations.
 
