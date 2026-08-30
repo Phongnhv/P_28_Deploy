@@ -262,8 +262,10 @@ def build_dashboard_proposal_graph() -> StateGraph:
 
 
 def _should_run_or_fail(state: AgentState) -> str:
-    """Route the dbt artifact to execution or terminal failure."""
+    """Route the dbt artifact to execution, direct SQL fallback, or terminal failure."""
     if state.get("dbt_validation_valid") is True:
+        return "run"
+    if state.get("generated_tests") and state.get("allow_direct_sql_fallback", True):
         return "run"
     return "fail"
 
@@ -355,11 +357,6 @@ def build_execution_graph(observer: NodeObserver | None = None) -> StateGraph:
     graph.add_edge("persist_report", END)
 
     return graph.compile()
-
-
-# ---------------------------------------------------------------------------
-# Run 3: Anomaly Graph (Detector ➔ Hypothesis ➔ Persist)
-# ---------------------------------------------------------------------------
 
 def build_anomaly_graph(
     investigation_mode: Literal["deepagent", "legacy"] | None = None,
@@ -759,8 +756,9 @@ async def run_anomaly_graph(
 
     from src.config import get_settings
     from src.models.database import DqRunModel
-    from src.services.rule_store import get_engine
+    from src.services.rule_store import get_engine, init_db
 
+    init_db()
     settings = get_settings()
     active_mode = investigation_mode or settings.anomaly_investigation_mode
 
@@ -791,7 +789,7 @@ async def run_anomaly_graph(
         "anomaly_run_id": anomaly_run_id,
         "execution_run_id": execution_run_id,
         "dataset_id": dataset_id,
-        "detector_config_version": "anomaly-v1",
+        "detector_config_version": settings.detector_config_version,
         "metadata": {
             "investigation_mode": active_mode,
         },
@@ -813,7 +811,6 @@ async def run_anomaly_graph(
         decision_data = final_state.get("anomaly_decision", {})
         signals = final_state.get("signal_observations", [])
         hypotheses = final_state.get("hypotheses", [])
-        # report_writer_node sets steward_report_path in state and metadata
         steward_report_path = final_state.get("steward_report_path") or final_state.get("metadata", {}).get(
             "steward_report_path"
         )

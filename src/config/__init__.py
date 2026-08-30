@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     cors_origins: str = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173"
+    enable_public_demo: bool = False
+    demo_steward_password: str | None = None
+    rate_limit_hash_key: str | None = None
+    trusted_proxy_cidrs: str = ""
 
     # LLM
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
@@ -36,7 +40,6 @@ class Settings(BaseSettings):
     llm_provider: Literal["openai", "anthropic", "mistral", "google"] = os.getenv("PROVIDER") or "openai"
 
     # Set model based on provider
-    # model_name: str = os.getenv("MISTRAL_MODEL") or "mistral-medium-latest"
     openai_model_name: str = os.getenv("OPENAI_MODEL") or "gpt-5.6-luna"
     anthropic_model_name: str = os.getenv("ANTHROPIC_MODEL") or "claude-opus-5"
     mistral_model_name: str = os.getenv("MISTRAL_MODEL") or "mistral-medium-latest"
@@ -56,12 +59,10 @@ class Settings(BaseSettings):
     anomaly_investigation_tool_call_limit: int = Field(default=10, ge=1, le=100)
     anomaly_investigation_thread_tool_call_limit: int = Field(default=20, ge=1, le=200)
 
+    # Anomaly Detection versioning
+    detector_config_version: str = os.getenv("DETECTOR_CONFIG_VERSION") or "anomaly-v2-iforest"
+
     # Database
-    # ``DATABASE_URL`` is the explicit control-plane database.  When it is not
-    # supplied, use the configured Supabase connection for both workflow
-    # metadata and execution instead of silently creating a local SQLite file.
-    # SQLite remains an intentional fallback only for tests or an unconfigured
-    # local checkout.
     database_url: str = Field(
         default_factory=lambda: (
             os.getenv("DATABASE_URL")
@@ -69,8 +70,6 @@ class Settings(BaseSettings):
             or "sqlite:///steward_local.db"
         )
     )
-    # Canonical source data can be separate from the control-plane store when
-    # an explicit DATABASE_URL is used.
     supabase_database_url: str | None = os.getenv("SUPABASE_DATABASE_URL")
     dq_execution_backend: Literal["auto", "local", "supabase"] = os.getenv("DQ_EXECUTION_BACKEND") or "auto"
     database_pool_size: int = Field(default=5, ge=1, le=20)
@@ -81,6 +80,10 @@ class Settings(BaseSettings):
     output_dir: str = "./output"
     results_dir: str = "./output" # Backwards-compatible alias
     upload_dir: str = "./data/uploads"
+    upload_max_bytes: int = Field(default=100 * 1024 * 1024, ge=1024, le=100 * 1024 * 1024)
+    upload_max_rows: int = Field(default=1_000_000, ge=1, le=10_000_000)
+    upload_max_columns: int = Field(default=128, ge=1, le=1024)
+    upload_max_decoded_bytes: int = Field(default=512 * 1024 * 1024, ge=1024 * 1024)
 
     # Generated dbt artifacts (GCS/Cloud Run, AWS S3, or MinIO locally)
     object_storage_enabled: bool = True
@@ -99,3 +102,6 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+__all__ = ["Settings", "get_settings"]

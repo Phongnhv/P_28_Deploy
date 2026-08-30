@@ -379,6 +379,23 @@ async def test_api_execute_tests_endpoint():
     proposal_run_id = f"prop_api_{uuid.uuid4().hex[:8]}"
     create_run(proposal_run_id, "mock_trips")
 
+    from sqlalchemy.orm import Session
+
+    from src.models.database import DatasetAccessModel
+    from src.services.rule_store import get_engine
+
+    with Session(get_engine()) as db_session:
+        db_session.add(
+            DatasetAccessModel(
+                id=f"access-{uuid.uuid4().hex}",
+                dataset_id="mock_trips",
+                username="steward",
+                access_level="MANAGE",
+                granted_by="steward",
+            )
+        )
+        db_session.commit()
+
     # dq_router sits behind a session dependency, so an anonymous client answers
     # 401 before reaching the route under test.
     client = TestClient(app)

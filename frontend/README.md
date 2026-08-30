@@ -16,8 +16,8 @@ Open `http://localhost:5173` and sign in with one of the seeded local accounts:
 - `steward` / `steward` — profile, proposal review, and rule configuration
 - `admin` / `admin` — user provisioning and dataset-access administration
 
-For a judge-friendly read/write demo, the login form is prefilled with the
-bounded account `demo-steward` / `ridepulse-demo-2026`. Its write-side budget is
+For a judge-friendly read/write demo, enable `ENABLE_PUBLIC_DEMO` and configure
+an explicit `DEMO_STEWARD_PASSWORD` in a non-production environment. Its write-side budget is
 enforced by the backend (40 mutations, 3 uploads, 3 profiler starts and 2
 analysis starts per rolling 24-hour window). Read-only polling is not charged.
 The same quota is shared across browser tabs and devices because reservations

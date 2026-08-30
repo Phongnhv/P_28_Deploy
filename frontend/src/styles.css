@@ -908,6 +908,61 @@ nav {
   font-size: 10px;
 }
 
+.floating-toasts-stack {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(420px, calc(100vw - 48px));
+  pointer-events: auto;
+}
+.floating-toasts-stack .progress-panel {
+  margin-bottom: 0;
+  box-shadow: 0 14px 36px rgb(15 23 42 / 14%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+}
+.toast-notification {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 14px 36px rgb(15 23 42 / 14%);
+}
+.toast-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.toast-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.toast-message {
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.toast-close {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
 .dataset-hero {
   display: flex;
   align-items: center;
@@ -8094,6 +8149,21 @@ button.step-nav-button:disabled {
 
 /* Step 2 · the contract panel's two actions, kept on one line */
 .contract-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+/* Graph 1A inferred schema browser: cards are easier to scan than a 33-row
+   matrix while retaining every field and its confidence signal. */
+.semantic-schema-grid { display: block; }
+.semantic-schema-grid-header { display: none; }
+.semantic-schema-grid-items { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.semantic-schema-card { display: block; padding: 14px; border: 1px solid var(--border, #e2e8f0); border-radius: 8px; background: var(--surface, #fff); box-shadow: 0 2px 8px rgba(15, 23, 42, .05); }
+.semantic-schema-card td { display: block; padding: 0 !important; border: 0 !important; }
+.semantic-schema-card td:nth-child(1) { font-size: 14px; margin-bottom: 8px; }
+.semantic-schema-card td:nth-child(2) { position: absolute; margin: -31px 0 0 145px; }
+.semantic-schema-card td:nth-child(3) { display: inline; color: var(--muted); font-size: 12px; }
+.semantic-schema-card td:nth-child(4) { display: inline; float: right; font-weight: 700; font-size: 12px; }
+.semantic-schema-card td:nth-child(5) { clear: both; padding-top: 10px !important; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.semantic-schema-card::after { content: ""; display: block; height: 4px; margin-top: 8px; border-radius: 99px; background: linear-gradient(90deg, var(--accent, #2563eb) 82%, var(--surface-muted, #e2e8f0) 82%); }
+@media (max-width: 640px) { .semantic-schema-grid-items { grid-template-columns: 1fr; } .semantic-schema-card td:nth-child(2) { margin-left: 125px; } }
 
 /* The retry control on the error banner. Distinct from the dismiss "×" so
    recovering from a failed job is not mistaken for hiding the message. */

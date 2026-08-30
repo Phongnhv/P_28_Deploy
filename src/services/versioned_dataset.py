@@ -13,6 +13,7 @@ import json
 import math
 import os
 import re
+import shutil
 import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -35,6 +36,10 @@ class DatasetContractError(ValueError):
 
 class SourceIntegrityError(DatasetContractError):
     """A source object cannot be trusted against its recorded metadata."""
+
+
+class UploadTooLargeError(DatasetContractError):
+    """The multipart wire payload exceeded the configured limit."""
 
 
 @dataclass(frozen=True)
@@ -234,6 +239,88 @@ def inspect_upload(content: bytes, filename: str, content_type: str | None = Non
         row_count=int(len(frame)),
         schema=schema,
     )
+
+
+async def spool_upload(upload: Any, filename: str) -> tuple[Path, int, str]:
+    """Stream an UploadFile to disk while enforcing wire size and hashing."""
+    settings = get_settings()
+    suffix = Path(filename or "dataset.csv").suffix.lower()
+    handle = tempfile.NamedTemporaryFile(prefix="upload-", suffix=suffix, delete=False)
+    path = Path(handle.name)
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        with handle:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > settings.upload_max_bytes:
+                    raise UploadTooLargeError("The upload exceeds the 100 MB limit")
+                digest.update(chunk)
+                handle.write(chunk)
+        if total == 0:
+            raise DatasetContractError("The uploaded file is empty")
+        return path, total, digest.hexdigest()
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+
+def inspect_upload_path(path: Path, filename: str, content_type: str | None = None, *, checksum: str | None = None, size_bytes: int | None = None) -> InspectedUpload:
+    """Bounded preflight inspection without materializing untrusted input."""
+    import pandas as pd
+    settings = get_settings()
+    safe_name = _safe_filename(filename)
+    actual_size = path.stat().st_size
+    if actual_size > settings.upload_max_bytes:
+        raise UploadTooLargeError("The upload exceeds the 100 MB limit")
+    suffix = Path(safe_name).suffix.lower()
+    if suffix == ".parquet":
+        try:
+            import pyarrow.parquet as pq
+            parquet = pq.ParquetFile(path)
+            columns = parquet.schema_arrow.names
+            if len(columns) > settings.upload_max_columns:
+                raise DatasetContractError("Dataset exceeds the maximum column limit")
+            rows = 0
+            decoded = 0
+            for batch in parquet.iter_batches(batch_size=50_000):
+                rows += batch.num_rows
+                decoded += batch.nbytes
+                if rows > settings.upload_max_rows or decoded > settings.upload_max_decoded_bytes:
+                    raise DatasetContractError("Dataset exceeds decoded resource limits")
+            frame = parquet.read().to_pandas()
+        except DatasetContractError:
+            raise
+        except Exception as exc:
+            raise DatasetContractError("Parquet content is not readable") from exc
+    else:
+        rows = 0
+        decoded = 0
+        first = None
+        try:
+            for chunk in pd.read_csv(path, chunksize=50_000):
+                if first is None:
+                    first = chunk
+                    if len(chunk.columns) > settings.upload_max_columns:
+                        raise DatasetContractError("Dataset exceeds the maximum column limit")
+                rows += len(chunk)
+                decoded += int(chunk.memory_usage(deep=True).sum())
+                if rows > settings.upload_max_rows or decoded > settings.upload_max_decoded_bytes:
+                    raise DatasetContractError("Dataset exceeds decoded resource limits")
+            if first is None:
+                raise DatasetContractError("CSV content is not readable")
+            # Schema is determined from the first bounded batch; row/resource
+            # limits were enforced cumulatively above, so no full reread is needed.
+            frame = first
+        except DatasetContractError:
+            raise
+        except Exception as exc:
+            raise DatasetContractError("CSV content is not readable") from exc
+    schema = canonical_schema_manifest(frame)
+    return InspectedUpload(safe_name, suffix.lstrip("."), int(size_bytes if size_bytes is not None else actual_size), checksum or sha256_file(path), int(rows if suffix == ".parquet" else len(frame) if rows == len(frame) else rows), schema)
 
 
 def verify_file(path: Path, expected_checksum: str, expected_size: int | None = None) -> None:
@@ -612,6 +699,29 @@ def store_source_artifact(content: bytes, inspected: InspectedUpload, *, workspa
         if ref.sha256 != checksum or ref.size_bytes != inspected.size_bytes:
             raise SourceIntegrityError("Object-storage source metadata does not match the uploaded content")
         return SourceArtifactRef(ref.bucket, ref.object_key, checksum, inspected.size_bytes, inspected.format, inspected.filename, f"object://{ref.bucket}/{ref.object_key}", True, ref.version_id)
+    except Exception as exc:
+        raise SourceIntegrityError("Object-storage upload failed; version was not made executable") from exc
+
+
+def store_source_artifact_path(path: Path, inspected: InspectedUpload, *, workspace_id: str, dataset_id: str, dataset_version_id: str) -> SourceArtifactRef:
+    """Store a verified temporary file without loading it into memory."""
+    from src.services.dbt_artifact_store import get_dbt_artifact_store
+    key = safe_source_object_key(workspace_id, dataset_id, dataset_version_id, inspected.checksum, inspected.filename)
+    settings = get_settings()
+    if settings.app_env in {"local", "development", "test"}:
+        target = _to_extended_path(_local_storage_root() / key)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        existed = target.exists()
+        if not existed:
+            with path.open("rb") as source, target.open("wb") as destination:
+                shutil.copyfileobj(source, destination, length=1024 * 1024)
+        verify_file(target, inspected.checksum, inspected.size_bytes)
+        return SourceArtifactRef(None, key, inspected.checksum, inspected.size_bytes, inspected.format, inspected.filename, f"local:{target}", not existed)
+    try:
+        ref = get_dbt_artifact_store().upload_source_path(key, path, checksum=inspected.checksum)
+        if ref.sha256 != inspected.checksum or ref.size_bytes != inspected.size_bytes:
+            raise SourceIntegrityError("Object-storage source metadata does not match the uploaded content")
+        return SourceArtifactRef(ref.bucket, ref.object_key, inspected.checksum, inspected.size_bytes, inspected.format, inspected.filename, f"object://{ref.bucket}/{ref.object_key}", True, ref.version_id)
     except Exception as exc:
         raise SourceIntegrityError("Object-storage upload failed; version was not made executable") from exc
 

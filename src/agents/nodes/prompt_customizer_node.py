@@ -92,7 +92,17 @@ async def prompt_customizer_node(state: AgentState) -> dict:
 
     for table_name, result in zip(table_names, results):
         if isinstance(result, Exception):
-            logger.error(f"Lỗi khi sinh ngữ cảnh nghiệp vụ cho bảng {table_name}: {result}")
+            logger.warning(f"Lỗi khi sinh ngữ cảnh nghiệp vụ cho bảng {table_name}: {result}. Sử dụng fallback template.")
+            table_info = tables_contract.get(table_name, {})
+            cols = table_info.get("columns", {})
+            col_names = list(cols.keys()) if isinstance(cols, dict) else [c.get("name", str(c)) for c in cols if isinstance(c, dict)]
+            col_summary = ", ".join(col_names[:10]) if col_names else "dữ liệu nghiệp vụ"
+            fallback_context = (
+                f"Bảng '{table_name}' chứa dữ liệu phục vụ phân tích chất lượng dữ liệu. "
+                f"Các trường dữ liệu chính bao gồm: {col_summary}. "
+                f"Yêu cầu đảm bảo tính toàn vẹn, hợp lệ và không trùng lặp cho các trường dữ liệu quan trọng."
+            )
+            business_contexts[table_name] = fallback_context
         else:
             business_contexts[table_name] = result
             logger.info(f"Đã tạo business context dài {len(result)} ký tự cho bảng {table_name}")

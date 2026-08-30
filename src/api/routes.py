@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import json
 import logging
 import uuid
@@ -21,7 +20,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from sqlalchemy import or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -134,11 +133,13 @@ from src.services.supabase_dataset import query_dataset_rows as query_supabase_d
 from src.services.versioned_dataset import (
     DatasetContractError,
     SourceIntegrityError,
+    UploadTooLargeError,
     canonical_schema_manifest,
     delete_source_artifact,
-    inspect_upload,
+    inspect_upload_path,
     schema_hash,
-    store_source_artifact,
+    spool_upload,
+    store_source_artifact_path,
 )
 from src.time_utils import utc_now
 
@@ -266,8 +267,17 @@ class RuleSpecSchema(BaseModel):
     min_value: float | None = None
     max_value: float | None = None
     allowed_values: list[str] | None = None
+    regex: str | None = None
     operator: str | None = None
     fingerprint_columns: list[str] | None = None
+
+    @model_validator(mode="after")
+    def validate_regex_rule(self):
+        if self.type.upper() == "REGEX_FORMAT":
+            from src.services.safe_regex import validate_regex
+
+            validate_regex(self.regex or "")
+        return self
 
 
 class RuleProposalSchema(BaseModel):
@@ -558,53 +568,54 @@ def require_dataset_access(db: Session, session: SessionModel, dataset_id: str, 
         )
 
 
-def _dataset_of_run(db: Session, linked_entity: str | None) -> str | None:
-    """Resolve the dataset a proposal run belongs to.
-
-    ``JobModel.linked_entity`` holds either a dataset id or an immutable dataset
-    version id, so the version has to be dereferenced before tenancy can be asked.
-    """
-    if not linked_entity:
-        return None
-    if linked_entity.startswith("dv-"):
-        version = db.get(DatasetVersionModel, linked_entity)
-        return version.dataset_id if version else None
-    return linked_entity
+def require_compat_dataset_access(
+    db: Session, session: SessionModel, dataset_id: str | None, *, manage: bool = False
+) -> str:
+    """Authorize a compatibility object through its persisted dataset identity."""
+    resolved = str(dataset_id or "").strip()
+    if not resolved or resolved == "unknown":
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    require_dataset_access(db, session, resolved, manage=manage)
+    return resolved
 
 
-def require_run_access(*, manage: bool = False, param: str = "run_id"):
-    """Tenancy for the ``/dq`` run endpoints, attached at the decorator.
+def require_proposal_run_access(
+    db: Session, session: SessionModel, run_id: str, *, manage: bool = False
+) -> dict[str, Any]:
+    from src.services.rule_store import get_run
 
-    ``dq_router`` is mounted with a role dependency only, so a caller holding the
-    right role could read, review and publish another tenant's proposal run: seven
-    cross-tenant requests answered 200 in the behaviour probe. The check lives in a
-    dependency rather than in each handler because that is how those seven arose --
-    every one of them simply omitted the call, and a route added tomorrow would
-    inherit the same gap by doing nothing at all.
-    """
+    run = get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"proposal run_id={run_id!r} does not exist")
+    require_compat_dataset_access(db, session, run.get("dataset_id"), manage=manage)
+    return run
 
-    def _dep(
-        request: Request,
-        session: SessionModel = Depends(get_session),
-        db: Session = Depends(get_db),
-    ) -> str:
-        from src.services.rule_store import get_run
 
-        run_id = request.path_params.get(param)
-        run = get_run(str(run_id))
-        if not run:
-            raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
-        dataset_id = _dataset_of_run(db, run.get("dataset_id"))
-        if not dataset_id:
-            # A run with no resolvable dataset cannot be shown to be the caller's.
-            raise HTTPException(
-                status_code=403,
-                detail={"code": "DATASET_ACCESS_FORBIDDEN", "message": "You do not have access to this dataset."},
-            )
-        require_dataset_access(db, session, dataset_id, manage=manage)
-        return dataset_id
+def require_test_run_access(
+    db: Session, session: SessionModel, test_run_id: str, *, manage: bool = False
+) -> dict[str, Any]:
+    from src.services.rule_store import get_test_run
 
-    return _dep
+    run = get_test_run(test_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"test_run_id={test_run_id!r} does not exist")
+    require_compat_dataset_access(db, session, run.get("dataset_id"), manage=manage)
+    return run
+
+
+def require_anomaly_run_access(
+    db: Session, session: SessionModel, run_id: str, *, manage: bool = False
+) -> AnomalyRunModel:
+    anomaly_run = db.get(AnomalyRunModel, run_id)
+    if not anomaly_run:
+        anomaly_run = db.query(AnomalyRunModel).filter(AnomalyRunModel.execution_run_id == run_id).first()
+    if not anomaly_run:
+        raise HTTPException(status_code=404, detail=f"Anomaly run {run_id} not found")
+    dq_run = db.get(DqRunModel, anomaly_run.execution_run_id)
+    if not dq_run:
+        raise HTTPException(status_code=404, detail=f"Execution run {anomaly_run.execution_run_id} not found")
+    require_compat_dataset_access(db, session, dq_run.dataset_id, manage=manage)
+    return anomaly_run
 
 
 # ---------------------------------------------------------------------------
@@ -744,20 +755,32 @@ async def import_dataset(
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in {".csv", ".parquet"}:
         raise HTTPException(status_code=415, detail="Only CSV and Parquet files are supported.")
-    payload = await file.read()
-    if not payload:
-        raise HTTPException(status_code=422, detail="The uploaded file is empty.")
-    if len(payload) > 100 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="The upload exceeds the 100 MB limit.")
+    try:
+        temp_path, upload_size, upload_checksum = await spool_upload(file, file.filename or f"imported{suffix}")
+    except UploadTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except DatasetContractError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     dataset_id = f"dataset-import-{uuid.uuid4().hex[:20]}"
     upload_dir = Path(get_settings().upload_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
     upload_path = upload_dir / f"{dataset_id}{suffix}"
-    upload_path.write_bytes(payload)
+    try:
+        inspected = inspect_upload_path(temp_path, file.filename or f"imported{suffix}", file.content_type, checksum=upload_checksum, size_bytes=upload_size)
+    except UploadTooLargeError as exc:
+        temp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except DatasetContractError as exc:
+        temp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.unlink(missing_ok=True)
+    import shutil
+    shutil.move(str(temp_path), str(upload_path))
     if get_settings().object_storage_enabled:
         try:
             from src.services.dbt_artifact_store import get_dbt_artifact_store
-            get_dbt_artifact_store().upload_dataset_file(dataset_id, file.filename or f"imported{suffix}", payload)
+            get_dbt_artifact_store().upload_dataset_path(dataset_id, upload_path)
         except Exception as exc:
             logger.warning("Failed to upload dataset to MinIO: %s", exc)
     display_name = Path(file.filename or "Imported dataset").stem.replace("_", " ").strip() or "Imported dataset"
@@ -772,7 +795,7 @@ async def import_dataset(
         row_count=0,
         source_label=file.filename or f"imported{suffix}",
         manifest_version="import-v1",
-        checksum=hashlib.sha256(payload).hexdigest(),
+        checksum=inspected.checksum,
     )
     job_id = str(uuid.uuid4())
     job = JobModel(
@@ -808,7 +831,7 @@ async def import_dataset(
         entity_id=dataset_id,
         detail={"filename": file.filename, "job_id": job_id},
     )
-    background_tasks.add_task(run_ingest_profile, job_id, dataset_id, session.id, session.role)
+    dispatch_or_mark_failed(db, job)
     return {
         "dataset": {
             "id": dataset.id,
@@ -853,12 +876,22 @@ async def import_versioned_dataset(
         raise HTTPException(status_code=404, detail={"code": "WORKSPACE_NOT_FOUND", "message": "Workspace not found"})
     if membership.role not in {"ADMIN", "STEWARD"} and session.role not in {"ADMIN", "STEWARD"}:
         raise HTTPException(status_code=403, detail={"code": "WORKSPACE_MANAGE_FORBIDDEN", "message": "Workspace management permission is required"})
-    payload = await file.read()
     try:
-        inspected = inspect_upload(payload, file.filename or "dataset.csv", file.content_type)
+        temp_path, upload_size, upload_checksum = await spool_upload(file, file.filename or "dataset.csv")
+    except UploadTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except DatasetContractError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        inspected = inspect_upload_path(temp_path, file.filename or "dataset.csv", file.content_type, checksum=upload_checksum, size_bytes=upload_size)
+    except UploadTooLargeError as exc:
+        temp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except DatasetContractError as exc:
+        temp_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail={"code": "INVALID_DATASET", "message": str(exc)}) from exc
     if client_sha256 and client_sha256.lower() != inspected.checksum:
+        temp_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail={"code": "CHECKSUM_MISMATCH", "message": "Uploaded checksum does not match content"})
 
     idempotency_key = idempotency_key.strip()
@@ -902,6 +935,7 @@ async def import_versioned_dataset(
         known_checksum = existing_version.checksum if existing_version else job_checksum(existing_job)
         if known_checksum and known_checksum != inspected.checksum:
             raise HTTPException(status_code=409, detail={"code": "IDEMPOTENCY_KEY_REUSED", "message": "Idempotency-Key is already bound to a different payload"})
+        temp_path.unlink(missing_ok=True)
         return replay_response(existing_version, existing_job)
 
     # For a request that does not supply a dataset id, checksum identity is
@@ -916,6 +950,7 @@ async def import_versioned_dataset(
     checksum_version = checksum_query.order_by(DatasetVersionModel.created_at.asc()).first()
     if checksum_version:
         checksum_job = db.query(JobModel).filter(JobModel.linked_entity == checksum_version.id).order_by(JobModel.created_at.desc()).first()
+        temp_path.unlink(missing_ok=True)
         return replay_response(checksum_version, checksum_job)
 
     logical_id = dataset_id or f"dataset-import-{uuid.uuid4().hex[:20]}"
@@ -955,11 +990,12 @@ async def import_versioned_dataset(
         known_checksum = existing_version.checksum if existing_version else job_checksum(job)
         if known_checksum and known_checksum != inspected.checksum:
             raise HTTPException(status_code=409, detail={"code": "IDEMPOTENCY_KEY_REUSED", "message": "Idempotency-Key is already bound to a different payload"})
+        temp_path.unlink(missing_ok=True)
         return replay_response(existing_version, job)
 
     artifact_ref = None
     try:
-        artifact_ref = store_source_artifact(payload, inspected, workspace_id=workspace_id, dataset_id=logical_id, dataset_version_id=version_id)
+        artifact_ref = store_source_artifact_path(temp_path, inspected, workspace_id=workspace_id, dataset_id=logical_id, dataset_version_id=version_id)
     except SourceIntegrityError as exc:
         db.rollback()
         try:
@@ -980,6 +1016,8 @@ async def import_versioned_dataset(
             except Exception:
                 db.rollback()
         raise HTTPException(status_code=502, detail={"code": "SOURCE_STORAGE_FAILED", "message": str(exc)}) from exc
+    finally:
+        temp_path.unlink(missing_ok=True)
     artifact_id = f"artifact-{uuid.uuid4().hex}"
     metadata = {
         "filename": inspected.filename,
@@ -3789,17 +3827,17 @@ async def _run_execution_pipeline(
 async def execute_tests(
     run_id: str,
     background_tasks: BackgroundTasks,
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
 ) -> ExecuteTestsResponse:
     """Kích hoạt Run 2: load approved rules → test_generator → validate → repair → run → anomaly.
 
     Trả về test_run_id ngay lập tức. Client poll GET /dq/test-runs/{test_run_id}
     để kiểm tra trạng thái và kết quả.
     """
-    from src.services.rule_store import create_test_run, get_run
+    from src.services.rule_store import create_test_run
 
-    proposal_run = await asyncio.to_thread(get_run, run_id)
-    if not proposal_run:
-        raise HTTPException(status_code=404, detail=f"proposal run_id={run_id!r} không tồn tại")
+    proposal_run = require_proposal_run_access(db, session, run_id, manage=True)
 
     dataset_id = proposal_run.get("dataset_id", "unknown")
     test_run_id = uuid.uuid4().hex
@@ -3818,13 +3856,14 @@ async def execute_tests(
     "/test-runs/{test_run_id}",
     response_model=TestRunStatusResponse,
 )
-async def get_test_run_status(test_run_id: str) -> TestRunStatusResponse:
+async def get_test_run_status(
+    test_run_id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+) -> TestRunStatusResponse:
     """Poll trạng thái của một test run."""
-    from src.services.rule_store import get_test_run as store_get_test_run
 
-    run = await asyncio.to_thread(store_get_test_run, test_run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail=f"test_run_id={test_run_id!r} không tồn tại")
+    run = require_test_run_access(db, session, test_run_id)
     return TestRunStatusResponse(**run)
 
 
@@ -3835,18 +3874,15 @@ async def get_test_run_status(test_run_id: str) -> TestRunStatusResponse:
 async def get_test_run_results(
     test_run_id: str,
     status: str | None = None,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
 ) -> TestResultsListResponse:
     """Lấy danh sách kết quả kiểm thử của từng rule trong test run."""
     from src.services.rule_store import (
         get_test_results as store_get_results,
     )
-    from src.services.rule_store import (
-        get_test_run as store_get_test_run,
-    )
 
-    run = await asyncio.to_thread(store_get_test_run, test_run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail=f"test_run_id={test_run_id!r} không tồn tại")
+    require_test_run_access(db, session, test_run_id)
 
     rows = await asyncio.to_thread(store_get_results, test_run_id, status)
     return TestResultsListResponse(
@@ -3872,13 +3908,15 @@ async def get_test_run_results(
         Depends(require_run_access(manage=True)),
     ],
 )
-async def publish_run_rules(run_id: str) -> PublishRulesResponse:
+async def publish_run_rules(
+    run_id: str,
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+) -> PublishRulesResponse:
     """Xuất bản (Publish/Merge) các rules đã APPROVED từ proposal run vào Active Ruleset chính thức."""
-    from src.services.rule_store import get_run, publish_approved_rules
+    from src.services.rule_store import publish_approved_rules
 
-    proposal_run = await asyncio.to_thread(get_run, run_id)
-    if not proposal_run:
-        raise HTTPException(status_code=404, detail=f"proposal run_id={run_id!r} không tồn tại")
+    require_proposal_run_access(db, session, run_id, manage=True)
 
     count = await asyncio.to_thread(publish_approved_rules, run_id)
     return PublishRulesResponse(
@@ -3895,11 +3933,18 @@ async def publish_run_rules(run_id: str) -> PublishRulesResponse:
 async def list_active_rules(
     dataset_id: str | None = None,
     table_name: str | None = None,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
 ) -> ActiveRulesListResponse:
     """Lấy danh sách các rules đang hoạt động (Active Ruleset)."""
     from src.services.rule_store import get_active_rules as store_get_active_rules
 
-    rules = await asyncio.to_thread(store_get_active_rules, dataset_id, table_name)
+    if not dataset_id or dataset_id == "all":
+        if session.role != "ADMIN":
+            raise HTTPException(status_code=403, detail={"code": "ROLE_FORBIDDEN", "message": "Only administrators may list rules across all datasets."})
+    else:
+        require_compat_dataset_access(db, session, dataset_id)
+    rules = await asyncio.to_thread(store_get_active_rules, dataset_id if dataset_id != "all" else None, table_name)
     return ActiveRulesListResponse(
         total_rules=len(rules),
         rules=[ActiveRuleResponse(**r) for r in rules],
@@ -3910,10 +3955,19 @@ async def list_active_rules(
     "/active-rules/{rule_id}/deactivate",
     dependencies=[Depends(require_role(["STEWARD", "ADMIN"]))],
 )
-async def deactivate_active_rule(rule_id: str) -> dict:
+async def deactivate_active_rule(
+    rule_id: str,
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+) -> dict:
     """Vô hiệu hoá một active rule."""
+    from src.services.rule_store import ActiveRuleModel
     from src.services.rule_store import deactivate_rule as store_deactivate_rule
 
+    rule = db.get(ActiveRuleModel, rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail=f"rule_id={rule_id!r} does not exist")
+    require_compat_dataset_access(db, session, rule.dataset_id, manage=True)
     success = await asyncio.to_thread(store_deactivate_rule, rule_id)
     if not success:
         raise HTTPException(status_code=404, detail=f"rule_id={rule_id!r} không tồn tại hoặc đã bị vô hiệu hóa")
@@ -3927,12 +3981,19 @@ async def deactivate_active_rule(rule_id: str) -> dict:
 async def execute_active_tests(
     request: ExecuteActiveTestsRequest,
     background_tasks: BackgroundTasks,
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
 ) -> ExecuteTestsResponse:
     """Kích hoạt chạy test trên bộ Active Ruleset chính thức."""
     from src.services.rule_store import create_test_run, get_active_rules
 
     test_run_id = uuid.uuid4().hex
     dataset_id = request.dataset_id or "all"
+    if dataset_id == "all":
+        if session.role != "ADMIN":
+            raise HTTPException(status_code=403, detail={"code": "ROLE_FORBIDDEN", "message": "Only administrators may execute all datasets."})
+    else:
+        require_compat_dataset_access(db, session, dataset_id, manage=True)
     create_test_run(test_run_id, dataset_id)
 
     async def _run_active_execution(test_run_id: str, dataset_id: str, table_name: str | None) -> None:
@@ -3981,12 +4042,12 @@ async def list_proposal_rules(
     run_id: str,
     status: str | None = None,
     dimension: str | None = None,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
 ) -> list[RuleReviewResponse]:
-    from src.services.rule_store import get_run, list_rules
+    from src.services.rule_store import list_rules
 
-    run = await asyncio.to_thread(get_run, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
+    require_proposal_run_access(db, session, run_id)
 
     rules = await asyncio.to_thread(list_rules, run_id=run_id, status=status, dimension=dimension)
     return [RuleReviewResponse(**r) for r in rules]
@@ -4004,13 +4065,15 @@ async def review_proposal_rule(
     run_id: str,
     rule_id: str,
     body: RuleUpdateRequest,
-    session: SessionModel = Depends(get_session),
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
 ) -> RuleReviewResponse:
-    from src.services.rule_store import get_run, review_rule
+    from src.services.rule_store import review_rule
 
-    run = await asyncio.to_thread(get_run, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
+    run = require_proposal_run_access(db, session, run_id, manage=True)
+    prop = db.get(RuleProposalModel, rule_id)
+    if not prop or prop.dataset_id != run["dataset_id"]:
+        raise HTTPException(status_code=404, detail=f"rule_id={rule_id!r} does not exist in run_id={run_id!r}")
 
     res = await asyncio.to_thread(
         review_rule,
@@ -4019,9 +4082,6 @@ async def review_proposal_rule(
         status=body.status.value if hasattr(body.status, "value") else body.status,
         edited_parameters=body.edited_parameters,
         severity=body.severity,
-        # The approver is whoever holds the session, never whoever the body names:
-        # an audit trail that records a client-supplied name cannot answer "who
-        # approved this rule". PRODUCT_SPEC safety rule 5.
         reviewer=session.username,
         review_note=body.review_note,
     )
@@ -4041,13 +4101,12 @@ async def review_proposal_rule(
 async def bulk_review_proposal_rules(
     run_id: str,
     body: BulkReviewRequest,
-    session: SessionModel = Depends(get_session),
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
 ) -> BulkReviewResponse:
-    from src.services.rule_store import bulk_review, get_run
+    from src.services.rule_store import bulk_review
 
-    run = await asyncio.to_thread(get_run, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
+    run = require_proposal_run_access(db, session, run_id, manage=True)
 
     decisions_dict = [
         {
@@ -4055,13 +4114,24 @@ async def bulk_review_proposal_rules(
             "status": d.status.value if hasattr(d.status, "value") else d.status,
             "edited_parameters": d.edited_parameters,
             "severity": d.severity,
-            # Same rule as the single-rule endpoint: the actor is the session, and a
-            # per-decision reviewer in the body is ignored rather than trusted.
             "reviewer": session.username,
             "review_note": d.review_note,
         }
         for d in body.decisions
     ]
+    requested_ids = {item["rule_id"] for item in decisions_dict}
+    forbidden_ids = {
+        row[0]
+        for row in db.query(RuleProposalModel.id).filter(
+            RuleProposalModel.id.in_(requested_ids),
+            RuleProposalModel.dataset_id != run["dataset_id"],
+        ).all()
+    }
+    if forbidden_ids:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "DATASET_ACCESS_FORBIDDEN", "message": "Cross-dataset rule review is forbidden"},
+        )
     updated, not_found = await asyncio.to_thread(bulk_review, run_id, decisions_dict)
     return BulkReviewResponse(
         updated_count=len(updated), rules=[RuleReviewResponse(**r) for r in updated], not_found=not_found
@@ -4073,12 +4143,14 @@ async def bulk_review_proposal_rules(
     response_model=ReviewSummaryResponse,
     dependencies=[Depends(require_run_access())],
 )
-async def get_run_review_summary(run_id: str) -> ReviewSummaryResponse:
-    from src.services.rule_store import get_review_summary, get_run
+async def get_run_review_summary(
+    run_id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+) -> ReviewSummaryResponse:
+    from src.services.rule_store import get_review_summary
 
-    run = await asyncio.to_thread(get_run, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
+    require_proposal_run_access(db, session, run_id)
 
     res = await asyncio.to_thread(get_review_summary, run_id)
     return ReviewSummaryResponse(**res)
@@ -4089,12 +4161,14 @@ async def get_run_review_summary(run_id: str) -> ReviewSummaryResponse:
     response_model=ApprovedRulesResponse,
     dependencies=[Depends(require_run_access())],
 )
-async def get_run_approved_rules(run_id: str) -> ApprovedRulesResponse:
-    from src.services.rule_store import get_approved_rules, get_run
+async def get_run_approved_rules(
+    run_id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+) -> ApprovedRulesResponse:
+    from src.services.rule_store import get_approved_rules
 
-    run = await asyncio.to_thread(get_run, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
+    require_proposal_run_access(db, session, run_id)
 
     rules = await asyncio.to_thread(get_approved_rules, run_id)
     return ApprovedRulesResponse(run_id=run_id, count=len(rules), rules=[RuleReviewResponse(**r) for r in rules])
@@ -4117,14 +4191,19 @@ async def get_run_approved_rules(run_id: str) -> ApprovedRulesResponse:
 async def publish_ruleset_endpoint(
     proposal_run_id: str,
     body: PublishRulesetRequest,
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
 ) -> PublishRulesetResponse:
     """Publishes approved rules into an active immutable RulesetVersion."""
     from src.services.rule_store import publish_approved_rules
 
+    proposal_run = require_proposal_run_access(db, session, proposal_run_id, manage=True)
+    if body.dataset_id != proposal_run["dataset_id"]:
+        raise HTTPException(status_code=422, detail="dataset_id does not match the proposal run")
     ruleset_ver_id = await asyncio.to_thread(
         publish_approved_rules,
         proposal_run_id=proposal_run_id,
-        created_by=body.created_by,
+        created_by=session.username,
     )
     if not ruleset_ver_id:
         raise HTTPException(status_code=400, detail="No approved rules found or failed to publish ruleset.")
@@ -4147,10 +4226,20 @@ async def publish_ruleset_endpoint(
 )
 async def trigger_execution_run_endpoint(
     body: ExecutionRequest,
+    session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
 ) -> CombinedRunStatusResponse:
     """Triggers Graph 2 (Execution) and Graph 3 (Anomaly) returning combined 3-status payload."""
     from src.agents.graph import run_execution_graph
 
+    require_compat_dataset_access(db, session, body.dataset_id, manage=True)
+    if body.ruleset_version_id:
+        ruleset = db.get(RulesetVersionModel, body.ruleset_version_id)
+        if not ruleset or ruleset.dataset_id != body.dataset_id:
+            raise HTTPException(status_code=422, detail="ruleset_version_id does not belong to dataset_id")
+    existing_run = db.get(DqRunModel, body.execution_run_id)
+    if existing_run and existing_run.dataset_id != body.dataset_id:
+        raise HTTPException(status_code=409, detail="execution_run_id is already bound to another dataset")
     res = await run_execution_graph(
         dataset_id=body.dataset_id,
         test_run_id=body.execution_run_id,
@@ -4176,12 +4265,15 @@ async def trigger_execution_run_endpoint(
 )
 async def get_execution_run_results_endpoint(
     id: str,
+    auth: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
 ) -> CombinedRunStatusResponse:
     """Fetches combined execution status, anomaly status, and hypothesis status."""
     with Session(get_engine()) as session:
         dq_run = session.query(DqRunModel).filter(DqRunModel.id == id).first()
         if not dq_run:
             raise HTTPException(status_code=404, detail=f"Execution run {id} not found")
+        require_compat_dataset_access(db, auth, dq_run.dataset_id)
 
         anomaly_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.execution_run_id == id).first()
         signals = (
@@ -4215,17 +4307,13 @@ async def get_execution_run_results_endpoint(
 )
 async def get_anomaly_signals_endpoint(
     id: str,
+    auth: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
 ) -> list[AnomalySignalDTO]:
     """Fetches specialized signals for an anomaly run."""
+    anomaly = require_anomaly_run_access(db, auth, id)
     with Session(get_engine()) as session:
-        signals = session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == id).all()
-        if not signals:
-            # Also check if id is execution_run_id
-            anom_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.execution_run_id == id).first()
-            if anom_run:
-                signals = (
-                    session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anom_run.id).all()
-                )
+        signals = session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anomaly.id).all()
 
         result = []
         for s in signals:
@@ -4254,18 +4342,13 @@ async def get_anomaly_signals_endpoint(
 )
 async def get_anomaly_hypotheses_endpoint(
     id: str,
+    auth: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
     """Fetches detailed hypotheses for an anomaly run."""
+    anomaly = require_anomaly_run_access(db, auth, id)
     with Session(get_engine()) as session:
-        hyps = session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == id).all()
-        if not hyps:
-            anom_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.execution_run_id == id).first()
-            if anom_run:
-                hyps = (
-                    session.query(AnomalyHypothesisModel)
-                    .filter(AnomalyHypothesisModel.anomaly_run_id == anom_run.id)
-                    .all()
-                )
+        hyps = session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == anomaly.id).all()
 
         return [
             {
@@ -4293,20 +4376,17 @@ async def get_anomaly_hypotheses_endpoint(
 async def submit_anomaly_feedback_endpoint(
     id: str,
     body: AnomalyFeedbackRequest,
+    auth: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Submits steward feedback for an anomaly run."""
+    anom_run = require_anomaly_run_access(db, auth, id, manage=True)
     with Session(get_engine()) as session:
-        anom_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.id == id).first()
-        if not anom_run:
-            anom_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.execution_run_id == id).first()
-        if not anom_run:
-            raise HTTPException(status_code=404, detail=f"Anomaly run {id} not found")
-
         feedback_id = f"fb-{uuid.uuid4().hex[:12]}"
         fb = AnomalyFeedbackModel(
             id=feedback_id,
             anomaly_run_id=anom_run.id,
-            username=body.username,
+            username=auth.username,
             feedback_label=body.feedback_label,
             comment=body.comment,
             created_at=utc_now(),

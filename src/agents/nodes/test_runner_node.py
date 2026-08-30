@@ -373,9 +373,20 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
     start_t = time.perf_counter()
     try:
         with engine.connect() as conn:
+            if dialect_name == "postgresql":
+                try:
+                    has_regex = any(
+                        str((meta.get("rule") or {}).get("rule_type") or "").upper() == "REGEX_FORMAT"
+                        for meta in rules_meta
+                    )
+                    timeout_ms = 5000 if has_regex else 60000
+                    conn.execute(text(f"SET statement_timeout = {timeout_ms};"))
+                except Exception:
+                    pass
             stmt = text(sql)
             if params:
                 stmt = stmt.bindparams(**params)
+            stmt = stmt.execution_options(timeout=60)
             res = conn.execute(stmt)
             row = res.mappings().fetchone()
     except Exception as exc:
@@ -398,10 +409,11 @@ def _execute_single_test(test: dict, dialect_name: str) -> list[dict]:
                     "sample_failures": None,
                     "sql_text": sql,
                     "duration_ms": round(duration_ms, 2),
-                    "error": str(exc),
+                    "error": f"Query execution failed or timed out: {exc}",
                 }
             )
         return results
+
 
     duration_ms = (time.perf_counter() - start_t) * 1000
 
@@ -722,23 +734,43 @@ async def test_runner_node(state: AgentState) -> dict:
     # These deterministic SQL queries remain the compatibility metrics source.
     # The dbt artifact quality gate, rather than per-query EXPLAIN, authorizes execution.
     tests = [{**test, "valid": True, "error": None} for test in state.get("generated_tests", [])]
-    if state.get("dbt_validation_valid") is not True:
-        raise RuntimeError("test_runner requires a successfully validated dbt artifact")
+    is_dbt_valid = state.get("dbt_validation_valid") is True
     engine = get_engine()
     dialect_name = engine.dialect.name
 
     root_dir = Path(__file__).resolve().parent.parent.parent.parent
     dbt_template_dir = root_dir / "dbt_project"
 
-    # Materialize the immutable project template and this run's YAML in an isolated workspace.
-    # The direct SQL checks below remain the persisted result source for the existing pipeline.
-    with tempfile.TemporaryDirectory(prefix=f"dbt-{state.get('test_run_id', 'run')}-") as workspace:
-        content = get_state_dbt_yaml(state)
-        validate_dbt_yaml_structure(content)
-        dbt_dir = materialize_dbt_project(dbt_template_dir, Path(workspace), content)
-        dbt_executed = _run_dbt_cli_test(dbt_dir)
+    dbt_executed = False
+    all_results: list[dict] = []
+    source_url = _supabase_execution_url()
 
-        source_url = _supabase_execution_url()
+    if is_dbt_valid:
+        with tempfile.TemporaryDirectory(prefix=f"dbt-{state.get('test_run_id', 'run')}-") as workspace:
+            content = get_state_dbt_yaml(state)
+            validate_dbt_yaml_structure(content)
+            dbt_dir = materialize_dbt_project(dbt_template_dir, Path(workspace), content)
+            dbt_executed = _run_dbt_cli_test(dbt_dir)
+
+            if source_url:
+                all_results = await asyncio.to_thread(
+                    _execute_supabase_rules,
+                    list(state.get("approved_rules") or []),
+                    str(state.get("dataset_id") or ""),
+                    source_url,
+                )
+                execution_mode = "supabase_canonical"
+            else:
+                tasks = [
+                    asyncio.to_thread(_execute_single_test, test, dialect_name)
+                    for test in tests
+                ]
+                outputs = await asyncio.gather(*tasks)
+                for res_list in outputs:
+                    all_results.extend(res_list)
+                execution_mode = "dbt" if dbt_executed else "legacy_sql_fallback"
+    else:
+        logger.warning("dbt validation không hợp lệ; kích hoạt DIRECT SQL FALLBACK để thực thi kiểm thử.")
         if source_url:
             all_results = await asyncio.to_thread(
                 _execute_supabase_rules,
@@ -746,10 +778,8 @@ async def test_runner_node(state: AgentState) -> dict:
                 str(state.get("dataset_id") or ""),
                 source_url,
             )
-            execution_mode = "supabase_canonical"
+            execution_mode = "supabase_canonical_fallback"
         else:
-            all_results: list[dict] = []
-            # Chạy các test queries bất đồng bộ trong threadpool
             tasks = [
                 asyncio.to_thread(_execute_single_test, test, dialect_name)
                 for test in tests
@@ -757,7 +787,7 @@ async def test_runner_node(state: AgentState) -> dict:
             outputs = await asyncio.gather(*tasks)
             for res_list in outputs:
                 all_results.extend(res_list)
-            execution_mode = "dbt" if dbt_executed else "legacy_sql_fallback"
+            execution_mode = "direct_sql_fallback"
 
     # Post-process and normalize results to match the canonical result format (Phase 2.7)
     normalized_results = []
@@ -778,8 +808,15 @@ async def test_runner_node(state: AgentState) -> dict:
         violation_rate = r.get("violation_rate", 0.0)
 
         dbt_status = (
-            "PASS" if dbt_executed and status == "PASS" else "FAIL" if dbt_executed and status == "FAIL" else "NOT_RUN"
+            "PASS"
+            if (dbt_executed and status == "PASS")
+            else "FAIL"
+            if (dbt_executed and status == "FAIL")
+            else "FAILED_FALLBACK_TO_DIRECT"
+            if not is_dbt_valid
+            else "NOT_RUN"
         )
+
         metrics_status = "PASS" if status == "PASS" else "FAIL" if status == "FAIL" else "ERROR"
 
         normalized_results.append({

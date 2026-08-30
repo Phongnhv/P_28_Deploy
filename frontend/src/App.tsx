@@ -103,30 +103,31 @@ function formatRule(rule: RuleSpec) {
   return `DUPLICATE · ${(rule.fingerprint_columns ?? []).join(" + ")}`;
 }
 
-function getErrorMessage(error: unknown, fallback: string) {
+function getErrorMessage(error: unknown, fallback: string, language: "en" | "vi" = "en") {
+  const vi = language === "vi";
   if (!(error instanceof ApiError))
     return error instanceof TypeError
-      ? "Cannot reach the API service. Confirm that the local backend is running, then try again."
+      ? (vi ? "Không thể kết nối tới dịch vụ API. Vui lòng kiểm tra backend local đã chạy chưa, sau đó thử lại." : "Cannot reach the API service. Confirm that the local backend is running, then try again.")
       : error instanceof Error
         ? error.message
         : fallback;
   if (error.status === 401)
-    return "Your session has expired. Please sign in again.";
+    return vi ? "Phiên làm việc đã hết hạn. Vui lòng đăng nhập lại." : "Your session has expired. Please sign in again.";
   if (error.status === 409)
     return (
-      error.message || "The workflow cannot continue from its current state."
+      error.message || (vi ? "Quy trình không thể tiếp tục ở trạng thái hiện tại." : "The workflow cannot continue from its current state.")
     );
   if (error.status === 422)
-    return "The request is not valid for the current workflow state.";
+    return vi ? "Yêu cầu không hợp lệ với trạng thái quy trình hiện tại." : "The request is not valid for the current workflow state.";
   if (error.status === 429)
-    return "The demo quota has been reached. Please try again later.";
+    return vi ? "Đã đạt hạn ngạch tài khoản demo. Vui lòng thử lại sau." : "The demo quota has been reached. Please try again later.";
   // A client-side configuration failure is raised locally with a 5xx status and
   // never reached the server, so reporting it as an outage sends the operator
   // to the wrong place. Surface its own message instead.
   if (error.code === "WORKSPACE_NOT_CONFIGURED")
     return error.message;
   if (error.status >= 500)
-    return "The service is temporarily unavailable. Retry when it is ready.";
+    return vi ? "Dịch vụ tạm thời không khả dụng. Vui lòng thử lại sau khi hệ thống sẵn sàng." : "The service is temporarily unavailable. Retry when it is ready.";
   return error.message || fallback;
 }
 
@@ -145,6 +146,21 @@ function StatusPill({
   );
 }
 
+export function parseApiTimestamp(timestamp: string | number | undefined | null): number {
+  if (timestamp === undefined || timestamp === null || timestamp === "") return NaN;
+  if (typeof timestamp === "number") return timestamp;
+  let str = String(timestamp).trim();
+  if (!str) return NaN;
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/.test(str)) {
+    str = str.replace(" ", "T");
+    if (!/Z$|[+-]\d{2}:?\d{2}$/i.test(str)) {
+      str = `${str}Z`;
+    }
+  }
+  const time = new Date(str).getTime();
+  return Number.isNaN(time) ? NaN : time;
+}
+
 /** Seconds since a timestamp, ticking once a second while the panel is open. */
 function useElapsedSeconds(since: string | undefined, active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
@@ -154,7 +170,7 @@ function useElapsedSeconds(since: string | undefined, active: boolean): number {
     return () => window.clearInterval(timer);
   }, [active]);
   if (!since) return 0;
-  const started = new Date(since).getTime();
+  const started = parseApiTimestamp(since);
   return Number.isNaN(started) ? 0 : Math.max(0, Math.floor((now - started) / 1000));
 }
 
@@ -201,6 +217,34 @@ function ProgressPanel({
       : 0;
   const percent = Math.min(100, Math.max(job.progress, nodeShare));
 
+  const translateMessage = (msg: string) => {
+    if (!vi || !msg) return msg;
+    if (msg.includes("Queued for local worker")) return "Đang chờ worker xử lý…";
+    if (msg.includes("Validating manifest")) return "Đang kiểm tra tệp dữ liệu…";
+    if (msg.includes("Loading immutable raw rows")) return "Đang nạp các dòng dữ liệu…";
+    if (msg.includes("Running dbt build")) return "Đang chạy khởi tạo dbt…";
+    if (msg.includes("Persisting aggregate profile")) return "Đang lưu trữ hồ sơ dữ liệu…";
+    if (msg.includes("Preparing allow-listed evidence")) return "Đang chuẩn bị dữ liệu bằng chứng…";
+    if (msg.includes("Calling local proposal adapter")) return "Đang sinh đề xuất quy tắc…";
+    if (msg.includes("Validating typed proposals")) return "Đang kiểm tra đề xuất…";
+    if (msg.includes("Persisting proposals")) return "Đang lưu các đề xuất quy tắc…";
+    if (msg.includes("Claiming approved rule set")) return "Đang lấy bộ quy tắc đã duyệt…";
+    if (msg.includes("Compiling read-only checks")) return "Đang biên dịch quy tắc kiểm tra…";
+    if (msg.includes("Executing bounded queries")) return "Đang thực thi truy vấn…";
+    if (msg.includes("Persisting results")) return "Đang lưu kết quả kiểm tra…";
+    if (msg === "Completed") return "Đã hoàn thành";
+    return msg;
+  };
+
+  const translateStatus = (status: string) => {
+    if (!vi) return status;
+    if (status === "SUCCEEDED") return "THÀNH CÔNG";
+    if (status === "FAILED") return "THẤT BẠI";
+    if (status === "PENDING") return "ĐANG CHỜ";
+    if (status === "RUNNING") return "ĐANG CHẠY";
+    return status;
+  };
+
   return (
     <div className="progress-panel">
       <div className="progress-heading">
@@ -216,15 +260,15 @@ function ProgressPanel({
       {nodeProgress && nodeProgress.total > 0 && (
         <div className="progress-nodes">
           <span>
-            {vi ? "Node" : "Node"} {Math.min(nodeProgress.done + (running ? 1 : 0), nodeProgress.total)}/
+            Node {Math.min(nodeProgress.done + (running ? 1 : 0), nodeProgress.total)}/
             {nodeProgress.total}
             {nodeProgress.current ? ` · ${nodeProgress.current}` : ""}
           </span>
         </div>
       )}
       <div className="progress-meta">
-        <span>{job.message}</span>
-        <span>{running ? formatElapsed(elapsed, vi) : job.status}</span>
+        <span>{translateMessage(job.message)}</span>
+        <span>{running ? formatElapsed(elapsed, vi) : translateStatus(job.status)}</span>
       </div>
     </div>
   );
@@ -239,8 +283,8 @@ function LoginScreen({
   busy: boolean;
   error: string;
 }) {
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const submit = (event: FormEvent) => {
     event.preventDefault();
     onLogin(username, password);
@@ -514,29 +558,37 @@ function SemanticContractPanel({
             <div className="understanding-holder" style={{ marginTop: "16px" }}>
               <div className="understanding-summary" style={{ padding: "16px", background: "var(--surface-muted, #f8fafc)", borderRadius: "8px", borderLeft: "4px solid var(--accent, #2563eb)" }}>
                 <span className="eyebrow">
-                  SEMANTIC CONTRACT · MODE: {String(payload.agent_mode ?? "profile-backed").toUpperCase()}
+                  {t("datasets.semanticContract")} · {t("datasets.mode")}: {String(payload.agent_mode ?? "profile-backed").toUpperCase()}
                 </span>
                 <p style={{ marginTop: "8px", fontSize: "15px", lineHeight: "1.5", color: "var(--ink)" }}>
-                  {String(payload.summary ?? "Agent analysis completed.")}
+                  {String(payload.summary ?? t("datasets.agentAnalysisCompleted"))}
                 </p>
               </div>
 
               <div className="understanding-meta" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginTop: "16px", marginBottom: "20px" }}>
                 <div>
-                  <span>Rows</span>
+                  <span>{t("datasets.rows")}</span>
                   <strong>{(profile?.row_count ?? dataset.row_count).toLocaleString()}</strong>
                 </div>
                 <div>
-                  <span>Completeness Score</span>
+                  <span>{t("datasets.completenessScore")}</span>
                   <strong>{profile ? `${profile.completeness_score.toFixed(1)}%` : "—"}</strong>
                 </div>
                 <div>
-                  <span>Validity Score</span>
+                  <span>{t("datasets.validityScore")}</span>
                   <strong>{profile ? `${profile.validity_score.toFixed(1)}%` : "—"}</strong>
                 </div>
                 <div>
-                  <span>Artifact Status</span>
-                  <strong>{activeArtifact?.status ?? "VALIDATED"}</strong>
+                  <span>{t("datasets.artifactStatus")}</span>
+                  <strong>
+                    {activeArtifact?.status === "CONFIRMED"
+                      ? (language === "vi" ? "ĐÃ XÁC NHẬN" : "CONFIRMED")
+                      : activeArtifact?.status === "APPROVED"
+                        ? (language === "vi" ? "ĐÃ DUYỆT" : "APPROVED")
+                        : activeArtifact?.status === "VALIDATED"
+                          ? (language === "vi" ? "ĐÃ KIỂM ĐỊNH" : "VALIDATED")
+                          : activeArtifact?.status ?? (language === "vi" ? "ĐÃ KIỂM ĐỊNH" : "VALIDATED")}
+                  </strong>
                 </div>
               </div>
 
@@ -545,27 +597,27 @@ function SemanticContractPanel({
                 <div className="understanding-section" style={{ marginTop: "20px" }}>
                   <div className="panel-heading" style={{ marginBottom: "12px" }}>
                     <div>
-                      <span className="eyebrow">SEMANTIC CONTRACT</span>
-                      <h3 style={{ margin: 0 }}>Inferred Column Schemas ({contractColumns.length})</h3>
+                      <span className="eyebrow">{t("datasets.semanticContract")}</span>
+                      <h3 style={{ margin: 0 }}>{t("datasets.inferredSchemas", { count: contractColumns.length })}</h3>
                     </div>
                   </div>
                   <div style={{ overflowX: "auto", border: "1px solid var(--border, #e2e8f0)", borderRadius: "8px" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
-                      <thead>
+                    <div className="semantic-schema-grid">
+                      <div className="semantic-schema-grid-header">
                         <tr style={{ background: "var(--surface-muted, #f1f5f9)", textAlign: "left", borderBottom: "2px solid var(--border, #cbd5e1)" }}>
-                          <th style={{ padding: "10px 12px" }}>Column Name</th>
-                          <th style={{ padding: "10px 12px" }}>Semantic Type</th>
-                          <th style={{ padding: "10px 12px" }}>Nullable</th>
-                          <th style={{ padding: "10px 12px" }}>Confidence</th>
-                          <th style={{ padding: "10px 12px" }}>Description / Reasoning</th>
+                          <th style={{ padding: "10px 12px" }}>{t("datasets.colName")}</th>
+                          <th style={{ padding: "10px 12px" }}>{t("datasets.colSemanticType")}</th>
+                          <th style={{ padding: "10px 12px" }}>{t("datasets.colNullable")}</th>
+                          <th style={{ padding: "10px 12px" }}>{t("datasets.colConfidence")}</th>
+                          <th style={{ padding: "10px 12px" }}>{t("datasets.colDescription")}</th>
                         </tr>
-                      </thead>
-                      <tbody>
+                      </div>
+                      <div className="semantic-schema-grid-items">
                         {contractColumns.map((col, idx) => (
-                          <tr key={String(col.name ?? idx)} style={{ borderBottom: "1px solid var(--border, #e2e8f0)", background: idx % 2 === 0 ? "transparent" : "var(--surface-muted, #f8fafc)" }}>
+                          <article className="semantic-schema-card" key={String(col.name ?? idx)}>
                             <td style={{ padding: "10px 12px", fontWeight: 600 }}><code>{String(col.name ?? "")}</code></td>
                             <td style={{ padding: "10px 12px" }}><span className="status-pill info">{String(col.semantic_type ?? "unknown")}</span></td>
-                            <td style={{ padding: "10px 12px" }}>{col.nullable ? "Yes" : "No"}</td>
+                            <td style={{ padding: "10px 12px" }}>{col.nullable ? t("datasets.yes") : t("datasets.no")}</td>
                             <td style={{ padding: "10px 12px" }}>
                               <span className={`confidence-value ${Number(col.confidence ?? 0) >= 0.8 ? "high" : "low"}`}>
                                 {typeof col.confidence === "number" ? `${(col.confidence * 100).toFixed(0)}%` : "N/A"}
@@ -574,17 +626,17 @@ function SemanticContractPanel({
                             <td style={{ padding: "10px 12px", color: "var(--muted)", fontSize: "12px" }}>
                               {String(col.description ?? col.reasoning ?? col.type ?? "—")}
                             </td>
-                          </tr>
+                          </article>
                         ))}
-                      </tbody>
-                    </table>
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
             </div>
           ) : (
             <div className="workflow-artifact-empty" style={{ marginTop: "16px", padding: "20px", background: "var(--color-bg-subtle, #f8fafc)", borderRadius: "8px", textAlign: "center" }}>
-              No Understand Data artifact generated for this dataset yet. Select this dataset and click <strong>⚡ Run Understand Agent</strong> above to analyze it.
+              {t("datasets.noUnderstandArtifactDesc")}
             </div>
           )}
         </section>
@@ -1494,6 +1546,7 @@ function App() {
   // unread count would silently stick.
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [activeJob, setActiveJob] = useState<Job | null>(null);
+  const [activeJobStartedAt, setActiveJobStartedAt] = useState<string | undefined>();
   const [workflowActionBusy, setWorkflowActionBusy] = useState(false);
   const [activeRun, setActiveRun] = useState<DqRun | null>(null);
   const [dqResults, setDqResults] = useState<DqResult[]>([]);
@@ -1520,6 +1573,7 @@ function App() {
   // are telemetry refreshed alongside the workspace and while a graph is live.
   const [graphCatalog, setGraphCatalog] = useState<GraphCatalog | null>(null);
   const [nodeRuns, setNodeRuns] = useState<NodeRun[]>([]);
+  const workflowNodeRuns = useMemo(() => (workflow ? nodeRuns.filter((run) => run.workflow_run_id === workflow.id) : []), [nodeRuns, workflow]);
   const [graphLoading, setGraphLoading] = useState(false);
 
   const dataset = useMemo(
@@ -1609,16 +1663,21 @@ function App() {
     if (!selectedDatasetId) return;
     setGraphLoading(true);
     try {
-      // Filtering by dataset covers every graph the wizard drives: Graph 1A/1B
-      // carry the dataset directly, Graph 2/3 inherit it from the run.
-      setNodeRuns(await api.listNodeRuns({ datasetId: selectedDatasetId, limit: 500 }));
+      // Once a workflow exists, ask the API for that exact session. Dataset
+      // filtering alone includes historical Graph 1A executions and does not
+      // guarantee that the just-started node runs are returned first.
+      setNodeRuns(await api.listNodeRuns({
+        datasetId: selectedDatasetId,
+        workflowRunId: workflow?.id,
+        limit: 500,
+      }));
     } catch {
       // Telemetry is supporting detail; a failure here must not blank the page.
       setNodeRuns([]);
     } finally {
       setGraphLoading(false);
     }
-  }, [selectedDatasetId]);
+  }, [selectedDatasetId, workflow?.id]);
 
   const loadNodeDetail = useCallback((nodeRunId: string) => api.getNodeRun(nodeRunId), []);
 
@@ -1644,14 +1703,18 @@ function App() {
     // Older runs for the same dataset are still in the list; keep only the
     // newest graph run or the count would include historical executions.
     const newest = relevant.reduce((latest, run) =>
-      (run.started_at ?? "") > (latest.started_at ?? "") ? run : latest,
+      parseApiTimestamp(run.started_at) > parseApiTimestamp(latest.started_at) ? run : latest,
     );
     const current = relevant.filter((run) => run.graph_run_id === newest.graph_run_id);
     const total = graphCatalog?.graphs.find((graph) => graph.key === graphKey)?.nodes.length ?? current.length;
     const done = current.filter((run) => run.status === "SUCCEEDED" || run.status === "SKIPPED").length;
     const inFlight = current.find((run) => run.status === "RUNNING");
-    const startedAt = current.reduce<string | undefined>(
-      (earliest, run) => (run.started_at && (!earliest || run.started_at < earliest) ? run.started_at : earliest),
+    const nodeStartedAt = current.reduce<string | undefined>(
+      (earliest, run) => {
+        if (!run.started_at) return earliest;
+        if (!earliest) return run.started_at;
+        return parseApiTimestamp(run.started_at) < parseApiTimestamp(earliest) ? run.started_at : earliest;
+      },
       undefined,
     );
     return {
@@ -1663,9 +1726,9 @@ function App() {
             : graphCatalog?.graphs.find((g) => g.key === graphKey)?.nodes.find((n) => n.name === inFlight.node_name)?.label_en)
           ?? inFlight.node_name
         : undefined,
-      startedAt,
+      startedAt: activeJobStartedAt ?? nodeStartedAt,
     };
-  }, [activeJob, nodeRuns, graphCatalog, language]);
+  }, [activeJob, activeJobStartedAt, nodeRuns, graphCatalog, language]);
   const loadStewardReport = useCallback((runId: string) => api.getStewardReport(runId), []);
 
   // Topology never changes at runtime, so fetch it once per session.
@@ -1816,17 +1879,18 @@ function App() {
     // it — so one failed job bricked the page until a reload. The retry action
     // below is what lets the user try again, not a lingering activeJob.
     setActiveJob(null);
+    setActiveJobStartedAt(undefined);
     if (finalStatus === "SUCCEEDED") {
       await onComplete();
       setRetryAction(null);
-      setToast("Job completed successfully.");
+      setToast(language === "vi" ? "Tác vụ đã hoàn thành thành công." : "Job completed successfully.");
     } else {
       setRetryAction(() => () => void pollJob(acceptedJob, onComplete, jobApi));
       setError(
         current.error ??
           (finalStatus === "FAILED" || finalStatus === "FAILED_RETRYABLE"
-            ? "The job failed. Retry the operation when ready."
-            : "The job is still running after 10 minutes. Retry to keep watching it."),
+            ? (language === "vi" ? "Tác vụ thất bại. Vui lòng thử lại khi sẵn sàng." : "The job failed. Retry the operation when ready.")
+            : (language === "vi" ? "Tác vụ vẫn đang chạy sau 10 phút. Thử lại để tiếp tục theo dõi." : "The job is still running after 10 minutes. Retry to keep watching it.")),
       );
     }
   }
@@ -1848,7 +1912,7 @@ function App() {
           }));
       });
     } catch (err) {
-      setError(getErrorMessage(err, "Unable to start analysis."));
+      setError(getErrorMessage(err, language === "vi" ? "Không thể phân tích hồ sơ dữ liệu." : "Unable to start analysis.", language));
     }
   }
 
@@ -1876,12 +1940,12 @@ function App() {
         await refreshWorkspace();
       });
     } catch (err) {
-      setError(getErrorMessage(err, "Unable to import dataset."));
+      setError(getErrorMessage(err, language === "vi" ? "Không thể nạp bộ dữ liệu." : "Unable to import dataset.", language));
     }
   }
 
   async function deleteDataset(id: string) {
-    if (!window.confirm("Are you sure you want to delete this dataset?")) return;
+    if (!window.confirm(language === "vi" ? "Bạn có chắc chắn muốn xoá bộ dữ liệu này không?" : "Are you sure you want to delete this dataset?")) return;
     setDatasets((current) => current.filter((d) => d.id !== id));
     if (selectedDatasetId === id) {
       const remaining = datasets.filter((d) => d.id !== id);
@@ -1890,7 +1954,7 @@ function App() {
       if (nextId) sessionStorage.setItem("ridepulse.dataset", nextId);
       else sessionStorage.removeItem("ridepulse.dataset");
     }
-    setToast("Dataset removed from workspace.");
+    setToast(language === "vi" ? "Đã xoá bộ dữ liệu khỏi không gian làm việc." : "Dataset removed from workspace.");
   }
 
   async function requestProposals() {
@@ -2110,6 +2174,7 @@ function App() {
     setError("");
     setRetryAction(null);
     setWorkflowActionBusy(true);
+    setActiveJobStartedAt(new Date().toISOString());
     try {
       if (!workflow && step === "UPLOAD_PROFILE") {
         const ingestion = await api.startIngestion(
@@ -2153,6 +2218,7 @@ function App() {
         queuedJob,
         async () => {
           await refreshWorkflow(currentWorkflow!.id);
+          await refreshNodeRuns();
           setProfile(await api.getProfile(dataset.id));
           setProposals(
             await api.listProposals(dataset.id, currentWorkflow!.id),
@@ -2520,8 +2586,8 @@ function App() {
                 <ProgressPanel
                   job={activeJob}
                   title={
-                    activeJob.type === "INGEST_PROFILE"
-                      ? (language === "vi" ? "Đang phân tích hồ sơ dữ liệu…" : "Building dataset profile")
+                    activeJob.type === "INGEST_PROFILE" || activeJob.type === "UNDERSTAND_DATA"
+                      ? (language === "vi" ? "Đang nạp và phân tích hồ sơ dữ liệu…" : "Building dataset profile")
                       : activeJob.type === "PROPOSE_RULES"
                         ? (language === "vi" ? "Đang sinh đề xuất quy tắc…" : "Generating rule proposals")
                         : activeJob.type === "RUN_DQ" &&
@@ -2552,22 +2618,10 @@ function App() {
               )}
             </div>
           )}
-          {activeJob ? (
-            <ProgressPanel
-              job={activeJob}
-              title={
-                activeJob.type === "INGEST_PROFILE"
-                  ? "Building dataset profile"
-                  : activeJob.type === "PROPOSE_RULES"
-                    ? "Generating rule proposals"
-                    : "Running approved checks"
-              }
-              nodeProgress={activeJobNodeProgress}
-            />
-          ) : showGraphs ? (
+          {showGraphs ? (
             <GraphStagePanel
               catalog={graphCatalog}
-              runs={nodeRuns}
+              runs={workflowNodeRuns}
               graphKeys={["G1A", "G1B", "G2", "G3"]}
               language={language}
               loadNodeDetail={loadNodeDetail}
@@ -2658,7 +2712,7 @@ function App() {
                   </div>
                   <GraphStagePanel
                     catalog={graphCatalog}
-                    runs={nodeRuns}
+                    runs={workflowNodeRuns}
                     graphKeys={["G1A"]}
                     language={language}
                     loadNodeDetail={loadNodeDetail}
@@ -2720,7 +2774,7 @@ function App() {
                     graphPanel={
                       <GraphStagePanel
                         catalog={graphCatalog}
-                        runs={nodeRuns}
+                        runs={workflowNodeRuns}
                         graphKeys={["G1B"]}
                         language={language}
                         loadNodeDetail={loadNodeDetail}
@@ -2910,7 +2964,7 @@ function App() {
                       <>
                         <GraphStagePanel
                           catalog={graphCatalog}
-                          runs={nodeRuns}
+                        runs={workflowNodeRuns}
                           /* G2_DIRECT is what the button on this step runs; the
                              dbt graph (G2) belongs to the analysis workflow and
                              is shown after it so both paths stay visible. */
@@ -2968,7 +3022,7 @@ function App() {
                   </div>
                   <GraphStagePanel
                     catalog={graphCatalog}
-                    runs={nodeRuns}
+                    runs={workflowNodeRuns}
                     graphKeys={["G3"]}
                     language={language}
                     loadNodeDetail={loadNodeDetail}
@@ -3157,6 +3211,9 @@ function OverviewPage({
   onNavigate: (view: View) => void;
   onSelectDataset?: (datasetId: string) => void;
 }) {
+  const { language } = useI18n();
+  const vi = language === "vi";
+
   const proposalCount = proposals.filter((proposal) =>
     ["PROPOSED", "EDITED"].includes(proposal.status),
   ).length;
@@ -3168,24 +3225,22 @@ function OverviewPage({
       : null;
     return { dataset: item, profile: itemProfile, score };
   });
-  // Catalogue-wide averages used to feed the KPI row. That row now describes the
-  // selected dataset instead, and the remaining consumers are the two panels
-  // below -- so only the figures those panels read are still computed here.
+
   const attentionCount = qualityRows.filter((row) => row.score !== null && row.score < 85).length;
   const statusRows = [
     {
-      label: "Profile ready",
+      label: vi ? "Đã profile" : "Profile ready",
       count: datasets.filter((item) => item.status === "PROFILE_READY").length,
     },
     {
-      label: "Ingested",
+      label: vi ? "Đã nạp dữ liệu" : "Ingested",
       count: datasets.filter((item) => item.status === "INGESTED").length,
     },
     {
-      label: "Registered",
+      label: vi ? "Đã đăng ký" : "Registered",
       count: datasets.filter((item) => item.status === "REGISTERED").length,
     },
-    { label: "Needs attention", count: attentionCount },
+    { label: vi ? "Cần chú ý" : "Needs attention", count: attentionCount },
   ];
   const statusMax = Math.max(1, ...statusRows.map((row) => row.count));
   if (!dataset)
@@ -3193,25 +3248,23 @@ function OverviewPage({
       <>
         <div className="page-heading">
           <div>
-            <span className="eyebrow">QUALITY COMMAND CENTER</span>
-            <h1>No registered dataset</h1>
-            <p>The backend has not registered a Gate 2 dataset yet.</p>
+            <span className="eyebrow">{vi ? "TRUNG TÂM ĐIỀU HÀNH CHẤT LƯỢNG" : "QUALITY COMMAND CENTER"}</span>
+            <h1>{vi ? "Chưa có bộ dữ liệu nào" : "No registered dataset"}</h1>
+            <p>{vi ? "Hệ thống backend chưa đăng ký bộ dữ liệu nào." : "The backend has not registered a Gate 2 dataset yet."}</p>
           </div>
         </div>
         <section className="empty-state">
           <div className="empty-illustration">▦</div>
-          <h2>Dataset catalog is empty</h2>
+          <h2>{vi ? "Danh mục dữ liệu đang trống" : "Dataset catalog is empty"}</h2>
           <p>
-            Upload or register a dataset to populate the multi-dataset quality
-            dashboard.
+            {vi
+              ? "Tải lên hoặc đăng ký bộ dữ liệu để xem bảng điều khiển chất lượng."
+              : "Upload or register a dataset to populate the multi-dataset quality dashboard."}
           </p>
         </section>
       </>
     );
-  // Step 2 reports on the dataset chosen in step 1, so the heading and the KPI row
-  // below describe that one dataset. The catalogue-wide aggregates computed above
-  // are still used, but only by the two panels further down, where comparing
-  // datasets is the point.
+
   const selectedProfile = datasetProfiles[dataset.id] ?? profile;
   const selectedColumns = selectedProfile?.columns ?? [];
   const nullColumnCount = selectedColumns.filter(
@@ -3221,80 +3274,90 @@ function OverviewPage({
     <>
       <div className="page-heading overview-heading">
         <div>
-          <span className="eyebrow">QUALITY PROFILE</span>
+          <span className="eyebrow">{vi ? "HỒ SƠ CHẤT LƯỢNG" : "QUALITY PROFILE"}</span>
           <h1>{dataset.name}</h1>
           <p>
             {dataset.source_label} ·{" "}
             {selectedProfile
-              ? `Profiled ${new Date(selectedProfile.generated_at).toLocaleString()}`
-              : "No aggregate profile yet — run Understand dataset in step 1"}
+              ? vi
+                ? `Profile lúc ${new Date(selectedProfile.generated_at).toLocaleString("vi-VN")}`
+                : `Profiled ${new Date(selectedProfile.generated_at).toLocaleString()}`
+              : vi
+                ? "Chưa có hồ sơ tổng hợp — bấm Profile dữ liệu ở bước 1"
+                : "No aggregate profile yet — run Profile dataset in step 1"}
           </p>
         </div>
         <div className="heading-actions">
           <StatusPill
-            label={dataset.status.replaceAll("_", " ")}
+            label={
+              vi
+                ? dataset.status === "REGISTERED"
+                  ? "ĐÃ ĐĂNG KÝ"
+                  : dataset.status === "PROFILE_READY"
+                    ? "ĐÃ PROFILE"
+                    : dataset.status.replaceAll("_", " ")
+                : dataset.status.replaceAll("_", " ")
+            }
             tone={dataset.status === "PROFILE_READY" ? "success" : "info"}
           />
           <button
             className="button ghost"
             onClick={() => onNavigate("datasets")}
           >
-            Dataset catalog →
+            {vi ? "Danh mục bộ dữ liệu →" : "Dataset catalog →"}
           </button>
-          {/* No observatory button here: section 5 of step 1 opens the same
-              panel, and two entry points a screen apart read as two things. */}
         </div>
       </div>
       <section className="stat-grid overview-kpis">
         <StatCard
-          label="Rows"
+          label={vi ? "Số dòng" : "Rows"}
           value={(selectedProfile?.row_count ?? dataset.row_count).toLocaleString()}
-          detail={selectedProfile ? "Counted during profiling" : "Declared at registration"}
+          detail={selectedProfile ? (vi ? "Đã đếm trong quá trình profile" : "Counted during profiling") : (vi ? "Khai báo khi đăng ký" : "Declared at registration")}
           tone="blue"
         />
         <StatCard
-          label="Columns"
+          label={vi ? "Số cột" : "Columns"}
           value={selectedColumns.length ? `${selectedColumns.length}` : "—"}
-          detail={selectedColumns.length ? "Fields profiled" : "Awaiting profile data"}
+          detail={selectedColumns.length ? (vi ? "Cột đã được profile" : "Fields profiled") : (vi ? "Chờ dữ liệu profile" : "Awaiting profile data")}
           tone="violet"
         />
         <StatCard
-          label="Completeness"
+          label={vi ? "Độ đầy đủ" : "Completeness"}
           value={
             selectedProfile ? `${selectedProfile.completeness_score.toFixed(1)}%` : "—"
           }
           detail={
             selectedProfile
-              ? `${nullColumnCount} column${nullColumnCount === 1 ? "" : "s"} contain nulls`
-              : "Awaiting profile data"
+              ? (vi ? `${nullColumnCount} cột có chứa giá trị null` : `${nullColumnCount} column${nullColumnCount === 1 ? "" : "s"} contain nulls`)
+              : (vi ? "Chờ dữ liệu profile" : "Awaiting profile data")
           }
           tone={
             selectedProfile && selectedProfile.completeness_score < 95 ? "amber" : "green"
           }
         />
         <StatCard
-          label="Validity"
+          label={vi ? "Độ hợp lệ" : "Validity"}
           value={selectedProfile ? `${selectedProfile.validity_score.toFixed(1)}%` : "—"}
-          detail={selectedProfile ? "Values matching their declared type" : "Awaiting profile data"}
+          detail={selectedProfile ? (vi ? "Giá trị khớp với kiểu dữ liệu" : "Values matching their declared type") : (vi ? "Chờ dữ liệu profile" : "Awaiting profile data")}
           tone={selectedProfile && selectedProfile.validity_score < 95 ? "amber" : "green"}
         />
         <StatCard
-          label="Duplicate rate"
+          label={vi ? "Tỷ lệ trùng lặp" : "Duplicate rate"}
           value={selectedProfile ? `${selectedProfile.duplicate_rate.toFixed(2)}%` : "—"}
           detail={
             selectedProfile && selectedProfile.duplicate_rate > 0
-              ? "Repeated rows detected"
-              : "No duplicate rows detected"
+              ? (vi ? "Phát hiện dòng bị trùng lặp" : "Repeated rows detected")
+              : (vi ? "Không có dòng trùng lặp" : "No duplicate rows detected")
           }
           tone={selectedProfile && selectedProfile.duplicate_rate > 0 ? "amber" : "green"}
         />
         <StatCard
-          label="Rules proposed"
+          label={vi ? "Quy tắc đề xuất" : "Rules proposed"}
           value={`${proposalCount}`}
           detail={
             approvedRules
-              ? `${approvedRules} approved rule${approvedRules === 1 ? "" : "s"} active`
-              : "Awaiting review in step 3"
+              ? (vi ? `${approvedRules} quy tắc đã duyệt đang hoạt động` : `${approvedRules} approved rule${approvedRules === 1 ? "" : "s"} active`)
+              : (vi ? "Chờ xem xét ở bước 3" : "Awaiting review in step 3")
           }
           tone={proposalCount ? "amber" : "blue"}
         />
@@ -3303,10 +3366,10 @@ function OverviewPage({
         <article className="panel overview-dataset-panel">
           <div className="panel-heading">
             <div>
-              <span className="eyebrow">CATALOG QUALITY MAP</span>
-              <h3>Quality by dataset</h3>
+              <span className="eyebrow">{vi ? "BẢN ĐỒ CHẤT LƯỢNG DANH MỤC" : "CATALOG QUALITY MAP"}</span>
+              <h3>{vi ? "Chất lượng theo bộ dữ liệu" : "Quality by dataset"}</h3>
             </div>
-            <span className="panel-caption">{datasets.length} registered · Click to select</span>
+            <span className="panel-caption">{vi ? `${datasets.length} bộ dữ liệu · Bấm để chọn` : `${datasets.length} registered · Click to select`}</span>
           </div>
           <div className="overview-dataset-list">
             {qualityRows.map((row) => (
@@ -3322,19 +3385,27 @@ function OverviewPage({
                     <strong>{row.dataset.name}</strong>
                     <small style={{ display: "block", color: "var(--muted)", fontSize: "11px" }}>
                       {row.dataset.source_label} ·{" "}
-                      {row.dataset.row_count.toLocaleString()} rows
+                      {row.dataset.row_count.toLocaleString()} {vi ? "dòng" : "rows"}
                     </small>
                   </div>
                 </div>
                 <StatusPill
-                  label={row.dataset.status.replaceAll("_", " ")}
+                  label={
+                    vi
+                      ? row.dataset.status === "REGISTERED"
+                        ? "ĐÃ ĐĂNG KÝ"
+                        : row.dataset.status === "PROFILE_READY"
+                          ? "ĐÃ PROFILE"
+                          : row.dataset.status.replaceAll("_", " ")
+                      : row.dataset.status.replaceAll("_", " ")
+                  }
                   tone={
                     row.dataset.status === "PROFILE_READY" ? "success" : "info"
                   }
                 />
                 <div className="overview-dataset-score">
                   {row.score === null ? (
-                    <span className="muted">Profile pending</span>
+                    <span className="muted">{vi ? "Chờ profile" : "Profile pending"}</span>
                   ) : (
                     <>
                       <div className="overview-score-track">
@@ -3351,11 +3422,11 @@ function OverviewPage({
         <article className="panel overview-status-panel">
           <div className="panel-heading">
             <div>
-              <span className="eyebrow">CATALOG STATUS</span>
-              <h3>Readiness distribution</h3>
+              <span className="eyebrow">{vi ? "TRẠNG THÁI DANH MỤC" : "CATALOG STATUS"}</span>
+              <h3>{vi ? "Phân bố trạng thái sẵn sàng" : "Readiness distribution"}</h3>
             </div>
             <span className="panel-caption">
-              {approvedRules} approved rules active
+              {vi ? `${approvedRules} quy tắc đã duyệt đang hoạt động` : `${approvedRules} approved rules active`}
             </span>
           </div>
           <div className="overview-status-list">
@@ -3374,8 +3445,8 @@ function OverviewPage({
             ))}
           </div>
           <div className="overview-status-footer">
-            <span>Review queue</span>
-            <strong>{proposalCount} pending</strong>
+            <span>{vi ? "Hàng đợi xem xét" : "Review queue"}</span>
+            <strong>{vi ? `${proposalCount} chờ xử lý` : `${proposalCount} pending`}</strong>
           </div>
         </article>
       </section>
@@ -3383,14 +3454,14 @@ function OverviewPage({
         <article className="panel overview-trend-panel">
           <div className="panel-heading">
             <div>
-              <span className="eyebrow">ACTIVE DATASET TREND</span>
-              <h3>Quality score over time</h3>
+              <span className="eyebrow">{vi ? "XU HƯỚNG BỘ DỮ LIỆU ĐANG CHỌN" : "ACTIVE DATASET TREND"}</span>
+              <h3>{vi ? "Điểm chất lượng theo thời gian" : "Quality score over time"}</h3>
             </div>
             <button
               className="text-button"
               onClick={() => onNavigate("visualization")}
             >
-              Open full view →
+              {vi ? "Mở chế độ xem đầy đủ →" : "Open full view →"}
             </button>
           </div>
           <TrendChart points={qualityTrends} />
@@ -3398,59 +3469,62 @@ function OverviewPage({
         <article className="panel overview-compare-panel">
           <div className="panel-heading">
             <div>
-              <span className="eyebrow">QUALITY COMPARISON</span>
-              <h3>Completeness vs validity</h3>
+              <span className="eyebrow">{vi ? "SO SÁNH CHẤT LƯỢNG" : "QUALITY COMPARISON"}</span>
+              <h3>{vi ? "Độ đầy đủ vs Độ hợp lệ" : "Completeness vs validity"}</h3>
             </div>
-            <span className="panel-caption">Profiled datasets only</span>
+            <span className="panel-caption">{vi ? "Chỉ bộ dữ liệu đã profile" : "Profiled datasets only"}</span>
           </div>
           <OverviewQualityBars rows={qualityRows} />
         </article>
       </section>
-      <section className="overview-action-panel next-panel">
-        <div>
-          <span className="eyebrow">NEXT ACTION</span>
-          <h3>
-            {profile
-              ? "Continue the active pipeline"
-              : "Build the first profile"}
-          </h3>
-          <p>
-            {profile
-              ? "The active dataset is profiled. Move into Rule proposer to review the next agent step."
-              : "Run ingestion and profiling to make this dataset available for cross-dataset comparison."}
-          </p>
-        </div>
-        <div className="overview-action-buttons">
-          {canOperate &&
-            (!profile ? (
-              <button
-                className="button secondary"
-                onClick={onStartAnalysis}
-                disabled={loading || busy}
-              >
-                Start profiling →
-              </button>
-            ) : proposalCount ? (
-              <button
-                className="button secondary"
-                onClick={() => onNavigate("rules")}
-              >
-                Open review queue →
-              </button>
-            ) : (
-              <button
-                className="button secondary"
-                onClick={onRequestProposals}
-                disabled={busy}
-              >
-                Generate proposals →
-              </button>
-            ))}
-          <button className="button ghost" onClick={() => onNavigate("audit")}>
-            View audit trail
-          </button>
-        </div>
-      </section>
+      {/* Tạm thời ẩn theo yêu cầu người dùng (giữ nguyên mã nguồn) */}
+      {false && (
+        <section className="overview-action-panel next-panel">
+          <div>
+            <span className="eyebrow">{vi ? "HÀNH ĐỘNG TIẾP THEO" : "NEXT ACTION"}</span>
+            <h3>
+              {profile
+                ? (vi ? "Tiếp tục quy trình đang làm việc" : "Continue the active pipeline")
+                : (vi ? "Tạo hồ sơ profile đầu tiên" : "Build the first profile")}
+            </h3>
+            <p>
+              {profile
+                ? (vi ? "Bộ dữ liệu đã được profile. Chuyển sang bước Đề xuất quy tắc để xem tiếp các bước agent." : "The active dataset is profiled. Move into Rule proposer to review the next agent step.")
+                : (vi ? "Chạy nạp dữ liệu và profile để bộ dữ liệu sẵn sàng cho việc so sánh." : "Run ingestion and profiling to make this dataset available for cross-dataset comparison.")}
+            </p>
+          </div>
+          <div className="overview-action-buttons">
+            {canOperate &&
+              (!profile ? (
+                <button
+                  className="button secondary"
+                  onClick={onStartAnalysis}
+                  disabled={loading || busy}
+                >
+                  {vi ? "Bắt đầu profile →" : "Start profiling →"}
+                </button>
+              ) : proposalCount ? (
+                <button
+                  className="button secondary"
+                  onClick={() => onNavigate("rules")}
+                >
+                  {vi ? "Mở hàng đợi duyệt →" : "Open review queue →"}
+                </button>
+              ) : (
+                <button
+                  className="button secondary"
+                  onClick={onRequestProposals}
+                  disabled={busy}
+                >
+                  {vi ? "Sinh đề xuất quy tắc →" : "Generate proposals →"}
+                </button>
+              ))}
+            <button className="button ghost" onClick={() => onNavigate("audit")}>
+              {vi ? "Xem lịch sử nhật ký" : "View audit trail"}
+            </button>
+          </div>
+        </section>
+      )}
     </>
   );
 }
@@ -3464,6 +3538,9 @@ function OverviewQualityBars({
     score: number | null;
   }>;
 }) {
+  const { language } = useI18n();
+  const vi = language === "vi";
+
   return (
     <div className="overview-quality-bars">
       {rows.map((row) => (
@@ -3472,13 +3549,13 @@ function OverviewQualityBars({
             <strong>{row.dataset.name}</strong>
             <span>
               {row.score === null
-                ? "Profile pending"
-                : `${row.score.toFixed(1)}% overall`}
+                ? (vi ? "Chờ profile" : "Profile pending")
+                : (vi ? `${row.score.toFixed(1)}% tổng thể` : `${row.score.toFixed(1)}% overall`)}
             </span>
           </div>
           <div className="overview-quality-lines">
             <div>
-              <span>Completeness</span>
+              <span>{vi ? "Độ đầy đủ" : "Completeness"}</span>
               <div className="overview-line-track">
                 <i
                   style={{ width: `${row.profile?.completeness_score ?? 0}%` }}
@@ -3491,7 +3568,7 @@ function OverviewQualityBars({
               </strong>
             </div>
             <div>
-              <span>Validity</span>
+              <span>{vi ? "Độ hợp lệ" : "Validity"}</span>
               <div className="overview-line-track validity">
                 <i style={{ width: `${row.profile?.validity_score ?? 0}%` }} />
               </div>
@@ -4896,35 +4973,39 @@ function AnomalyMonitoringPanel({
   anomalies: DqAnomaly[];
   trends: QualityTrendPoint[];
 }) {
+  const { language } = useI18n();
+  const vi = language === "vi";
+
   const historicalReady = trends.length >= 6;
   const detectionMode =
     anomalies[0]?.detection_mode === "HISTORICAL" ||
     (!anomalies.length && historicalReady)
-      ? "Historical baseline"
-      : "Cold-start screen";
+      ? vi ? "Mô hình lịch sử" : "Historical baseline"
+      : vi ? "Mô hình khởi đầu lạnh" : "Cold-start screen";
   return (
     <article className="panel anomaly-monitor">
       <div className="panel-heading">
         <div>
-          <span className="eyebrow">AUTOMATED ANOMALY DETECTION</span>
-          <h3>Violation-rate monitoring</h3>
+          <span className="eyebrow">{vi ? "GIÁM SÁT BẤT THƯỜNG TỰ ĐỘNG" : "AUTOMATED ANOMALY DETECTION"}</span>
+          <h3>{vi ? "Giám sát tỷ lệ vi phạm" : "Violation-rate monitoring"}</h3>
         </div>
         <StatusPill
           label={
             anomalies.length
-              ? `${anomalies.length} SIGNAL${anomalies.length === 1 ? "" : "S"}`
-              : "NO SIGNALS"
+              ? (vi ? `${anomalies.length} TÍN HIỆU` : `${anomalies.length} SIGNAL${anomalies.length === 1 ? "" : "S"}`)
+              : (vi ? "KHÔNG CÓ TÍN HIỆU" : "NO SIGNALS")
           }
           tone={anomalies.length ? "warning" : "success"}
         />
       </div>
       <div className="anomaly-monitor-layout">
         <div className="anomaly-engine">
-          <span className="monitor-label">WHEN IT RUNS</span>
-          <strong>After every completed DQ run</strong>
+          <span className="monitor-label">{vi ? "KHI NÀO CHẠY" : "WHEN IT RUNS"}</span>
+          <strong>{vi ? "Sau mỗi lượt chạy kiểm tra chất lượng hoàn thành" : "After every completed DQ run"}</strong>
           <p>
-            It compares each approved rule’s failure rate without reading raw
-            values in the browser.
+            {vi
+              ? "So sánh tỷ lệ vi phạm của từng quy tắc đã duyệt mà không cần đọc dữ liệu thô trên trình duyệt."
+              : "It compares each approved rule’s failure rate without reading raw values in the browser."}
           </p>
           <div className="anomaly-engine-state">
             <i />
@@ -4934,19 +5015,19 @@ function AnomalyMonitoringPanel({
         <div className="anomaly-evaluation">
           <div className="anomaly-spec-grid">
             <div>
-              <span>Minimum sample</span>
-              <strong>100 rows</strong>
-              <small>small checks are ignored</small>
+              <span>{vi ? "Mẫu tối thiểu" : "Minimum sample"}</span>
+              <strong>{vi ? "100 dòng" : "100 rows"}</strong>
+              <small>{vi ? "bỏ qua lượt kiểm tra nhỏ" : "small checks are ignored"}</small>
             </div>
             <div>
-              <span>Cold start</span>
+              <span>{vi ? "Khởi đầu lạnh" : "Cold start"}</span>
               <strong>≥ 5.0%</strong>
-              <small>until 5 prior runs exist</small>
+              <small>{vi ? "cho tới khi có 5 lượt chạy trước" : "until 5 prior runs exist"}</small>
             </div>
             <div>
-              <span>Historical mode</span>
+              <span>{vi ? "Mô hình lịch sử" : "Historical mode"}</span>
               <strong>z ≥ 2.5</strong>
-              <small>also requires rate &gt; 1.0%</small>
+              <small>{vi ? "yêu cầu tỷ lệ > 1.0%" : "also requires rate > 1.0%"}</small>
             </div>
           </div>
           {anomalies.length ? (
@@ -4960,23 +5041,23 @@ function AnomalyMonitoringPanel({
                     <strong>{anomaly.rule_title}</strong>
                     <span>
                       {anomaly.anomaly_type === "Z_SCORE_SPIKE"
-                        ? "Historical spike"
-                        : "High violation rate"}
+                        ? (vi ? "Đột biến lịch sử" : "Historical spike")
+                        : (vi ? "Tỷ lệ vi phạm cao" : "High violation rate")}
                     </span>
                   </div>
                   <div className="anomaly-monitor-metrics">
                     <span>
-                      Current{" "}
+                      {vi ? "Hiện tại" : "Current"}{" "}
                       <strong>
                         {(anomaly.current_rate * 100).toFixed(2)}%
                       </strong>
                     </span>
                     <span>
                       {anomaly.historical_mean == null ? (
-                        "Baseline unavailable"
+                        vi ? "Chưa có điểm cơ sở" : "Baseline unavailable"
                       ) : (
                         <>
-                          Baseline{" "}
+                          {vi ? "Cơ sở" : "Baseline"}{" "}
                           <strong>
                             {(anomaly.historical_mean * 100).toFixed(2)}%
                           </strong>
@@ -4985,7 +5066,7 @@ function AnomalyMonitoringPanel({
                     </span>
                     <span>
                       {anomaly.z_score == null ? (
-                        `${anomaly.history_size} prior runs`
+                        vi ? `${anomaly.history_size} lượt chạy trước` : `${anomaly.history_size} prior runs`
                       ) : (
                         <>
                           z-score <strong>{anomaly.z_score.toFixed(2)}</strong>
@@ -4999,12 +5080,14 @@ function AnomalyMonitoringPanel({
             </div>
           ) : (
             <div className="anomaly-clear-state">
-              <span>Latest evaluation</span>
-              <strong>No unusual violation-rate movement detected.</strong>
+              <span>{vi ? "ĐÁNH GIÁ MỚI NHẤT" : "Latest evaluation"}</span>
+              <strong>{vi ? "Không phát hiện biến động tỷ lệ vi phạm bất thường." : "No unusual violation-rate movement detected."}</strong>
               <p>
                 {historicalReady
-                  ? "Current rule rates remain within their stored historical baselines."
-                  : `Collect ${Math.max(0, 6 - trends.length)} more completed run${6 - trends.length === 1 ? "" : "s"} to enable historical z-score detection.`}
+                  ? (vi ? "Tỷ lệ vi phạm hiện tại vẫn nằm trong ngưỡng cơ sở lịch sử đã lưu." : "Current rule rates remain within their stored historical baselines.")
+                  : vi
+                    ? `Cần thêm ${Math.max(0, 6 - trends.length)} lượt chạy hoàn thành nữa để bật phát hiện z-score lịch sử.`
+                    : `Collect ${Math.max(0, 6 - trends.length)} more completed run${6 - trends.length === 1 ? "" : "s"} to enable historical z-score detection.`}
               </p>
             </div>
           )}
@@ -5025,6 +5108,9 @@ function VisualizationPage({
   anomalies: DqAnomaly[];
   trends: QualityTrendPoint[];
 }) {
+  const { language } = useI18n();
+  const vi = language === "vi";
+
   const latestScore =
     trends.at(-1)?.quality_score ?? profile?.validity_score ?? 0;
   const failedRules = results.filter(
@@ -5050,11 +5136,12 @@ function VisualizationPage({
     <>
       <div className="page-heading visualization-heading">
         <div>
-          <span className="eyebrow">QUALITY CONTROL ROOM</span>
-          <h1>Data quality observatory</h1>
+          <span className="eyebrow">{vi ? "PHÒNG ĐIỀU HÀNH CHẤT LƯỢNG" : "QUALITY CONTROL ROOM"}</span>
+          <h1>{vi ? "Bảng quan sát chất lượng dữ liệu" : "Data quality observatory"}</h1>
           <p>
-            Monitor run health, surface rule drift, and focus review on the
-            signals that need attention.
+            {vi
+              ? "Theo dõi sức khỏe lượt chạy, phát hiện độ trôi quy tắc và tập trung xem xét các tín hiệu cần chú ý."
+              : "Monitor run health, surface rule drift, and focus review on the signals that need attention."}
           </p>
         </div>
         <div
@@ -5074,7 +5161,7 @@ function VisualizationPage({
           </svg>
           <div>
             <strong>{latestScore.toFixed(1)}</strong>
-            <span>quality score</span>
+            <span>{vi ? "điểm chất lượng" : "quality score"}</span>
           </div>
         </div>
       </div>
@@ -5083,40 +5170,39 @@ function VisualizationPage({
         aria-label="Latest quality indicators"
       >
         <div>
-          <span>Profiled records</span>
+          <span>{vi ? "Bản ghi đã profile" : "Profiled records"}</span>
           <strong>{(profile?.row_count ?? 0).toLocaleString()}</strong>
-          <small>current dataset</small>
+          <small>{vi ? "bộ dữ liệu hiện tại" : "current dataset"}</small>
         </div>
         <div>
-          <span>Latest movement</span>
+          <span>{vi ? "Biến động mới nhất" : "Latest movement"}</span>
           <strong
             className={
               scoreDelta !== null && scoreDelta < 0 ? "metric-warn" : ""
             }
           >
             {scoreDelta === null
-              ? "Baseline"
+              ? (vi ? "Điểm cơ sở" : "Baseline")
               : `${scoreDelta >= 0 ? "+" : ""}${scoreDelta.toFixed(2)} pts`}
           </strong>
           <small>
-            {trends.length} completed {trends.length === 1 ? "run" : "runs"}
+            {vi ? `${trends.length} lượt chạy hoàn thành` : `${trends.length} completed ${trends.length === 1 ? "run" : "runs"}`}
           </small>
         </div>
         <div>
-          <span>Rules requiring review</span>
+          <span>{vi ? "Quy tắc cần xem xét" : "Rules requiring review"}</span>
           <strong className={failedRules ? "metric-warn" : ""}>
             {failedRules} / {results.length}
           </strong>
-          <small>{(maximumViolation * 100).toFixed(1)}% peak violation</small>
+          <small>{vi ? `${(maximumViolation * 100).toFixed(1)}% vi phạm cao nhất` : `${(maximumViolation * 100).toFixed(1)}% peak violation`}</small>
         </div>
         <div>
-          <span>Signal status</span>
+          <span>{vi ? "Trạng thái tín hiệu" : "Signal status"}</span>
           <strong className={anomalies.length ? "metric-warn" : ""}>
-            {anomalies.length ? "Attention" : "Stable"}
+            {anomalies.length ? (vi ? "Cần chú ý" : "Attention") : (vi ? "Ổn định" : "Stable")}
           </strong>
           <small>
-            {anomalies.length} detected{" "}
-            {anomalies.length === 1 ? "anomaly" : "anomalies"}
+            {vi ? `${anomalies.length} bất thường phát hiện` : `${anomalies.length} detected ${anomalies.length === 1 ? "anomaly" : "anomalies"}`}
           </small>
         </div>
       </section>
@@ -5124,65 +5210,65 @@ function VisualizationPage({
         <article className="panel trend-panel">
           <div className="panel-heading">
             <div>
-              <span className="eyebrow">RUN HISTORY</span>
-              <h3>Quality score trend</h3>
+              <span className="eyebrow">{vi ? "LỊCH SỬ CHẠY" : "RUN HISTORY"}</span>
+              <h3>{vi ? "Xu hướng điểm chất lượng" : "Quality score trend"}</h3>
             </div>
             <span className="panel-caption">
               {latestRunAt
-                ? `Updated ${formatTime(latestRunAt)}`
-                : "No completed run"}
+                ? (vi ? `Cập nhật lúc ${formatTime(latestRunAt)}` : `Updated ${formatTime(latestRunAt)}`)
+                : (vi ? "Chưa có lượt chạy" : "No completed run")}
             </span>
           </div>
           <TrendChart points={trends} />
           <div className="chart-legend">
             <span>
               <i />
-              Quality score
+              {vi ? "Điểm chất lượng" : "Quality score"}
             </span>
-            <small>Calculated from bounded rule results</small>
+            <small>{vi ? "Tính toán từ kết quả các quy tắc kiểm tra" : "Calculated from bounded rule results"}</small>
           </div>
         </article>
         <article className="panel signal-summary">
           <div className="signal-heading">
-            <span className="eyebrow">LATEST SIGNALS</span>
+            <span className="eyebrow">{vi ? "TÍN HIỆU MỚI NHẤT" : "LATEST SIGNALS"}</span>
             <span
               className={`signal-state ${anomalies.length ? "attention" : "stable"}`}
             >
-              {anomalies.length ? "Review" : "Stable"}
+              {anomalies.length ? (vi ? "Cần duyệt" : "Review") : (vi ? "Ổn định" : "Stable")}
             </span>
           </div>
           <div className="signal-number">
             <strong>{anomalies.length}</strong>
-            <span>anomalies detected</span>
+            <span>{vi ? "bất thường phát hiện" : "anomalies detected"}</span>
           </div>
           <div className="signal-row">
-            <span>Failed rules</span>
+            <span>{vi ? "Quy tắc vi phạm" : "Failed rules"}</span>
             <strong>{failedRules}</strong>
           </div>
           <div className="signal-row">
-            <span>Checks available</span>
+            <span>{vi ? "Quy tắc khả dụng" : "Checks available"}</span>
             <strong>{results.length}</strong>
           </div>
           <div className="signal-row">
-            <span>Detection mode</span>
+            <span>{vi ? "Chế độ phát hiện" : "Detection mode"}</span>
             <strong>
               {anomalies[0]?.detection_mode === "HISTORICAL"
-                ? "Historical"
-                : "Cold start"}
+                ? (vi ? "Theo lịch sử" : "Historical")
+                : (vi ? "Khởi đầu lạnh" : "Cold start")}
             </strong>
           </div>
           <p className="signal-insight">
             {anomalies[0]?.reason ??
-              "No abnormal violation-rate movement detected in the latest completed run."}
+              (vi ? "Không phát hiện biến động tỷ lệ vi phạm bất thường trong lượt chạy gần nhất." : "No abnormal violation-rate movement detected in the latest completed run.")}
           </p>
         </article>
         <article className="panel completeness-panel">
           <div className="panel-heading">
             <div>
-              <span className="eyebrow">PROFILE HEALTH</span>
-              <h3>Column completeness</h3>
+              <span className="eyebrow">{vi ? "SỨC KHỎE HỒ SƠ DỮ LIỆU" : "PROFILE HEALTH"}</span>
+              <h3>{vi ? "Độ đầy đủ theo cột" : "Column completeness"}</h3>
             </div>
-            <span className="panel-caption">lowest coverage first</span>
+            <span className="panel-caption">{vi ? "sắp xếp từ độ bao phủ thấp nhất" : "lowest coverage first"}</span>
           </div>
           <div className="viz-bars">
             {sortedColumns.map((column) => {
@@ -5199,7 +5285,7 @@ function VisualizationPage({
             })}
             {!profile && (
               <div className="chart-empty">
-                Create a dataset profile to visualize completeness.
+                {vi ? "Tạo profile dữ liệu để xem biểu đồ độ đầy đủ." : "Create a dataset profile to visualize completeness."}
               </div>
             )}
           </div>
@@ -5207,10 +5293,10 @@ function VisualizationPage({
         <article className="panel failure-panel">
           <div className="panel-heading">
             <div>
-              <span className="eyebrow">RULE EXECUTION</span>
-              <h3>Violation rates</h3>
+              <span className="eyebrow">{vi ? "THỰC THI QUY TẮC" : "RULE EXECUTION"}</span>
+              <h3>{vi ? "Tỷ lệ vi phạm" : "Violation rates"}</h3>
             </div>
-            <span className="panel-caption">latest completed run</span>
+            <span className="panel-caption">{vi ? "lượt chạy hoàn thành mới nhất" : "latest completed run"}</span>
           </div>
           <div className="failure-list">
             {results.map((result) => {
@@ -5224,8 +5310,9 @@ function VisualizationPage({
                       {result.rule_title}
                     </strong>
                     <span>
-                      {result.failed_count.toLocaleString()} of{" "}
-                      {result.checked_count.toLocaleString()} rows
+                      {vi
+                        ? `${result.failed_count.toLocaleString()} / ${result.checked_count.toLocaleString()} dòng`
+                        : `${result.failed_count.toLocaleString()} of ${result.checked_count.toLocaleString()} rows`}
                     </span>
                   </div>
                   <strong className={rate ? "metric-warn" : ""}>
@@ -5238,7 +5325,7 @@ function VisualizationPage({
               );
             })}
             {!results.length && (
-              <div className="chart-empty">No persisted rule results yet.</div>
+              <div className="chart-empty">{vi ? "Chưa có kết quả quy tắc nào được lưu." : "No persisted rule results yet."}</div>
             )}
           </div>
         </article>

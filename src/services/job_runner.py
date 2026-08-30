@@ -106,6 +106,9 @@ def _uploaded_dataset_path(dataset_id: str) -> Path | None:
 
 def _profile_uploaded_dataset(db: Session, dataset_id: str, path: Path) -> dict:
     """Profile an imported CSV/Parquet without exposing its source rows to agents."""
+    from src.services.versioned_dataset import inspect_upload_path
+    dataset_meta = db.get(DatasetModel, dataset_id)
+    inspect_upload_path(path, path.name, checksum=(dataset_meta.checksum if dataset_meta else None))
     existing_profile = db.query(ProfileModel).filter_by(dataset_id=dataset_id).first()
     if existing_profile:
         dataset = db.get(DatasetModel, dataset_id)
@@ -1121,6 +1124,8 @@ def compile_rule_to_sql(rule_type: str, spec: dict, columns_allowlist: set[str])
 
 def execute_uploaded_rule(uploaded_path: Path, rule_type: str, spec: dict) -> tuple[int, list[str], int]:
     """Execute a data quality rule on an uploaded CSV/Parquet dataset via pandas."""
+    from src.services.versioned_dataset import inspect_upload_path
+    inspect_upload_path(uploaded_path, uploaded_path.name)
     df = pd.read_parquet(uploaded_path) if uploaded_path.suffix.lower() == ".parquet" else pd.read_csv(uploaded_path)
     total_rows = len(df)
 

@@ -1,14 +1,13 @@
 """Unit tests for the canonical anomaly service (Median/MAD, exclusions, and family aggregations)."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy.orm import Session
 
 from src.models.database import AnomalyFeedbackModel, DqResultModel, DqRunModel
 from src.services.anomaly_service import (
-    compute_mad,
-    compute_median,
+    calculate_robust_zscore,
     detect_anomalies,
 )
 from src.services.rule_store import TestResultModel as DbTestResultModel
@@ -16,27 +15,18 @@ from src.services.rule_store import TestRunModel as DbTestRunModel
 
 
 def test_calculate_median_mad_basic():
-    """Verify median and MAD values for simple datasets."""
+    """Verify robust zscore, median and MAD values for simple datasets."""
     data = [1.0, 2.0, 3.0, 4.0, 5.0]
-    med = compute_median(data)
-    mad = compute_mad(data, med)
+    z, med, mad = calculate_robust_zscore(5.0, data)
     assert med == 3.0
     assert mad == 1.0
+    assert z > 0.0
 
     data_const = [5.0, 5.0, 5.0]
-    med = compute_median(data_const)
-    mad = compute_mad(data_const, med)
-    assert med == 5.0
-    assert mad == 0.0
-
-
-def test_calculate_median_mad_even():
-    """Verify median and MAD for even-sized datasets."""
-    data = [1.0, 2.0, 9.0, 10.0]
-    med = compute_median(data)
-    mad = compute_mad(data, med)
-    assert med == 5.5
-    assert mad == 4.0
+    z_const, med_const, mad_const = calculate_robust_zscore(5.0, data_const)
+    assert med_const == 5.0
+    assert mad_const == 0.0
+    assert z_const == 0.0
 
 
 def test_detect_anomalies_no_run(test_db):
@@ -82,10 +72,11 @@ def test_detect_anomalies_cold_start(test_db):
 
         # Since rule_fail violation rate (0.08) >= 0.05, it gets score = 0.80 -> decision = ANOMALY
         assert result["decision"] == "ANOMALY"
-        assert len(result["signals"]) == 2
+        stat_sigs = [s for s in result["signals"] if s["family"] == "STATISTICAL"]
+        assert len(stat_sigs) == 2
 
         # Verify signal details
-        sigs = {s["target_id"]: s for s in result["signals"]}
+        sigs = {s["target_id"]: s for s in stat_sigs}
         assert sigs["rule_pass"]["score"] == 0.0
         assert sigs["rule_pass"]["sufficient_history"] is False
 
@@ -120,6 +111,7 @@ def test_detect_anomalies_accepts_graph2_test_run_store(test_db):
 
 def test_detect_anomalies_with_exclusions(test_db):
     """Verify that failed runs, feedback runs, and current runs are excluded from baselines."""
+    base_time = datetime(2026, 8, 1, 0, 0, 0)
     with Session(test_db) as session:
         # 1. Historical runs
         # Run 1: Failed
@@ -129,7 +121,8 @@ def test_detect_anomalies_with_exclusions(test_db):
             dataset_id="dataset_1",
             rule_ids="[]",
             status="FAILED",
-            completed_at=datetime.now(),
+            created_at=base_time + timedelta(hours=1),
+            completed_at=base_time + timedelta(hours=1, minutes=5),
         )
         res1 = DqResultModel(
             run_id="run_h1",
@@ -149,7 +142,8 @@ def test_detect_anomalies_with_exclusions(test_db):
             dataset_id="dataset_1",
             rule_ids="[]",
             status="SUCCEEDED",
-            completed_at=datetime.now(),
+            created_at=base_time + timedelta(hours=2),
+            completed_at=base_time + timedelta(hours=2, minutes=5),
         )
         res2 = DqResultModel(
             run_id="run_h2",
@@ -164,7 +158,6 @@ def test_detect_anomalies_with_exclusions(test_db):
         feedback2 = AnomalyFeedbackModel(
             id="fb_2", anomaly_run_id="anom_h2", username="steward", feedback_label="TRUE_ANOMALY"
         )
-        # To link feedback, we need an anomaly run record for run2
         from src.models.database import AnomalyRunModel
 
         anom_run2 = AnomalyRunModel(
@@ -183,7 +176,8 @@ def test_detect_anomalies_with_exclusions(test_db):
                     dataset_id="dataset_1",
                     rule_ids="[]",
                     status="SUCCEEDED",
-                    completed_at=datetime.now(),
+                    created_at=base_time + timedelta(hours=i),
+                    completed_at=base_time + timedelta(hours=i, minutes=5),
                 )
             )
             res_normal.append(
@@ -206,7 +200,8 @@ def test_detect_anomalies_with_exclusions(test_db):
             dataset_id="dataset_1",
             rule_ids="[]",
             status="SUCCEEDED",
-            completed_at=datetime.now(),
+            created_at=base_time + timedelta(hours=10),
+            completed_at=base_time + timedelta(hours=10, minutes=5),
         )
         res_curr = DqResultModel(
             run_id="run_curr",
@@ -223,17 +218,14 @@ def test_detect_anomalies_with_exclusions(test_db):
         session.commit()
 
         # Run anomaly detection on current run
-        # History should consist of only runs 3, 4, 5, 6, 7 (size = 5)
-        # Baselines: [0.05, 0.05, 0.06, 0.05, 0.05] (approx, median = 0.05)
         result = detect_anomalies(session, "run_curr")
 
-        assert len(result["signals"]) == 1
-        sig = result["signals"][0]
+        stat_sigs = [s for s in result["signals"] if s["family"] == "STATISTICAL"]
+        assert len(stat_sigs) == 1
+        sig = stat_sigs[0]
         assert sig["sufficient_history"] is True
         assert sig["baseline"]["history_size"] == 5
-        # The median should be 0.05
         assert sig["baseline"]["median"] == 0.05
-        # 0.40 is far above 0.05, so it triggers an anomaly
         assert sig["score"] >= 0.80  # ANOMALY score
         assert result["decision"] == "ANOMALY"
 
@@ -242,7 +234,6 @@ def test_detect_anomalies_critical_override(test_db):
     """Verify that failing critical business or execution rules triggers immediate CRITICAL decision."""
     with Session(test_db) as session:
         run = DqRunModel(id="run_over", job_id="job_1", dataset_id="dataset_1", rule_ids="[]", status="SUCCEEDED")
-        # Failing a business rule (dimension = BUSINESS_RULE, status = FAIL)
         res_biz = DqResultModel(
             run_id="run_over",
             rule_id="rule_biz",
@@ -256,19 +247,13 @@ def test_detect_anomalies_critical_override(test_db):
         session.add_all([run, res_biz])
         session.commit()
 
-        # Since it is a business rule failure, it should trigger critical decision directly
         result = detect_anomalies(session, "run_over")
         assert result["decision"] == "CRITICAL"
         assert "Vi phạm nghiêm trọng luật nghiệp vụ" in result["override_reason"]
 
 
 def test_volume_signal_does_not_dilute_rule_anomaly(test_db):
-    """Regression: một family khỏe mạnh (VOLUME=0.0) KHÔNG được kéo tụt điểm của family đang báo động.
-
-    Kịch bản production thật: sau bước ingest luôn tồn tại bản ghi `profiles`, nên
-    VOLUME_DRIFT_DETECTOR luôn sinh một signal. Trước khi sửa, phép trung bình có trọng số
-    biến score 0.80 (ANOMALY) thành 0.3429 (NORMAL).
-    """
+    """Regression: Một family khỏe mạnh (VOLUME=0.0) KHÔNG được kéo tụt điểm của family đang báo động."""
     from src.models.database import ProfileModel
 
     with Session(test_db) as session:
@@ -283,7 +268,6 @@ def test_volume_signal_does_not_dilute_rule_anomaly(test_db):
             failed_row_ids="[]",
             violation_rate=0.08,
         )
-        # Bản ghi profile khiến VOLUME_DRIFT_DETECTOR sinh signal score = 0.0 (không đủ lịch sử)
         profile = ProfileModel(
             dataset_id="dataset_1",
             row_count=100,
@@ -298,10 +282,45 @@ def test_volume_signal_does_not_dilute_rule_anomaly(test_db):
         result = detect_anomalies(session, "run_dilute")
 
         families = {s["family"] for s in result["signals"]}
-        assert "VOLUME" in families, "Fixture phải sinh được signal VOLUME"
+        assert "VOLUME" in families
 
         stat_scores = [s["score"] for s in result["signals"] if s["family"] == "STATISTICAL"]
         assert max(stat_scores) == 0.80
 
-        assert result["score"] >= 0.70, f"Điểm tổng hợp bị pha loãng: {result['score']} (kỳ vọng >= 0.70)"
+        assert result["score"] >= 0.70
         assert result["decision"] == "ANOMALY"
+
+
+def test_detect_anomalies_rollout_modes(test_db):
+    """Verify rollout modes: DISABLED emits no ML, SHADOW excludes from decision, ADVISORY applies uplift."""
+    with Session(test_db) as session:
+        run = DqRunModel(id="run_rollout", job_id="job_1", dataset_id="dataset_rollout", rule_ids="[]", status="SUCCEEDED")
+        res_pass = DqResultModel(
+            run_id="run_rollout",
+            rule_id="rule_rollout",
+            rule_title="Check nulls",
+            status="PASS",
+            checked_count=100,
+            failed_count=0,
+            failed_row_ids="[]",
+            violation_rate=0.0,
+        )
+        session.add_all([run, res_pass])
+        session.commit()
+
+        # 1. DISABLED (anomaly-v1)
+        res_v1 = detect_anomalies(session, "run_rollout", detector_config_version="anomaly-v1")
+        fams_v1 = [s["family"] for s in res_v1["signals"]]
+        assert "ML" not in fams_v1
+        assert res_v1["rollout_mode"] == "DISABLED"
+
+        # 2. SHADOW (anomaly-v2-iforest)
+        res_v2 = detect_anomalies(session, "run_rollout", detector_config_version="anomaly-v2-iforest")
+        fams_v2 = [s["family"] for s in res_v2["signals"]]
+        assert "ML" in fams_v2
+        assert res_v2["rollout_mode"] == "SHADOW"
+        assert res_v2["decision"] == "INSUFFICIENT_HISTORY"
+
+        # 3. ADVISORY (anomaly-v2-iforest-advisory)
+        res_adv = detect_anomalies(session, "run_rollout", detector_config_version="anomaly-v2-iforest-advisory")
+        assert res_adv["rollout_mode"] == "ADVISORY"

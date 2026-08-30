@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import sys
 import time
 from datetime import datetime
@@ -24,6 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from sqlalchemy.orm import Session
+
 from src.agents.nodes.rule_proposer_node import (
     CandidateTableRuleProposal,
     _propose_for_table,
@@ -32,7 +33,6 @@ from src.agents.tools.rule_proposer_tools import dry_run_rule_candidate
 from src.config import get_settings
 from src.services.llm import get_llm
 from src.services.rule_store import ActiveRuleModel, get_engine, init_db
-from sqlalchemy.orm import Session
 
 logging.basicConfig(
     level=logging.INFO,
@@ -345,8 +345,8 @@ async def run_benchmark():
 
     md_content = f"""# Báo Cáo Benchmark Đối Chiếu: Graph 1 Rule Proposer (Legacy vs DeepAgent)
 
-**Thời gian thực hiện**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  
-**Tập dữ liệu (Dataset)**: `{dataset_id}` ({table_name})  
+**Thời gian thực hiện**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+**Tập dữ liệu (Dataset)**: `{dataset_id}` ({table_name})
 
 ---
 

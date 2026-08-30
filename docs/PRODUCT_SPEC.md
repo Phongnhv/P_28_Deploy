@@ -57,8 +57,8 @@ end-to-end course-project simulation of production practices.
 5. All state transitions and executions create an audit record.
 6. Public errors and logs do not expose backend secrets, raw rows or internal traces.
 
-The judge-facing credential is intentionally public and is not a security secret:
-`demo-steward` / `ridepulse-demo-2026`. The backend limits this account to 40
+The optional judge-facing credential is configured by the operator as
+`demo-steward` plus `DEMO_STEWARD_PASSWORD` in non-production only. The backend limits this account to 40
 write mutations, 3 uploads, 3 profiling starts and 2 analysis starts per rolling
 24-hour window; read-only polling is not charged.
 
