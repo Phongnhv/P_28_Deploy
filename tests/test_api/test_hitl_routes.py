@@ -89,11 +89,50 @@ async def client():
         yield ac
 
 
+def _grant_steward_access(dataset_id: str, username: str = "steward") -> None:
+    """Give the signed-in steward MANAGE on the dataset, as an import would.
+
+    Both import endpoints write a MANAGE DatasetAccessModel row for the uploader
+    (routes.py:793 and routes.py:1035), so a steward who owns a dataset always has
+    one in production. These tests seed runs straight through the service layer and
+    skip that step, which was invisible while the /dq run endpoints had no tenancy
+    check and became a blanket 403 once they did.
+    """
+    import uuid as _uuid
+
+    from sqlalchemy.orm import Session as SASession
+
+    from src.models.database import DatasetAccessModel
+    from src.services.rule_store import get_engine
+
+    with SASession(get_engine()) as session:
+        exists = (
+            session.query(DatasetAccessModel)
+            .filter(
+                DatasetAccessModel.dataset_id == dataset_id,
+                DatasetAccessModel.username == username,
+            )
+            .first()
+        )
+        if not exists:
+            session.add(
+                DatasetAccessModel(
+                    id=str(_uuid.uuid4()),
+                    dataset_id=dataset_id,
+                    username=username,
+                    access_level="MANAGE",
+                    granted_by=username,
+                )
+            )
+            session.commit()
+
+
 def _seed_run(run_id: str, dataset_id: str = "yellow_tripdata") -> None:
     from src.services.rule_store import create_run, update_run_status
 
     create_run(run_id, dataset_id)
     update_run_status(run_id, "DONE")
+    _grant_steward_access(dataset_id)
 
 
 def _seed_rules(run_id: str, rules_specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -149,6 +188,7 @@ async def test_list_rules_returns_empty_when_running(steward_client):
 
     run_id = uuid.uuid4().hex
     create_run(run_id, "yellow_tripdata")  # status=QUEUED, không có rules
+    _grant_steward_access("yellow_tripdata")
 
     r = await steward_client.get(f"/api/v1/dq/runs/{run_id}/rules")
     assert r.status_code == 200
@@ -270,12 +310,17 @@ async def test_patch_rule_approve_success(steward_client):
 
     r = await steward_client.patch(
         f"/api/v1/dq/runs/{run_id}/rules/t.col_a.NOT_NULL",
+        # The body still names a reviewer, deliberately: the point of the assertion
+        # below is that the server ignores it.
         json={"status": "APPROVED", "reviewer": "steward@ridepulse.vn"},
     )
     assert r.status_code == 200
     data = r.json()
     assert data["status"] == "APPROVED"
-    assert data["reviewer"] == "steward@ridepulse.vn"
+    # The recorded approver comes from the authenticated session, never from the
+    # request body. PRODUCT_SPEC safety rule 5: an audit trail that stores whoever
+    # the caller typed cannot establish who approved a rule.
+    assert data["reviewer"] == "steward"
     assert data["reviewed_at"] is not None
 
 

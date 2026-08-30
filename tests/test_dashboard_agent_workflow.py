@@ -232,9 +232,18 @@ def test_graph_normalizer_uses_canonical_text_spec_and_confidence_ceiling():
 
     assert len(proposals) == 1
     proposal = proposals[0]
-    assert proposal.title == "trip_distance must be non-negative"
+    # The candidate now carries an upper bound derived from p95 (12.0) plus headroom,
+    # so a RANGE rule can actually reject an outlier instead of admitting every value
+    # that existed at profiling time. The model's restated 80.0 is still discarded in
+    # favour of the server-owned bound -- which is what the next two assertions check.
+    assert proposal.title == "trip_distance must be between 0 and 13.2"
     assert "80" not in proposal.description
-    assert proposal.rule_spec == {"type": "numeric_range", "column": "trip_distance", "min_value": 0.0}
+    assert proposal.rule_spec == {
+        "type": "numeric_range",
+        "column": "trip_distance",
+        "min_value": 0.0,
+        "max_value": 13.2,
+    }
     assert proposal.severity == "HIGH"
     assert proposal.confidence == 0.9
 

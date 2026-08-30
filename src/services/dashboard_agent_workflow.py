@@ -167,6 +167,34 @@ def get_dataset_rule_policy(dataset_id: str, columns: list[Any] | None = None) -
     return None
 
 
+#: Headroom above the p95 quantile. Wide enough that ordinary variation does not
+#: trip the rule, narrow enough that the rule still has something to reject.
+_UPPER_BOUND_HEADROOM = 1.10
+
+
+def _upper_bound(column) -> float | None:
+    """An upper bound derived from the distribution, not from the observed maximum.
+
+    A RANGE rule whose bounds are taken from the same column's min and max admits
+    every value that existed at profiling time, so it can never report a violation
+    -- it looks like a control and is one only on paper. Anchoring the top of the
+    range on p95 plus headroom keeps normal rows inside it while leaving the tail
+    outside, which is what makes the rule capable of firing at all.
+
+    Returns None when the profile cannot support a bound that would actually
+    constrain anything; the caller then leaves the rule open-topped rather than
+    inventing a threshold with no evidence behind it.
+    """
+    p95 = column.quantiles.get("p95") if column.quantiles else None
+    if p95 is None:
+        return None
+    bound = round(float(p95) * _UPPER_BOUND_HEADROOM, 4)
+    # A bound at or above the observed maximum constrains nothing on this data.
+    if column.max_value is not None and bound >= float(column.max_value):
+        return None
+    return bound
+
+
 @dataclass(frozen=True)
 class DashboardRuleCandidate:
     """A deterministic, evidence-backed rule that the dashboard agent may select."""
@@ -850,21 +878,36 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
             for name in ("p05", "p50", "p95")
             if name in column.quantiles
         )
+        upper = _upper_bound(column)
+        parameters: dict[str, Any] = {"min": 0.0}
+        rule_spec: dict[str, Any] = {"type": "numeric_range", "column": column.name, "min_value": 0.0}
+        if upper is not None:
+            parameters["max"] = upper
+            rule_spec["max_value"] = upper
         candidates.append(
             DashboardRuleCandidate(
                 id=f"nonnegative:{column.name}",
                 rule_type="RANGE",
                 column=column.name,
-                parameters={"min": 0.0},
+                parameters=parameters,
                 dashboard_rule_type="numeric_range",
-                rule_spec={"type": "numeric_range", "column": column.name, "min_value": 0.0},
+                rule_spec=rule_spec,
                 evidence_refs=evidence_refs,
                 selection_reason=(
                     "Dataset policy defines this measure as non-negative; full-table bounds, negative rate "
                     "and quantiles describe current behavior."
+                    + (
+                        f" Upper bound {upper} sits above p95 so the rule can still reject an outlier."
+                        if upper is not None
+                        else ""
+                    )
                 ),
                 priority=100,
-                title=f"{column.name} must be non-negative",
+                title=(
+                    f"{column.name} must be non-negative"
+                    if upper is None
+                    else f"{column.name} must be between 0 and {upper}"
+                ),
                 description=f"Reject rows where the policy-defined non-negative measure {column.name} is below zero.",
                 severity="HIGH",
                 confidence_ceiling=0.9,
@@ -963,15 +1006,44 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
             )
             if col.data_type in ("numeric", "float", "integer", "real") and col.min_value is not None:
                 min_val = 0.0 if col.min_value >= 0 else float(col.min_value)
+                upper = _upper_bound(col)
+                range_parameters: dict[str, Any] = {"min": min_val}
+                range_spec: dict[str, Any] = {
+                    "type": "numeric_range", "column": col.name, "min_value": min_val,
+                }
+                range_refs = [f"profile.column.{col.name}.min_value"]
+                if upper is not None:
+                    range_parameters["max"] = upper
+                    range_spec["max_value"] = upper
+                    range_refs.extend(
+                        [f"profile.column.{col.name}.quantile.p95", f"profile.column.{col.name}.max_value"]
+                    )
                 candidates.append(
                     DashboardRuleCandidate(
                         id=f"range:{col.name}", rule_type="RANGE", column=col.name,
-                        parameters={"min": min_val}, dashboard_rule_type="numeric_range",
-                        rule_spec={"type": "numeric_range", "column": col.name, "min_value": min_val},
-                        evidence_refs=[f"profile.column.{col.name}.min_value"],
-                        selection_reason=f"Observed minimum for {col.name} is {col.min_value}.",
-                        priority=85, title=f"{col.name} minimum threshold (>= {min_val})",
-                        description=f"Validate that {col.name} values are greater than or equal to {min_val}.",
+                        parameters=range_parameters, dashboard_rule_type="numeric_range",
+                        rule_spec=range_spec,
+                        evidence_refs=range_refs,
+                        selection_reason=(
+                            f"Observed minimum for {col.name} is {col.min_value}."
+                            if upper is None
+                            else (
+                                f"Observed minimum for {col.name} is {col.min_value}; the upper bound "
+                                f"{upper} sits above p95 and below the observed maximum, so the rule "
+                                "can reject an outlier instead of admitting everything."
+                            )
+                        ),
+                        priority=85,
+                        title=(
+                            f"{col.name} minimum threshold (>= {min_val})"
+                            if upper is None
+                            else f"{col.name} expected range [{min_val}, {upper}]"
+                        ),
+                        description=(
+                            f"Validate that {col.name} values are greater than or equal to {min_val}."
+                            if upper is None
+                            else f"Validate that {col.name} values fall between {min_val} and {upper}."
+                        ),
                         severity="MEDIUM", confidence_ceiling=0.85,
                     )
                 )
@@ -1016,8 +1088,16 @@ def _candidate_parameters_match(
         return False
     if _finite_float(parameters.get("min")) != _finite_float(candidate.parameters.get("min")):
         return False
+    supplied_max = _finite_float(parameters.get("max"))
+    # Omitting the upper bound is not inventing one. Candidates carry a p95-derived
+    # maximum so the rule can fire at all, and a model asked for a "must be
+    # non-negative" rule often answers with the lower bound alone. It has still named
+    # the right candidate and made nothing up, and the server persists its own
+    # canonical parameters either way -- so this is a match, not a fallback.
+    if supplied_max is None and candidate.parameters.get("max") is not None:
+        return True
     observed_max = next((column.max_value for column in evidence.columns if column.name == candidate.column), None)
-    return observed_max is not None and _finite_float(parameters.get("max")) == observed_max
+    return observed_max is not None and supplied_max == observed_max
 
 
 def _dimension_for_rule_type(rule_type: str) -> str:

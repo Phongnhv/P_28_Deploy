@@ -52,7 +52,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from evalgate.gates.gate2_security.authz_probe import PUBLIC_ALLOW_LIST, collect_endpoints
+from evalgate.gates.gate2_security.authz_probe import PUBLIC_ALLOW_LIST, collect_all_endpoints
 from evalgate.normalizers import normalizers as norm
 from evalgate.schemas.eval_result import (
     EvalResult,
@@ -119,9 +119,12 @@ CROSS_TENANT_READS: tuple[tuple[str, str], ...] = (
 CROSS_TENANT_WRITES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("POST", "/datasets/{ds}/workflows", ("steward",)),
     # Publishing another tenant's rules into the active ruleset. dq_router is mounted
-    # for USER as well as STEWARD, so both actors clear the role gate here and what is
-    # left is purely the ownership question.
-    ("POST", "/dq/runs/{prun}/publish", ("steward", "user")),
+    # for USER as well as STEWARD, but routes.py:3820 adds a second, endpoint-level
+    # require_role(["STEWARD","ADMIN"]) on this one. A USER is therefore refused by the
+    # role gate before ownership is ever consulted, which proves nothing about tenancy
+    # and only produces an inconclusive case. STEWARD alone still clears the role gate,
+    # so the ownership question survives.
+    ("POST", "/dq/runs/{prun}/publish", ("steward",)),
 )
 
 #: (actor, method, path) where the actor's role sits below the endpoint's requirement.
@@ -247,12 +250,22 @@ def _route_matcher(endpoints: list[tuple[str, str]]):
 
 def _static_blind_spots(endpoints: list[tuple[str, str]]) -> list[str]:
     """Endpoints the AST probe cannot see at all."""
+    from src.api.data_access_routes import router as data_access_router
     from src.api.routes import dq_router
 
-    prefixes = {"router": "", "dq_router": dq_router.prefix}
+    # Keyed by (module, router variable) rather than by the variable alone: both route
+    # modules call their local router ``router``, and they mount on different prefixes.
+    prefixes = {
+        ("src/api/routes.py", "router"): "",
+        ("src/api/routes.py", "dq_router"): dq_router.prefix,
+        ("src/api/data_access_routes.py", "router"): data_access_router.prefix,
+    }
     seen = {
-        (endpoint.method.upper(), prefixes.get(endpoint.router, "") + endpoint.path)
-        for endpoint in collect_endpoints()
+        (
+            endpoint.method.upper(),
+            prefixes.get((endpoint.source, endpoint.router), "") + endpoint.path,
+        )
+        for endpoint in collect_all_endpoints()
     }
     return sorted(f"{method} {path}" for method, path in endpoints if (method, path) not in seen)
 

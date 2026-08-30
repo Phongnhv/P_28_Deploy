@@ -159,6 +159,26 @@ def test_publish_api_endpoints():
 
     create_run(run_id, dataset_id)
 
+    # The /dq run endpoints check dataset tenancy, and an import would have written
+    # this MANAGE grant for the uploader (routes.py:793). create_run alone does not,
+    # so without it the steward is a stranger to its own run and gets a 403.
+    from sqlalchemy.orm import Session as _SASession
+
+    from src.models.database import DatasetAccessModel
+    from src.services.rule_store import get_engine as _get_engine
+
+    with _SASession(_get_engine()) as _grant_session:
+        _grant_session.add(
+            DatasetAccessModel(
+                id=str(uuid.uuid4()),
+                dataset_id=dataset_id,
+                username="steward",
+                access_level="MANAGE",
+                granted_by="steward",
+            )
+        )
+        _grant_session.commit()
+
     mock_rules = [
         {
             "rule_id": "yellow_tripdata.payment_type.ACCEPTED_VALUES",

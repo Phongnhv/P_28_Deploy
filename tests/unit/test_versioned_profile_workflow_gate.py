@@ -7,9 +7,8 @@ created with UNDERSTAND_DATA locked and answered "This workflow step is not
 ready to run."
 """
 
-from datetime import timedelta
-
 import json
+from datetime import timedelta
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session

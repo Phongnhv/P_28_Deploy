@@ -1,16 +1,16 @@
 import asyncio
+import inspect
 import json
 import logging
 import os
 import sys
-import inspect
 from collections.abc import Awaitable, Callable
 from typing import Literal
 
 from dotenv import load_dotenv
 from langgraph.graph import END, StateGraph
 
-from src.agents.graph_catalog import DETERMINISTIC, GATE, LLM
+from src.agents.graph_catalog import DETERMINISTIC, LLM
 from src.agents.state import AgentState
 from src.services.node_telemetry import instrument, start_graph_run
 
@@ -94,6 +94,7 @@ def build_rule_proposal_graph() -> StateGraph:
 def _timed_node(node_name: str, node_func: Callable) -> Callable:
     """Wrap a graph node to track its execution duration and set current node for token attribution."""
     import time
+
     from src.utils.metrics_tracker import get_metrics_tracker
 
     async def _wrapped(state: AgentState) -> dict:

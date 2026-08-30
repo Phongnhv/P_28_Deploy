@@ -33,6 +33,56 @@ def _json_lists(text: str) -> list[list]:
     return found
 
 
+#: Column ``role`` values the profile digest emits, mapped onto the semantic
+#: vocabulary the contract expects.
+_ROLE_TO_SEMANTIC = {
+    "numeric": ("numeric", "measure"),
+    "datetime": ("timestamp", "event_time"),
+    "categorical": ("category", "dimension"),
+    "identifier": ("identifier", "primary_key"),
+}
+
+
+def _semantic_columns(text: str) -> list[dict]:
+    """Rebuild the contract's columns from the profile digest inside the prompt.
+
+    An empty column list is rejected by ``confirm_semantic_contract`` -- correctly,
+    since a contract that describes nothing cannot govern anything. So the double has
+    to answer with the columns it was actually shown, the same way it already lifts
+    rule candidates out of the proposal prompt, rather than inventing a shape the
+    product would refuse.
+    """
+    columns = next(
+        (
+            items
+            for items in _json_lists(text)
+            if items
+            and all(
+                isinstance(item, dict) and "name" in item and "type" in item
+                for item in items
+            )
+        ),
+        [],
+    )
+    rebuilt: list[dict] = []
+    for column in columns:
+        semantic_type, business_role = _ROLE_TO_SEMANTIC.get(
+            str(column.get("role", "")), ("text", "attribute")
+        )
+        rebuilt.append({
+            "name": str(column["name"]),
+            "semantic_type": semantic_type,
+            "business_role": business_role,
+            # The digest carries an observed null percentage; treating a column that
+            # was never null as non-nullable is the one inference worth making here,
+            # because NOT_NULL candidates depend on it.
+            "nullable_expected": float(column.get("null_pct") or 0.0) > 0.0,
+            "confidence": 1.0,
+            "description": f"Deterministic evaluation column derived from {column.get('type')}",
+        })
+    return rebuilt
+
+
 def _trace(schema: str) -> None:
     value = os.getenv("EVALGATE_LLM_TRACE_PATH", "")
     if not value:
@@ -57,13 +107,16 @@ class _Structured:
         if name == "TableSemanticContract":
             value = self.schema(table_name="source_rows", domain="evaluation",
                                 table_purpose="Deterministic served-path evaluation",
-                                columns=[], relationships=[], business_assumptions=[])
+                                columns=_semantic_columns(text),
+                                relationships=[], business_assumptions=[])
         elif name == "InferredDictionaryTable":
             value = self.schema(table_name="source_rows", description="Evaluation dataset",
                                 columns=[], business_rules=[])
         elif name == "HypothesisResponse":
             value = self.schema(hypotheses=[])
-        elif name == "TableRuleProposal":
+        # The proposer asks for the draft schema, which restores server-owned fields
+        # afterwards; the strict name is kept so an older caller still resolves here.
+        elif name in {"TableRuleProposal", "CandidateTableRuleDraft"}:
             candidates = next(
                 (
                     items

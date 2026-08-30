@@ -180,7 +180,9 @@ class TestResultResponse(BaseModel):
     violation_rate: float
     # Chỉ chứa ID dòng vi phạm, không phải nội dung bản ghi (xem test_runner_node).
     sample_failures: list[str] | None = None
-    sql_text: str
+    # `sql_text` cố ý không nằm ở đây. docs/API_CONTRACT.md: SQL đã biên dịch không
+    # phải trường API công khai — nó vẫn được giữ trong payload nội bộ của
+    # test_runner_node để debug, và bị bỏ qua khi dựng response này.
     duration_ms: float
     error: str | None = None
     created_at: str | None = None

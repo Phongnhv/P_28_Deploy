@@ -193,19 +193,41 @@ def load_profile(mode: str) -> list[str]:
     return [spec.name for spec in SPECS if mode in spec.profiles]
 
 
+def _upload_handlers() -> list[str]:
+    """Where the product accepts a file upload, measured rather than asserted.
+
+    This used to be the sentence "no upload endpoint exists". It stopped being true
+    and nothing noticed, because a hand-written reason is never re-checked against
+    the code it describes -- so the same report could carry contract_conformance
+    reporting SCOPE-UPLOAD implemented at three sites next to this claiming none.
+    """
+    from evalgate.gates.gate5_reliability.config_static_check import _grep
+
+    return _grep(r"UploadFile\s*=\s*File\(", PROJECT_ROOT / "src" / "api")
+
+
 def _declared_but_not_run(selected: list[str]) -> list[EvalResult]:
-    """Evaluators the plan defines that this run cannot execute."""
+    """Evaluators the plan defines that this run cannot execute.
+
+    A reason here is a statement about the product, and it is read as evidence. Where
+    one can be derived from the code, derive it; a constant is only acceptable for
+    facts about EvalGate's own environment, like a missing package or a paid call.
+    """
+    uploads = _upload_handlers()
     blocked = [
         ("input_data", "gx_corpus_integrity_v1", EvalStatus.NOT_IMPLEMENTED,
          "requires the great-expectations package"),
         ("input_data", "evidently_drift_v1", EvalStatus.NOT_IMPLEMENTED,
          "requires the evidently package"),
-        ("ai_security", "upload_probe_v1", EvalStatus.BLOCKED_BY_SYSTEM_CAPABILITY,
-         "no upload endpoint exists, so malicious files cannot be submitted"),
+        ("ai_security", "upload_probe_v1",
+         EvalStatus.NOT_EXECUTED if uploads else EvalStatus.BLOCKED_BY_SYSTEM_CAPABILITY,
+         f"{len(uploads)} upload handler(s) exist ({', '.join(uploads[:3])}); "
+         "the probe is not selected in this profile"
+         if uploads else "no upload endpoint exists, so malicious files cannot be submitted"),
         ("ai_quality", "generalization_evaluator_v1", EvalStatus.BLOCKED_BY_SYSTEM_CAPABILITY,
          "six of seven corpus datasets cannot be ingested; variance is undefined"),
-        ("ai_quality", "live_sdih_detection_v1", EvalStatus.BLOCKED_BY_SYSTEM_CAPABILITY,
-         "get_dataset_rule_policy raises for every dataset, so the agent cannot be invoked"),
+        ("ai_quality", "live_sdih_detection_v1", EvalStatus.NOT_EXECUTED,
+         "requires a paid model call against a live agent; runs in nightly and pre_release only"),
         ("ai_security", "promptfoo_injection_v1", EvalStatus.NOT_EXECUTED,
          "requires npx promptfoo, network access and a paid model call"),
         ("ai_quality", "geval_domain_v1", EvalStatus.NOT_EXECUTED,

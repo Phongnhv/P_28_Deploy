@@ -171,7 +171,7 @@ def test_a_syntactically_broken_app_module_is_survived(tmp_path):
 
 def test_a_missing_routes_file_reports_not_applicable(monkeypatch, tmp_path):
     """No routes file means nothing was inspected -- that is not a clean bill."""
-    monkeypatch.setattr(ap, "ROUTES", tmp_path / "absent.py")
+    monkeypatch.setattr(ap, "ROUTE_FILES", (tmp_path / "absent.py",))
     result = ap.evaluate(write_evidence=False)
     assert result.status == EvalStatus.NOT_APPLICABLE
     assert result.metrics == {}
@@ -846,7 +846,10 @@ def test_the_real_application_enforces_csrf_on_every_write(live_result):
 def test_the_behaviour_probe_and_the_static_probe_see_the_same_surface(live_result):
     """An endpoint the AST walk cannot see is where an unprotected route hides.
 
-    ``authz_probe`` reads only routes.py; anything mounted elsewhere is invisible to
-    it and would never be counted a violation no matter how open it was.
+    ``authz_probe`` walks every route module under src/api; anything mounted from a
+    file it does not read is invisible to it and would never be counted a violation no
+    matter how open it was. This assertion is what keeps the two surfaces tied
+    together: it is how the /api/v2 grant endpoints were found missing from the static
+    scan, which had been reading routes.py alone.
     """
     assert live_result.metadata["endpoints_invisible_to_static_probe"] == []

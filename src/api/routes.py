@@ -85,6 +85,14 @@ from src.models.schemas import (
     TestResultsListResponse,
     TestRunStatusResponse,
 )
+from src.services.data_dictionary_store import (
+    DataDictionaryError,
+    delete_data_dictionary,
+    get_data_dictionary,
+    parse_data_dictionary,
+    save_data_dictionary,
+    serialize_data_dictionary,
+)
 from src.services.demo_quota import enforce_demo_quota
 from src.services.job_dispatch import create_persisted_job, dispatch_or_mark_failed, job_checksum
 from src.services.job_runner import (
@@ -120,14 +128,6 @@ from src.services.session_service import (
     get_current_session,
     hash_password,
     verify_csrf,
-)
-from src.services.data_dictionary_store import (
-    DataDictionaryError,
-    delete_data_dictionary,
-    get_data_dictionary,
-    parse_data_dictionary,
-    save_data_dictionary,
-    serialize_data_dictionary,
 )
 from src.services.supabase_dataset import create_supabase_engine
 from src.services.supabase_dataset import query_dataset_rows as query_supabase_dataset_rows
@@ -556,6 +556,55 @@ def require_dataset_access(db: Session, session: SessionModel, dataset_id: str, 
             status_code=403,
             detail={"code": "DATASET_ACCESS_FORBIDDEN", "message": "You do not have access to this dataset."},
         )
+
+
+def _dataset_of_run(db: Session, linked_entity: str | None) -> str | None:
+    """Resolve the dataset a proposal run belongs to.
+
+    ``JobModel.linked_entity`` holds either a dataset id or an immutable dataset
+    version id, so the version has to be dereferenced before tenancy can be asked.
+    """
+    if not linked_entity:
+        return None
+    if linked_entity.startswith("dv-"):
+        version = db.get(DatasetVersionModel, linked_entity)
+        return version.dataset_id if version else None
+    return linked_entity
+
+
+def require_run_access(*, manage: bool = False, param: str = "run_id"):
+    """Tenancy for the ``/dq`` run endpoints, attached at the decorator.
+
+    ``dq_router`` is mounted with a role dependency only, so a caller holding the
+    right role could read, review and publish another tenant's proposal run: seven
+    cross-tenant requests answered 200 in the behaviour probe. The check lives in a
+    dependency rather than in each handler because that is how those seven arose --
+    every one of them simply omitted the call, and a route added tomorrow would
+    inherit the same gap by doing nothing at all.
+    """
+
+    def _dep(
+        request: Request,
+        session: SessionModel = Depends(get_session),
+        db: Session = Depends(get_db),
+    ) -> str:
+        from src.services.rule_store import get_run
+
+        run_id = request.path_params.get(param)
+        run = get_run(str(run_id))
+        if not run:
+            raise HTTPException(status_code=404, detail=f"run_id={run_id!r} không tồn tại")
+        dataset_id = _dataset_of_run(db, run.get("dataset_id"))
+        if not dataset_id:
+            # A run with no resolvable dataset cannot be shown to be the caller's.
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "DATASET_ACCESS_FORBIDDEN", "message": "You do not have access to this dataset."},
+            )
+        require_dataset_access(db, session, dataset_id, manage=manage)
+        return dataset_id
+
+    return _dep
 
 
 # ---------------------------------------------------------------------------
@@ -3816,8 +3865,12 @@ async def get_test_run_results(
     "/runs/{run_id}/publish",
     response_model=PublishRulesResponse,
     # Publishing puts rules into the active ruleset, where they compile and run.
-    # Safety rule 3 makes that a steward decision, not a reader's.
-    dependencies=[Depends(require_role(["STEWARD", "ADMIN"]))],
+    # Safety rule 3 makes that a steward decision, not a reader's -- and being a
+    # steward somewhere is not the same as being one on this run's dataset.
+    dependencies=[
+        Depends(require_role(["STEWARD", "ADMIN"])),
+        Depends(require_run_access(manage=True)),
+    ],
 )
 async def publish_run_rules(run_id: str) -> PublishRulesResponse:
     """Xuất bản (Publish/Merge) các rules đã APPROVED từ proposal run vào Active Ruleset chính thức."""
@@ -3922,6 +3975,7 @@ async def execute_active_tests(
 @dq_router.get(
     "/runs/{run_id}/rules",
     response_model=list[RuleReviewResponse],
+    dependencies=[Depends(require_run_access())],
 )
 async def list_proposal_rules(
     run_id: str,
@@ -3941,12 +3995,16 @@ async def list_proposal_rules(
 @dq_router.patch(
     "/runs/{run_id}/rules/{rule_id}",
     response_model=RuleReviewResponse,
-    dependencies=[Depends(require_role(["STEWARD", "ADMIN"]))],
+    dependencies=[
+        Depends(require_role(["STEWARD", "ADMIN"])),
+        Depends(require_run_access(manage=True)),
+    ],
 )
 async def review_proposal_rule(
     run_id: str,
     rule_id: str,
     body: RuleUpdateRequest,
+    session: SessionModel = Depends(get_session),
 ) -> RuleReviewResponse:
     from src.services.rule_store import get_run, review_rule
 
@@ -3961,7 +4019,10 @@ async def review_proposal_rule(
         status=body.status.value if hasattr(body.status, "value") else body.status,
         edited_parameters=body.edited_parameters,
         severity=body.severity,
-        reviewer=body.reviewer,
+        # The approver is whoever holds the session, never whoever the body names:
+        # an audit trail that records a client-supplied name cannot answer "who
+        # approved this rule". PRODUCT_SPEC safety rule 5.
+        reviewer=session.username,
         review_note=body.review_note,
     )
     if not res:
@@ -3972,11 +4033,15 @@ async def review_proposal_rule(
 @dq_router.post(
     "/runs/{run_id}/rules/bulk-review",
     response_model=BulkReviewResponse,
-    dependencies=[Depends(require_role(["STEWARD", "ADMIN"]))],
+    dependencies=[
+        Depends(require_role(["STEWARD", "ADMIN"])),
+        Depends(require_run_access(manage=True)),
+    ],
 )
 async def bulk_review_proposal_rules(
     run_id: str,
     body: BulkReviewRequest,
+    session: SessionModel = Depends(get_session),
 ) -> BulkReviewResponse:
     from src.services.rule_store import bulk_review, get_run
 
@@ -3990,7 +4055,9 @@ async def bulk_review_proposal_rules(
             "status": d.status.value if hasattr(d.status, "value") else d.status,
             "edited_parameters": d.edited_parameters,
             "severity": d.severity,
-            "reviewer": d.reviewer,
+            # Same rule as the single-rule endpoint: the actor is the session, and a
+            # per-decision reviewer in the body is ignored rather than trusted.
+            "reviewer": session.username,
             "review_note": d.review_note,
         }
         for d in body.decisions
@@ -4004,6 +4071,7 @@ async def bulk_review_proposal_rules(
 @dq_router.get(
     "/runs/{run_id}/review-summary",
     response_model=ReviewSummaryResponse,
+    dependencies=[Depends(require_run_access())],
 )
 async def get_run_review_summary(run_id: str) -> ReviewSummaryResponse:
     from src.services.rule_store import get_review_summary, get_run
@@ -4019,6 +4087,7 @@ async def get_run_review_summary(run_id: str) -> ReviewSummaryResponse:
 @dq_router.get(
     "/runs/{run_id}/approved-rules",
     response_model=ApprovedRulesResponse,
+    dependencies=[Depends(require_run_access())],
 )
 async def get_run_approved_rules(run_id: str) -> ApprovedRulesResponse:
     from src.services.rule_store import get_approved_rules, get_run
@@ -4039,7 +4108,11 @@ async def get_run_approved_rules(run_id: str) -> ApprovedRulesResponse:
 @dq_router.post(
     "/rule-runs/{proposal_run_id}/publish",
     response_model=PublishRulesetResponse,
-    dependencies=[Depends(require_role(["STEWARD", "ADMIN"]))],
+    dependencies=[
+        Depends(require_role(["STEWARD", "ADMIN"])),
+        # Same run, different path parameter name.
+        Depends(require_run_access(manage=True, param="proposal_run_id")),
+    ],
 )
 async def publish_ruleset_endpoint(
     proposal_run_id: str,

@@ -400,10 +400,14 @@ def check_single_run_state_owner() -> tuple[Check, list[str]]:
 #: its single largest weight (0.25), meaning EvalGate was *rewarding* the one item on
 #: that list the product actually implemented.
 OUT_OF_SCOPE: tuple[tuple[str, str, str], ...] = (
-    ("SCOPE-UPLOAD", "Arbitrary upload input", r"UploadFile|File\(\.\.\.\)"),
+    # SCOPE-UPLOAD and SCOPE-STREAM were resolved on 2026-08-30: validated file
+    # upload and server-sent-event progress streaming were adopted deliberately and
+    # moved into PRODUCT_SPEC's must-have scope, so the two documents now agree and
+    # the drift finding has been answered. This list is a hand-kept mirror of the
+    # spec rather than a parse of it, so a future scope change has to be made here
+    # as well as there.
     ("SCOPE-SQL", "Arbitrary SQL from the client",
      r"text\(\s*(?:request|body|payload)\.|exec_driver_sql\(\s*(?:request|body|payload)"),
-    ("SCOPE-STREAM", "Streaming responses", r"StreamingResponse|WebSocket|EventSourceResponse"),
     ("SCOPE-SCHEDULER", "A scheduler", r"APScheduler|celery\.schedules|schedule\.every"),
     ("SCOPE-ML", "An ML anomaly model",
      r"IsolationForest|sklearn\.|RandomForest|DBSCAN|LocalOutlierFactor"),
