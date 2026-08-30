@@ -18,6 +18,7 @@ import logging
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from src.agents.state import AnomalyGraphState
 from src.services.llm import get_llm
@@ -214,15 +215,24 @@ def _build_data_context(
 # ---------------------------------------------------------------------------
 
 
-def _strip_code_fences(text: str) -> str:
+def _strip_code_fences(text: Any) -> str:
     """Loại bỏ code fences (```markdown ... ```) nếu LLM bọc output."""
-    text = text.strip()
+    if isinstance(text, list):
+        text = "".join(
+            part.get("text", str(part))
+            if isinstance(part, dict)
+            else getattr(part, "text", str(part))
+            if hasattr(part, "text")
+            else str(part)
+            for part in text
+        )
+    text_str = str(text or "").strip()
     # Match ```markdown, ```md, or ``` at start
     pattern = r"^```(?:markdown|md)?\s*\n(.*?)\n```\s*$"
-    match = re.match(pattern, text, re.DOTALL | re.IGNORECASE)
+    match = re.match(pattern, text_str, re.DOTALL | re.IGNORECASE)
     if match:
         return match.group(1).strip()
-    return text
+    return text_str
 
 
 def _report_matches_anomaly_decision(content: str, decision: str) -> bool:

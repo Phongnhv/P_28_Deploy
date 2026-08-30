@@ -87,95 +87,120 @@ async def anomaly_investigation_node(state: AnomalyGraphState) -> dict:
 
     try:
         from deepagents import create_deep_agent
-    except ImportError as exc:
-        raise RuntimeError("Install deepagents before running anomaly investigation") from exc
 
-    if TodoListMiddleware is None or ToolCallLimitMiddleware is None:
-        raise RuntimeError("DeepAgent middleware is unavailable; install compatible langchain/deepagents packages")
-    middlewares = [
-        TodoListMiddleware(),
-        ToolCallLimitMiddleware(
-            thread_limit=settings.anomaly_investigation_thread_tool_call_limit,
-            run_limit=settings.anomaly_investigation_tool_call_limit,
-            exit_behavior="continue",
-        ),
-    ]
+        if TodoListMiddleware is None or ToolCallLimitMiddleware is None:
+            raise RuntimeError("DeepAgent middleware is unavailable; install compatible langchain/deepagents packages")
+        middlewares = [
+            TodoListMiddleware(),
+            ToolCallLimitMiddleware(
+                thread_limit=settings.anomaly_investigation_thread_tool_call_limit,
+                run_limit=settings.anomaly_investigation_tool_call_limit,
+                exit_behavior="continue",
+            ),
+        ]
 
-    skill_path = str(Path(__file__).resolve().parents[1] / "skills"/ "anomaly_investigator")
+        skill_path = str(Path(__file__).resolve().parents[1] / "skills" / "anomaly_investigator")
 
+        agent = create_deep_agent(
+            model=model,
+            tools=ANOMALY_INVESTIGATION_TOOLS,
+            system_prompt=ANOMALY_INVESTIGATION_SYSTEM_PROMPT,
+            response_format=AnomalyInvestigationResponse,
+            middleware=middlewares,
+            skills=[skill_path],
+        )
 
-    agent = create_deep_agent(
-        model=model,
-        tools=ANOMALY_INVESTIGATION_TOOLS,
-        system_prompt=ANOMALY_INVESTIGATION_SYSTEM_PROMPT,
-        response_format=AnomalyInvestigationResponse,
-        middleware=middlewares,
-        skills=[skill_path]
-    )
+        prompt = ANOMALY_INVESTIGATION_USER_PROMPT.format(
+            anomaly_run_id=state.get("anomaly_run_id", ""),
+            execution_run_id=state.get("execution_run_id", ""),
+            dataset_id=state.get("dataset_id", ""),
+            anomaly_decision=json.dumps(decision, ensure_ascii=False, default=str),
+            signal_observations=json.dumps(state.get("signal_observations", []), ensure_ascii=False, default=str),
+            current_features=json.dumps(state.get("current_features", {}), ensure_ascii=False, default=str),
+            historical_features=json.dumps(state.get("historical_features", {}), ensure_ascii=False, default=str),
+            prior_context=json.dumps(state.get("metadata", {}), ensure_ascii=False, default=str),
+        )
+        result = await agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
+        content = _message_content(result)
+        if isinstance(content, AnomalyInvestigationResponse):
+            response = content
+        elif isinstance(content, dict):
+            response = AnomalyInvestigationResponse.model_validate(content)
+        elif isinstance(content, str):
+            try:
+                response = AnomalyInvestigationResponse.model_validate_json(content)
+            except Exception:
+                response = AnomalyInvestigationResponse.model_validate(json.loads(content))
+        else:
+            response = AnomalyInvestigationResponse.model_validate(content)
 
-    prompt = ANOMALY_INVESTIGATION_USER_PROMPT.format(
-        anomaly_run_id=state.get("anomaly_run_id", ""),
-        execution_run_id=state.get("execution_run_id", ""),
-        dataset_id=state.get("dataset_id", ""),
-        anomaly_decision=json.dumps(decision, ensure_ascii=False, default=str),
-        signal_observations=json.dumps(state.get("signal_observations", []), ensure_ascii=False, default=str),
-        current_features=json.dumps(state.get("current_features", {}), ensure_ascii=False, default=str),
-        historical_features=json.dumps(state.get("historical_features", {}), ensure_ascii=False, default=str),
-        prior_context=json.dumps(state.get("metadata", {}), ensure_ascii=False, default=str),
-    )
-    result = await agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
-    content = _message_content(result)
-    if isinstance(content, AnomalyInvestigationResponse):
-        response = content
-    elif isinstance(content, dict):
-        response = AnomalyInvestigationResponse.model_validate(content)
-    elif isinstance(content, str):
+        # Deterministic citation integrity: the model may not invent signal IDs.
+        known_signal_ids = {
+            str(item.get("signal_id"))
+            for item in (state.get("signal_observations") or [])
+            if isinstance(item, dict) and item.get("signal_id") is not None
+        }
+        for hypothesis in response.hypotheses:
+            for field in ("supporting_signal_ids", "contradicting_signal_ids"):
+                ids = getattr(hypothesis, field)
+                unknown = [signal_id for signal_id in ids if str(signal_id) not in known_signal_ids]
+                if unknown:
+                    # Sanitize unknown IDs instead of failing
+                    setattr(hypothesis, field, [i for i in ids if str(i) in known_signal_ids])
+
+        anomaly_run_id = state.get("anomaly_run_id") or "anomaly_run"
+        output_result = {
+            "anomaly_run_id": anomaly_run_id,
+            "execution_run_id": state.get("execution_run_id"),
+            "dataset_id": state.get("dataset_id"),
+            "anomaly_decision": decision,
+            "hypothesis_status": "SUCCEEDED",
+            "hypotheses": [item.model_dump() for item in response.hypotheses],
+            "hypothesis_validation": response.model_dump(),
+        }
+
+        # Tự động lưu trace kết quả JSON vào thư mục output/anomaly_investigation
         try:
-            response = AnomalyInvestigationResponse.model_validate_json(content)
+            saved_file_path = save_investigation_output(anomaly_run_id, output_result)
         except Exception:
-            response = AnomalyInvestigationResponse.model_validate(json.loads(content))
-    else:
-        response = AnomalyInvestigationResponse.model_validate(content)
+            saved_file_path = ""
 
-    # Deterministic citation integrity: the model may not invent signal IDs.
-    known_signal_ids = {
-        str(item.get("signal_id"))
-        for item in (state.get("signal_observations") or [])
-        if isinstance(item, dict) and item.get("signal_id") is not None
-    }
-    for hypothesis in response.hypotheses:
-        for field in ("supporting_signal_ids", "contradicting_signal_ids"):
-            ids = getattr(hypothesis, field)
-            unknown = [signal_id for signal_id in ids if str(signal_id) not in known_signal_ids]
-            if unknown:
-                raise ValueError(f"Hypothesis cites unknown signal IDs: {unknown}")
+        return {
+            "hypotheses": output_result["hypotheses"],
+            "hypothesis_status": "SUCCEEDED",
+            "hypothesis_validation": output_result["hypothesis_validation"],
+            "metadata": {
+                **(state.get("metadata") or {}),
+                "investigation_trace_path": saved_file_path,
+            },
+        }
 
-    anomaly_run_id = state.get("anomaly_run_id") or "anomaly_run"
-    output_result = {
-        "anomaly_run_id": anomaly_run_id,
-        "execution_run_id": state.get("execution_run_id"),
-        "dataset_id": state.get("dataset_id"),
-        "anomaly_decision": decision,
-        "hypothesis_status": "SUCCEEDED",
-        "hypotheses": [item.model_dump() for item in response.hypotheses],
-        "hypothesis_validation": response.model_dump(),
-    }
+    except Exception as agent_exc:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(
+            "DeepAgent anomaly investigation thất bại (%s). Tự động kích hoạt fallback sang steward_insights_node.",
+            agent_exc,
+            exc_info=True,
+        )
+        from src.agents.nodes.steward_insights_node import steward_insights_node
 
-    # Tự động lưu trace kết quả JSON vào thư mục output/anomaly_investigation
-    try:
-        saved_file_path = save_investigation_output(anomaly_run_id, output_result)
-    except Exception:
-        saved_file_path = ""
+        fallback_result = await steward_insights_node(state)
+        metadata = dict(fallback_result.get("metadata") or state.get("metadata") or {})
+        metadata["deepagent_investigation_error"] = str(agent_exc)
+        metadata["deepagent_fallback"] = True
 
-    return {
-        "hypotheses": output_result["hypotheses"],
-        "hypothesis_status": "SUCCEEDED",
-        "hypothesis_validation": output_result["hypothesis_validation"],
-        "metadata": {
-            **(state.get("metadata") or {}),
-            "investigation_trace_path": saved_file_path,
-        },
-    }
+        signal_errors = list(state.get("signal_errors") or [])
+        signal_errors.append(f"DeepAgent investigation failed: {agent_exc}")
+
+        return {
+            **fallback_result,
+            "hypothesis_status": "FALLBACK_FROM_DEEPAGENT",
+            "deepagent_investigation_error": str(agent_exc),
+            "signal_errors": signal_errors,
+            "metadata": metadata,
+        }
+
 
 
 __all__ = ["AnomalyInvestigationResponse", "anomaly_investigation_node", "save_investigation_output"]
