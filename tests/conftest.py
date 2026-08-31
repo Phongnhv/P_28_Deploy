@@ -24,6 +24,12 @@ def test_db():
     original_db_url = settings.database_url
     original_supabase_url = getattr(settings, "supabase_database_url", None)
     original_agent_mode = settings.agent_mode
+    original_hash_iterations = settings.password_hash_iterations
+    # Bộ test dựng lại database và seed lại tài khoản cho TỪNG test, nên chi phí
+    # KDF thật (600k vòng ≈ 232 ms mỗi hash × 3 tài khoản) cộng dồn thành hàng
+    # phút mà không kiểm chứng thêm được điều gì. Giá trị mặc định mạnh vẫn được
+    # khoá lại bằng một khẳng định riêng trong tests/test_password_hashing.py.
+    settings.password_hash_iterations = 1_000
     settings.database_url = db_url
     # Tests must never inherit a developer's real Supabase/LLM settings from
     # .env; otherwise background jobs read cloud rows and call live models.
@@ -46,6 +52,7 @@ def test_db():
 
     # Restore original settings and engine
     rule_store._engine = original_engine
+    settings.password_hash_iterations = original_hash_iterations
     settings.database_url = original_db_url
     settings.supabase_database_url = original_supabase_url
     settings.agent_mode = original_agent_mode

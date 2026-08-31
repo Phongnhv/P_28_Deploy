@@ -31,7 +31,7 @@ from src.models.database import (
     SourceRowModel,
 )
 from src.models.rule_schemas import RuleStatus
-from src.services.safe_regex import safe_search, validate_regex
+from src.services.safe_regex import safe_search, start_regex_budget, validate_regex
 from src.services.session_service import (
     ensure_default_users,
     ensure_default_workspace,
@@ -111,6 +111,18 @@ def get_engine():
             )
 
         _engine = create_engine(db_url, connect_args=connect_args, **engine_options)
+
+        @event.listens_for(_engine, "before_cursor_execute")
+        def _reset_regex_budget(_conn, _cursor, _statement, _params, _context, _many):
+            """Cấp ngân sách regex mới cho mỗi câu lệnh.
+
+            `MATCH_TIMEOUT_SECONDS` chỉ chặn từng lần gọi, mà hàm REGEXP của
+            SQLite chạy một lần cho mỗi dòng: 50 000 dòng × 24 ms (vừa dưới
+            ngưỡng) đốt khoảng 20 phút CPU mà không lần gọi nào báo động.
+            Đặt ở đây thay vì bọc từng nơi gọi để không chỗ nào bị bỏ sót.
+            """
+            if "sqlite" in db_url:
+                start_regex_budget()
 
         @event.listens_for(_engine, "connect")
         def _set_sqlite_pragma(dbapi_conn, _connection_record):

@@ -203,7 +203,9 @@ def test_publish_api_endpoints():
     assert publish_res.json()["published_count"] == 1
 
     # 2. Gọi API GET /api/v1/dq/active-rules
-    active_res = client.get("/api/v1/dq/active-rules")
+    # Phải kèm dataset_id: liệt kê xuyên MỌI dataset chỉ dành cho ADMIN, còn
+    # đây là STEWARD chỉ có quyền trên yellow_tripdata.
+    active_res = client.get("/api/v1/dq/active-rules", params={"dataset_id": dataset_id})
     assert active_res.status_code == 200
     active_data = active_res.json()
     assert active_data["total_rules"] == 1
@@ -214,8 +216,20 @@ def test_publish_api_endpoints():
     deact_res = client.patch("/api/v1/dq/active-rules/yellow_tripdata.payment_type.ACCEPTED_VALUES/deactivate")
     assert deact_res.status_code == 200
 
-    active_res_after = client.get("/api/v1/dq/active-rules")
+    active_res_after = client.get("/api/v1/dq/active-rules", params={"dataset_id": dataset_id})
     assert active_res_after.json()["total_rules"] == 0
+
+
+def test_active_rules_across_all_datasets_requires_admin():
+    """Không kèm dataset_id nghĩa là liệt kê xuyên tenant — chỉ ADMIN được phép."""
+    client = TestClient(app)
+    login = client.post("/api/v1/session", json={"username": "steward", "password": "steward"})
+    assert login.status_code == 200
+    client.headers["X-CSRF-Token"] = login.json()["csrf_token"]
+
+    denied = client.get("/api/v1/dq/active-rules")
+    assert denied.status_code == 403
+    assert denied.json()["code"] == "ROLE_FORBIDDEN"
 
 
 def test_sqlite_migration_renames_legacy_rule_configuration_key():

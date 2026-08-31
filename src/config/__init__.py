@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     demo_steward_password: str | None = None
     rate_limit_hash_key: str | None = None
     trusted_proxy_cidrs: str = ""
+    #: Số vòng PBKDF2 cho hash mật khẩu MỚI. Mặc định theo khuyến nghị OWASP
+    #: cho PBKDF2-HMAC-SHA256. Hạ xuống CHỈ để chạy test: bộ test dựng lại
+    #: database và seed lại tài khoản cho từng test, nên chi phí KDF thật cộng
+    #: dồn thành hàng phút mà không kiểm chứng thêm được điều gì.
+    password_hash_iterations: int = Field(default=600_000, ge=1_000)
 
     # LLM
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")

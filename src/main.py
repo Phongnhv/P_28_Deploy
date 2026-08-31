@@ -98,6 +98,30 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Baseline browser hardening headers on every response.
+
+    CSP ships as report-only on purpose. The dev frontend serves inline styles
+    and scripts, so enforcing the policy immediately would blank the page; the
+    report-only header collects violations first so the enforced policy can be
+    written from evidence rather than guesswork.
+    """
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    if settings.app_env == "production":
+        # Only over HTTPS; sending HSTS on plain-HTTP local development would
+        # pin the browser to a scheme the dev server does not speak.
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Content-Security-Policy-Report-Only"] = (
+        "default-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+    )
+    return response
+
+
 # Exception handlers for stable error envelope (Step 8)
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):

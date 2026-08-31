@@ -562,6 +562,17 @@ def has_dataset_access(db: Session, session: SessionModel, dataset_id: str, mana
 
 def require_dataset_access(db: Session, session: SessionModel, dataset_id: str, manage: bool = False) -> None:
     if not has_dataset_access(db, session, dataset_id, manage):
+        # Một lần từ chối là bình thường; một loạt từ chối từ cùng một tài khoản
+        # là dấu hiệu dò tìm ngang quyền. Không ghi lại thì không phân biệt được.
+        from src.services.session_service import audit_security_event
+
+        audit_security_event(
+            "ACCESS_DENIED",
+            dataset_id,
+            entity_type="dataset",
+            actor_role=session.role,
+            detail={"username": session.username, "manage": manage},
+        )
         raise HTTPException(
             status_code=403,
             detail={"code": "DATASET_ACCESS_FORBIDDEN", "message": "You do not have access to this dataset."},
@@ -587,7 +598,11 @@ def require_proposal_run_access(
     run = get_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail=f"proposal run_id={run_id!r} does not exist")
-    require_compat_dataset_access(db, session, run.get("dataset_id"), manage=manage)
+    # Dereference before the access check: a version id never matches a
+    # dataset_access row, so checking the raw value refuses the rightful owner.
+    require_compat_dataset_access(
+        db, session, _resolve_dataset_id(db, run.get("dataset_id")), manage=manage
+    )
     return run
 
 
@@ -616,6 +631,44 @@ def require_anomaly_run_access(
         raise HTTPException(status_code=404, detail=f"Execution run {anomaly_run.execution_run_id} not found")
     require_compat_dataset_access(db, session, dq_run.dataset_id, manage=manage)
     return anomaly_run
+
+
+def _resolve_dataset_id(db: Session, linked_entity: str | None) -> str | None:
+    """Resolve the dataset a proposal run belongs to.
+
+    ``JobModel.linked_entity`` holds either a dataset id or an immutable dataset
+    version id, so the version has to be dereferenced before tenancy can be asked.
+    Without this step a run linked to a version id can never match any row in
+    ``dataset_access`` and its rightful owner is refused.
+    """
+    if not linked_entity:
+        return None
+    if linked_entity.startswith("dv-"):
+        version = db.get(DatasetVersionModel, linked_entity)
+        return version.dataset_id if version else None
+    return linked_entity
+
+
+def require_run_access(*, manage: bool = False, param: str = "run_id"):
+    """Tenancy for the ``/dq`` run endpoints, attached at the decorator.
+
+    ``dq_router`` is mounted with a role dependency only, so a caller holding the
+    right role could read, review and publish another tenant's proposal run. The
+    check lives in a dependency rather than in each handler because that is how
+    those gaps arise -- every one of them simply omits the call, and a route added
+    tomorrow would inherit the same gap by doing nothing at all.
+    """
+
+    def _dep(
+        request: Request,
+        session: SessionModel = Depends(get_session),
+        db: Session = Depends(get_db),
+    ) -> str:
+        run_id = str(request.path_params.get(param))
+        run = require_proposal_run_access(db, session, run_id, manage=manage)
+        return _resolve_dataset_id(db, run.get("dataset_id")) or ""
+
+    return _dep
 
 
 # ---------------------------------------------------------------------------
