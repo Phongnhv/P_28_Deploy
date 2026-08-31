@@ -7,6 +7,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+
 def dispatch_cloud_run_job(job_id: str, job_type: str) -> bool:
     """
     Trigger Cloud Run Job execution asynchronously using Run API v2.
@@ -50,14 +51,9 @@ def dispatch_cloud_run_job(job_id: str, job_type: str) -> bool:
             name=name,
             overrides={
                 "container_overrides": [
-                    {
-                        "env": [
-                            {"name": "RUN_JOB_ID", "value": job_id},
-                            {"name": "RUN_JOB_TYPE", "value": job_type}
-                        ]
-                    }
+                    {"env": [{"name": "RUN_JOB_ID", "value": job_id}, {"name": "RUN_JOB_TYPE", "value": job_type}]}
                 ]
-            }
+            },
         )
         client.run_job(request=request)
         logger.info(f"Dispatched Cloud Run Job {name} for task {job_id}")

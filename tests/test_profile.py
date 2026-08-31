@@ -20,14 +20,8 @@ async def test_profile_hidden_before_completion(client):
     assert profile_res.json()["code"] == "NOT_FOUND"
 
     # 2. Trigger ingestion
-    headers = {
-        "X-CSRF-Token": csrf_token,
-        "Idempotency-Key": "profile-ingest-key"
-    }
-    ingest_res = await client.post(
-        "/api/v1/datasets/dataset-nyc-yellow-taxi-50k/ingestions",
-        headers=headers
-    )
+    headers = {"X-CSRF-Token": csrf_token, "Idempotency-Key": "profile-ingest-key"}
+    ingest_res = await client.post("/api/v1/datasets/dataset-nyc-yellow-taxi-50k/ingestions", headers=headers)
     assert ingest_res.status_code == 202
     job_id = ingest_res.json()["job_id"]
 

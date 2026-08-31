@@ -26,6 +26,7 @@ def run_job(job_id: str, job_type: str) -> bool:
         print(f"[LocalWorker] Error executing Job {job_id}: {e}")
         return False
 
+
 @app.post("/run")
 def trigger_job(job_id: str, job_type: str):
     if not run_job(job_id, job_type):

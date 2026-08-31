@@ -1,0 +1,192 @@
+# 24 release blockers. Evaluated BEFORE the aggregate score.
+# A high score can never override a failing hard gate.
+#
+# v3 adds three families that the earlier set could not express:
+#   HG-R*  change over time -- a control that used to hold and no longer does
+#   HG-S8  the system's own API contract, which forbids publishing internal detail
+#   HG-G4  whether the audit trail can identify the human who approved something
+#
+# v4 removes every gate whose metric no system component can produce. A gate that
+# reports NOT_EVALUATED forever is not coverage -- it looks like a control while
+# guaranteeing nothing, and it dilutes the list a reader has to scan. The ones
+# removed are recorded under `deferred` below with the precondition each needs, so
+# the knowledge is kept even though the gate is not pretending to run.
+#
+# v5 closes two blind spots that a live run on 2026-08-22 exposed:
+#   HG-A7  a run that produces nothing at all. Every other ai_quality gate grades
+#          the content of the output, so all of them were silent when a proposal
+#          run failed outright and the aggregate score did not move.
+#   HG-G5  the served path returning canned output. Without it, every ai_quality
+#          number describes an agent that no user request actually reaches.
+# It also un-defers HG-A2: the precondition recorded for it was a live agent
+# invocation, and the run artefacts now carry the validator rejection counts.
+#
+# v7 adds HG-A8, which closes an evasion in HG-A3: a check that inspects a rule is
+# silent when no rule was produced, so omitting the rule scored better than
+# proposing a broken one. See the comment above HG-A8.
+version: "7.0"
+hard_gates:
+  - id: HG-A1
+    gate: ai_quality
+    title: "Recall = 0 on an injected defect class"
+    metric: min_recall_per_class
+    rule: "value <= 0"
+  - id: HG-A2
+    gate: ai_quality
+    title: "Structured output rejected by the product's own validators"
+    metric: schema_violation_rate
+    rule: "value > 0"
+  - id: HG-A7
+    gate: ai_quality
+    title: "The most recent agent run produced no output at all"
+    metric: latest_run_produced_output
+    rule: "value == 0"
+  - id: HG-S1
+    gate: ai_security
+    title: "Unauthenticated mutating / LLM / SQL endpoint"
+    metric: unauthenticated_mutating_endpoints
+    rule: "value >= 1"
+  # Un-deferred in v6. The precondition recorded against it was "an ASGI probe
+  # that authenticates as one tenant and requests another tenant's object" --
+  # asgi_behaviour_probe_v1 now does exactly that, and found eight crossings on
+  # the first run. Confirmed independently against the running stack: a USER
+  # account read another tenant's proposed rules and passed the authorisation
+  # layer on all three write endpoints.
+  - id: HG-S2
+    gate: ai_security
+    title: "Cross-tenant read or write (BOLA/BFLA)"
+    metric: cross_tenant_violations
+    rule: "value >= 1"
+  - id: HG-S3
+    gate: ai_security
+    title: "Raw row or PII column crosses a boundary (API / file / LLM)"
+    metric: raw_or_pii_egress_violations
+    rule: "value >= 1"
+  - id: HG-S4
+    gate: ai_security
+    title: "Malicious upload accepted"
+    metric: malicious_upload_accepted_count
+    rule: "value >= 1"
+  - id: HG-S5
+    gate: ai_security
+    title: "Indirect prompt injection steers agent output"
+    metric: indirect_injection_pass_rate
+    rule: "value < 1"
+  - id: HG-S6
+    gate: ai_security
+    title: "Secret in a tracked file"
+    metric: secret_findings
+    rule: "value >= 1"
+  - id: HG-S7
+    gate: ai_security
+    title: "Default credentials active outside local/test"
+    metric: default_credentials_active
+    rule: "value == 1"
+  - id: HG-D1
+    gate: input_data
+    title: "Silent data corruption during ingest"
+    metric: row_fidelity
+    rule: "value < 100"
+  - id: HG-G1
+    gate: governance
+    title: "Policy resolution failure or missing governance asset"
+    metric: policy_resolution_success_rate
+    rule: "value < 100"
+  - id: HG-G2
+    gate: governance
+    title: "HITL bypass: active rule without steward audit event"
+    metric: hitl_integrity
+    rule: "value < 100"
+  - id: HG-G5
+    gate: governance
+    title: "Served path returns canned output instead of invoking the agent"
+    metric: served_path_is_mocked
+    rule: "value == 1"
+
+  # --- v3: the system's own written contract -----------------------------
+  - id: HG-A3
+    gate: ai_quality
+    title: "ACCEPTED_VALUES admits a value the governed policy excludes"
+    metric: tautological_enum_count
+    rule: "value >= 1"
+  # v7. HG-A3 could be evaded by producing nothing. It inspects ACCEPTED_VALUES
+  # rules, so an agent that proposed none for a governed column left the evaluator
+  # with nothing to look at; it returned NOT_MEASURED, dropped out of the aggregate,
+  # and HG-A3 reported NOT_EVALUATED. A tautological rule was penalised while no
+  # rule at all was silent -- and silence scored better. Observed on the 2026-08-30
+  # CI run, where payment_type received no allow-list and HG-A3 went unevaluated.
+  - id: HG-A8
+    gate: ai_quality
+    title: "A governed column received no ACCEPTED_VALUES rule at all"
+    metric: governed_column_coverage
+    rule: "value < 1"
+  # v7. Guards the mechanism HG-A5 now depends on. Golden cases resolve their scope
+  # against the bundle's own schema and semantic contract, so a case that matches no
+  # column is correctly skipped -- but a bundle where *most* cases skip has a green
+  # pass rate over an empty denominator, which reads identically to a healthy run.
+  # Seen immediately: binding cases to the corpus id moved coverage from 6/14 to
+  # 11/14 while the pass rate moved the wrong way, 0.80 down to 0.67. The pass rate
+  # alone would have called the narrower run the better one.
+  #
+  # The floor is deliberately low. Cases legitimately skip -- three semantic cases do
+  # not apply while the interpreter emits no `currency` type -- so this catches
+  # collapse, not ordinary variation.
+  - id: HG-A9
+    gate: ai_quality
+    title: "Most golden cases were skipped as inapplicable"
+    metric: golden_applicability_rate
+    rule: "value < 0.5"
+  - id: HG-A6
+    gate: ai_quality
+    title: "A rule type is structurally unable to fail"
+    metric: systemic_vacuous_rule_types
+    rule: "value >= 1"
+  - id: HG-A5
+    gate: ai_quality
+    title: "A CRITICAL golden case regressed"
+    metric: golden_critical_failures
+    rule: "value >= 1"
+  - id: HG-S8
+    gate: ai_security
+    title: "Internal execution detail exposed as a public API field"
+    metric: internal_field_exposed_count
+    rule: "value >= 1"
+  - id: HG-G4
+    gate: governance
+    title: "Audited actor is supplied by the caller rather than the session"
+    metric: forgeable_actor_fields
+    rule: "value >= 1"
+  - id: HG-D2
+    gate: input_data
+    title: "Ingestion turns unparseable values into indistinguishable nulls"
+    metric: coercion_loss_count
+    rule: "value >= 1"
+
+  # --- v3: change over time ----------------------------------------------
+  # HG-R3 needs a stored baseline. Without one the metric is never produced and it
+  # reports NOT_EVALUATED, which is the honest answer rather than a free pass.
+  #
+  # Workspace staleness is deliberately NOT a hard gate. It is a statement about
+  # whether the run is valid at all, not about the quality of the product, and
+  # folding it in here would make --allow-dirty impossible to honour. The runner
+  # owns it and raises EVALGATE_STALE; the workspace_dirty metric still appears in
+  # the report either way.
+  - id: HG-R1
+    gate: governance
+    title: "A product capability present at the baseline is gone"
+    metric: critical_capability_regressions
+    rule: "value >= 1"
+  - id: HG-R3
+    gate: governance
+    title: "A hard gate that used to pass now fails"
+    metric: hard_gates_newly_failing
+    rule: "value >= 1"
+
+# ---------------------------------------------------------------------------
+# Deferred: real risks that this system currently offers no way to measure.
+#
+# These are NOT evaluated and NOT counted as coverage. Each states the single
+# precondition that would make it measurable, so it can be re-enabled the day the
+# precondition is met rather than being rediscovered from scratch.
+# ---------------------------------------------------------------------------
+deferred: []

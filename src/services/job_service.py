@@ -7,12 +7,14 @@ from src.models.database import JobModel
 from src.services.rule_store import get_engine
 
 
-def create_job(job_type: str, idempotency_key: str, linked_entity: str = None, correlation_id: str = None) -> tuple[JobModel, bool]:
+def create_job(
+    job_type: str, idempotency_key: str, linked_entity: str = None, correlation_id: str = None
+) -> tuple[JobModel, bool]:
     with Session(get_engine()) as session:
         # Idempotency check
         existing = session.query(JobModel).filter_by(idempotency_key=idempotency_key).first()
         if existing:
-            return existing, False # False means collision
+            return existing, False  # False means collision
 
         new_job = JobModel(
             id=str(uuid.uuid4()),
@@ -20,13 +22,14 @@ def create_job(job_type: str, idempotency_key: str, linked_entity: str = None, c
             idempotency_key=idempotency_key,
             linked_entity=linked_entity,
             correlation_id=correlation_id or str(uuid.uuid4()),
-            status='PENDING',
+            status="PENDING",
             message=f"Queued {job_type}",
         )
         session.add(new_job)
         session.commit()
         session.refresh(new_job)
         return new_job, True
+
 
 def update_job_status(job_id: str, status: str, error: str = None) -> JobModel:
     with Session(get_engine()) as session:
@@ -41,10 +44,10 @@ def update_job_status(job_id: str, status: str, error: str = None) -> JobModel:
             session.refresh(job)
         return job
 
+
 def get_job(job_id: str) -> JobModel:
     with Session(get_engine()) as session:
         return session.query(JobModel).filter_by(id=job_id).first()
-
 
 
 def claim_job(job_id: str, lease_duration_seconds: int = 300) -> bool:
@@ -60,23 +63,23 @@ def claim_job(job_id: str, lease_duration_seconds: int = 300) -> bool:
         if not job:
             return False
 
-        if job.status == 'RUNNING':
-            lease_expires = getattr(job, 'lease_expires_at', None)
+        if job.status == "RUNNING":
+            lease_expires = getattr(job, "lease_expires_at", None)
             if lease_expires and lease_expires.tzinfo is None:
                 lease_expires = lease_expires.replace(tzinfo=UTC)
             if lease_expires and lease_expires < now:
                 # Stale lease, we can reclaim it
-                job.status = 'PENDING'
+                job.status = "PENDING"
                 job.error = "Lease expired, reclaimed by worker"
             else:
                 return False
 
-        if job.status in ['SUCCEEDED', 'COMPLETED', 'FAILED']:
+        if job.status in ["SUCCEEDED", "COMPLETED", "FAILED"]:
             return False
 
-        job.status = 'RUNNING'
+        job.status = "RUNNING"
         job.attempt_count = (job.attempt_count or 0) + 1
-        if hasattr(job, 'lease_expires_at'):
+        if hasattr(job, "lease_expires_at"):
             job.lease_expires_at = now + timedelta(seconds=lease_duration_seconds)
         session.commit()
         return True
@@ -92,7 +95,6 @@ def renew_job_lease(job_id: str, lease_duration_seconds: int = 300) -> bool:
         job.lease_expires_at = now + timedelta(seconds=lease_duration_seconds)
         session.commit()
         return True
-
 def check_and_cleanup_stale_leases() -> int:
     """
     Finds running jobs whose leases have expired and marks them as FAILED_RETRYABLE.
@@ -100,14 +102,11 @@ def check_and_cleanup_stale_leases() -> int:
     """
     now = datetime.now(UTC)
     with Session(get_engine()) as session:
-        stale_jobs = session.query(JobModel).filter(
-            JobModel.status == 'RUNNING',
-            JobModel.lease_expires_at < now
-        ).all()
+        stale_jobs = session.query(JobModel).filter(JobModel.status == "RUNNING", JobModel.lease_expires_at < now).all()
 
         count = 0
         for job in stale_jobs:
-            job.status = 'FAILED_RETRYABLE'
+            job.status = "FAILED_RETRYABLE"
             job.error = "Job lease expired (worker did not report back)"
             count += 1
 

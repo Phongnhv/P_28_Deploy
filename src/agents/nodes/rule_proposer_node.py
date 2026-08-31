@@ -23,6 +23,7 @@ import os
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from langchain_core.messages import SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -40,11 +41,19 @@ from src.agents.tools.profile_digest import (
 )
 from src.config import get_settings
 from src.models.rule_schemas import (
+    DataQualityDimension,
+    EvidenceSourceType,
+    ParameterProvenance,
+    ProposalBasis,
     ProposedRule,
+    RuleConfidence,
     RuleEvidenceSnapshot,
+    RuleParameters,
+    RuleType,
+    Severity,
     TableRuleProposal,
 )
-from src.services.llm import get_llm
+from src.services.llm import get_llm, telemetry_callbacks
 
 logger = logging.getLogger(__name__)
 
@@ -61,17 +70,77 @@ class CandidateTableRuleProposal(BaseModel):
     table: str
     rules: list[CandidateProposedRule] = Field(default_factory=list)
 
+
+class CandidateProposedRuleDraft(BaseModel):
+    """LLM-facing schema before server-owned candidate fields are restored.
+
+    Rule-specific parameter validation intentionally does not run here. Models can
+    omit or alter a parameter even when the allow-listed candidate already contains
+    the authoritative value. The server binds those fields back from the candidate
+    before validating the strict ``CandidateProposedRule`` contract.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str | None = Field(default=None, min_length=1)
+    column: str | None = None
+    rule_type: RuleType
+    parameters: RuleParameters = Field(default_factory=RuleParameters)
+    rule_name: str = Field(min_length=1)
+    business_rationale: str = Field(min_length=1)
+    proposal_basis: ProposalBasis
+    selected_evidence_refs: list[str] = Field(default_factory=list)
+    parameter_provenance: list[ParameterProvenance] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    confidence: RuleConfidence
+    severity: Severity
+    dimension: DataQualityDimension
+    rule_description: str = Field(min_length=1)
+    ai_reasoning: str = Field(min_length=1)
+
+
+class CandidateTableRuleDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    table: str
+    rules: list[CandidateProposedRuleDraft] = Field(default_factory=list)
+
 # ---------------------------------------------------------------------------
 # Domain context & Data dictionary injected vào mỗi lần gọi LLM
 # ---------------------------------------------------------------------------
 
-DOMAIN_CONTEXT = """\
-Hệ thống quản lý dữ liệu vận tải taxi thành phố New York (NYC TLC Yellow Taxi Trip Records).
-Dataset ghi nhận chi tiết các chuyến đi taxi: thời gian đón/trả khách, địa điểm đón/trả (Taxi Zone),
-số lượng hành khách, khoảng cách di chuyển, các khoản cước phí, phụ phí, thuế, phí cầu đường, tiền tip và tổng tiền thanh toán.
-"""
+def _merge_table_business_contexts(state: AgentState) -> dict[str, str]:
+    """Merge new and legacy context fields, with the new field taking precedence."""
+    legacy = state.get("specialized_system_prompts") or {}
+    current = state.get("table_business_contexts") or {}
+    return {
+        **(legacy if isinstance(legacy, dict) else {}),
+        **(current if isinstance(current, dict) else {}),
+    }
 
-DATA_DICTIONARY_PATH = Path(__file__).resolve().parents[3] / "data" / "data_dictionary_trip_records_yellow.json"
+
+def _dictionary_for_table(normalized_dictionary: object, table_name: str) -> dict | str | None:
+    """Resolve one table's dictionary from supported state shapes.
+
+    Inferred dictionaries are stored as ``{"tables": {name: payload}}`` while
+    some callers provide a directly keyed mapping or a single-table payload.
+    Keep this normalization at the node boundary so prompt construction always
+    receives the dictionary for the table being proposed.
+    """
+    if not isinstance(normalized_dictionary, dict):
+        return normalized_dictionary if normalized_dictionary else None
+
+    tables = normalized_dictionary.get("tables")
+    if isinstance(tables, dict) and table_name in tables:
+        return tables[table_name]
+
+    if table_name in normalized_dictionary:
+        return normalized_dictionary[table_name]
+
+    if normalized_dictionary.get("table_name") == table_name:
+        return normalized_dictionary
+
+    return None
 
 
 def _build_coverage_requirements(table_digest: dict) -> list[dict]:
@@ -94,9 +163,7 @@ def _build_coverage_requirements(table_digest: dict) -> list[dict]:
     requirements: list[dict] = []
     digest_columns = table_digest.get("columns") or []
     available_columns = {
-        column.get("name")
-        for column in digest_columns
-        if isinstance(column, dict) and column.get("name")
+        column.get("name") for column in digest_columns if isinstance(column, dict) and column.get("name")
     }
 
     for column in digest_columns:
@@ -110,67 +177,78 @@ def _build_coverage_requirements(table_digest: dict) -> list[dict]:
         signals = set(column.get("signals", []))
         null_pct = column.get("null_pct", 0.0) or 0.0
 
-        if "no_nulls" in signals and (
-            role in {"id", "datetime"}
-            or name in {"vendor_id", "rate_code_id", "payment_type"}
-        ):
-            requirements.append({
-                "column": name,
-                "rule_type": "NOT_NULL",
-                "evidence": ["no_nulls", f"role={role}"],
-            })
+        if "no_nulls" in signals and (role in {"id", "datetime", "category", "categorical"}):
+            requirements.append(
+                {
+                    "column": name,
+                    "rule_type": "NOT_NULL",
+                    "evidence": ["no_nulls", f"role={role}"],
+                }
+            )
 
         if signals.intersection({"has_pk_constraint", "has_unique_constraint", "unique_full_table"}):
-            requirements.append({
-                "column": name,
-                "rule_type": "UNIQUE",
-                "evidence": sorted(signals.intersection({
-                    "has_pk_constraint", "has_unique_constraint", "unique_full_table"
-                })),
-            })
+            requirements.append(
+                {
+                    "column": name,
+                    "rule_type": "UNIQUE",
+                    "evidence": sorted(
+                        signals.intersection({"has_pk_constraint", "has_unique_constraint", "unique_full_table"})
+                    ),
+                }
+            )
 
-        if role == "numeric" and signals.intersection({
-            "has_extreme_outliers", "has_negative_values", "has_zero_values"
-        }):
-            requirements.append({
-                "column": name,
-                "rule_type": "RANGE",
-                "evidence": sorted(signals.intersection({
-                    "has_extreme_outliers", "has_negative_values", "has_zero_values"
-                })),
-            })
+        if role == "numeric" and signals.intersection(
+            {"has_extreme_outliers", "has_negative_values", "has_zero_values"}
+        ):
+            requirements.append(
+                {
+                    "column": name,
+                    "rule_type": "RANGE",
+                    "evidence": sorted(
+                        signals.intersection({"has_extreme_outliers", "has_negative_values", "has_zero_values"})
+                    ),
+                }
+            )
 
         values = [value for value in column.get("values", []) if value is not None]
         if role == "categorical" and values:
-            requirements.append({
-                "column": name,
-                "rule_type": "ACCEPTED_VALUES",
-                "evidence": {"values": values},
-            })
+            requirements.append(
+                {
+                    "column": name,
+                    "rule_type": "ACCEPTED_VALUES",
+                    "evidence": {"values": values},
+                }
+            )
 
         if role == "datetime":
-            requirements.append({
-                "column": name,
-                "rule_type": "FRESHNESS",
-                "evidence": {"range": column.get("range")},
-            })
+            requirements.append(
+                {
+                    "column": name,
+                    "rule_type": "FRESHNESS",
+                    "evidence": {"range": column.get("range")},
+                }
+            )
 
-        if null_pct > 5.0 and name not in {
-            "congestion_surcharge", "airport_fee", "cbd_congestion_fee"
-        }:
-            requirements.append({
-                "column": name,
-                "rule_type": "NULL_RATE",
-                "evidence": {"null_pct": null_pct},
-            })
+        if null_pct > 5.0:
+            requirements.append(
+                {
+                    "column": name,
+                    "rule_type": "NULL_RATE",
+                    "evidence": {"null_pct": null_pct},
+                }
+            )
 
-        is_datetime_col = any(suffix in name for suffix in ["_at", "_time", "_date", "datetime", "pickup", "dropoff"])
+        is_datetime_col = role == "datetime" or any(
+            suffix in name.lower() for suffix in ["_at", "_time", "_date", "datetime"]
+        )
         if "fixed_length" in signals and not is_datetime_col:
-            requirements.append({
-                "column": name,
-                "rule_type": "REGEX_FORMAT",
-                "evidence": {"length_stats": column.get("length_stats")},
-            })
+            requirements.append(
+                {
+                    "column": name,
+                    "rule_type": "REGEX_FORMAT",
+                    "evidence": {"length_stats": column.get("length_stats")},
+                }
+            )
 
     cross_field_operators = {
         "datetime_order": "<=",
@@ -204,24 +282,28 @@ def _build_coverage_requirements(table_digest: dict) -> list[dict]:
             )
             continue
 
-        requirements.append({
-            "column": source_column,
-            "rule_type": "CROSS_FIELD_COMPARISON",
-            "parameters": {
-                "target_column": target_column,
-                "operator": operator,
-            },
-            "evidence": hint,
-        })
+        requirements.append(
+            {
+                "column": source_column,
+                "rule_type": "CROSS_FIELD_COMPARISON",
+                "parameters": {
+                    "target_column": target_column,
+                    "operator": operator,
+                },
+                "evidence": hint,
+            }
+        )
 
-    requirements.append({
-        "column": None,
-        "rule_type": "ROW_COUNT",
-        "parameters": {
-            "min_row_count": max(1, int((table_digest.get("rows") or 0) * 0.8)),
-        },
-        "evidence": {"rows": table_digest.get("rows", 0)},
-    })
+    requirements.append(
+        {
+            "column": None,
+            "rule_type": "ROW_COUNT",
+            "parameters": {
+                "min_row_count": max(1, int((table_digest.get("rows") or 0) * 0.8)),
+            },
+            "evidence": {"rows": table_digest.get("rows", 0)},
+        }
+    )
     return _attach_evidence_items(requirements, table_digest)
 
 
@@ -283,20 +365,24 @@ def _attach_evidence_items(requirements: list[dict], table_digest: dict) -> list
                     prefix = "schema" if "constraint" in reference or reference == "has_pk_constraint" else "profile"
                     reference = f"{prefix}:{column or '_table'}:{reference}"
                 metric = reference.rsplit(".", 1)[-1].rsplit(":", 1)[-1]
-                evidence_items.append({
-                    "id": reference,
-                    "source_type": _evidence_source_type(reference),
-                    "metric": metric,
-                    "value": _digest_metric_value(table_digest, column, metric),
-                })
+                evidence_items.append(
+                    {
+                        "id": reference,
+                        "source_type": _evidence_source_type(reference),
+                        "metric": metric,
+                        "value": _digest_metric_value(table_digest, column, metric),
+                    }
+                )
         elif isinstance(raw_evidence, dict):
             for metric, value in raw_evidence.items():
-                evidence_items.append({
-                    "id": f"profile:{column or '_table'}:{metric}",
-                    "source_type": "DATA_PROFILE",
-                    "metric": metric,
-                    "value": value,
-                })
+                evidence_items.append(
+                    {
+                        "id": f"profile:{column or '_table'}:{metric}",
+                        "source_type": "DATA_PROFILE",
+                        "metric": metric,
+                        "value": value,
+                    }
+                )
         item["evidence_items"] = evidence_items
         enriched.append(item)
     return enriched
@@ -317,9 +403,7 @@ def _find_requirement(rule: ProposedRule, requirements: list[dict]) -> dict | No
 
 def _load_data_dictionary() -> str:
     """Đọc data dictionary JSON từ file data_dictionary_trip_records_yellow.json."""
-    target_path = DATA_DICTIONARY_PATH
-    if not target_path.exists():
-        target_path = Path("data/data_dictionary_trip_records_yellow.json")
+    target_path = Path("data/data_dictionary_trip_records_yellow.json")
 
     if target_path.exists():
         try:
@@ -377,6 +461,153 @@ def _dedupe_candidates(candidates: list[dict]) -> list[dict]:
     return list(merged.values())
 
 
+def _bind_proposal_to_candidates(
+    table_name: str,
+    proposal: BaseModel | dict,
+    candidates: list[dict],
+) -> CandidateTableRuleProposal | TableRuleProposal:
+    """Restore the server-owned rule contract before strict validation.
+
+    Candidate identity, scope, type, parameters, and evidence references are
+    deterministic inputs created by Node 6. The LLM may write the steward-facing
+    narrative and confidence fields, but it cannot remove or mutate those core
+    execution fields.
+    """
+
+    # Preserve the legacy/internal test seam. Production calls this helper with
+    # CandidateTableRuleDraft because ``with_structured_output`` is configured
+    # with that schema below; an already-strict TableRuleProposal has therefore
+    # already passed the old public contract and needs no candidate repair.
+    if isinstance(proposal, TableRuleProposal) and not isinstance(
+        proposal, CandidateTableRuleProposal
+    ):
+        return proposal
+
+    proposal_payload = (
+        proposal.model_dump()
+        if isinstance(proposal, BaseModel)
+        else dict(proposal)
+    )
+    raw_rules = proposal_payload.get("rules") or []
+    if len(raw_rules) < len(candidates):
+        # Not fatal. Demanding one narrative per candidate discarded the entire
+        # batch when the model covered 19 of 20 -- measured on gpt-4o-mini as
+        # "expected 20, received 5" and "expected 10, received 9", both ending in
+        # 0 rules -- and the DeepAgent loop then retried the whole batch, which
+        # is where the minutes and the rate-limit storm came from. Bind what was
+        # covered; the uncovered candidates are simply not proposed this round.
+        logger.warning(
+            "[%s] Model covered %d of %d candidates; proposing the covered ones.",
+            table_name,
+            len(raw_rules),
+            len(candidates),
+        )
+    raw_payloads = [
+        raw_rule.model_dump() if isinstance(raw_rule, BaseModel) else dict(raw_rule)
+        for raw_rule in raw_rules
+    ]
+    unused_payload_indexes = set(range(len(raw_payloads)))
+    ordered_payloads: list[dict] = []
+    # Kept aligned with ordered_payloads, since a candidate with no narrative is
+    # skipped rather than bound.
+    covered_candidates: list[dict] = []
+    uncovered: list[str] = []
+
+    # Associate one model narrative with every server candidate. Correct IDs win;
+    # then an exact column/type match; finally checklist order. This tolerates the
+    # provider duplicating IDs or emitting an extra narrative without ever trusting
+    # model-owned execution fields.
+    for candidate in candidates:
+        candidate_id = str(candidate.get("candidate_id") or "")
+        selected_index = next(
+            (
+                index
+                for index in sorted(unused_payload_indexes)
+                if str(raw_payloads[index].get("candidate_id") or "") == candidate_id
+            ),
+            None,
+        )
+        if selected_index is None:
+            selected_index = next(
+                (
+                    index
+                    for index in sorted(unused_payload_indexes)
+                    if raw_payloads[index].get("column") == candidate.get("column")
+                    and str(
+                        raw_payloads[index].get("rule_type").value
+                        if isinstance(raw_payloads[index].get("rule_type"), RuleType)
+                        else raw_payloads[index].get("rule_type")
+                    ) == str(candidate.get("rule_type"))
+                ),
+                None,
+            )
+        if selected_index is None and unused_payload_indexes:
+            selected_index = min(unused_payload_indexes)
+        if selected_index is None:
+            uncovered.append(candidate_id)
+            continue
+        ordered_payloads.append(raw_payloads[selected_index])
+        covered_candidates.append(candidate)
+        unused_payload_indexes.remove(selected_index)
+
+    if uncovered and not ordered_payloads:
+        # Nothing at all came back for this batch; that is a real failure.
+        raise ValueError(
+            f"No LLM narrative for any of the {len(candidates)} server candidates"
+        )
+    if uncovered:
+        logger.info(
+            "[%s] %d candidate(s) had no narrative and were left unproposed: %s",
+            table_name,
+            len(uncovered),
+            ", ".join(uncovered[:5]) + ("…" if len(uncovered) > 5 else ""),
+        )
+
+    if unused_payload_indexes:
+        logger.warning(
+            "[%s] Ignoring %d extra LLM rule narrative(s); server checklist has %d candidates",
+            table_name,
+            len(unused_payload_indexes),
+            len(candidates),
+        )
+
+    bound_rules: list[CandidateProposedRule] = []
+    used_candidate_ids: set[str] = set()
+
+    for payload, candidate in zip(ordered_payloads, covered_candidates):
+        candidate_id = str(candidate.get("candidate_id") or "")
+        if not candidate_id:
+            raise ValueError("Server candidate is missing candidate_id after deduplication")
+        if candidate_id in used_candidate_ids:
+            raise ValueError(
+                f"Server candidate binding reused candidate_id={candidate_id!r}"
+            )
+
+        evidence_refs = [
+            str(item.get("id"))
+            for item in candidate.get("evidence_items") or []
+            if isinstance(item, dict) and item.get("id")
+        ]
+        if not evidence_refs:
+            raise ValueError(f"Candidate {candidate_id!r} has no evidence reference")
+
+        # These fields are owned by the server-side candidate. Clearing provenance
+        # lets ProposedRule's bounded compatibility adapter recreate one exact entry
+        # per active candidate parameter from the deterministic evidence refs.
+        payload.update({
+            "candidate_id": candidate_id,
+            "column": candidate.get("column"),
+            "rule_type": candidate.get("rule_type"),
+            "parameters": candidate.get("parameters") or {},
+            "selected_evidence_refs": evidence_refs,
+            "parameter_provenance": [],
+        })
+        bound_rules.append(CandidateProposedRule.model_validate(payload))
+        used_candidate_ids.add(candidate_id)
+
+    return CandidateTableRuleProposal(table=table_name, rules=bound_rules)
+
+
 def _candidate_batches(candidates: list[dict], batch_size: int) -> list[list[dict]]:
     return [candidates[index:index + batch_size] for index in range(0, len(candidates), batch_size)]
 
@@ -421,6 +652,137 @@ def _filter_semantic_context(semantic_contract: dict | None, candidates: list[di
     return compact
 
 
+def _message_content(result: Any) -> Any:
+    if isinstance(result, CandidateTableRuleProposal):
+        return result
+    if isinstance(result, dict):
+        if "structured_response" in result and result["structured_response"] is not None:
+            return result["structured_response"]
+        messages = result.get("messages", [])
+        if messages:
+            last_msg = messages[-1]
+            return getattr(last_msg, "content", last_msg)
+    return result
+
+
+async def _propose_for_table_deepagent(
+    table_name: str,
+    table_digest: dict,
+    model,
+    candidates: list[dict] | None = None,
+    semantic_contract: dict | None = None,
+    business_context: str | None = None,
+    data_dictionary: dict | str | None = None,
+    dataset_id: str = "unknown",
+    specialized_system_prompt: str | None = None,
+) -> CandidateTableRuleProposal:
+    """Sử dụng DeepAgent (ReAct pattern + Tools) để điều tra và đề xuất rules."""
+    from deepagents import GeneralPurposeSubagentProfile, HarnessProfile, create_deep_agent, register_harness_profile
+    try:
+        from langchain.agents.middleware.todo import TodoListMiddleware
+        from langchain.agents.middleware.tool_call_limit import ToolCallLimitMiddleware
+    except ImportError:
+        TodoListMiddleware = None  # noqa: N806
+        ToolCallLimitMiddleware = None  # noqa: N806
+
+    from src.agents.nodes.templates import (
+        RULE_PROPOSER_AGENT_SYSTEM_PROMPT,
+        RULE_PROPOSER_AGENT_USER_PROMPT,
+    )
+    from src.agents.tools.rule_proposer_tools import RULE_PROPOSER_TOOLS
+    settings = get_settings()
+
+    model_name = getattr(settings, f"{settings.llm_provider}_model_name", "rule-proposer")
+    model_key = f"{settings.llm_provider}:{model_name}"
+    try:
+        register_harness_profile(
+            model_key,
+            HarnessProfile(
+                excluded_tools=frozenset({"ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute", "task"}),
+                general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
+            ),
+        )
+    except Exception:
+        pass
+
+    system_prompt = RULE_PROPOSER_AGENT_SYSTEM_PROMPT
+    if specialized_system_prompt:
+        system_prompt = f"{specialized_system_prompt}\n\n{RULE_PROPOSER_AGENT_SYSTEM_PROMPT}"
+
+    middlewares = []
+    if TodoListMiddleware is not None and ToolCallLimitMiddleware is not None:
+        middlewares = [
+            TodoListMiddleware(),
+            ToolCallLimitMiddleware(
+                thread_limit=settings.rule_proposer_thread_tool_call_limit,
+                run_limit=settings.rule_proposer_max_tool_calls,
+                # Must stay "continue". "end" is far faster (33s / 5 calls versus
+                # ten minutes / 75 calls) but it stops the run the moment the
+                # tool budget is spent, before the agent emits its structured
+                # answer -- measured at budgets 6 and 15, both failed with
+                # "could not produce a valid structured response". Speed is not
+                # worth returning nothing.
+                exit_behavior="continue",
+            ),
+        ]
+
+    skill_path = str(Path(__file__).resolve().parents[1] / "skills"/ "rule_proposer")
+
+    agent = create_deep_agent(
+        model=model,
+        tools=RULE_PROPOSER_TOOLS,
+        system_prompt=system_prompt,
+        response_format=CandidateTableRuleProposal,
+        middleware=middlewares,
+        skills=[skill_path],
+    )
+
+    if candidates is not None:
+        coverage_requirements = json.dumps(candidates, ensure_ascii=False)
+    else:
+        coverage_requirements = json.dumps(
+            _build_coverage_requirements(table_digest),
+            ensure_ascii=False,
+        )
+
+    dict_content = (
+        json.dumps(data_dictionary, ensure_ascii=False, indent=2)
+        if isinstance(data_dictionary, dict)
+        else (str(data_dictionary) if data_dictionary else "None")
+    )
+
+    prompt = RULE_PROPOSER_AGENT_USER_PROMPT.format(
+        table_name=table_name,
+        dataset_id=dataset_id,
+        business_context=business_context or "Không có ngữ cảnh nghiệp vụ bổ sung.",
+        coverage_requirements=coverage_requirements,
+        table_digest=json.dumps(table_digest, ensure_ascii=False),
+        semantic_contract=json.dumps(semantic_contract or {}, ensure_ascii=False),
+        data_dictionary=dict_content,
+    )
+
+    # Tool events are dispatched by the caller's callback manager, not the
+    # model's, so the handlers are attached here as well. Otherwise the trace
+    # shows every model call and no tool the agent actually used.
+    result = await agent.ainvoke(
+        {"messages": [{"role": "user", "content": prompt}]},
+        config={"callbacks": telemetry_callbacks()},
+    )
+    content = _message_content(result)
+
+    if isinstance(content, CandidateTableRuleProposal):
+        return content
+    elif isinstance(content, dict):
+        return CandidateTableRuleProposal.model_validate(content)
+    elif isinstance(content, str):
+        try:
+            return CandidateTableRuleProposal.model_validate_json(content)
+        except Exception:
+            return CandidateTableRuleProposal.model_validate(json.loads(content))
+    else:
+        raise ValueError("DeepAgent returned an unrecognized structured response")
+
+
 async def _propose_for_table(
     table_name: str,
     table_digest: dict,
@@ -428,11 +790,20 @@ async def _propose_for_table(
     semaphore: asyncio.Semaphore,
     max_retries: int,
     semantic_contract: dict | None = None,
+    business_context: str | None = None,
+    data_dictionary: dict | str | None = None,
     candidates: list[dict] | None = None,
     dataset_id: str = "unknown",
     specialized_system_prompt: str | None = None,
+    mode: str | None = None,
+    raw_llm=None,
+    batch_index: int = 1,
 ) -> CandidateTableRuleProposal:
     """Gọi LLM một lần cho một bảng, bảo vệ bằng semaphore + retry."""
+    from src.utils.metrics_tracker import get_metrics_tracker
+    tracker = get_metrics_tracker()
+    settings = get_settings()
+    active_mode = mode or getattr(settings, "rule_proposer_mode", "deepagent")
     columns = [col["name"] for col in table_digest.get("columns", [])]
     dashboard_mode = bool(table_digest.get("dashboard_candidate_mode"))
     historical = [] if dashboard_mode else query_historical_rules(table_name, columns)
@@ -443,14 +814,64 @@ async def _propose_for_table(
             try:
                 entry_ts = datetime.now()
                 logger.info(
-                    "[%s] Bắt đầu gọi LLM (attempt %d/%d) lúc %s",
+                    "[%s] Bắt đầu đề xuất rules [Mode: %s] (attempt %d/%d) lúc %s",
                     table_name,
+                    active_mode.upper(),
                     attempt + 1,
                     max_retries + 1,
                     entry_ts.isoformat(),
                 )
 
-                is_taxi = dataset_id.lower().startswith("nyc-yellow") or "taxi" in dataset_id.lower()
+                if active_mode == "deepagent" and raw_llm is not None:
+                    try:
+                        result = await _propose_for_table_deepagent(
+                            table_name=table_name,
+                            table_digest=table_digest,
+                            model=raw_llm,
+                            candidates=candidates,
+                            semantic_contract=semantic_contract,
+                            business_context=business_context,
+                            data_dictionary=data_dictionary,
+                            dataset_id=dataset_id,
+                            specialized_system_prompt=specialized_system_prompt,
+                        )
+                        exit_ts = datetime.now()
+                        duration = (exit_ts - entry_ts).total_seconds()
+                        logger.info(
+                            "[%s] Hoàn thành DeepAgent (attempt %d) sau %.2fs — %d rules",
+                            table_name,
+                            attempt + 1,
+                            duration,
+                            len(result.rules),
+                        )
+                        tracker.record_deepagent_run(
+                            table_name=table_name,
+                            batch_index=batch_index,
+                            duration_seconds=duration,
+                            rules_count=len(result.rules),
+                            mode="deepagent",
+                            status="SUCCESS",
+                        )
+                        return result
+                    except Exception as agent_exc:
+                        exit_ts = datetime.now()
+                        duration = (exit_ts - entry_ts).total_seconds()
+                        tracker.record_deepagent_run(
+                            table_name=table_name,
+                            batch_index=batch_index,
+                            duration_seconds=duration,
+                            rules_count=0,
+                            mode="deepagent",
+                            status="FAILED",
+                            error=str(agent_exc),
+                        )
+                        logger.exception(
+                            "[%s] DeepAgent gặp lỗi (%s), fallback sang 1-shot structured LLM",
+                            table_name,
+                            agent_exc,
+                        )
+                        if not getattr(settings, "rule_proposer_allow_legacy_fallback", True):
+                            raise
 
                 if candidates is not None:
                     coverage_requirements = json.dumps(candidates, ensure_ascii=False)
@@ -466,50 +887,71 @@ async def _propose_for_table(
                         table_digest=json.dumps(table_digest, ensure_ascii=False),
                         coverage_requirements=coverage_requirements,
                     )
-                elif not is_taxi:
-                    from src.agents.nodes.templates import generic_rule_proposer_prompt
-                    messages = generic_rule_proposer_prompt.format_messages(
-                        table_name=table_name,
-                        table_digest=json.dumps(table_digest, ensure_ascii=False),
-                        semantic_contract=json.dumps(semantic_contract or {}, ensure_ascii=False),
-                        historical_rules=json.dumps(historical, ensure_ascii=False),
-                        coverage_requirements=coverage_requirements,
-                    )
                 else:
+                    dict_content = (
+                        json.dumps(data_dictionary, ensure_ascii=False, indent=2)
+                        if isinstance(data_dictionary, dict)
+                        else (str(data_dictionary) if data_dictionary else "None")
+                    )
                     messages = rule_proposer_prompt.format_messages(
                         table_name=table_name,
                         table_digest=json.dumps(table_digest, ensure_ascii=False),
-                        domain_context=DOMAIN_CONTEXT,
-                        data_dictionary=_load_data_dictionary(),
+                        semantic_contract=json.dumps(semantic_contract or {}, ensure_ascii=False),
+                        business_context=business_context or "Không có ngữ cảnh nghiệp vụ bổ sung.",
+                        data_dictionary=dict_content,
                         historical_rules=json.dumps(historical, ensure_ascii=False),
                         coverage_requirements=coverage_requirements,
                         few_shot_examples=_RULE_PROPOSER_FEW_SHOT,
                     )
+                system_additions: list[str] = []
                 if specialized_system_prompt:
-                    guardrails = (
-                        "\n\nReturn only a valid TableRuleProposal. Propose rules only from the "
-                        "provided candidates, keep candidate_id and evidence references exact, "
-                        "and do not invent columns, metrics, thresholds, or evidence."
+                    system_additions.append(
+                        "=== NODE 7 DOMAIN CONTEXT ===\n" + specialized_system_prompt
                     )
+                if candidates is not None:
+                    system_additions.append(
+                        "=== SERVER CANDIDATE CONTRACT ===\n"
+                        "Return every provided candidate exactly once. Copy candidate_id, column, "
+                        "rule_type, parameters, and evidence item IDs exactly. These fields are "
+                        "server-owned; do not omit, alter, or invent them."
+                    )
+                if last_exc is not None:
+                    system_additions.append(
+                        "=== PREVIOUS OUTPUT REJECTED ===\n"
+                        f"Validation error: {str(last_exc)[:1200]}\n"
+                        "Correct the structured output and return the complete candidate batch."
+                    )
+                if system_additions:
+                    original_system = str(messages[0].content)
                     messages = [
-                        SystemMessage(content=specialized_system_prompt + guardrails),
+                        SystemMessage(content=original_system + "\n\n" + "\n\n".join(system_additions)),
                         *messages[1:],
                     ]
-                result: CandidateTableRuleProposal = await structured_llm.ainvoke(messages)
+                draft: CandidateTableRuleDraft = await structured_llm.ainvoke(messages)
+                result = _bind_proposal_to_candidates(table_name, draft, candidates or [])
                 exit_ts = datetime.now()
+                duration = (exit_ts - entry_ts).total_seconds()
                 logger.info(
-                    "[%s] Hoàn thành (attempt %d) sau %.2fs — %d rules",
+                    "[%s] Hoàn thành Legacy 1-shot (attempt %d) sau %.2fs — %d rules",
                     table_name,
                     attempt + 1,
-                    (exit_ts - entry_ts).total_seconds(),
+                    duration,
                     len(result.rules),
+                )
+                tracker.record_deepagent_run(
+                    table_name=table_name,
+                    batch_index=batch_index,
+                    duration_seconds=duration,
+                    rules_count=len(result.rules),
+                    mode="legacy",
+                    status="SUCCESS",
                 )
                 return result
 
             except (ValidationError, Exception) as exc:
                 last_exc = exc
                 if attempt < max_retries:
-                    wait_seconds = 2 ** attempt  # 1s, 2s, 4s …
+                    wait_seconds = 2**attempt  # 1s, 2s, 4s …
                     logger.warning(
                         "[%s] Lỗi attempt %d: %s — thử lại sau %ds",
                         table_name,
@@ -533,6 +975,7 @@ async def _propose_for_table(
 # Helper: validate + stamp rule_id cho một ProposedRule
 # ---------------------------------------------------------------------------
 
+
 def _stamp_rule(
     rule: ProposedRule,
     table_name: str,
@@ -548,9 +991,7 @@ def _stamp_rule(
     col_key = rule.column if rule.column else "_table"
     if rule.rule_type.value == "CROSS_FIELD_COMPARISON":
         target_column = rule.parameters.target_column
-        base_id = (
-            f"{table_name}.{col_key}.VS.{target_column}.{rule.rule_type.value}"
-        )
+        base_id = f"{table_name}.{col_key}.VS.{target_column}.{rule.rule_type.value}"
     else:
         base_id = f"{table_name}.{col_key}.{rule.rule_type.value}"
 
@@ -578,8 +1019,7 @@ def _stamp_rule(
     evidence_items = (requirement or {}).get("evidence_items", [])
     if requirement is None:
         evidence_items = [
-            {"id": ref, "source_type": _evidence_source_type(ref), "value": None}
-            for ref in rule.selected_evidence_refs
+            {"id": ref, "source_type": _evidence_source_type(ref), "value": None} for ref in rule.selected_evidence_refs
         ]
     evidence_by_id = {item["id"]: item for item in evidence_items}
     selected_refs = list(rule.selected_evidence_refs)
@@ -624,12 +1064,12 @@ def _stamp_rule(
     sample = digest.get("sample") or {}
     dashboard_full_table = bool(digest.get("dashboard_candidate_mode"))
     evidence = RuleEvidenceSnapshot(
-        sample_row_count=int(digest.get("rows") or 0) if dashboard_full_table else int(sample.get("n") or digest.get("rows") or 0),
+        sample_row_count=int(digest.get("rows") or 0)
+        if dashboard_full_table
+        else int(sample.get("n") or digest.get("rows") or 0),
         sample_rate=1.0 if dashboard_full_table else float(sample.get("rate", 1.0)),
         sampling_caveat=sample.get("caveat"),
-        observed_metrics={
-            ref: evidence_by_id[ref].get("value") for ref in selected_refs
-        },
+        observed_metrics={ref: evidence_by_id[ref].get("value") for ref in selected_refs},
         source_refs=selected_refs,
     )
 
@@ -657,9 +1097,124 @@ def _stamp_rule(
     }
 
 
+def _promote_candidates_to_rules(
+    candidates_by_table: dict[str, list[dict]],
+    run_id: str,
+    per_table_digest: dict[str, dict],
+) -> list[dict]:
+    """Heuristic Rule Promotion: Tự động chuyển đổi các rule_candidates đã xác thực thành ProposedRule khi LLM gặp sự cố."""
+    stamped_rules: list[dict] = []
+    used_ids: set[str] = set()
+    stamped_keys: set[str] = set()
+
+    dimension_map = {
+        "NOT_NULL": DataQualityDimension.COMPLETENESS,
+        "UNIQUE": DataQualityDimension.UNIQUENESS,
+        "RANGE": DataQualityDimension.VALIDITY,
+        "ACCEPTED_VALUES": DataQualityDimension.VALIDITY,
+        "REGEX_FORMAT": DataQualityDimension.VALIDITY,
+        "CROSS_FIELD_COMPARISON": DataQualityDimension.CONSISTENCY,
+        "NULL_RATE": DataQualityDimension.COMPLETENESS,
+        "ROW_COUNT": DataQualityDimension.COMPLETENESS,
+        "FRESHNESS": DataQualityDimension.FRESHNESS,
+    }
+
+    for table_name, candidates in candidates_by_table.items():
+        table_digest = per_table_digest.get(table_name, {})
+        for cand in candidates:
+            if not isinstance(cand, dict):
+                continue
+            col = cand.get("column")
+            rule_type_raw = str(cand.get("rule_type") or "").upper()
+            try:
+                rule_type_enum = RuleType(rule_type_raw)
+            except ValueError:
+                continue
+
+            params = cand.get("parameters") or {}
+            evidence_items = cand.get("evidence_items") or []
+            selected_refs = [
+                item["id"] for item in evidence_items if isinstance(item, dict) and "id" in item
+            ]
+            if not selected_refs:
+                evidence_refs_list = cand.get("evidence") or []
+                selected_refs = [str(r) for r in evidence_refs_list] if evidence_refs_list else [f"profile:{table_name}:{col or '_table'}"]
+
+            col_display = f"cột '{col}'" if col else f"bảng '{table_name}'"
+            rule_name = f"{table_name}_{col}_{rule_type_raw}".lower() if col else f"{table_name}_{rule_type_raw}".lower()
+            desc = f"Kiểm tra chất lượng {rule_type_raw} cho {col_display} trên bảng '{table_name}'."
+
+            dim = dimension_map.get(rule_type_raw, DataQualityDimension.VALIDITY)
+
+            provenance = [
+                ParameterProvenance(
+                    parameter_name=k,
+                    source_type=EvidenceSourceType.DATA_PROFILE,
+                    source_ref=selected_refs[0],
+                    derivation_method="heuristic_candidate_promoter",
+                )
+                for k in params.keys()
+            ]
+
+            confidence = RuleConfidence(
+                overall=0.60,
+                evidence_strength=0.60,
+                business_support=0.60,
+                sample_representativeness=0.60,
+                explanation="Được đề xuất tự động từ phân tích thống kê và hợp đồng dữ liệu (Heuristic Fallback).",
+            )
+
+            try:
+                rule_obj = ProposedRule(
+                    candidate_id=cand.get("candidate_id") or f"cand_{table_name}_{col}_{rule_type_raw}",
+                    column=col,
+                    rule_type=rule_type_enum,
+                    parameters=RuleParameters(**params),
+                    rule_name=rule_name,
+                    business_rationale="Đề xuất luật tự động dựa trên phân tích thống kê phân vị và tính toàn vẹn của dữ liệu (Heuristic Fallback).",
+                    proposal_basis=ProposalBasis.DATA_PROFILE,
+                    selected_evidence_refs=selected_refs,
+                    parameter_provenance=provenance,
+                    assumptions=["Được sinh tự động từ thống kê profile để duy trì tính liên tục của workflow khi LLM gián đoạn."],
+                    confidence=confidence,
+                    severity=Severity.MEDIUM,
+                    dimension=dim,
+                    rule_description=desc,
+                    ai_reasoning="Dịch vụ LLM tạm thời gián đoạn. Hệ thống tự động nâng cấp Rule Candidate thống kê thành Proposed Rule hợp lệ.",
+                )
+
+                stamped = _stamp_rule(
+                    rule_obj,
+                    table_name,
+                    run_id,
+                    used_ids,
+                    cand,
+                    table_digest,
+                )
+                if stamped:
+                    sig = json.dumps(
+                        {
+                            "table": stamped.get("table_name"),
+                            "column": stamped.get("column"),
+                            "rule_type": stamped.get("rule_type"),
+                            "parameters": stamped.get("parameters") or {},
+                        },
+                        sort_keys=True,
+                        default=str,
+                    )
+                    if sig not in stamped_keys:
+                        stamped_keys.add(sig)
+                        stamped_rules.append(stamped)
+            except Exception as e:
+                logger.warning("Không thể promote candidate %s: %s", cand, e)
+
+    return stamped_rules
+
+
 # ---------------------------------------------------------------------------
 # Main node: rule_proposer_node
 # ---------------------------------------------------------------------------
+
 
 async def rule_proposer_node(state: AgentState) -> dict:
     """Rule Proposer Node — fan-out LLM structured output per table.
@@ -692,7 +1247,9 @@ async def rule_proposer_node(state: AgentState) -> dict:
 
     out_dir = getattr(settings, "output_dir", None)
     res_dir = getattr(settings, "results_dir", None)
-    base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+    base_dir = (
+        out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+    )
     rule_proposer_dir = Path(base_dir) / "rule_proposer"
 
     # 2. Debug dump (tuỳ chọn)
@@ -702,7 +1259,7 @@ async def rule_proposer_node(state: AgentState) -> dict:
 
     # 3. Chuẩn bị LLM với structured output
     llm = get_llm(settings.llm_provider, temperature=0.1)
-    structured_llm = llm.with_structured_output(CandidateTableRuleProposal)
+    structured_llm = llm.with_structured_output(CandidateTableRuleDraft)
 
     # 4. Fan-out in bounded batches. Each request sees only relevant columns.
     semaphore = asyncio.Semaphore(settings.rule_proposer_concurrency)
@@ -713,6 +1270,9 @@ async def rule_proposer_node(state: AgentState) -> dict:
 
     contract = state.get("semantic_contract") or {}
     tables_contract = contract.get("tables", {})
+
+    business_contexts = _merge_table_business_contexts(state)
+    normalized_dict = state.get("normalized_data_dictionary") or {}
 
     all_candidates = state.get("rule_candidates", [])
     candidates_by_table: dict[str, list[dict]] = {}
@@ -745,9 +1305,13 @@ async def rule_proposer_node(state: AgentState) -> dict:
                 semantic_contract=_filter_semantic_context(
                     tables_contract.get(table_name), candidate_batch
                 ),
+                business_context=business_contexts.get(table_name),
+                data_dictionary=_dictionary_for_table(normalized_dict, table_name),
                 candidates=candidate_batch,
                 dataset_id=dataset_id,
                 specialized_system_prompt=specialized_prompts.get(table_name),
+                raw_llm=llm,
+                batch_index=_batch_index,
             )
             for table_name, _batch_index, candidate_batch in batch_jobs
         ],
@@ -803,15 +1367,33 @@ async def rule_proposer_node(state: AgentState) -> dict:
                 stamped_rule_keys.add(signature)
                 flat_rules.append(stamped)
 
-    # Never persist a partial policy set when one of its batches failed.
+    heuristic_fallback_used = False
     if errors:
-        flat_rules = []
+        # Nếu TẤT CẢ các batch đều thất bại (LLM service gián đoạn hoàn toàn), kích hoạt Heuristic Rule Promotion
+        if len(errors) == len(batch_jobs) and candidates_by_table and state.get("allow_heuristic_fallback", True):
+            logger.warning(
+                "Tất cả các lượt gọi LLM đều thất bại (%d/%d batches). Kích hoạt Heuristic Rule Promotion từ candidates.",
+                len(errors),
+                len(batch_jobs),
+            )
+            promoted = _promote_candidates_to_rules(candidates_by_table, run_id, per_table)
+            if promoted:
+                flat_rules = promoted
+                heuristic_fallback_used = True
+                logger.info("Heuristic Rule Promotion đã sinh thành công %d proposed rules dự phòng.", len(flat_rules))
+            else:
+                flat_rules = []
+        else:
+            # Khi một phần batch bị lỗi: fail-closed để tránh lưu bộ luật chắp vá
+            flat_rules = []
+
 
     logger.info(
-        "rule_proposer_node hoàn thành: run_id=%s | %d rules | %d errors",
+        "rule_proposer_node hoàn thành: run_id=%s | %d rules | %d errors | fallback=%s",
         run_id,
         len(flat_rules),
         len(errors),
+        heuristic_fallback_used,
     )
 
     # Xuất trace JSON proposed rules
@@ -824,6 +1406,7 @@ async def rule_proposer_node(state: AgentState) -> dict:
             "generated_at": datetime.now().isoformat(),
             "total_rules": len(flat_rules),
             "total_errors": len(errors),
+            "heuristic_fallback_used": heuristic_fallback_used,
             "proposed_rules": flat_rules,
             "errors": errors,
         }
@@ -838,18 +1421,23 @@ async def rule_proposer_node(state: AgentState) -> dict:
         "rule_run_id": run_id,
     }
 
-    if errors:
-        result["error"] = (
-            f"Rule proposer failed closed because {len(errors)}/{len(batch_jobs)} batch(es) failed: "
-            + "; ".join(
-                f"{e.get('table')} batch {e.get('batch')}: {e.get('error')}"
-                for e in errors[:3]
+    if not flat_rules:
+        if errors:
+            result["error"] = (
+                f"Rule proposer failed closed because {len(errors)}/{len(batch_jobs)} batch(es) failed: "
+                + "; ".join(
+                    f"{e.get('table')} batch {e.get('batch')}: {e.get('error')}"
+                    for e in errors[:3]
+                )
             )
-        )
-    elif not flat_rules:
-        result["error"] = "Rule proposer returned no valid structured proposals."
+        else:
+            result["error"] = "Rule proposer returned no valid structured proposals."
+    elif heuristic_fallback_used:
+        result["heuristic_fallback_used"] = True
 
     return result
+
+
 
 # ---------------------------------------------------------------------------
 
@@ -870,9 +1458,7 @@ async def persist_rules_node(state: AgentState) -> dict:
         logger.warning("persist_rules_node: không có rule nào để lưu.")
         n_saved = 0
     else:
-        n_saved = await asyncio.to_thread(
-            save_proposed_rules, run_id, dataset_id, proposed_rules
-        )
+        n_saved = await asyncio.to_thread(save_proposed_rules, run_id, dataset_id, proposed_rules)
         logger.info("persist_rules_node: đã lưu %d rules (run_id=%s)", n_saved, run_id)
 
     return {
@@ -887,6 +1473,7 @@ async def persist_rules_node(state: AgentState) -> dict:
 # ---------------------------------------------------------------------------
 # Debug harness
 # ---------------------------------------------------------------------------
+
 
 async def main():
     """Chạy rule_proposer_node từ file digest đã lưu.
@@ -938,4 +1525,3 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
     # Run test syntax: python -m src.agents.nodes.rule_proposer_node
-

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 UI/UX Pro Max Core - BM25 search engine for UI/UX style guides
 """
@@ -7,9 +6,9 @@ UI/UX Pro Max Core - BM25 search engine for UI/UX style guides
 import csv
 import difflib
 import re
-from pathlib import Path
-from math import log
 from collections import defaultdict
+from math import log
+from pathlib import Path
 
 # ============ CONFIGURATION ============
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -369,7 +368,7 @@ def _load_csv_snapshot(filepath, attempts=3):
 
     for _ in range(attempts):
         before = _file_signature(filepath)
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(filepath, encoding='utf-8') as f:
             rows = list(csv.DictReader(f))
         after = _file_signature(filepath)
         if before == after:

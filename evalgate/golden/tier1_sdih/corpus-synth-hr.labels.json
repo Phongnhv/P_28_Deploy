@@ -1,0 +1,4046 @@
+{
+  "dataset_id": "corpus-synth-hr",
+  "seed": 20260819,
+  "applicable_classes": [
+    "CROSS_FIELD_VIOLATION",
+    "DUPLICATE_ROW",
+    "FORMAT_VIOLATION",
+    "INVALID_CATEGORY",
+    "MISSING_VALUE",
+    "OUTLIER",
+    "OUT_OF_RANGE",
+    "SIGN_FLIP",
+    "STALE_TIMESTAMP",
+    "TYPE_VIOLATION"
+  ],
+  "injected_classes": [
+    "CROSS_FIELD_VIOLATION",
+    "DUPLICATE_ROW",
+    "FORMAT_VIOLATION",
+    "INVALID_CATEGORY",
+    "MISSING_VALUE",
+    "OUTLIER",
+    "OUT_OF_RANGE",
+    "SIGN_FLIP",
+    "STALE_TIMESTAMP",
+    "TYPE_VIOLATION"
+  ],
+  "not_applicable_classes": [],
+  "counts_by_class": {
+    "CROSS_FIELD_VIOLATION": 50,
+    "DUPLICATE_ROW": 50,
+    "FORMAT_VIOLATION": 50,
+    "INVALID_CATEGORY": 50,
+    "MISSING_VALUE": 50,
+    "OUTLIER": 50,
+    "OUT_OF_RANGE": 50,
+    "SIGN_FLIP": 50,
+    "STALE_TIMESTAMP": 50,
+    "TYPE_VIOLATION": 50
+  },
+  "total_labels": 500,
+  "total_dirty_rows": 500,
+  "notes": [],
+  "labels": [
+    {
+      "row_id": "emp-001502",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1502,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001083",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1083,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000021",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 21,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001712",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1712,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001119",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1119,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000696",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 696,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001595",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1595,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000556",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 556,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000440",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 440,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000252",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 252,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000532",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 532,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001652",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1652,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000836",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 836,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000843",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 843,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001193",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1193,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000508",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 508,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000218",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 218,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001195",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1195,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001159",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1159,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000306",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 306,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001764",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1764,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001190",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1190,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000461",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 461,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001863",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1863,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000328",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 328,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001822",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1822,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000375",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 375,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000423",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 423,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000025",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 25,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001883",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1883,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001099",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1099,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000854",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 854,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000671",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 671,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001778",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1778,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001133",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1133,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001381",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1381,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000599",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 599,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001139",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1139,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001919",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1919,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001911",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1911,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001922",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1922,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001155",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1155,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001269",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1269,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000416",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 416,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001867",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1867,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001422",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1422,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001349",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1349,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001117",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1117,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-000627",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 627,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001438",
+      "column": "date_of_birth",
+      "defect": "CROSS_FIELD_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1438,
+      "detail": "swapped with hired_at"
+    },
+    {
+      "row_id": "emp-001444",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1444,
+      "detail": "key copied from row 306"
+    },
+    {
+      "row_id": "emp-000431",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 431,
+      "detail": "key copied from row 1187"
+    },
+    {
+      "row_id": "emp-001017",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1017,
+      "detail": "key copied from row 412"
+    },
+    {
+      "row_id": "emp-001817",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1817,
+      "detail": "key copied from row 1981"
+    },
+    {
+      "row_id": "emp-001053",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1053,
+      "detail": "key copied from row 1809"
+    },
+    {
+      "row_id": "emp-000626",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 626,
+      "detail": "key copied from row 1391"
+    },
+    {
+      "row_id": "emp-001566",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1566,
+      "detail": "key copied from row 533"
+    },
+    {
+      "row_id": "emp-000515",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 515,
+      "detail": "key copied from row 658"
+    },
+    {
+      "row_id": "emp-001000",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1000,
+      "detail": "key copied from row 1271"
+    },
+    {
+      "row_id": "emp-000804",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 804,
+      "detail": "key copied from row 1553"
+    },
+    {
+      "row_id": "emp-001510",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1510,
+      "detail": "key copied from row 287"
+    },
+    {
+      "row_id": "emp-001855",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1855,
+      "detail": "key copied from row 594"
+    },
+    {
+      "row_id": "emp-000434",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 434,
+      "detail": "key copied from row 91"
+    },
+    {
+      "row_id": "emp-001545",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1545,
+      "detail": "key copied from row 1863"
+    },
+    {
+      "row_id": "emp-001354",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1354,
+      "detail": "key copied from row 31"
+    },
+    {
+      "row_id": "emp-001122",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1122,
+      "detail": "key copied from row 376"
+    },
+    {
+      "row_id": "emp-000548",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 548,
+      "detail": "key copied from row 1375"
+    },
+    {
+      "row_id": "emp-000148",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 148,
+      "detail": "key copied from row 938"
+    },
+    {
+      "row_id": "emp-001832",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1832,
+      "detail": "key copied from row 1531"
+    },
+    {
+      "row_id": "emp-000861",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 861,
+      "detail": "key copied from row 1451"
+    },
+    {
+      "row_id": "emp-000880",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 880,
+      "detail": "key copied from row 848"
+    },
+    {
+      "row_id": "emp-001032",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1032,
+      "detail": "key copied from row 954"
+    },
+    {
+      "row_id": "emp-001102",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1102,
+      "detail": "key copied from row 210"
+    },
+    {
+      "row_id": "emp-001936",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1936,
+      "detail": "key copied from row 1896"
+    },
+    {
+      "row_id": "emp-001725",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1725,
+      "detail": "key copied from row 607"
+    },
+    {
+      "row_id": "emp-001248",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1248,
+      "detail": "key copied from row 238"
+    },
+    {
+      "row_id": "emp-001028",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1028,
+      "detail": "key copied from row 1479"
+    },
+    {
+      "row_id": "emp-001146",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1146,
+      "detail": "key copied from row 355"
+    },
+    {
+      "row_id": "emp-000781",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 781,
+      "detail": "key copied from row 969"
+    },
+    {
+      "row_id": "emp-001409",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1409,
+      "detail": "key copied from row 1478"
+    },
+    {
+      "row_id": "emp-000885",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 885,
+      "detail": "key copied from row 383"
+    },
+    {
+      "row_id": "emp-001002",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1002,
+      "detail": "key copied from row 1800"
+    },
+    {
+      "row_id": "emp-001310",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1310,
+      "detail": "key copied from row 1255"
+    },
+    {
+      "row_id": "emp-000738",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 738,
+      "detail": "key copied from row 849"
+    },
+    {
+      "row_id": "emp-001814",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1814,
+      "detail": "key copied from row 1921"
+    },
+    {
+      "row_id": "emp-000436",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 436,
+      "detail": "key copied from row 1376"
+    },
+    {
+      "row_id": "emp-001928",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1928,
+      "detail": "key copied from row 460"
+    },
+    {
+      "row_id": "emp-000669",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 669,
+      "detail": "key copied from row 73"
+    },
+    {
+      "row_id": "emp-000247",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 247,
+      "detail": "key copied from row 80"
+    },
+    {
+      "row_id": "emp-000546",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 546,
+      "detail": "key copied from row 941"
+    },
+    {
+      "row_id": "emp-000320",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 320,
+      "detail": "key copied from row 1995"
+    },
+    {
+      "row_id": "emp-000945",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 945,
+      "detail": "key copied from row 528"
+    },
+    {
+      "row_id": "emp-000456",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 456,
+      "detail": "key copied from row 415"
+    },
+    {
+      "row_id": "emp-001372",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1372,
+      "detail": "key copied from row 424"
+    },
+    {
+      "row_id": "emp-001933",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1933,
+      "detail": "key copied from row 1836"
+    },
+    {
+      "row_id": "emp-000045",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 45,
+      "detail": "key copied from row 1537"
+    },
+    {
+      "row_id": "emp-000842",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 842,
+      "detail": "key copied from row 335"
+    },
+    {
+      "row_id": "emp-000198",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 198,
+      "detail": "key copied from row 668"
+    },
+    {
+      "row_id": "emp-001205",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 1205,
+      "detail": "key copied from row 1057"
+    },
+    {
+      "row_id": "emp-000540",
+      "column": "employee_id",
+      "defect": "DUPLICATE_ROW",
+      "origin": "sdih",
+      "row_pos": 540,
+      "detail": "key copied from row 597"
+    },
+    {
+      "row_id": "emp-001731",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1731,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001861",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1861,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001397",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1397,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000737",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 737,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001086",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1086,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000068",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 68,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000979",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 979,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000495",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 495,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001632",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1632,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001279",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1279,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000448",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 448,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001631",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1631,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001092",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1092,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001984",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1984,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001951",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1951,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001999",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1999,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001481",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1481,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001079",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1079,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001435",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1435,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001265",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1265,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000331",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 331,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001501",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1501,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000984",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 984,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000526",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 526,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000292",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 292,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001283",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1283,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000868",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 868,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000332",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 332,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000568",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 568,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001009",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1009,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000289",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 289,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001347",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1347,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000989",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 989,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001131",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1131,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000755",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 755,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001340",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1340,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000653",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 653,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001798",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1798,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001878",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1878,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000730",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 730,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001142",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1142,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001763",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1763,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001756",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1756,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001379",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1379,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001637",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1637,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001437",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1437,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001181",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1181,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001641",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1641,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-000187",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 187,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001329",
+      "column": "grade",
+      "defect": "FORMAT_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1329,
+      "detail": "pattern broken"
+    },
+    {
+      "row_id": "emp-001710",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1710,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000022",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 22,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000790",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 790,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000126",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 126,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000914",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 914,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001170",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1170,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001522",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1522,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000390",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 390,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001192",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1192,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001493",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1493,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000982",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 982,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000288",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 288,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000810",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 810,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000940",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 940,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000717",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 717,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001174",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1174,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001530",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1530,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001512",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1512,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001555",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1555,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000955",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 955,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000803",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 803,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000518",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 518,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000587",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 587,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001579",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1579,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000801",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 801,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000707",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 707,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001459",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1459,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001841",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1841,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001284",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1284,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001904",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1904,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001742",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1742,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001578",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1578,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001468",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1468,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000591",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 591,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000480",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 480,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000592",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 592,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001228",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1228,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001829",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1829,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000371",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 371,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000782",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 782,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000067",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 67,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001104",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1104,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001271",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1271,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001206",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1206,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001492",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1492,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000283",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 283,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000191",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 191,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001500",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1500,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001703",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 1703,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-000536",
+      "column": "employment_type",
+      "defect": "INVALID_CATEGORY",
+      "origin": "sdih",
+      "row_pos": 536,
+      "detail": "out-of-domain"
+    },
+    {
+      "row_id": "emp-001681",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1681,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000636",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 636,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000643",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 643,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000828",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 828,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001455",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1455,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001096",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1096,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000651",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 651,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001559",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1559,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001732",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1732,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000870",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 870,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000699",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 699,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001087",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1087,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001882",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1882,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001744",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1744,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000704",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 704,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000768",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 768,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001599",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1599,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000377",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 377,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001544",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1544,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001250",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1250,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000400",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 400,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001219",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1219,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000826",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 826,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001622",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1622,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000749",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 749,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001730",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1730,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001337",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1337,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001534",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1534,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000219",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 219,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000661",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 661,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000062",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 62,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000807",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 807,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001346",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1346,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000381",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 381,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000258",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 258,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000493",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 493,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000310",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 310,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000490",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 490,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001807",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1807,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001514",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1514,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000453",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 453,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000654",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 654,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001123",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1123,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001425",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1425,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001064",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1064,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000858",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 858,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000012",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 12,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000925",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 925,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-001765",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 1765,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000727",
+      "column": "grade",
+      "defect": "MISSING_VALUE",
+      "origin": "sdih",
+      "row_pos": 727,
+      "detail": "set to NULL"
+    },
+    {
+      "row_id": "emp-000304",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 304,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000809",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 809,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001843",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1843,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000911",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 911,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000713",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 713,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001137",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1137,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000168",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 168,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001055",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1055,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000628",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 628,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001416",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1416,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001350",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1350,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000822",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 822,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001258",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1258,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000889",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 889,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001352",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1352,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001957",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1957,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000762",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 762,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001274",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1274,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000153",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 153,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001977",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1977,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001947",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1947,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000829",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 829,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000663",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 663,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000618",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 618,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001245",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1245,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001955",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1955,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000864",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 864,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001198",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1198,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000907",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 907,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001515",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1515,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000962",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 962,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001156",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1156,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001605",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1605,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001758",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1758,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001687",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1687,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000179",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 179,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001611",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1611,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001887",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1887,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001031",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1031,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000658",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 658,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001371",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1371,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000786",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 786,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001513",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1513,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000100",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 100,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001194",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1194,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001470",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1470,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001429",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1429,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001267",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1267,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001114",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1114,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-001105",
+      "column": "bonus",
+      "defect": "OUTLIER",
+      "origin": "sdih",
+      "row_pos": 1105,
+      "detail": "extreme value"
+    },
+    {
+      "row_id": "emp-000893",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 893,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000967",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 967,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001728",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1728,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000883",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 883,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001505",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1505,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001902",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1902,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001173",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1173,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001819",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1819,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001091",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1091,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000588",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 588,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000370",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 370,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000619",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 619,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000163",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 163,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000000",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 0,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000725",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 725,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001084",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1084,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001793",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1793,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001901",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1901,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000097",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 97,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000361",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 361,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000452",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 452,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000426",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 426,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000372",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 372,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000089",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 89,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000920",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 920,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000438",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 438,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000386",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 386,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001374",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1374,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000977",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 977,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001478",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1478,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001673",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1673,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000604",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 604,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000150",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 150,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000466",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 466,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000086",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 86,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001592",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1592,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000196",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 196,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001391",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1391,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000506",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 506,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000396",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 396,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000362",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 362,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000523",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 523,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001833",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1833,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000912",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 912,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001315",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1315,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000879",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 879,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000763",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 763,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001749",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1749,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001890",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1890,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-001583",
+      "column": "base_salary",
+      "defect": "OUT_OF_RANGE",
+      "origin": "sdih",
+      "row_pos": 1583,
+      "detail": "set to 105056838.0"
+    },
+    {
+      "row_id": "emp-000207",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 207,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000969",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 969,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000412",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 412,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001213",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1213,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001738",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1738,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001753",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1753,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001950",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1950,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000570",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 570,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000134",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 134,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000265",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 265,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000793",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 793,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001034",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1034,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000667",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 667,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001041",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1041,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000644",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 644,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000143",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 143,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000213",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 213,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000116",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 116,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000145",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 145,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000996",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 996,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000251",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 251,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000337",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 337,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000679",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 679,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001626",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1626,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001717",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1717,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001826",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1826,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000832",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 832,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000280",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 280,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000724",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 724,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000812",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 812,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001780",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1780,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000201",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 201,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001233",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1233,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001410",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1410,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000220",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 220,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000995",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 995,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001447",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1447,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001120",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1120,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000193",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 193,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001436",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1436,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000664",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 664,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000766",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 766,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001240",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1240,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001276",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1276,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001339",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1339,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000408",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 408,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-001277",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 1277,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000491",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 491,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000460",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 460,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000123",
+      "column": "bonus",
+      "defect": "SIGN_FLIP",
+      "origin": "sdih",
+      "row_pos": 123,
+      "detail": "negated"
+    },
+    {
+      "row_id": "emp-000315",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 315,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001402",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1402,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001926",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1926,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001225",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1225,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001736",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1736,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001521",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1521,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001571",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1571,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000597",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 597,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000623",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 623,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000170",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 170,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000991",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 991,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000689",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 689,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000849",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 849,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000106",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 106,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000388",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 388,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000839",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 839,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001570",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1570,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000027",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 27,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001551",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1551,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001770",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1770,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000309",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 309,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001704",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1704,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001308",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1308,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001467",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1467,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001768",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1768,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000174",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 174,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001827",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1827,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000469",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 469,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000890",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 890,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001004",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1004,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001475",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1475,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000528",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 528,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001849",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1849,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001527",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1527,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000457",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 457,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000482",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 482,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000140",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 140,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000631",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 631,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000656",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 656,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000104",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 104,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000214",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 214,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001874",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1874,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001642",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1642,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000633",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 633,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000329",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 329,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001126",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1126,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000287",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 287,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000726",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 726,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-000240",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 240,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001027",
+      "column": "contract_end_at",
+      "defect": "STALE_TIMESTAMP",
+      "origin": "sdih",
+      "row_pos": 1027,
+      "detail": "shifted 10 years back"
+    },
+    {
+      "row_id": "emp-001695",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1695,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000777",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 777,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001801",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1801,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001812",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1812,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001591",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1591,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000420",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 420,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001568",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1568,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000401",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 401,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000358",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 358,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000874",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 874,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000246",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 246,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001946",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1946,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001804",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1804,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000745",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 745,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001677",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1677,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001824",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1824,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001971",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1971,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000719",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 719,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000209",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 209,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001178",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1178,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000136",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 136,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000342",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 342,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001783",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1783,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000680",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 680,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000964",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 964,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000898",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 898,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000038",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 38,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000407",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 407,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000336",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 336,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000744",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 744,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001932",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1932,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000963",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 963,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000752",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 752,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000559",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 559,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001431",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1431,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001638",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1638,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000327",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 327,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001287",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1287,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001344",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1344,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000946",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 946,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001604",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1604,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000896",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 896,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000095",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 95,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000061",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 61,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000878",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 878,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-001186",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 1186,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000514",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 514,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000129",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 129,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000542",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 542,
+      "detail": "non-castable"
+    },
+    {
+      "row_id": "emp-000195",
+      "column": "annual_leave_days",
+      "defect": "TYPE_VIOLATION",
+      "origin": "sdih",
+      "row_pos": 195,
+      "detail": "non-castable"
+    }
+  ]
+}

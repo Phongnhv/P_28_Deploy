@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any
 
 import yaml
 
@@ -12,16 +13,23 @@ from src.config import get_settings
 from src.services.llm import get_llm
 
 
-def _extract_yaml(value: str) -> str:
-    match = re.fullmatch(r"\s*```(?:ya?ml)?\s*([\s\S]*?)```\s*", value, re.IGNORECASE)
-    return (match.group(1) if match else value).strip() + "\n"
+def _extract_yaml(value: Any) -> str:
+    if isinstance(value, list):
+        value = "".join(
+            part.get("text", str(part))
+            if isinstance(part, dict)
+            else getattr(part, "text", str(part))
+            if hasattr(part, "text")
+            else str(part)
+            for part in value
+        )
+    val_str = str(value or "").strip()
+    match = re.fullmatch(r"\s*```(?:ya?ml)?\s*([\s\S]*?)```\s*", val_str, re.IGNORECASE)
+    return (match.group(1) if match else val_str).strip() + "\n"
 
 
 def _approved_scope(rules: list[dict]) -> set[tuple[str, str | None]]:
-    return {
-        (str(rule.get("table_name") or "profile_input"), rule.get("column") or "source_row_id")
-        for rule in rules
-    }
+    return {(str(rule.get("table_name") or "profile_input"), rule.get("column") or "source_row_id") for rule in rules}
 
 
 def _yaml_scope(content: str) -> set[tuple[str, str | None]]:

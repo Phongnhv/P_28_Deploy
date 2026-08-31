@@ -455,52 +455,42 @@ Sửa hai test: `test_empty_optional_parameters_do_not_require_provenance` và `
 **Trước:**
 
 ```python
-        active_parameters = {
-            name for name, value in p.model_dump().items() if value is not None
-        }
-        provenance_parameters = {item.parameter_name for item in self.parameter_provenance}
-        if active_parameters != provenance_parameters:
-            raise ValueError(
-                "parameter_provenance phải chứa đúng một entry cho mỗi parameter đang sử dụng"
-            )
+active_parameters = {name for name, value in p.model_dump().items() if value is not None}
+provenance_parameters = {item.parameter_name for item in self.parameter_provenance}
+if active_parameters != provenance_parameters:
+    raise ValueError("parameter_provenance phải chứa đúng một entry cho mỗi parameter đang sử dụng")
 
-        return self
+return self
 ```
 
 **Sau:**
 
 ```python
-        # Một tham số chỉ được coi là "đang sử dụng" khi nó thực sự ràng buộc điều gì.
-        # `None` là chưa khai; collection rỗng (`[]`, `{}`, `""`) là có khai nhưng không
-        # ràng buộc gì — cả hai đều không cần chứng cứ đi kèm.
-        #
-        # KHÔNG dùng phép kiểm falsy ở đây: `min=0`, `max_null_pct=0.0` hay
-        # `threshold=False` đều là ràng buộc thật và bắt buộc phải có provenance.
-        active_parameters = {
-            name
-            for name, value in p.model_dump().items()
-            if value is not None
-            and not (isinstance(value, (list, dict, set, tuple, str)) and len(value) == 0)
-        }
+# Một tham số chỉ được coi là "đang sử dụng" khi nó thực sự ràng buộc điều gì.
+# `None` là chưa khai; collection rỗng (`[]`, `{}`, `""`) là có khai nhưng không
+# ràng buộc gì — cả hai đều không cần chứng cứ đi kèm.
+#
+# KHÔNG dùng phép kiểm falsy ở đây: `min=0`, `max_null_pct=0.0` hay
+# `threshold=False` đều là ràng buộc thật và bắt buộc phải có provenance.
+active_parameters = {
+    name
+    for name, value in p.model_dump().items()
+    if value is not None and not (isinstance(value, (list, dict, set, tuple, str)) and len(value) == 0)
+}
 
-        provenance_names = [item.parameter_name for item in self.parameter_provenance]
-        provenance_parameters = set(provenance_names)
+provenance_names = [item.parameter_name for item in self.parameter_provenance]
+provenance_parameters = set(provenance_names)
 
-        # So sánh hai `set` sẽ nuốt mất entry trùng tên (hai entry "min" gộp thành một),
-        # nên phải bắt trùng lặp trước khi so khớp.
-        if len(provenance_names) != len(provenance_parameters):
-            duplicates = sorted({n for n in provenance_names if provenance_names.count(n) > 1})
-            raise ValueError(
-                "parameter_provenance có entry trùng tên cho cùng một parameter: "
-                + ", ".join(duplicates)
-            )
+# So sánh hai `set` sẽ nuốt mất entry trùng tên (hai entry "min" gộp thành một),
+# nên phải bắt trùng lặp trước khi so khớp.
+if len(provenance_names) != len(provenance_parameters):
+    duplicates = sorted({n for n in provenance_names if provenance_names.count(n) > 1})
+    raise ValueError("parameter_provenance có entry trùng tên cho cùng một parameter: " + ", ".join(duplicates))
 
-        if active_parameters != provenance_parameters:
-            raise ValueError(
-                "parameter_provenance phải chứa đúng một entry cho mỗi parameter đang sử dụng"
-            )
+if active_parameters != provenance_parameters:
+    raise ValueError("parameter_provenance phải chứa đúng một entry cho mỗi parameter đang sử dụng")
 
-        return self
+return self
 ```
 
 **Lỗi 1 — danh sách rỗng bị coi là đang dùng.** `if value is not None` khiến `accepted_values = []` bị tính vào `active_parameters` và đòi phải có chứng cứ. Định nghĩa được chốt: *một tham số là "đang sử dụng" khi nó thực sự ràng buộc điều gì đó.*

@@ -14,6 +14,7 @@ import json
 import logging
 import re
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import inspect
 
@@ -26,16 +27,25 @@ from src.services.rule_store import get_engine
 logger = logging.getLogger(__name__)
 
 
-def _extract_sql(llm_output: str) -> str:
+def _extract_sql(llm_output: Any) -> str:
     """Trích xuất câu SQL từ khối markdown ```sql ... ``` hoặc raw string."""
-    match = re.search(r"```(?:sql)?\s*(SELECT[\s\S]*?)```", llm_output, re.IGNORECASE)
+    if isinstance(llm_output, list):
+        llm_output = "".join(
+            part.get("text", str(part))
+            if isinstance(part, dict)
+            else getattr(part, "text", str(part))
+            if hasattr(part, "text")
+            else str(part)
+            for part in llm_output
+        )
+    output_str = str(llm_output or "").strip()
+    match = re.search(r"```(?:sql)?\s*(SELECT[\s\S]*?)```", output_str, re.IGNORECASE)
     if match:
         return match.group(1).strip()
     # Nếu không có code block, kiểm tra xem có bắt đầu bằng SELECT không
-    stripped = llm_output.strip()
-    if stripped.upper().startswith("SELECT"):
-        return stripped
-    return llm_output.strip()
+    if output_str.upper().startswith("SELECT"):
+        return output_str
+    return output_str
 
 
 def _is_safe_select(sql: str) -> bool:
@@ -122,6 +132,7 @@ async def llm_repair_node(state: AgentState) -> dict:
     # Xuất trace file
     try:
         from pathlib import Path
+
         settings = get_settings()
         base_dir = getattr(settings, "output_dir", None) or "./output"
         out_dir = Path(base_dir) / "llm_repair"
@@ -144,6 +155,7 @@ async def llm_repair_node(state: AgentState) -> dict:
 # ---------------------------------------------------------------------------
 # Standalone Test Harness (Chạy từ file output hoặc demo)
 # ---------------------------------------------------------------------------
+
 
 async def main():
     """Hàm chạy test độc lập cho llm_repair_node (Agentic Repair Loop).
@@ -221,8 +233,7 @@ async def main():
     print("\n" + "=" * 75 + "\n")
 
 
-
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(main())
 
+    asyncio.run(main())

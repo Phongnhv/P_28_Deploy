@@ -38,13 +38,14 @@ Env overrides:
   ANTIGRAVITY_BRAIN_DIR  point at a different brain/ directory
   AI_LOG_DIR             where session.jsonl is written (default: .ai-log)
 """
+
 import argparse
 import json
 import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Fix Windows console encoding so VN diacritics in prompts print cleanly.
@@ -75,9 +76,7 @@ AUX_BLOCK_RE = re.compile(
 
 def git(cmd: str) -> str:
     try:
-        return subprocess.check_output(
-            cmd.split(), shell=False, text=True, stderr=subprocess.DEVNULL
-        ).strip()
+        return subprocess.check_output(cmd.split(), shell=False, text=True, stderr=subprocess.DEVNULL).strip()
     except Exception:
         return ""
 
@@ -85,6 +84,7 @@ def git(cmd: str) -> str:
 # ---------------------------------------------------------------------------
 # Locating brain/
 # ---------------------------------------------------------------------------
+
 
 def get_brain_dirs() -> list[Path]:
     """Brain directories to scan, newest layout first."""
@@ -98,6 +98,7 @@ def get_brain_dirs() -> list[Path]:
 # ---------------------------------------------------------------------------
 # Path normalization + repo gating
 # ---------------------------------------------------------------------------
+
 
 def _normalize(p: str) -> str:
     """Lower-case + backslash form, no trailing separator."""
@@ -132,7 +133,7 @@ def _conv_cwds(transcript: Path) -> set[str]:
                     entry = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                for tc in (entry.get("tool_calls") or []):
+                for tc in entry.get("tool_calls") or []:
                     args = tc.get("args") or {}
                     cwd = args.get("Cwd") or args.get("cwd")
                     cwd = _unquote_arg(cwd)
@@ -163,6 +164,7 @@ def _conv_matches_repo(cwds: set[str], repo_root_n: str) -> bool:
 # Prompt extraction
 # ---------------------------------------------------------------------------
 
+
 def extract_user_prompt(content: str) -> str:
     """Pull the text between <USER_REQUEST>...</USER_REQUEST>. Fall back to
     stripping known auxiliary blocks if no wrapper is present."""
@@ -181,6 +183,7 @@ def extract_user_prompt(content: str) -> str:
 # ---------------------------------------------------------------------------
 # Reading existing log to avoid duplicates
 # ---------------------------------------------------------------------------
+
 
 def get_logged_entry_ids(log_file: Path) -> set[str]:
     logged: set[str] = set()
@@ -205,8 +208,8 @@ def get_logged_entry_ids(log_file: Path) -> set[str]:
 # Iterating user inputs
 # ---------------------------------------------------------------------------
 
-def iter_user_inputs(brain_dirs: list[Path], cutoff: datetime | None,
-                     only_conv: str | None, repo_root_n: str):
+
+def iter_user_inputs(brain_dirs: list[Path], cutoff: datetime | None, only_conv: str | None, repo_root_n: str):
     """Yield user-input dicts from every matching conversation transcript."""
     for brain in brain_dirs:
         for conv_dir in sorted(brain.iterdir()):
@@ -214,9 +217,7 @@ def iter_user_inputs(brain_dirs: list[Path], cutoff: datetime | None,
                 continue
             if only_conv and conv_dir.name != only_conv:
                 continue
-            transcript = (
-                conv_dir / ".system_generated" / "logs" / "transcript.jsonl"
-            )
+            transcript = conv_dir / ".system_generated" / "logs" / "transcript.jsonl"
             if not transcript.exists() or transcript.stat().st_size == 0:
                 continue
 
@@ -234,16 +235,13 @@ def iter_user_inputs(brain_dirs: list[Path], cutoff: datetime | None,
                         entry = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    if (entry.get("type") != "USER_INPUT"
-                            or entry.get("source") != "USER_EXPLICIT"):
+                    if entry.get("type") != "USER_INPUT" or entry.get("source") != "USER_EXPLICIT":
                         continue
 
                     ts = entry.get("created_at") or ""
                     if cutoff and ts:
                         try:
-                            ts_dt = datetime.fromisoformat(
-                                ts.replace("Z", "+00:00")
-                            )
+                            ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                             if ts_dt < cutoff:
                                 continue
                         except ValueError:
@@ -265,16 +263,12 @@ def iter_user_inputs(brain_dirs: list[Path], cutoff: datetime | None,
 # Emitting entries
 # ---------------------------------------------------------------------------
 
-def build_entry(msg: dict, repo: str, branch: str, commit: str,
-                student: str) -> dict:
+
+def build_entry(msg: dict, repo: str, branch: str, commit: str, student: str) -> dict:
     ts = msg["timestamp"]
     if ts.endswith("Z"):
         try:
-            ts = (
-                datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                .astimezone(VN_TZ)
-                .isoformat()
-            )
+            ts = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(VN_TZ).isoformat()
         except ValueError:
             pass
 
@@ -296,21 +290,14 @@ def build_entry(msg: dict, repo: str, branch: str, commit: str,
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Extract user prompts from Antigravity IDE transcripts"
-                    " into .ai-log/session.jsonl."
+        description="Extract user prompts from Antigravity IDE transcripts into .ai-log/session.jsonl."
     )
-    parser.add_argument("--auto", action="store_true",
-                        help="Default mode: scan recent conversations.")
-    parser.add_argument("--hours", type=int, default=24,
-                        help="Window in hours when scanning (default: 24).")
-    parser.add_argument("--all", action="store_true",
-                        help="Ignore the time window; scan everything.")
-    parser.add_argument("--conv-id",
-                        help="Limit to a single conversation id.")
-    parser.add_argument("--no-repo-filter", action="store_true",
-                        help="Don't filter conversations by current repo.")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Show what would be logged, don't write.")
+    parser.add_argument("--auto", action="store_true", help="Default mode: scan recent conversations.")
+    parser.add_argument("--hours", type=int, default=24, help="Window in hours when scanning (default: 24).")
+    parser.add_argument("--all", action="store_true", help="Ignore the time window; scan everything.")
+    parser.add_argument("--conv-id", help="Limit to a single conversation id.")
+    parser.add_argument("--no-repo-filter", action="store_true", help="Don't filter conversations by current repo.")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be logged, don't write.")
     # Legacy positional args from old log_manual.py callers.
     parser.add_argument("summary", nargs="?", help=argparse.SUPPRESS)
     parser.add_argument("model", nargs="?", help=argparse.SUPPRESS)
@@ -323,9 +310,11 @@ def main() -> None:
 
     brain_dirs = get_brain_dirs()
     if not brain_dirs:
-        print("[antigravity-log] No Antigravity brain/ directory found "
-              f"(checked {', '.join(str(p) for p in BRAIN_CANDIDATES)}).",
-              file=sys.stderr)
+        print(
+            "[antigravity-log] No Antigravity brain/ directory found "
+            f"(checked {', '.join(str(p) for p in BRAIN_CANDIDATES)}).",
+            file=sys.stderr,
+        )
         sys.exit(0)
 
     log_dir = Path(os.environ.get("AI_LOG_DIR", ".ai-log"))
@@ -344,13 +333,11 @@ def main() -> None:
     repo = git("git remote get-url origin").split("/")[-1].replace(".git", "")
     branch = git("git rev-parse --abbrev-ref HEAD")
     commit = git("git rev-parse --short HEAD")
-    student = git("git config user.email") or os.environ.get(
-        "USERNAME", os.environ.get("USER", "unknown"))
+    student = git("git config user.email") or os.environ.get("USERNAME", os.environ.get("USER", "unknown"))
 
     new_entries: list[dict] = []
     for msg in iter_user_inputs(brain_dirs, cutoff, args.conv_id, repo_root_n):
-        entry = build_entry(msg, repo or default_repo_name, branch, commit,
-                            student)
+        entry = build_entry(msg, repo or default_repo_name, branch, commit, student)
         if entry["entry_id"] in logged_ids:
             continue
         new_entries.append(entry)
@@ -359,13 +346,11 @@ def main() -> None:
     if not new_entries:
         scope = "all" if args.all else f"{args.hours}h"
         repo_note = "any repo" if args.no_repo_filter else f"repo={repo_root_n or '(unknown)'}"
-        print(f"[antigravity-log] No new prompts ({repo_note}, window={scope}).",
-              file=sys.stderr)
+        print(f"[antigravity-log] No new prompts ({repo_note}, window={scope}).", file=sys.stderr)
         sys.exit(0)
 
     if args.dry_run:
-        print(f"\n[antigravity-log] DRY RUN — would log "
-              f"{len(new_entries)} entries:\n")
+        print(f"\n[antigravity-log] DRY RUN — would log {len(new_entries)} entries:\n")
         for e in new_entries:
             preview = e["prompt"].replace("\n", " ")[:120]
             print(f"  [{e['ts'][:19]}] {preview}")
@@ -375,14 +360,14 @@ def main() -> None:
         for e in new_entries:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
 
-    print(f"[antigravity-log] Logged {len(new_entries)} prompt(s) from "
-          f"Antigravity IDE.", file=sys.stderr)
+    print(f"[antigravity-log] Logged {len(new_entries)} prompt(s) from Antigravity IDE.", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
 # Legacy manual mode (kept for back-compat with log_manual.py callers and the
 # old .agents/rules instructions). New rules tell the AI not to call this.
 # ---------------------------------------------------------------------------
+
 
 def _legacy_log(summary: str, model: str) -> None:
     ts = datetime.now(VN_TZ).isoformat()
@@ -395,8 +380,7 @@ def _legacy_log(summary: str, model: str) -> None:
         "repo": git("git remote get-url origin").split("/")[-1].replace(".git", ""),
         "branch": git("git rev-parse --abbrev-ref HEAD"),
         "commit": git("git rev-parse --short HEAD"),
-        "student": git("git config user.email") or os.environ.get(
-            "USERNAME", os.environ.get("USER", "unknown")),
+        "student": git("git config user.email") or os.environ.get("USERNAME", os.environ.get("USER", "unknown")),
         "prompt": summary[:1000],
         "response_summary": f"[Antigravity] {summary[:500]}",
     }

@@ -18,6 +18,7 @@ import logging
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from src.agents.state import AnomalyGraphState
 from src.services.llm import get_llm
@@ -166,9 +167,7 @@ def _build_data_context(
     # Hypotheses
     if hypotheses:
         sections.append(f"Giả thuyết nguyên nhân ({len(hypotheses)} giả thuyết, sắp xếp theo độ tin cậy):")
-        for idx, h in enumerate(
-            sorted(hypotheses, key=lambda x: x.get("confidence", 0.0), reverse=True), 1
-        ):
+        for idx, h in enumerate(sorted(hypotheses, key=lambda x: x.get("confidence", 0.0), reverse=True), 1):
             # Parse JSON strings safely
             def _parse(val):
                 if isinstance(val, list):
@@ -215,15 +214,25 @@ def _build_data_context(
 # Output post-processing
 # ---------------------------------------------------------------------------
 
-def _strip_code_fences(text: str) -> str:
+
+def _strip_code_fences(text: Any) -> str:
     """Loại bỏ code fences (```markdown ... ```) nếu LLM bọc output."""
-    text = text.strip()
+    if isinstance(text, list):
+        text = "".join(
+            part.get("text", str(part))
+            if isinstance(part, dict)
+            else getattr(part, "text", str(part))
+            if hasattr(part, "text")
+            else str(part)
+            for part in text
+        )
+    text_str = str(text or "").strip()
     # Match ```markdown, ```md, or ``` at start
     pattern = r"^```(?:markdown|md)?\s*\n(.*?)\n```\s*$"
-    match = re.match(pattern, text, re.DOTALL | re.IGNORECASE)
+    match = re.match(pattern, text_str, re.DOTALL | re.IGNORECASE)
     if match:
         return match.group(1).strip()
-    return text
+    return text_str
 
 
 def _report_matches_anomaly_decision(content: str, decision: str) -> bool:
@@ -247,6 +256,7 @@ def _write_report_file(
     """Ghi file Markdown với timestamp, trả về path."""
     try:
         from src.config import get_settings
+
         settings = get_settings()
         base_dir = Path(output_dir or getattr(settings, "output_dir", None) or "./output")
     except Exception:
@@ -269,10 +279,10 @@ def _write_report_file(
     return str(out_path)
 
 
-
 # ---------------------------------------------------------------------------
 # LangGraph Node
 # ---------------------------------------------------------------------------
+
 
 async def report_writer_node(state: AnomalyGraphState) -> dict:
     """LangGraph Node: Viết báo cáo Markdown tiếng Việt bằng LLM cho Data Steward.
@@ -287,14 +297,13 @@ async def report_writer_node(state: AnomalyGraphState) -> dict:
     # Load DB data
     def _load():
         from src.services.report_renderer import _load_execution_data
+
         return _load_execution_data(execution_run_id)
 
     dq_run, dq_results = await asyncio.to_thread(_load)
 
     # Build context
-    data_context = _build_data_context(
-        execution_run_id, dataset_id, dict(state), dq_run, dq_results
-    )
+    data_context = _build_data_context(execution_run_id, dataset_id, dict(state), dq_run, dq_results)
 
     user_prompt = (
         f"{data_context}\n\n"
@@ -333,7 +342,9 @@ async def report_writer_node(state: AnomalyGraphState) -> dict:
         ):
             md_content = cleaned
             llm_used = True
-            logger.info("LLM viết báo cáo thành công cho execution_run_id=%s (%d ký tự)", execution_run_id, len(md_content))
+            logger.info(
+                "LLM viết báo cáo thành công cho execution_run_id=%s (%d ký tự)", execution_run_id, len(md_content)
+            )
         else:
             logger.warning(
                 "LLM output không hợp lệ, thiếu tiêu đề hoặc mâu thuẫn decision canonical. Dùng fallback. "

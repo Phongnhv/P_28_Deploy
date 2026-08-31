@@ -6,10 +6,8 @@ from typing import Any
 
 MANIFEST_ALLOW_LIST: dict[str, str] = {
     "nyc-yellow-demo-v1": "src/resources/manifest.json",
-    "nyc-yellow-50k-v1": "data/yellow_tripdata_2025/semantic_data/manifest.json"
+    "nyc-yellow-50k-v1": "data/yellow_tripdata_2025/semantic_data/manifest.json",
 }
-
-
 
 
 def _get_project_root() -> Path:
@@ -117,6 +115,7 @@ def load_dataset_rows(manifest_name: str) -> list[dict[str, Any]]:
 
     if str(local_path).endswith(".parquet"):
         import pandas as pd
+
         df = pd.read_parquet(full_csv_path)
         df = df.astype(object).where(pd.notnull(df), None)
         for col in df.columns:
@@ -133,4 +132,3 @@ def load_dataset_rows(manifest_name: str) -> list[dict[str, Any]]:
             rows.append(dict(row))
 
     return rows
-

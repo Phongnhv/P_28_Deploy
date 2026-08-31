@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from src.config import get_settings
 from src.models.database import (
     AnalysisNodeExecutionModel,
     AnalysisRunModel,
@@ -603,7 +604,7 @@ async def execute_analysis_run(run_id: str) -> None:
             "dataset_version_id": dataset_version_id,
             "profile_run_id": profile_run_id,
             "rule_review_snapshot_id": rule_review_snapshot_id,
-            "detector_config_version": "anomaly-v1",
+            "detector_config_version": get_settings().detector_config_version,
             "metadata": {"analysis_run_id": run_id},
         }
         graph3_failed = False

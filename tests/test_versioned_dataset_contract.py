@@ -41,7 +41,9 @@ def test_schema_hash_is_stable_and_object_key_is_versioned():
 def test_schema_contract_hash_ignores_pandas_physical_string_aliases():
     schema = canonical_schema_manifest(pd.DataFrame({"customer": ["a", "b"], "amount": [1, 2]}))
     pandas_3_manifest = [
-        {**item, "physical_type": "str" if item["logical_type"] == "string" else item["physical_type"]}
+        {**item, "physical_type": "object" if item["physical_type"] != "object" else "str"}
+        if item["logical_type"] == "string"
+        else item
         for item in schema
     ]
     assert schema_hash(schema) != schema_hash(pandas_3_manifest)

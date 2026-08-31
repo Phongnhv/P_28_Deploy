@@ -60,11 +60,13 @@ async def test_report_counts_normalized_statuses():
     test_run_id = f"persist_{uuid.uuid4().hex[:8]}"
     create_test_run(test_run_id, "mock_trips")
 
-    out = await persist_report_node({
-        "test_run_id": test_run_id,
-        "dataset_id": "mock_trips",
-        "test_results": _normalized_results(),
-    })
+    out = await persist_report_node(
+        {
+            "test_run_id": test_run_id,
+            "dataset_id": "mock_trips",
+            "test_results": _normalized_results(),
+        }
+    )
 
     report_path = Path(out["metadata"]["report_file_path"])
     payload = json.loads(report_path.read_text(encoding="utf-8"))
@@ -84,11 +86,13 @@ async def test_dq_run_timestamps_use_naive_utc():
     create_test_run(test_run_id, "mock_trips")
 
     before = utc_now()
-    await persist_report_node({
-        "test_run_id": test_run_id,
-        "dataset_id": "mock_trips",
-        "test_results": _normalized_results(),
-    })
+    await persist_report_node(
+        {
+            "test_run_id": test_run_id,
+            "dataset_id": "mock_trips",
+            "test_results": _normalized_results(),
+        }
+    )
     after = utc_now()
 
     with Session(get_engine()) as session:

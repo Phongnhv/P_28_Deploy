@@ -7,9 +7,15 @@ import type {
   DatasetProfile,
   DqRunCreateResponse,
   DqResult,
+  ActiveRule,
+  AnomalyFeedbackInput,
+  AnomalyHypothesis,
+  AnomalySignal,
   DqAnomaly,
+  DataDictionary,
   DatasetRowQuery,
   DatasetRowsResponse,
+  SemanticContractConfirmInput,
   QualityTrendPoint,
   DqRun,
   Job,
@@ -29,17 +35,21 @@ import type {
   AgentArtifact,
   ArtifactReviewInput,
   LoopDecisionInput,
-  Graph1Run,
-  Graph1NodeExecution,
-  Graph1RuleDecision,
-  AnalysisRun,
-  AnalysisNodeExecution,
-  AnalysisResult,
+  GraphCatalog,
+  NodeRun,
+  NodeRunDetail,
+  NodeRunFilter,
+  StewardReport,
 } from "../types";
 
-function resolveApiBaseUrl(configuredValue: string) {
-  const configured = configuredValue.replace(/\/$/, "");
-  if (!configured || typeof window === "undefined") return configured;
+function resolveApiBaseUrl(configuredValue?: string) {
+  const configured = (configuredValue || "").replace(/\/$/, "");
+  if (!configured) {
+    return typeof window !== "undefined" && window.location.port === "5173"
+      ? "http://localhost:8000"
+      : "";
+  }
+  if (typeof window === "undefined") return configured;
   try {
     const url = new URL(configured);
     const loopbackHosts = new Set(["localhost", "127.0.0.1"]);
@@ -53,7 +63,7 @@ function resolveApiBaseUrl(configuredValue: string) {
   return configured;
 }
 
-export const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL ?? "");
+export const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL);
 const workspaceId = (import.meta.env.VITE_WORKSPACE_ID ?? "").trim();
 const csrfStorageKey = "ridepulse.csrf";
 let csrfToken = typeof window === "undefined" ? "" : window.sessionStorage.getItem(csrfStorageKey) ?? "";
@@ -81,10 +91,6 @@ export function clearApiSession() {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  if (!apiBaseUrl) {
-    throw new ApiError(503, "API_NOT_CONFIGURED", "VITE_API_BASE_URL is not configured.");
-  }
-
   const method = options.method ?? "GET";
   const headers = new Headers(options.headers);
   headers.set("Accept", "application/json");
@@ -168,9 +174,15 @@ export const realApiClient: ApiClient = {
       version: { id: string; version_number: number; status: string; checksum: string; row_count: number };
       job: { job_id: string; status: string };
       profile_run_id?: string;
+      idempotent_replay?: boolean;
     }>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/datasets/import`, {
       method: "POST",
-      headers: { "Idempotency-Key": `ui-${checksum}` },
+      // Unique per upload attempt, not per file. Keying on the content alone
+      // meant re-uploading the same file returned the first run's dataset and
+      // never profiled anything again — deliberately re-importing a file is a
+      // new run, not a duplicate submit. Computed once per call, so a transient
+      // network retry still reuses the same key.
+      headers: { "Idempotency-Key": `ui-${checksum}-${crypto.randomUUID()}` },
       body,
     });
     return {
@@ -193,6 +205,7 @@ export const realApiClient: ApiClient = {
         job_id: payload.job.job_id,
         status: payload.job.status === "RUNNING" ? "RUNNING" : "PENDING",
       },
+      idempotent_replay: payload.idempotent_replay ?? false,
     } satisfies DatasetImportResponse;
   },
   async deleteDataset(id) {
@@ -233,6 +246,12 @@ export const realApiClient: ApiClient = {
   deleteProposal(proposalId) {
     return request<void>(`/api/v1/rule-proposals/${encodeURIComponent(proposalId)}`, { method: "DELETE" });
   },
+  bulkReviewProposals(input) {
+    return request<RuleProposal[]>("/api/v1/rule-proposals/bulk-review", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
   listRuleConfigurations(datasetId) {
     return request<RuleConfiguration[]>(`/api/v1/rule-configurations?dataset_id=${encodeURIComponent(datasetId)}`);
   },
@@ -257,6 +276,28 @@ export const realApiClient: ApiClient = {
   getDqAnomalies(runId) {
     return request<DqAnomaly[]>(`/api/v1/dq-runs/${runId}/anomalies`);
   },
+  async getActiveRules(datasetId) {
+    const response = await request<{ total_rules: number; rules: ActiveRule[] }>(
+      `/api/v1/dq/active-rules?dataset_id=${encodeURIComponent(datasetId)}`,
+    );
+    return response.rules;
+  },
+  getAnomalySignals(runId) {
+    return request<AnomalySignal[]>(
+      `/api/v1/dq/anomaly-runs/${encodeURIComponent(runId)}/signals`,
+    );
+  },
+  getAnomalyHypotheses(runId) {
+    return request<AnomalyHypothesis[]>(
+      `/api/v1/dq/anomaly-runs/${encodeURIComponent(runId)}/hypotheses`,
+    );
+  },
+  async submitAnomalyFeedback(runId, input) {
+    await request<{ status: string }>(
+      `/api/v1/dq/anomaly-runs/${encodeURIComponent(runId)}/feedback`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  },
   getLatestDqRun(datasetId) {
     return request<DqRun | null>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/dq-runs/latest`);
   },
@@ -271,6 +312,22 @@ export const realApiClient: ApiClient = {
     return request<DatasetRowsResponse>(
       `/api/v1/datasets/${encodeURIComponent(datasetId)}/rows?${params.toString()}`,
     );
+  },
+  getDataDictionary(datasetId) {
+    // The API answers 200 with `null` when nothing was uploaded: that is the
+    // signal for "the agent will infer it", not a missing resource.
+    return request<DataDictionary | null>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/data-dictionary`);
+  },
+  uploadDataDictionary(datasetId, file) {
+    const body = new FormData();
+    body.append("file", file);
+    return request<DataDictionary>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/data-dictionary`, {
+      method: "POST",
+      body,
+    });
+  },
+  async deleteDataDictionary(datasetId) {
+    await request<void>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/data-dictionary`, { method: "DELETE" });
   },
   listAuditLogs() {
     return request<AuditLog[]>("/api/v1/audit-logs?limit=50");
@@ -305,6 +362,7 @@ export const realApiClient: ApiClient = {
   getWorkflow(workflowRunId: string) {
     return request<WorkflowRun>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}`);
   },
+
   runWorkflowStep(workflowRunId: string, step: WorkflowStepKey) {
     const idempotencyKey = crypto.randomUUID();
     return requestWithTransientRetry<CreateJobResponse>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}/steps/${step}`, {
@@ -326,6 +384,12 @@ export const realApiClient: ApiClient = {
       body: JSON.stringify(input),
     });
   },
+  confirmSemanticContract(workflowRunId: string, input: SemanticContractConfirmInput) {
+    return request<{ workflow: WorkflowRun; artifact: AgentArtifact }>(
+      `/api/v1/workflows/${encodeURIComponent(workflowRunId)}/semantic-contract/confirm`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  },
   continueLoop(workflowRunId: string, input: LoopDecisionInput) {
     return request<WorkflowRun>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}/loop-decision`, {
       method: "POST",
@@ -338,52 +402,25 @@ export const realApiClient: ApiClient = {
       body: JSON.stringify({ target_step: targetStep }),
     });
   },
-  createGraph1Run(datasetId: string, datasetVersionId?: string, profileRunId?: string) {
-    const query = new URLSearchParams();
-    if (datasetVersionId) query.set("dataset_version_id", datasetVersionId);
-    if (profileRunId) query.set("profile_run_id", profileRunId);
-    const suffix = query.toString() ? `?${query.toString()}` : "";
-    return request<Graph1Run>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/graph1-runs${suffix}`, {
-      method: "POST",
-      headers: { "Idempotency-Key": crypto.randomUUID() },
-    });
+  getGraphCatalog() {
+    return request<GraphCatalog>("/api/v1/graph/catalog");
   },
-  getLatestGraph1Run(datasetId: string, datasetVersionId?: string) {
-    const query = datasetVersionId ? `?dataset_version_id=${encodeURIComponent(datasetVersionId)}` : "";
-    return request<Graph1Run | null>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/graph1-runs/latest${query}`);
+  listNodeRuns(filter: NodeRunFilter) {
+    const params = new URLSearchParams();
+    if (filter.workflowRunId) params.set("workflow_run_id", filter.workflowRunId);
+    if (filter.datasetId) params.set("dataset_id", filter.datasetId);
+    if (filter.dqRunId) params.set("dq_run_id", filter.dqRunId);
+    if (filter.anomalyRunId) params.set("anomaly_run_id", filter.anomalyRunId);
+    if (filter.graphKey) params.set("graph_key", filter.graphKey);
+    if (filter.graphRunId) params.set("graph_run_id", filter.graphRunId);
+    if (filter.limit) params.set("limit", String(filter.limit));
+    const query = params.toString();
+    return request<NodeRun[]>(`/api/v1/graph/node-runs${query ? `?${query}` : ""}`);
   },
-  getGraph1Run(runId: string) {
-    return request<Graph1Run>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}`);
+  getNodeRun(nodeRunId: string) {
+    return request<NodeRunDetail>(`/api/v1/graph/node-runs/${encodeURIComponent(nodeRunId)}`);
   },
-  listGraph1Nodes(runId: string) {
-    return request<Graph1NodeExecution[]>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}/nodes`);
-  },
-  confirmGraph1Semantic(runId: string, contract: Record<string, unknown>) {
-    return request<Graph1Run>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}/semantic-review`, {
-      method: "POST", body: JSON.stringify({ contract }),
-    });
-  },
-  reviewGraph1Rules(runId: string, decisions: Graph1RuleDecision[]) {
-    return request<Graph1Run>(`/api/v1/graph1-runs/${encodeURIComponent(runId)}/rule-review`, {
-      method: "POST", body: JSON.stringify({ decisions }),
-    });
-  },
-  createAnalysisRun(graph1RunId: string, rerun = false) {
-    // The analysis launch is idempotent by Graph 1 run. Retry a dropped
-    // connection so a committed run can still be recovered by its key.
-    const query = rerun ? "?rerun=true" : "";
-    return requestWithTransientRetry<AnalysisRun>(`/api/v1/graph1-runs/${encodeURIComponent(graph1RunId)}/analysis-runs${query}`, {
-      method: "POST",
-      headers: { "Idempotency-Key": rerun ? `analysis-rerun-${graph1RunId}-${crypto.randomUUID()}` : `analysis-${graph1RunId}` },
-    });
-  },
-  getAnalysisRun(analysisRunId: string) {
-    return request<AnalysisRun>(`/api/v1/analysis-runs/${encodeURIComponent(analysisRunId)}`);
-  },
-  listAnalysisNodes(analysisRunId: string) {
-    return request<AnalysisNodeExecution[]>(`/api/v1/analysis-runs/${encodeURIComponent(analysisRunId)}/nodes`);
-  },
-  getAnalysisResult(analysisRunId: string) {
-    return request<AnalysisResult>(`/api/v1/analysis-runs/${encodeURIComponent(analysisRunId)}/result`);
+  getStewardReport(runId: string) {
+    return request<StewardReport>(`/api/v1/dq-runs/${encodeURIComponent(runId)}/steward-report`);
   },
 };

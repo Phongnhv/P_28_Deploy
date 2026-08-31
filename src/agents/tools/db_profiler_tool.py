@@ -97,8 +97,7 @@ def _get_schema_constraints(inspector, table_name: str) -> dict:
     try:
         ucs = inspector.get_unique_constraints(table_name)
         result["unique_constraints"] = [
-            {"name": uc.get("name"), "columns": uc.get("column_names", [])}
-            for uc in (ucs or [])
+            {"name": uc.get("name"), "columns": uc.get("column_names", [])} for uc in (ucs or [])
         ]
     except Exception as e:
         logger.debug("Không lấy được unique constraints của bảng '%s': %s", table_name, e)
@@ -240,9 +239,7 @@ def profile_database(
             inspector = inspect(engine)
 
             if not inspector.has_table(table_name):
-                return json.dumps(
-                    {"error": f"Bảng '{table_name}' không tồn tại trong database."}, ensure_ascii=False
-                )
+                return json.dumps({"error": f"Bảng '{table_name}' không tồn tại trong database."}, ensure_ascii=False)
 
             columns = inspector.get_columns(table_name)
             col_meta = _classify_columns(columns)
@@ -280,9 +277,7 @@ def profile_database(
                 for col in col_meta:
                     col_name = col["name"]
                     # Null count — tất cả cột
-                    full_select.append(
-                        f'SUM(CASE WHEN "{col_name}" IS NULL THEN 1 ELSE 0 END) AS "{col_name}_nulls"'
-                    )
+                    full_select.append(f'SUM(CASE WHEN "{col_name}" IS NULL THEN 1 ELSE 0 END) AS "{col_name}_nulls"')
                     if col["is_numeric"]:
                         full_select.append(f'MIN("{col_name}") AS "{col_name}_min"')
                         full_select.append(f'MAX("{col_name}") AS "{col_name}_max"')
@@ -344,7 +339,7 @@ def profile_database(
                 ]
                 distinct_res = None
                 if distinct_select:
-                    distinct_sql = f'SELECT {", ".join(distinct_select)} FROM {subquery}'
+                    distinct_sql = f"SELECT {', '.join(distinct_select)} FROM {subquery}"
                     distinct_res = conn.execute(text(distinct_sql)).mappings().first()
 
                 # ===================== PHA 3: Full-table distinct cho key candidates =====================
@@ -354,11 +349,7 @@ def profile_database(
                     col_name = col["name"]
                     if col["is_complex"]:
                         continue
-                    dist_sample = (
-                        int(distinct_res.get(f"{col_name}_distinct", 0))
-                        if distinct_res
-                        else 0
-                    )
+                    dist_sample = int(distinct_res.get(f"{col_name}_distinct", 0)) if distinct_res else 0
                     if _is_key_candidate(col_name, col, dist_sample, sampled_rows):
                         key_candidate_cols.append(col_name)
 
@@ -370,10 +361,7 @@ def profile_database(
 
                 full_distinct_res: dict[str, int] = {}
                 if key_candidate_cols:
-                    fd_select = [
-                        f'COUNT(DISTINCT "{c}") AS "{c}_full_distinct"'
-                        for c in key_candidate_cols
-                    ]
+                    fd_select = [f'COUNT(DISTINCT "{c}") AS "{c}_full_distinct"' for c in key_candidate_cols]
                     fd_sql = f'SELECT {", ".join(fd_select)} FROM "{table_name}"'
                     fd_row = conn.execute(text(fd_sql)).mappings().first()
                     if fd_row:
@@ -391,7 +379,7 @@ def profile_database(
                         pct_parts = []
                         for col_name in numeric_cols:
                             pct_parts.append(
-                                f'percentile_cont(ARRAY[0.01,0.05,0.25,0.5,0.75,0.95,0.99]) '
+                                f"percentile_cont(ARRAY[0.01,0.05,0.25,0.5,0.75,0.95,0.99]) "
                                 f'WITHIN GROUP (ORDER BY "{col_name}") AS "{col_name}_pcts"'
                             )
                         pct_sql = f'SELECT {", ".join(pct_parts)} FROM "{table_name}"'
@@ -403,7 +391,9 @@ def profile_database(
                                     if arr is not None:
                                         labels = ["p1", "p5", "p25", "p50", "p75", "p95", "p99"]
                                         percentile_res[col_name] = {
-                                            "values": {lbl: float(v) if v is not None else None for lbl, v in zip(labels, arr)},
+                                            "values": {
+                                                lbl: float(v) if v is not None else None for lbl, v in zip(labels, arr)
+                                            },
                                             "is_estimate": False,
                                         }
                         except Exception as e:
@@ -423,7 +413,7 @@ def profile_database(
                                                 f'SELECT "{col_name}" FROM {subquery} '
                                                 f'WHERE "{col_name}" IS NOT NULL '
                                                 f'ORDER BY "{col_name}" '
-                                                f'LIMIT 1 OFFSET {offset}'
+                                                f"LIMIT 1 OFFSET {offset}"
                                             )
                                         ).scalar()
                                         pct_values[lbl] = float(row) if row is not None else None
@@ -443,7 +433,7 @@ def profile_database(
                         try:
                             violation_sql = (
                                 f'SELECT SUM(CASE WHEN "{col_a}" > "{col_b}" THEN 1 ELSE 0 END) AS violations, '
-                                f'COUNT(*) AS total '
+                                f"COUNT(*) AS total "
                                 f'FROM "{table_name}" '
                                 f'WHERE "{col_a}" IS NOT NULL AND "{col_b}" IS NOT NULL'
                             )
@@ -463,9 +453,7 @@ def profile_database(
                                     }
                                 )
                         except Exception as e:
-                            logger.debug(
-                                "Không tính được cross-column hint (%s, %s): %s", col_a, col_b, e
-                            )
+                            logger.debug("Không tính được cross-column hint (%s, %s): %s", col_a, col_b, e)
 
                 # ===================== Tổng hợp kết quả =====================
                 result_columns = {}
@@ -504,7 +492,7 @@ def profile_database(
                     if col_name in full_distinct_res:
                         fd_count = full_distinct_res[col_name]
                         col_stats["distinct_full_table"] = fd_count
-                        col_stats["is_unique_full_table"] = (fd_count == total_rows and total_rows > 0)
+                        col_stats["is_unique_full_table"] = fd_count == total_rows and total_rows > 0
 
                     # min/max/mean cho numeric: từ full table (pha 1)
                     if col["is_numeric"] and full_res:

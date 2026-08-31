@@ -1,14 +1,27 @@
+import asyncio
+import inspect
+import json
 import logging
 import os
 import sys
 from collections.abc import Awaitable, Callable
+from typing import Literal
 
 from dotenv import load_dotenv
+from langgraph.graph import END, StateGraph
+
+from src.agents.graph_catalog import DETERMINISTIC, LLM
+from src.agents.state import AgentState
+from src.services.node_telemetry import instrument, start_graph_run
 
 load_dotenv()
 
 # Only enable Phoenix OpenTelemetry tracing when explicitly requested and not in test/disabled mode
-if "pytest" not in sys.modules and not os.getenv("DISABLE_TRACING") and (os.getenv("ENABLE_PHOENIX") == "true" or os.getenv("PHOENIX_COLLECTOR_ENDPOINT")):
+if (
+    "pytest" not in sys.modules
+    and not os.getenv("DISABLE_TRACING")
+    and (os.getenv("ENABLE_PHOENIX") == "true" or os.getenv("PHOENIX_COLLECTOR_ENDPOINT"))
+):
     try:
         from openinference.instrumentation.langchain import LangChainInstrumentor
         from opentelemetry import trace
@@ -19,23 +32,88 @@ if "pytest" not in sys.modules and not os.getenv("DISABLE_TRACING") and (os.gete
         phoenix_host = "localhost" if os.name == "nt" or not os.path.exists("/.dockerenv") else "host.docker.internal"
         phoenix_endpoint = os.getenv("PHOENIX_COLLECTOR_ENDPOINT") or f"http://{phoenix_host}:6006/v1/traces"
         tracer_provider = TracerProvider()
-        tracer_provider.add_span_processor(
-            BatchSpanProcessor(OTLPSpanExporter(endpoint=phoenix_endpoint))
-        )
+        tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=phoenix_endpoint)))
         trace.set_tracer_provider(tracer_provider)
         LangChainInstrumentor().instrument()
     except Exception:
         pass
 
 
-from langgraph.graph import END, StateGraph
-
-from src.agents.state import AgentState
-
-
 # ---------------------------------------------------------------------------
 # Run 1: Proposal Graph (profiler → digest → rule_proposer → persist_rules)
 # ---------------------------------------------------------------------------
+def build_understanding_graph() -> StateGraph:
+    """Graph 1A: consume persisted profile evidence and stop after understanding."""
+    from src.agents.nodes.data_dictionary_generator_node import data_dictionary_generator_node
+    from src.agents.nodes.dataset_understanding_node import dataset_understanding_node
+    from src.agents.nodes.profiler_node import profiler_digest_node
+
+    graph = StateGraph(AgentState)
+    graph.add_node(
+        "build_profile_digest",
+        instrument("G1A", "build_profile_digest", DETERMINISTIC)(profiler_digest_node),
+    )
+    graph.add_node(
+        "data_dictionary_generator",
+        instrument("G1A", "data_dictionary_generator", LLM)(data_dictionary_generator_node),
+    )
+    graph.add_node(
+        "dataset_understanding",
+        instrument("G1A", "dataset_understanding", LLM)(dataset_understanding_node),
+    )
+    graph.set_entry_point("build_profile_digest")
+    graph.add_conditional_edges("build_profile_digest", lambda state: END if state.get("error") else ("dataset_understanding" if state.get("normalized_data_dictionary") else "data_dictionary_generator"), {"dataset_understanding": "dataset_understanding", "data_dictionary_generator": "data_dictionary_generator", END: END})
+    graph.add_edge("data_dictionary_generator", "dataset_understanding")
+    graph.add_edge("dataset_understanding", END)
+    return graph.compile()
+
+
+def build_rule_proposal_graph() -> StateGraph:
+    """Graph 1B: candidate/context/proposal work from a confirmed contract."""
+    from src.agents.nodes.prompt_customizer_node import prompt_customizer_node
+    from src.agents.nodes.rule_candidate_builder_node import rule_candidate_builder_node
+    from src.agents.nodes.rule_proposer_node import rule_proposer_node
+
+    graph = StateGraph(AgentState)
+    graph.add_node(
+        "rule_candidate_builder",
+        instrument("G1B", "rule_candidate_builder", DETERMINISTIC)(rule_candidate_builder_node),
+    )
+    graph.add_node(
+        "prompt_customizer",
+        instrument("G1B", "prompt_customizer", LLM)(prompt_customizer_node),
+    )
+    graph.add_node("rule_proposer", instrument("G1B", "rule_proposer", LLM)(rule_proposer_node))
+    graph.set_entry_point("rule_candidate_builder")
+    graph.add_edge("rule_candidate_builder", "prompt_customizer")
+    graph.add_edge("prompt_customizer", "rule_proposer")
+    graph.add_edge("rule_proposer", END)
+    return graph.compile()
+
+
+def _timed_node(node_name: str, node_func: Callable) -> Callable:
+    """Wrap a graph node to track its execution duration and set current node for token attribution."""
+    import time
+
+    from src.utils.metrics_tracker import get_metrics_tracker
+
+    async def _wrapped(state: AgentState) -> dict:
+        tracker = get_metrics_tracker()
+        token = tracker.set_current_node(node_name)
+        start_ts = time.perf_counter()
+        try:
+            res = node_func(state)
+            if inspect.isawaitable(res):
+                res = await res
+            return res
+        finally:
+            duration = time.perf_counter() - start_ts
+            tracker.record_node_time(node_name, duration)
+            tracker.reset_current_node(token)
+
+    return _wrapped
+
+
 def build_proposal_graph() -> StateGraph:
     """Xây dựng graph cho Run 1 — kết thúc sau khi persist rules vào DB và ghi trace.
 
@@ -73,20 +151,19 @@ def build_proposal_graph() -> StateGraph:
 
     graph = StateGraph(AgentState)
 
-    graph.add_node("raw_profiler", raw_profiler_node)
-    graph.add_node("profiler_digest", profiler_digest_node)
-    graph.add_node("dataset_understanding", dataset_understanding_node)
-    graph.add_node("data_dictionary_generator", data_dictionary_generator_node)
-    graph.add_node("hitl_semantic_gate", hitl_semantic_gate_node)
-    graph.add_node("rule_candidate_builder", rule_candidate_builder_node)
-    graph.add_node("prompt_customizer", prompt_customizer_node)
-    graph.add_node("rule_proposer", rule_proposer_node)
-    graph.add_node("hitl_gate", hitl_gate_node)
+    graph.add_node("raw_profiler", _timed_node("raw_profiler", raw_profiler_node))
+    graph.add_node("profiler_digest", _timed_node("profiler_digest", profiler_digest_node))
+    graph.add_node("dataset_understanding", _timed_node("dataset_understanding", dataset_understanding_node))
+    graph.add_node("data_dictionary_generator", _timed_node("data_dictionary_generator", data_dictionary_generator_node))
+    graph.add_node("hitl_semantic_gate", _timed_node("hitl_semantic_gate", hitl_semantic_gate_node))
+    graph.add_node("rule_candidate_builder", _timed_node("rule_candidate_builder", rule_candidate_builder_node))
+    graph.add_node("prompt_customizer", _timed_node("prompt_customizer", prompt_customizer_node))
+    graph.add_node("rule_proposer", _timed_node("rule_proposer", rule_proposer_node))
+    graph.add_node("hitl_gate", _timed_node("hitl_gate", hitl_gate_node))
 
     # Entry point động
     graph.set_conditional_entry_point(
-        _route_entry,
-        {"rule_candidate_builder": "rule_candidate_builder", "raw_profiler": "raw_profiler"}
+        _route_entry, {"rule_candidate_builder": "rule_candidate_builder", "raw_profiler": "raw_profiler"}
     )
 
     # raw_profiler → profiler_digest (hoặc END nếu lỗi)
@@ -99,8 +176,16 @@ def build_proposal_graph() -> StateGraph:
     # profiler_digest → dataset_understanding (hoặc END nếu lỗi)
     graph.add_conditional_edges(
         "profiler_digest",
-        lambda state: END if state.get("error") else ("dataset_understanding" if state.get("normalized_data_dictionary") else "data_dictionary_generator"),
-        {"dataset_understanding": "dataset_understanding", "data_dictionary_generator": "data_dictionary_generator", END: END},
+        lambda state: (
+            END
+            if state.get("error")
+            else ("dataset_understanding" if state.get("normalized_data_dictionary") else "data_dictionary_generator")
+        ),
+        {
+            "dataset_understanding": "dataset_understanding",
+            "data_dictionary_generator": "data_dictionary_generator",
+            END: END,
+        },
     )
 
     graph.add_conditional_edges(
@@ -170,13 +255,17 @@ def build_dashboard_proposal_graph() -> StateGraph:
     graph.add_edge("rule_proposer", END)
     return graph.compile()
 
+
 # ---------------------------------------------------------------------------
 # Run 2: Execution Graph (Test Generator ➔ Validate ➔ Run ➔ Persist)
 # ---------------------------------------------------------------------------
 
+
 def _should_run_or_fail(state: AgentState) -> str:
-    """Route the dbt artifact to execution or terminal failure."""
+    """Route the dbt artifact to execution, direct SQL fallback, or terminal failure."""
     if state.get("dbt_validation_valid") is True:
+        return "run"
+    if state.get("generated_tests") and state.get("allow_direct_sql_fallback", True):
         return "run"
     return "fail"
 
@@ -239,11 +328,17 @@ def build_execution_graph(observer: NodeObserver | None = None) -> StateGraph:
 
     graph = StateGraph(AgentState)
 
-    graph.add_node("test_generator", _observed_node("GRAPH2", "test_generator", test_generator_node, observer))
-    graph.add_node("validate_dbt_project", _observed_node("GRAPH2", "validate_dbt_project", validate_dbt_project_node, observer))
-    graph.add_node("dbt_validation_failed", _observed_node("GRAPH2", "dbt_validation_failed", _fail_dbt_validation_node, observer))
-    graph.add_node("test_runner", _observed_node("GRAPH2", "test_runner", test_runner_node, observer))
-    graph.add_node("persist_report", _observed_node("GRAPH2", "persist_report", persist_report_node, observer))
+    graph.add_node("test_generator", instrument("G2", "test_generator", DETERMINISTIC)(test_generator_node))
+    graph.add_node(
+        "validate_dbt_project",
+        instrument("G2", "validate_dbt_project", DETERMINISTIC)(validate_dbt_project_node),
+    )
+    graph.add_node(
+        "dbt_validation_failed",
+        instrument("G2", "dbt_validation_failed", DETERMINISTIC)(_fail_dbt_validation_node),
+    )
+    graph.add_node("test_runner", instrument("G2", "test_runner", DETERMINISTIC)(test_runner_node))
+    graph.add_node("persist_report", instrument("G2", "persist_report", DETERMINISTIC)(persist_report_node))
 
     graph.set_entry_point("test_generator")
 
@@ -263,13 +358,16 @@ def build_execution_graph(observer: NodeObserver | None = None) -> StateGraph:
 
     return graph.compile()
 
-
-# ---------------------------------------------------------------------------
-# Run 3: Anomaly Graph (Detector ➔ Hypothesis ➔ Persist)
-# ---------------------------------------------------------------------------
-
-def build_anomaly_graph(observer: NodeObserver | None = None) -> StateGraph:
+def build_anomaly_graph(
+    investigation_mode: Literal["deepagent", "legacy"] | None = None,
+    observer: NodeObserver | None = None,
+) -> StateGraph:
     """Xây dựng graph cho Run 3 (Anomaly Analysis Graph).
+
+    Args:
+        investigation_mode: "deepagent" (Deep Agent + Tools + Skills) hoặc "legacy" (Steward Insights prompt cũ).
+                           Nếu None, lấy từ config (settings.anomaly_investigation_mode).
+        observer: Optional NodeObserver callback for streaming execution metrics.
 
     Luồng:
       anomaly_detector ➔ hypothesis_agent ➔ persist_analysis ➔ report_writer ➔ END
@@ -277,15 +375,26 @@ def build_anomaly_graph(observer: NodeObserver | None = None) -> StateGraph:
     from src.agents.nodes.anomaly_detector_node import anomaly_detector_node
     from src.agents.nodes.persist_analysis_node import persist_analysis_node
     from src.agents.nodes.report_writer_node import report_writer_node
-    from src.agents.nodes.steward_insights_node import steward_insights_node
     from src.agents.state import AnomalyGraphState
+    from src.config import get_settings
+
+    mode = investigation_mode or get_settings().anomaly_investigation_mode
+
+    if mode == "legacy":
+        from src.agents.nodes.steward_insights_node import steward_insights_node
+
+        hypothesis_agent = steward_insights_node
+    else:
+        from src.agents.nodes.anomaly_investigation_node import anomaly_investigation_node
+
+        hypothesis_agent = anomaly_investigation_node
 
     graph = StateGraph(AnomalyGraphState)
 
-    graph.add_node("anomaly_detector", _observed_node("GRAPH3", "anomaly_detector", anomaly_detector_node, observer))
-    graph.add_node("hypothesis_agent", _observed_node("GRAPH3", "hypothesis_agent", steward_insights_node, observer))
-    graph.add_node("persist_analysis", _observed_node("GRAPH3", "persist_analysis", persist_analysis_node, observer))
-    graph.add_node("report_writer", _observed_node("GRAPH3", "report_writer", report_writer_node, observer))
+    graph.add_node("anomaly_detector", instrument("G3", "anomaly_detector", DETERMINISTIC)(anomaly_detector_node))
+    graph.add_node("hypothesis_agent", instrument("G3", "hypothesis_agent", LLM)(hypothesis_agent))
+    graph.add_node("persist_analysis", instrument("G3", "persist_analysis", DETERMINISTIC)(persist_analysis_node))
+    graph.add_node("report_writer", instrument("G3", "report_writer", LLM)(report_writer_node))
 
     graph.set_entry_point("anomaly_detector")
     graph.add_edge("anomaly_detector", "hypothesis_agent")
@@ -307,26 +416,186 @@ logger = logging.getLogger("graph_runner")
 #: caller quên truyền sẽ âm thầm chạy trên dataset sai mà không có cảnh báo nào.
 DEFAULT_CLI_DATASET_ID = "dataset-nyc-yellow-taxi-50k"
 
+
+def _run_durable_proposal_workflow(dataset_id: str, auto_confirm_semantic: bool) -> dict:
+    from sqlalchemy.orm import Session
+
+    from src.models.database import (
+        ColumnProfileModel,
+        DatasetModel,
+        ProfileModel,
+        RuleProposalModel,
+        WorkflowArtifactModel,
+    )
+    from src.services.rule_proposer_workflow import (
+        confirm_semantic_contract,
+        execute_step,
+        get_or_create_run,
+        serialize_artifact,
+        serialize_run,
+    )
+    from src.services.rule_store import ProposedRuleModel, create_run, get_engine, init_db
+
+    init_db()
+    with Session(get_engine()) as db:
+        dataset = db.get(DatasetModel, dataset_id)
+        if not dataset:
+            dataset = DatasetModel(
+                id=dataset_id,
+                name=dataset_id,
+                description=f"Auto-registered dataset {dataset_id}",
+                status="PROFILE_READY",
+                row_count=0,
+                source_label=dataset_id,
+                manifest_version="1.0.0",
+                checksum="auto-seeded",
+            )
+            db.add(dataset)
+            db.flush()
+
+        profile = db.get(ProfileModel, dataset_id)
+        if not profile:
+            profile = ProfileModel(
+                dataset_id=dataset_id,
+                row_count=100,
+                completeness_score=95.0,
+                validity_score=95.0,
+                duplicate_rate=0.0,
+                evidence_keys="[]",
+            )
+            db.add(profile)
+            db.flush()
+            cols = db.query(ColumnProfileModel).filter_by(profile_dataset_id=dataset_id).all()
+            if not cols:
+                db.add(
+                    ColumnProfileModel(
+                        profile_dataset_id=dataset_id,
+                        name="status",
+                        data_type="string",
+                        null_rate=0.0,
+                        distinct_count=2,
+                        sample_value="OK",
+                    )
+                )
+                db.flush()
+
+        run = get_or_create_run(db, dataset, force_new=True)
+        db.commit()
+        create_run(run_id=run.id, dataset_id=dataset_id)
+        execute_step(db, run, "UNDERSTAND_DATA")
+        db.commit()
+        draft = (
+            db.query(WorkflowArtifactModel)
+            .filter_by(
+                workflow_run_id=run.id,
+                step_key="UNDERSTAND_DATA",
+                artifact_type="SEMANTIC_CONTRACT",
+                stale=False,
+            )
+            .order_by(WorkflowArtifactModel.version.desc())
+            .first()
+        )
+        if not draft:
+            raise ValueError("Understanding did not produce a semantic contract")
+        if not auto_confirm_semantic:
+            return {
+                "run_id": run.id,
+                "status": "AWAITING_SEMANTIC_REVIEW",
+                "workflow": serialize_run(run),
+                "artifact": serialize_artifact(draft),
+                "rules": [],
+                "summary": {"total": 0},
+            }
+        payload = json.loads(draft.payload_json or "{}")
+        confirm_semantic_contract(
+            db,
+            run,
+            artifact_id=draft.id,
+            expected_version=draft.version,
+            contract=payload,
+        )
+        execute_step(db, run, "PROPOSE_RULES")
+        db.commit()
+        rules = db.query(RuleProposalModel).filter_by(workflow_run_id=run.id).all()
+
+        for r in rules:
+            spec = json.loads(r.rule_spec or "{}")
+            spec["table_name"] = dataset_id
+            spec_json = json.dumps(spec)
+            db.add(
+                ProposedRuleModel(
+                    run_id=run.id,
+                    rule_id=r.id,
+                    dataset_id=dataset_id,
+                    table_name=dataset_id,
+                    column_name=spec.get("column"),
+                    rule_type=r.rule_type,
+                    parameters=spec_json,
+                    confidence_score=r.confidence,
+                    severity=r.severity,
+                    dimension="VALIDITY",
+                    rule_description=r.description,
+                    ai_reasoning=r.business_rationale,
+                    rule_name=r.rule_name or r.title,
+                    business_rationale=r.business_rationale,
+                    proposal_basis=r.proposal_basis,
+                    evidence=r.evidence or "{}",
+                    confidence_breakdown=r.confidence_breakdown or "{}",
+                    status="PENDING",
+                )
+            )
+        db.commit()
+
+        serialized_rules = [
+            {
+                "rule_id": rule.id,
+                "rule_description": rule.description,
+                "severity": rule.severity,
+                "status": rule.status,
+                "parameters": json.loads(rule.rule_spec or "{}"),
+                "ai_reasoning": rule.business_rationale,
+            }
+            for rule in rules
+        ]
+        return {
+            "run_id": run.id,
+            "status": "DONE",
+            "workflow": serialize_run(run),
+            "rules": serialized_rules,
+            "summary": {"total": len(serialized_rules)},
+        }
+
+
 async def run_proposal_graph(
     dataset_id: str,
     connection_string: str | None = None,
     sampling_rate: float = 1.0,
     auto_confirm_semantic: bool = True,
 ) -> dict:
-    """Chạy toàn bộ pipeline Run 1 (Đề xuất Rules): Profiler -> Digest -> Proposer -> HITL Gate."""
+    """Chạy toàn bộ pipeline Run 1 (Đề xuất Rule): Raw Profiler -> Digest -> Understanding -> Semantic Gate -> Candidates -> Customizer -> Proposer -> HITL Gate."""
     import uuid
 
     from src.config import get_settings
-    from src.services.rule_store import create_run, get_review_summary, init_db, list_rules, update_run_status
+    from src.services.rule_store import (
+        create_run,
+        get_review_summary,
+        init_db,
+        list_rules,
+        update_run_status,
+    )
 
     init_db()
+    run_id = uuid.uuid4().hex
     settings = get_settings()
     conn_str = connection_string or settings.database_url
-    run_id = uuid.uuid4().hex
 
     logger.info("Bắt đầu Run 1 (Proposal) | run_id=%s | dataset=%s", run_id, dataset_id)
     create_run(run_id=run_id, dataset_id=dataset_id)
     update_run_status(run_id=run_id, status="RUNNING")
+
+    from src.utils.metrics_tracker import get_metrics_tracker
+    tracker = get_metrics_tracker()
+    tracker.reset()
 
     proposal_graph = build_proposal_graph()
     initial_state = {
@@ -341,18 +610,15 @@ async def run_proposal_graph(
 
     try:
         final_state = await proposal_graph.ainvoke(initial_state)
+        tracker.finish()
+        tracker.print_report(title=f"GRAPH 1 (PROPOSAL) REPORT — DATASET: {dataset_id}")
 
-        # `ainvoke` KHÔNG ném exception khi một node trả về {"error": ...} — graph chỉ
-        # định tuyến sang END. Trước đây runner ghi "DONE" vô điều kiện nên một Run 1
-        # thất bại hoàn toàn (LLM hết quota → 0 rules) vẫn được báo là thành công, và
-        # trạng thái AWAITING_SEMANTIC_REVIEW do gate ghi cũng bị ghi đè ngay lập tức.
         pause_reason = final_state.get("pause_reason")
         graph_error = final_state.get("error")
 
         if pause_reason:
             update_run_status(run_id=run_id, status=str(pause_reason))
             logger.info("Run 1 tạm dừng chờ người duyệt | run_id=%s | lý do=%s", run_id, pause_reason)
-            print(f"\n⏸️  RUN 1 TẠM DỪNG — {pause_reason} (Proposal run_id: {run_id})\n")
             return {
                 "run_id": run_id,
                 "status": str(pause_reason),
@@ -363,7 +629,6 @@ async def run_proposal_graph(
         if graph_error:
             update_run_status(run_id=run_id, status="FAILED", error=str(graph_error))
             logger.error("Run 1 thất bại trong graph | run_id=%s | error=%s", run_id, graph_error)
-            print(f"\n❌ RUN 1 THẤT BẠI: {graph_error}\n")
             return {
                 "run_id": run_id,
                 "status": "FAILED",
@@ -373,34 +638,15 @@ async def run_proposal_graph(
             }
 
         update_run_status(run_id=run_id, status="DONE")
-
         rules = list_rules(run_id=run_id)
         summary = get_review_summary(run_id=run_id)
-
-        print("\n" + "=" * 75)
-        print(f"🎉 RUN 1 HOÀN THÀNH THÀNH CÔNG (Proposal run_id: {run_id})")
-        print("=" * 75)
-        print(f"• Tổng số rules đề xuất : {summary.get('total', len(rules))}")
-        print(f"• Trạng thái            : {final_state.get('metadata', {}).get('hitl_status', 'AWAITING_REVIEW')}")
-        print(f"• File trace debug       : {final_state.get('metadata', {}).get('trace_path', 'N/A')}")
-        print("\n📊 Phân bố theo Data Quality Dimension:")
-        for dim, stats in summary.get("by_dimension", {}).items():
-            print(f"   - {dim:<20}: {stats.get('total', 0)} rules")
-
-        print("\n🔍 Top 5 rules mẫu vừa sinh:")
-        for i, rule in enumerate(rules[:5], start=1):
-            print(f"\n[{i}] {rule.get('rule_id')} ({rule.get('dimension')}) - Mức độ: {rule.get('severity')}")
-            print(f"    Mô tả      : {rule.get('rule_description')}")
-            print(f"    AI Suy luận: {rule.get('ai_reasoning')}")
-            print(f"    Tham số    : {rule.get('parameters')}")
-
-        print("\n" + "=" * 75 + "\n")
         return {"run_id": run_id, "status": "DONE", "rules": rules, "summary": summary}
 
     except Exception as exc:
+        tracker.finish()
+        tracker.print_report(title=f"GRAPH 1 (PROPOSAL) FAILED REPORT — DATASET: {dataset_id}")
         logger.error("Run 1 thất bại: %s", exc, exc_info=True)
         update_run_status(run_id=run_id, status="FAILED", error=str(exc))
-        print(f"\n❌ RUN 1 THẤT BẠI: {exc}\n")
         raise
 
 
@@ -435,6 +681,7 @@ async def run_execution_graph(
     logger.info("Bắt đầu Run 2 (Execution) | test_run_id=%s | rules_count=%d", test_run_id, len(rules_to_test))
 
     execution_graph = build_execution_graph()
+    start_graph_run(dataset_id=dataset_id, dq_run_id=test_run_id)
     initial_state = {
         "dataset_id": dataset_id,
         "test_run_id": test_run_id,
@@ -469,7 +716,17 @@ async def run_execution_graph(
             "test_run_id": test_run_id,
             "results": results,
             "anomalies": anomalies,
-            "dq_score": final_state.get("dq_score", 100.0),
+            # No default. Nothing in the graph currently assigns dq_score, so a
+            # default of 100.0 reported flawless quality on a dataset that had just
+            # failed 8 of 31 rules with 7,672 rows missing passenger_count -- while
+            # persist_report_node wrote None and the Steward report said the data had
+            # serious problems. Three contradictory answers from one run.
+            #
+            # None is the honest answer for a computation that no longer happens: a
+            # caller can see the score is absent, but cannot see that 100.0 was
+            # invented. Restoring the computation is the real fix; until then the
+            # absence must be visible.
+            "dq_score": final_state.get("dq_score"),
             "anomaly_decision": decision_data
         }
 
@@ -481,41 +738,87 @@ async def run_execution_graph(
 
 
 async def run_anomaly_graph(
-    execution_run_id: str,
-    dataset_id: str,
+    execution_run_id: str | None = None,
+    dataset_id: str = DEFAULT_CLI_DATASET_ID,
+    investigation_mode: Literal["deepagent", "legacy"] | None = None,
+    stream_id: str | None = None,
 ) -> dict:
-    """Chạy toàn bộ pipeline Run 3 (Anomaly Analysis & Hypothesis)."""
+    """Chạy toàn bộ pipeline Run 3 (Anomaly Analysis & Hypothesis).
+
+    Args:
+        execution_run_id: ID của lần chạy test (DqRun). Nếu None, tự động lấy run mới nhất từ CSDL.
+        dataset_id: ID của dataset cần phân tích bất thường.
+        investigation_mode: "deepagent" hoặc "legacy". Nếu None, lấy từ config.
+    """
     import uuid
+
+    from sqlalchemy.orm import Session
+
+    from src.config import get_settings
+    from src.models.database import DqRunModel
+    from src.services.rule_store import get_engine, init_db
+
+    init_db()
+    settings = get_settings()
+    active_mode = investigation_mode or settings.anomaly_investigation_mode
+
+    # Tự động tìm execution_run_id mới nhất nếu caller không truyền
+    if not execution_run_id:
+        try:
+            with Session(get_engine()) as db:
+                latest_run = (
+                    db.query(DqRunModel)
+                    .filter(DqRunModel.dataset_id == dataset_id)
+                    .order_by(DqRunModel.created_at.desc())
+                    .first()
+                )
+                if latest_run:
+                    execution_run_id = latest_run.id
+                else:
+                    # Lấy run bất kỳ mới nhất nếu không khớp dataset_id
+                    any_run = db.query(DqRunModel).order_by(DqRunModel.created_at.desc()).first()
+                    execution_run_id = any_run.id if any_run else uuid.uuid4().hex
+        except Exception:
+            execution_run_id = uuid.uuid4().hex
+
     anomaly_run_id = f"anom-{uuid.uuid4().hex[:12]}"
 
-    anomaly_graph = build_anomaly_graph()
+    anomaly_graph = build_anomaly_graph(investigation_mode=active_mode)
+    start_graph_run(dataset_id=dataset_id, dq_run_id=execution_run_id, anomaly_run_id=anomaly_run_id)
     initial_state = {
         "anomaly_run_id": anomaly_run_id,
         "execution_run_id": execution_run_id,
         "dataset_id": dataset_id,
-        "detector_config_version": "anomaly-v1",
-        # KHÔNG hardcode model ở đây: steward_insights_node ghi lại model thật nó đã gọi
-        # (theo settings.llm_provider) vào metadata để persist_analysis_node lưu chính xác.
-        "metadata": {},
+        "detector_config_version": settings.detector_config_version,
+        "metadata": {
+            "investigation_mode": active_mode,
+        },
     }
 
-    logger.info("Bắt đầu Run 3 (Anomaly Analysis) | anomaly_run_id=%s | execution_run_id=%s",
-                anomaly_run_id, execution_run_id)
+    logger.info(
+        "Bắt đầu Run 3 (Anomaly Analysis) [Mode: %s] | anomaly_run_id=%s | execution_run_id=%s",
+        active_mode,
+        anomaly_run_id,
+        execution_run_id,
+    )
 
     try:
-        final_state = await anomaly_graph.ainvoke(initial_state)
+        if stream_id:
+            from src.services.node_event_stream import run_graph_streamed
+            final_state = await run_graph_streamed(anomaly_graph, initial_state, stream_id)
+        else:
+            final_state = await anomaly_graph.ainvoke(initial_state)
         decision_data = final_state.get("anomaly_decision", {})
         signals = final_state.get("signal_observations", [])
         hypotheses = final_state.get("hypotheses", [])
-        # report_writer_node sets steward_report_path in state and metadata
-        steward_report_path = (
-            final_state.get("steward_report_path")
-            or final_state.get("metadata", {}).get("steward_report_path")
+        steward_report_path = final_state.get("steward_report_path") or final_state.get("metadata", {}).get(
+            "steward_report_path"
         )
-        llm_used = final_state.get("metadata", {}).get("steward_report_llm_used", False)
+        trace_path = final_state.get("metadata", {}).get("investigation_trace_path", "")
 
         logger.info(
-            "Run 3 completed | anomaly_run_id=%s decision=%s score=%s confidence=%s signals=%d hypotheses=%d report=%s mode=%s",
+            "Run 3 completed | mode=%s anomaly_run_id=%s decision=%s score=%s confidence=%s signals=%d hypotheses=%d report=%s trace=%s",
+            active_mode,
             anomaly_run_id,
             decision_data.get("decision", "NORMAL"),
             decision_data.get("score", 0.0),
@@ -523,7 +826,7 @@ async def run_anomaly_graph(
             len(signals),
             len(hypotheses),
             steward_report_path or "not-written",
-            "llm" if llm_used else "fallback",
+            trace_path or "none",
         )
         return final_state
     except Exception as exc:
@@ -532,7 +835,7 @@ async def run_anomaly_graph(
 
 
 async def main():
-    """CLI Menu lựa chọn chạy Run 1 (Đề xuất) hoặc Run 2 (Chạy test)."""
+    """CLI Menu lựa chọn chạy Run 1, Run 2 hoặc Run 3 (với DeepAgent / Legacy switch)."""
     import sys
 
     logging.basicConfig(
@@ -542,14 +845,38 @@ async def main():
 
     args = sys.argv[1:]
     mode = args[0] if args else "all"
-    dataset_id = args[1] if len(args) > 1 else DEFAULT_CLI_DATASET_ID
 
-    if mode == "1" or mode == "proposal":
+    # Trích xuất các flag điều tra (investigation mode)
+    inv_mode: Literal["deepagent", "legacy"] = "deepagent"
+    cleaned_args = []
+    for arg in args:
+        if arg in ("--legacy", "-legacy", "legacy", "--mode=legacy"):
+            inv_mode = "legacy"
+        elif arg in ("--deepagent", "-deepagent", "deepagent", "--mode=deepagent"):
+            inv_mode = "deepagent"
+        else:
+            cleaned_args.append(arg)
+
+    mode = cleaned_args[0] if cleaned_args else "all"
+    dataset_id = cleaned_args[1] if len(cleaned_args) > 1 else DEFAULT_CLI_DATASET_ID
+
+    if mode in ("1", "proposal"):
         print(f"🚀 Lựa chọn: CHẠY RUN 1 (Proposal Graph) cho dataset {dataset_id}")
         await run_proposal_graph(dataset_id=dataset_id)
-    elif mode == "2" or mode == "execution":
+    elif mode in ("2", "execution"):
         print(f"🚀 Lựa chọn: CHẠY RUN 2 (Execution Graph trên Active Rules) cho dataset {dataset_id}")
         await run_execution_graph(dataset_id=dataset_id)
+    elif mode in ("3", "anomaly", "investigate"):
+        print(f"🚀 Lựa chọn: CHẠY RUN 3 (Anomaly Investigation Graph) cho dataset {dataset_id}")
+        print(
+            f"   ⚙️ Investigation Mode: [{inv_mode.upper()}] (Sử dụng {'Deep Agent + Tools + Skills' if inv_mode == 'deepagent' else 'Legacy Single-Shot Prompt'})"
+        )
+        res = await run_anomaly_graph(dataset_id=dataset_id, investigation_mode=inv_mode)
+        print("\n" + "=" * 70)
+        print(
+            f"🎉 HOÀN TẤT RUN 3 [{inv_mode.upper()}]: Quyết định = {res.get('anomaly_decision', {}).get('decision')} | Số giả thuyết = {len(res.get('hypotheses', []))}"
+        )
+        print("=" * 70 + "\n")
     else:
         print(f"🚀 Lựa chọn mặc định: CHẠY RUN 1 ➔ DUYỆT & PUBLISH ➔ CHẠY RUN 2 cho dataset {dataset_id}")
         from src.services.rule_store import publish_approved_rules, review_rule
@@ -571,4 +898,5 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(main())

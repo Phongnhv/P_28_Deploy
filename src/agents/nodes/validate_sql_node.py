@@ -81,6 +81,7 @@ async def validate_sql_node(state: AgentState) -> dict:
         from pathlib import Path
 
         from src.config import get_settings
+
         settings = get_settings()
         base_dir = getattr(settings, "output_dir", None) or "./output"
         out_dir = Path(base_dir) / "validate_sql"
@@ -102,6 +103,7 @@ async def validate_sql_node(state: AgentState) -> dict:
 # ---------------------------------------------------------------------------
 # Standalone Test Harness (Chạy từ file output trước đó)
 # ---------------------------------------------------------------------------
+
 
 async def main():
     """Hàm chạy test độc lập cho validate_sql_node từ file output thực tế.
@@ -166,6 +168,5 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(main())
-
-

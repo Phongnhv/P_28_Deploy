@@ -1,0 +1,106 @@
+# E1-E5 — the acceptance cases the project already wrote down, made executable.
+#
+# Source: eval/results/E1_E5_EVALUATION.md described these five cases in prose. Prose
+# cannot fail a build, so the same expectations are restated here as assertions and
+# the original document is kept in docs/ as the human-facing record.
+#
+# One case (GC-E5) deliberately encodes a KNOWN DEFECT rather than the happy path.
+# It is written to fail today: the point of a golden case is to state what should be
+# true, not to describe what currently happens.
+version: "2.0"
+layer: dataset
+dataset_id: corpus-nyc-taxi-50k
+description: >-
+  Acceptance cases E1-E5, evaluated against archived agent proposals under output/
+  and archived execution results under output/reports.
+
+cases:
+  - id: GC-E1-RANGE-NONNEGATIVE
+    tier: 2
+    severity: HIGH
+    intent: >-
+      Monetary and distance measures must get a RANGE rule whose lower bound is not
+      negative. A negative fare is a physical impossibility, so the bound is a
+      business fact rather than an observation.
+    source: eval/results/E1_E5_EVALUATION.md#E1
+    ground_truth_owner: data-engineer
+    assertions:
+      - type: rule_proposed
+        column: trip_distance
+        rule_type: RANGE
+      - type: rule_proposed
+        column: fare_amount
+        rule_type: RANGE
+      - type: parameter_bound
+        column: trip_distance
+        rule_type: RANGE
+        parameter: min
+        minimum: 0
+        note: "lower bound must not admit negative distance"
+
+  - id: GC-E2-NOTNULL-IDENTIFIER
+    tier: 2
+    severity: HIGH
+    intent: >-
+      The vendor identifier is a required business key; a missing one is a
+      completeness failure, not an acceptable null.
+    source: eval/results/E1_E5_EVALUATION.md#E2
+    ground_truth_owner: data-steward
+    assertions:
+      - type: rule_proposed
+        column: vendor_id
+        rule_type: NOT_NULL
+
+  - id: GC-E3-ENUM-FROM-POLICY
+    tier: 2
+    severity: CRITICAL
+    intent: >-
+      The payment-type allow-list must come from the governed policy, not from the
+      values observed in the column. The contract deliberately places one literal
+      outside the governed set so the agent can surface the four known invalid rows;
+      admitting that literal makes the rule unable to fire.
+    source: docs/SUPABASE_DATASET_CONTRACT.md#representation-policy
+    ground_truth_owner: data-steward
+    assertions:
+      - type: enum_from_policy
+        column: payment_type
+        must_exclude:
+          - "Invalid Payment (Dispute/Test)"
+      - type: min_violations
+        rule_suffix: payment_type.ACCEPTED_VALUES
+        at_least: 4
+        note: "four invalid rows are documented as planted"
+
+  - id: GC-E4-CROSSFIELD-ORDERING
+    tier: 2
+    severity: HIGH
+    intent: >-
+      Pickup must not follow dropoff. The relationship is an ordering invariant, so
+      it belongs in a CROSS_FIELD_COMPARISON rather than in two independent range
+      checks.
+    source: eval/results/E1_E5_EVALUATION.md#E4
+    ground_truth_owner: data-engineer
+    assertions:
+      - type: rule_proposed
+        column: pickup_at
+        rule_type: CROSS_FIELD_COMPARISON
+
+  - id: GC-E5-UNIQUE-ON-BUSINESS-KEY
+    tier: 2
+    severity: CRITICAL
+    intent: >-
+      Duplicate detection must target the business fingerprint. A UNIQUE rule placed
+      on the surrogate key source_row_id is vacuously true by construction, because
+      that column is generated to be unique even when the business rows it points at
+      are duplicates. This case is expected to FAIL today; it states the requirement,
+      not the current behaviour.
+    source: eval/results/E1_E5_EVALUATION.md#E5
+    ground_truth_owner: data-engineer
+    applies_to:
+      columns: [source_row_id]   # platform surrogate key, present on every dataset
+    assertions:
+      - type: rule_not_on_columns
+        rule_type: UNIQUE
+        columns:
+          - source_row_id
+        note: "a surrogate key cannot evidence business duplication"

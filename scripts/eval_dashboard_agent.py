@@ -141,9 +141,7 @@ def main() -> None:
             "fallback_proposal_count": total_fallbacks,
             "mean_latency_seconds": round(statistics.mean(latencies), 3) if latencies else None,
             "p95_latency_seconds": (
-                round(sorted(latencies)[max(0, math.ceil(len(latencies) * 0.95) - 1)], 3)
-                if latencies
-                else None
+                round(sorted(latencies)[max(0, math.ceil(len(latencies) * 0.95) - 1)], 3) if latencies else None
             ),
             "selected_rule_type_frequency": dict(sorted(selected_types.items())),
             "profile": profile_summary,

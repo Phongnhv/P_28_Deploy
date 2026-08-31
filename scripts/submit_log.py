@@ -9,19 +9,21 @@ After a successful submit, the live log is rotated:
 
 If the POST fails, the pending file is restored so nothing is lost.
 """
+
 import json
 import os
 import re
 import shutil
 import sys
 import time
-import urllib.request
 import urllib.error
-from datetime import datetime, timezone
+import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     pass
@@ -43,7 +45,7 @@ def _archive(pending: Path) -> None:
     if not pending.exists() or pending.stat().st_size == 0:
         return
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     archive_file = ARCHIVE_DIR / f"{today}.jsonl"
     with open(pending, "rb") as src, open(archive_file, "ab") as dst:
         shutil.copyfileobj(src, dst)
@@ -76,6 +78,7 @@ def _recover_pending_files() -> None:
     pending_files = sorted(LOG_DIR.glob("session.pending.*.jsonl"))
     for pf in pending_files:
         _restore_pending(pf)
+
 
 def _sanitize_text(s: str) -> str:
     if not isinstance(s, str):
@@ -159,7 +162,10 @@ def main():
         _restore_pending(pending)
         try:
             err_body = e.read().decode("utf-8", errors="replace")
-            print(f"[ai-log] Submit failed: HTTP Error {e.code}: {e.reason} ({err_body}) — logs kept locally.", file=sys.stderr)
+            print(
+                f"[ai-log] Submit failed: HTTP Error {e.code}: {e.reason} ({err_body}) — logs kept locally.",
+                file=sys.stderr,
+            )
         except Exception:
             print(f"[ai-log] Submit failed: {e} — logs kept locally.", file=sys.stderr)
         sys.exit(0)  # Don't block push on server error

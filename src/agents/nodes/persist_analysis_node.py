@@ -51,16 +51,25 @@ async def persist_analysis_node(state: AnomalyGraphState) -> dict:
     try:
         with Session(engine) as session:
             # Idempotency check: Delete existing anomaly run, signals, and hypotheses for the same execution + config version
-            existing_run = session.query(AnomalyRunModel).filter(
-                AnomalyRunModel.execution_run_id == execution_run_id,
-                AnomalyRunModel.detector_config_version == detector_config_version
-            ).first()
+            existing_run = (
+                session.query(AnomalyRunModel)
+                .filter(
+                    AnomalyRunModel.execution_run_id == execution_run_id,
+                    AnomalyRunModel.detector_config_version == detector_config_version,
+                )
+                .first()
+            )
 
             if existing_run:
-                logger.info("Found existing anomaly run ID %s. Updating fields and deleting old signals/hypotheses for idempotency.", existing_run.id)
+                logger.info(
+                    "Found existing anomaly run ID %s. Updating fields and deleting old signals/hypotheses for idempotency.",
+                    existing_run.id,
+                )
                 anomaly_run_id = existing_run.id
                 session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anomaly_run_id).delete()
-                session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == anomaly_run_id).delete()
+                session.query(AnomalyHypothesisModel).filter(
+                    AnomalyHypothesisModel.anomaly_run_id == anomaly_run_id
+                ).delete()
 
                 # Update existing run
                 existing_run.status = "SUCCEEDED"
@@ -82,7 +91,7 @@ async def persist_analysis_node(state: AnomalyGraphState) -> dict:
                     confidence=float(decision_data.get("confidence", 0.0)),
                     severity=decision_data.get("severity", "LOW"),
                     error_message=decision_data.get("override_reason") or None,
-                    completed_at=datetime.now(UTC)
+                    completed_at=datetime.now(UTC),
                 )
                 session.add(anomaly_run)
                 session.flush()  # Ensure anomaly_runs row exists before children are added
@@ -126,27 +135,47 @@ async def persist_analysis_node(state: AnomalyGraphState) -> dict:
                     contradicting_signal_ids=json.dumps(h.get("contradicting_signal_ids", [])),
                     evidence_refs=json.dumps(h.get("evidence_refs", [])),
                     recommended_checks=json.dumps(h.get("recommended_checks", [])),
-                    missing_evidence=h.get("missing_evidence"),
-                    limitations=h.get("limitations"),
+                    missing_evidence=(
+                        ", ".join(h.get("missing_evidence"))
+                        if isinstance(h.get("missing_evidence"), list)
+                        else (
+                            json.dumps(h.get("missing_evidence"), ensure_ascii=False)
+                            if isinstance(h.get("missing_evidence"), dict)
+                            else h.get("missing_evidence")
+                        )
+                    ),
+                    limitations=(
+                        ", ".join(h.get("limitations"))
+                        if isinstance(h.get("limitations"), list)
+                        else (
+                            json.dumps(h.get("limitations"), ensure_ascii=False)
+                            if isinstance(h.get("limitations"), dict)
+                            else h.get("limitations")
+                        )
+                    ),
                     model_name=model_name,
                     prompt_version=HYPOTHESIS_PROMPT_VERSION,
                     latency_ms=hypothesis_latency_ms,
-                    fallback_used=state.get("hypothesis_status") == "FALLBACK_USED"
+                    fallback_used=state.get("hypothesis_status") == "FALLBACK_USED",
                 )
                 session.add(hyp_record)
 
             session.commit()
-            logger.info("Successfully persisted anomaly analysis for run %s. Signals count: %d, Hypotheses count: %d",
-                        anomaly_run_id, len(signals), len(hypotheses))
+            logger.info(
+                "Successfully persisted anomaly analysis for run %s. Signals count: %d, Hypotheses count: %d",
+                anomaly_run_id,
+                len(signals),
+                len(hypotheses),
+            )
 
             return {
                 "anomaly_run_id": anomaly_run_id,
-                "metadata": {**state.get("metadata", {}), "persisted_anomaly_run_id": anomaly_run_id}
+                "metadata": {**state.get("metadata", {}), "persisted_anomaly_run_id": anomaly_run_id},
             }
 
     except Exception as exc:
         logger.error("Failed to persist anomaly analysis to database: %s", exc, exc_info=True)
         return {
             "error": f"Failed to persist anomaly analysis: {exc}",
-            "metadata": {**state.get("metadata", {}), "persistence_error": str(exc)}
+            "metadata": {**state.get("metadata", {}), "persistence_error": str(exc)},
         }
