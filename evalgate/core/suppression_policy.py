@@ -103,9 +103,18 @@ def apply_suppressions(
     central_policy = load_policy("evaluation_policy")
     measured_floor = float(central_policy["minimum_measured_weight"])
     bands = central_policy["score"]["decision_bands"]
+    # ``block_reasons`` carries the blocking conditions that raise no finding:
+    # missing mandatory evidence, an unevaluated mandatory hard gate, a mandatory
+    # evaluator that errored or failed. A suppression is an auditable exception to a
+    # *known* finding, so it cannot excuse any of them -- and before this guard
+    # existed it silently did: with an empty suppressions.yaml, a run blocked purely
+    # for missing evidence found ``unsuppressed_findings`` empty and was promoted
+    # straight to a score band, which is the precise failure the ratchet exists to
+    # make impossible.
     if (
         outcome.decision == Decision.RELEASE_BLOCKED
         and not outcome.unsuppressed_findings
+        and not outcome.block_reasons
         and outcome.measured_weight >= measured_floor
         and outcome.score is not None
     ):

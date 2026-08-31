@@ -27,7 +27,26 @@ from src.config import get_settings
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 SUPPORTED_FORMATS = {".csv", ".parquet"}
 SOURCE_ADAPTER_VERSION = "versioned-source-adapter-v1"
+#: How many failing row ids a result shows a steward. Deliberately small: this is a
+#: human-readable illustration, not evidence.
 FAILURE_SAMPLE_LIMIT = 20
+#: How many failing row ids a result records as machine-readable evidence.
+#:
+#: Kept separate from FAILURE_SAMPLE_LIMIT because the two answer different
+#: questions, and collapsing them silently capped a measurement. Detection recall is
+#: computed as |flagged rows ∩ known-defective rows| / |known-defective rows|, so
+#: when the only record of what a rule flagged was the 20-row illustration, recall
+#: could not exceed 20/|defects| no matter how well the rule performed -- roughly
+#: 0.8% on the evaluation fixture, against a gate that requires 80%.
+#:
+#: Only row identifiers are recorded, never row contents: a list of scalar ids
+#: carries no column values and so moves no raw data across the boundary.
+#:
+#: 500 is chosen against both consumers rather than as a round number. The
+#: evaluation fixture carries a few dozen defects per class, so the cap is far from
+#: binding on recall; and the steward UI renders every id once the list is expanded,
+#: which stays responsive at this size and would not at ten thousand.
+EVIDENCE_ROW_ID_LIMIT = 500
 
 
 class DatasetContractError(ValueError):
@@ -636,6 +655,8 @@ def execute_rule_frame(frame: Any, rule: dict[str, Any], *, failure_limit: int =
         "violation_rate": round(failed_count / total_rows, 6) if total_rows else 0.0,
         "sample_failures": [ids[index] for index in failed_indices[:failure_limit]],
         "sample_refs": [ids[index] for index in failed_indices[:failure_limit]],
+        "violation_row_ids": [ids[index] for index in failed_indices[:EVIDENCE_ROW_ID_LIMIT]],
+        "violation_row_ids_truncated": failed_count > EVIDENCE_ROW_ID_LIMIT,
         "duration_ms": round((datetime.now(UTC) - started).total_seconds() * 1000, 2),
         "error": error,
         "evidence_refs": normalized.get("evidence_refs", []),
@@ -655,7 +676,8 @@ def execute_rules_frame(frame: Any, rules: Iterable[dict[str, Any]]) -> list[dic
                 "rule_type": str((rule or {}).get("rule_type") or (rule or {}).get("type") or "UNKNOWN") if isinstance(rule, dict) else "UNKNOWN",
                 "table_name": "version_source", "status": "ERROR", "checked_count": 0,
                 "failed_count": 0, "total_rows": 0, "violation_count": 0, "violation_rate": 0.0,
-                "sample_failures": [], "sample_refs": [], "duration_ms": 0.0, "error": str(exc),
+                "sample_failures": [], "sample_refs": [], "violation_row_ids": [],
+                "violation_row_ids_truncated": False, "duration_ms": 0.0, "error": str(exc),
             })
     return results
 

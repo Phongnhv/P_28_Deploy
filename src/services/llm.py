@@ -9,6 +9,34 @@ from src.services.eval_telemetry import EvalTelemetryCallback
 Provider_type = Literal["openai", "anthropic", "mistral", "google"]
 
 
+def telemetry_callbacks(provider: Provider_type | None = None) -> list:
+    """The handlers every model call is instrumented with.
+
+    Exposed so an agent invocation can attach the same handlers at *its* level.
+    Callbacks passed to a chat model receive that model's events only -- tool
+    lifecycle events are dispatched by the callback manager of whatever invoked the
+    tool. Attaching them here and nowhere else is why the trace recorded every model
+    call an agent made and no record of a single tool it used, which left "did it
+    verify before asserting" unobservable.
+    """
+    from src.utils.metrics_tracker import get_metrics_tracker
+
+    settings = get_settings()
+    resolved = provider or settings.llm_provider
+    model_names = {
+        "openai": settings.openai_model_name,
+        "anthropic": settings.anthropic_model_name,
+        "mistral": settings.mistral_model_name,
+        "google": settings.google_model_name,
+    }
+    return [
+        get_metrics_tracker(),
+        EvalTelemetryCallback(
+            provider=resolved, model=model_names.get(resolved, str(resolved))
+        ),
+    ]
+
+
 def get_llm(provider: Provider_type, temperature: float | None = None, callbacks: list | None = None):
     """Tạo LLM instance cho provider được chỉ định.
 

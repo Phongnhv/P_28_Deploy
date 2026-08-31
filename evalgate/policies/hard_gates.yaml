@@ -1,4 +1,4 @@
-# 19 release blockers. Evaluated BEFORE the aggregate score.
+# 24 release blockers. Evaluated BEFORE the aggregate score.
 # A high score can never override a failing hard gate.
 #
 # v3 adds three families that the earlier set could not express:
@@ -20,7 +20,11 @@
 #          number describes an agent that no user request actually reaches.
 # It also un-defers HG-A2: the precondition recorded for it was a live agent
 # invocation, and the run artefacts now carry the validator rejection counts.
-version: "6.0"
+#
+# v7 adds HG-A8, which closes an evasion in HG-A3: a check that inspects a rule is
+# silent when no rule was produced, so omitting the rule scored better than
+# proposing a broken one. See the comment above HG-A8.
+version: "7.0"
 hard_gates:
   - id: HG-A1
     gate: ai_quality
@@ -105,6 +109,33 @@ hard_gates:
     title: "ACCEPTED_VALUES admits a value the governed policy excludes"
     metric: tautological_enum_count
     rule: "value >= 1"
+  # v7. HG-A3 could be evaded by producing nothing. It inspects ACCEPTED_VALUES
+  # rules, so an agent that proposed none for a governed column left the evaluator
+  # with nothing to look at; it returned NOT_MEASURED, dropped out of the aggregate,
+  # and HG-A3 reported NOT_EVALUATED. A tautological rule was penalised while no
+  # rule at all was silent -- and silence scored better. Observed on the 2026-08-30
+  # CI run, where payment_type received no allow-list and HG-A3 went unevaluated.
+  - id: HG-A8
+    gate: ai_quality
+    title: "A governed column received no ACCEPTED_VALUES rule at all"
+    metric: governed_column_coverage
+    rule: "value < 1"
+  # v7. Guards the mechanism HG-A5 now depends on. Golden cases resolve their scope
+  # against the bundle's own schema and semantic contract, so a case that matches no
+  # column is correctly skipped -- but a bundle where *most* cases skip has a green
+  # pass rate over an empty denominator, which reads identically to a healthy run.
+  # Seen immediately: binding cases to the corpus id moved coverage from 6/14 to
+  # 11/14 while the pass rate moved the wrong way, 0.80 down to 0.67. The pass rate
+  # alone would have called the narrower run the better one.
+  #
+  # The floor is deliberately low. Cases legitimately skip -- three semantic cases do
+  # not apply while the interpreter emits no `currency` type -- so this catches
+  # collapse, not ordinary variation.
+  - id: HG-A9
+    gate: ai_quality
+    title: "Most golden cases were skipped as inapplicable"
+    metric: golden_applicability_rate
+    rule: "value < 0.5"
   - id: HG-A6
     gate: ai_quality
     title: "A rule type is structurally unable to fail"

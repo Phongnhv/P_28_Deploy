@@ -106,6 +106,21 @@ class AggregateOutcome:
     unsuppressed_findings: list[str] = field(default_factory=list)
     mandatory_evidence_coverage: float = 0.0
     gate_verdicts: dict[str, str] = field(default_factory=dict)
+    #: Why the release is blocked for reasons that carry no finding id.
+    #:
+    #: Four of the six conditions that produce RELEASE_BLOCKED are statements about
+    #: missing evidence rather than about a failed control: a mandatory hard gate
+    #: that was never evaluated, a mandatory evaluator that errored, one that
+    #: failed, and mandatory coverage below 1.0. None of them raises a Finding, so
+    #: none of them appears in the id set the suppression ratchet reasons about --
+    #: and the ratchet downgrades RELEASE_BLOCKED whenever that set comes back
+    #: empty. With an empty suppressions.yaml, a run blocked purely for missing
+    #: evidence was therefore promoted straight to a score band.
+    #:
+    #: Recorded here so the ratchet can see them. A suppression is an exception to
+    #: a *known* finding; it must never be able to excuse evidence that was never
+    #: collected.
+    block_reasons: list[str] = field(default_factory=list)
 
     @property
     def exit_code(self) -> int:
@@ -308,6 +323,28 @@ def aggregate(results: list[EvalResult], *, profile: str = "local") -> Aggregate
     ]
     mandatory_failures = [r for r in mandatory_results if r.status == EvalStatus.FAIL]
 
+    # Blocking conditions that carry no finding id. See AggregateOutcome.block_reasons.
+    block_reasons: list[str] = []
+    if missing_hard:
+        block_reasons.append(
+            "mandatory hard gate(s) not evaluated: "
+            + ", ".join(sorted(h.id for h in missing_hard))
+        )
+    if mandatory_errors:
+        block_reasons.append(
+            "mandatory evaluator(s) could not run: "
+            + ", ".join(sorted(r.evaluator for r in mandatory_errors))
+        )
+    if mandatory_failures:
+        block_reasons.append(
+            "mandatory evaluator(s) failed: "
+            + ", ".join(sorted(r.evaluator for r in mandatory_failures))
+        )
+    if mandatory_coverage < 1.0:
+        block_reasons.append(
+            f"mandatory evidence coverage {mandatory_coverage:.2f} is below 1.00"
+        )
+
     # 2. Gate scores, collapsing multi-dataset evaluators.
     per_gate: dict[str, list[float]] = {}
     excluded_reasons: dict[str, str] = {}
@@ -337,8 +374,7 @@ def aggregate(results: list[EvalResult], *, profile: str = "local") -> Aggregate
     #    number computed from too little evidence should not be presented at all.
     if collisions or configuration_errors:
         decision = Decision.EVALGATE_INVALID
-    elif (any_hard_gate_failed or blocking or missing_hard or mandatory_errors
-          or mandatory_failures or mandatory_coverage < 1.0):
+    elif any_hard_gate_failed or blocking or block_reasons:
         decision = Decision.RELEASE_BLOCKED
     elif total_score is None:
         decision = Decision.FAIL
@@ -396,4 +432,5 @@ def aggregate(results: list[EvalResult], *, profile: str = "local") -> Aggregate
         override_reason="; ".join(configuration_errors) or None,
         mandatory_evidence_coverage=round(mandatory_coverage, 4),
         gate_verdicts=gate_verdicts,
+        block_reasons=block_reasons,
     )

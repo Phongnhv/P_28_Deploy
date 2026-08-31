@@ -7,8 +7,9 @@
 # One case (GC-E5) deliberately encodes a KNOWN DEFECT rather than the happy path.
 # It is written to fail today: the point of a golden case is to state what should be
 # true, not to describe what currently happens.
-version: "1.0"
-dataset_id: dataset-nyc-yellow-taxi-50k
+version: "2.0"
+layer: dataset
+dataset_id: corpus-nyc-taxi-50k
 description: >-
   Acceptance cases E1-E5, evaluated against archived agent proposals under output/
   and archived execution results under output/reports.
@@ -95,6 +96,8 @@ cases:
       not the current behaviour.
     source: eval/results/E1_E5_EVALUATION.md#E5
     ground_truth_owner: data-engineer
+    applies_to:
+      columns: [source_row_id]   # platform surrogate key, present on every dataset
     assertions:
       - type: rule_not_on_columns
         rule_type: UNIQUE

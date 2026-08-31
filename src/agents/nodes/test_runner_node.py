@@ -837,6 +837,12 @@ async def test_runner_node(state: AgentState) -> dict:
             "dbt_status": dbt_status,
             "metrics_status": metrics_status,
             "sample_refs": r.get("sample_failures", []),
+            # The steward-facing illustration above is capped at SAMPLE_FAILURE_LIMIT.
+            # These two carry the machine-readable record of what the rule flagged, so
+            # detection recall can be computed without the cap becoming its ceiling.
+            # Ids only, never row contents.
+            "violation_row_ids": r.get("violation_row_ids", []),
+            "violation_row_ids_truncated": bool(r.get("violation_row_ids_truncated", False)),
             "sql_text": r.get("sql_text", ""),
             "error": r.get("error"),
             "evidence_refs": r.get("evidence_refs", []),

@@ -53,7 +53,7 @@ from src.models.rule_schemas import (
     Severity,
     TableRuleProposal,
 )
-from src.services.llm import get_llm
+from src.services.llm import get_llm, telemetry_callbacks
 
 logger = logging.getLogger(__name__)
 
@@ -761,7 +761,13 @@ async def _propose_for_table_deepagent(
         data_dictionary=dict_content,
     )
 
-    result = await agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
+    # Tool events are dispatched by the caller's callback manager, not the
+    # model's, so the handlers are attached here as well. Otherwise the trace
+    # shows every model call and no tool the agent actually used.
+    result = await agent.ainvoke(
+        {"messages": [{"role": "user", "content": prompt}]},
+        config={"callbacks": telemetry_callbacks()},
+    )
     content = _message_content(result)
 
     if isinstance(content, CandidateTableRuleProposal):

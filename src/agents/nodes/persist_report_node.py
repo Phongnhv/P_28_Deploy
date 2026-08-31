@@ -196,7 +196,17 @@ async def persist_report_node(state: AgentState) -> dict:
                     status=r_status,
                     checked_count=c_count,
                     failed_count=f_count,
-                    failed_row_ids=json.dumps(res.get("sample_refs") or res.get("sample_failures") or []),
+                    # Prefer the bounded evidence list over the 20-row illustration.
+                    # Both are scalar row ids and land in the same column; the
+                    # illustration alone made detection recall unmeasurable above
+                    # 20/|defects|, because this is the only record of what a rule
+                    # flagged. Falls back for executors that do not emit it yet.
+                    failed_row_ids=json.dumps(
+                        res.get("violation_row_ids")
+                        or res.get("sample_refs")
+                        or res.get("sample_failures")
+                        or []
+                    ),
                     violation_rate=float(res.get("violation_rate") or 0.0),
                     duration_ms=float(res.get("duration_ms") or 0.0),
                     dbt_status=res.get("dbt_status") or "NOT_RUN",

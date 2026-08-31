@@ -279,15 +279,21 @@ def evaluate(*, write_evidence: bool = True, context: EvalRunContext | None = No
     all_tautological = 0
     conformances: list[float] = []
     recalls: list[float] = []
+    uncovered_columns: list[str] = []
 
     for domain in domains:
         outcomes = score_proposals(domain, context)
         if not outcomes:
+            # Reported as a gap in the product, not as a gap in the measurement.
+            # See the governed_column_coverage metric below for why the difference
+            # decides whether this evaluator can be evaded.
+            uncovered_columns.append(domain.column)
             breakdown.append(
                 DatasetBreakdown(
                     dataset_id=domain.column,
-                    status=EvalStatus.NOT_MEASURED,
-                    reason="no archived ACCEPTED_VALUES proposal for this column",
+                    status=EvalStatus.FAIL,
+                    score=0.0,
+                    reason="no ACCEPTED_VALUES rule was proposed for this governed column",
                 )
             )
             per_domain.append({"domain": asdict(domain), "outcomes": [], "flagged": None})
@@ -373,6 +379,43 @@ def evaluate(*, write_evidence: bool = True, context: EvalRunContext | None = No
 
     unbacked = count_unbacked_enums({d.column for d in domains}, context)
 
+    # Coverage closes an evasion this evaluator was otherwise open to.
+    #
+    # Every other check here inspects an ACCEPTED_VALUES rule. When the agent
+    # proposed none at all, there was nothing to inspect and the evaluator returned
+    # NOT_MEASURED -- which drops out of the aggregate and leaves HG-A3 reporting
+    # NOT_EVALUATED. Proposing a tautological rule was therefore penalised while
+    # proposing no rule for a governed column was silent, and silence scored better.
+    #
+    # A column the governance policy names is a column the product has committed to
+    # constraining, so the absence of a rule on it is a finding in its own right.
+    coverage = (len(domains) - len(uncovered_columns)) / len(domains) if domains else 1.0
+    if uncovered_columns:
+        findings.append(
+            Finding(
+                id="HG-A8",
+                severity=Severity.CRITICAL,
+                title=(
+                    f"{len(uncovered_columns)} governed column(s) received no "
+                    "ACCEPTED_VALUES rule"
+                ),
+                detail=(
+                    f"{sorted(uncovered_columns)} are declared in {domains[0].source} "
+                    "with a governed value set, but the agent proposed no allow-list "
+                    "rule for them. No enum conformance can be measured for a column "
+                    "that has no enum rule, so the absence is scored rather than "
+                    "reported as an unmeasured gap. " + _PATH_SCOPE_NOTE
+                ),
+                root_cause_hint=(
+                    "the agent only emits ACCEPTED_VALUES when it classifies the column "
+                    "as categorical; a governed column that misses that classification "
+                    "gets no rule and therefore no check"
+                ),
+                evidence_ref="evalgate/evidence/gate1/governed_enum_conformance.json",
+                blocks_release=True,
+            )
+        )
+
     evidence: list[Evidence] = []
     if write_evidence:
         EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
@@ -382,6 +425,8 @@ def evaluate(*, write_evidence: bool = True, context: EvalRunContext | None = No
                 {
                     "scope": _PATH_SCOPE_NOTE,
                     "governed_columns": [d.column for d in domains],
+                    "uncovered_governed_columns": sorted(uncovered_columns),
+                    "governed_column_coverage": round(coverage, 4),
                     "per_domain": per_domain,
                     "unbacked_enum_rules": unbacked,
                 },
@@ -391,15 +436,35 @@ def evaluate(*, write_evidence: bool = True, context: EvalRunContext | None = No
         )
         evidence.append(Evidence(type="file", path=str(target.relative_to(PROJECT_ROOT))))
 
+    coverage_metric = MetricValue(
+        raw=round(coverage, 4),
+        unit="ratio",
+        normalized=norm.ratio(coverage),
+        note=(
+            f"{len(domains) - len(uncovered_columns)}/{len(domains)} governed column(s) "
+            "carry an ACCEPTED_VALUES rule"
+        ),
+    )
+
     if not conformances:
+        # Every governed column is uncovered. This is a measured FAIL, not an
+        # unmeasured gap: the evaluator looked, and found the product had proposed
+        # nothing to check. Returning NOT_MEASURED here dropped the evaluator out of
+        # the aggregate entirely and rewarded the worse behaviour.
         return EvalResult(
             gate=GATE,
             evaluator=EVALUATOR,
-            status=EvalStatus.NOT_MEASURED,
+            status=EvalStatus.FAIL,
+            score=0.0,
+            metrics={"governed_column_coverage": coverage_metric},
+            per_dataset_breakdown=breakdown,
+            thresholds={"governed_column_coverage": Threshold(**{"pass": 100.0, "warn": 100.0})},
             evidence=evidence,
+            critical_findings=findings,
             metadata={
-                "reason": "no archived ACCEPTED_VALUES proposal for any governed column",
+                "reason": "no ACCEPTED_VALUES proposal for any governed column",
                 "policy_source": domains[0].source,
+                "uncovered_governed_columns": sorted(uncovered_columns),
             },
         )
 
@@ -425,6 +490,7 @@ def evaluate(*, write_evidence: bool = True, context: EvalRunContext | None = No
             raw=len(unbacked), unit="count", normalized=None,
             note="ACCEPTED_VALUES on columns no policy governs; tautological by construction",
         ),
+        "governed_column_coverage": coverage_metric,
     }
     if planted_recall is not None:
         metrics["planted_defect_recall"] = MetricValue(

@@ -362,7 +362,8 @@ def create_bundle(out_dir: Path, *, profile: str = "ci", suite: str = "frozen-v1
     for name in ("input", "api", "profile", "semantic", "proposals", "review", "ruleset",
                  "execution", "anomaly", "traces"):
         (bundle / name).mkdir(parents=True, exist_ok=False)
-    frame = generate("corpus-nyc-taxi-50k", rows=5_000)
+    corpus_id = "corpus-nyc-taxi-50k"
+    frame = generate(corpus_id, rows=5_000)
     # Product startup currently writes lifecycle messages to stdout. Keep stdout a
     # machine-readable one-line manifest contract for CI callers.
     with redirect_stdout(sys.stderr):
@@ -371,7 +372,7 @@ def create_bundle(out_dir: Path, *, profile: str = "ci", suite: str = "frozen-v1
     manifest = ArtifactManifestV2(
         schema_version="2.0", finalized=True,
         run_id=run_id, git_sha=git_sha, workspace_dirty=workspace_dirty,
-        created_at=datetime.now(UTC), dataset_id=dataset_id,
+        created_at=datetime.now(UTC), dataset_id=dataset_id, corpus_id=corpus_id,
         dataset_fingerprint=input_record.sha256,
         schema_fingerprint=_json_hash([{"name": name, "dtype": str(dtype)} for name, dtype in frame.dtypes.items()]),
         model=ModelIdentity(provider="evalgate", name="structured-fake-v1", mode="deterministic-test"),

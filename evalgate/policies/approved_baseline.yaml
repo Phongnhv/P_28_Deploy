@@ -1,7 +1,31 @@
+# The run every later run is compared against.
+#
+# A baseline is a fixed point, not a good one. Its only job is to answer "was this
+# control holding then, and is it holding now", and a RELEASE_BLOCKED run answers
+# that as well as a passing one would. Waiting for a PASS before bootstrapping is
+# what kept regression_engine_v1 and HG-R3 reporting NOT_MEASURED while 30 runs sat
+# in evalgate/runs/ unused.
+#
+# The run named here is the CI product benchmark at 45887f7: a finalized v2 manifest,
+# a served-path bundle, and 31 evaluator results on the current evaluation contract
+# (schema 2.0 / policy 1.0 / corpus 1.0 / normalizer 1.0). It is blocked on HG-A1,
+# and that is recorded rather than hidden -- comparisons against it will show
+# HG-A1 as already-failing (a KNOWN_GAP), not as a new regression.
+#
+# Re-approve when the evaluation contract changes: regression_engine refuses to
+# compare across differing schema/policy/corpus/normalizer versions and will report
+# NOT_MEASURED rather than produce a misleading delta.
 version: "1.0"
-run_id: null
-git_sha: null
-status: bootstrap_required
-approved_by: null
-approved_at: null
-
+run_id: product-ffd77da3e3e14473940d70e1b99f89d1
+git_sha: 45887f72ca7bcb9e32c804621db272a90073581a
+status: approved
+approved_by: chien-eval
+approved_at: "2026-08-31"
+decision_at_approval: RELEASE_BLOCKED
+note: >-
+  Bootstrap baseline. Blocked on HG-A1 (min_recall_per_class = 0). Two measurement
+  defects are known to affect that number and are being fixed separately: the replay
+  ground truth is derived from the full 50k fixture while the product bundle ingests
+  5,000 rows, and row-level recall is capped by the 20-id failure sample. Treat the
+  ai_quality figures in this baseline as a fixed reference point, not as a measured
+  capability.

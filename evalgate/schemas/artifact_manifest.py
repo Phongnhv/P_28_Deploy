@@ -81,6 +81,16 @@ class ArtifactManifestV2(BaseModel):
     workspace_dirty: bool
     created_at: datetime
     dataset_id: str = Field(min_length=1)
+    #: Which corpus the bundle was generated from, e.g. ``corpus-nyc-taxi-50k``.
+    #:
+    #: Distinct from ``dataset_id`` on purpose. The product mints a fresh
+    #: ``dataset-import-<uuid>`` on every upload, so the runtime id identifies *this
+    #: run* and can never be written down in advance. Ground truth has to bind to
+    #: the corpus, which is stable across runs; a golden case keyed on the runtime
+    #: id matches nothing, forever, and turns the whole suite off without a word.
+    #:
+    #: Optional so manifests written before this field remain readable.
+    corpus_id: str | None = None
     dataset_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     schema_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     model: ModelIdentity
