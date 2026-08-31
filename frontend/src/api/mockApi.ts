@@ -620,6 +620,11 @@ export const mockApi: ApiClient = {
     addAudit("WORKFLOW_CREATED", "workflow", workflow.id, "Created a step-by-step agent workflow in the local adapter.");
     return structuredClone(workflow);
   },
+  async getLatestWorkflow(id: string) {
+    await wait(80);
+    const workflow = [...workflowRuns].reverse().find((item) => item.dataset_id === id);
+    return workflow ? structuredClone(workflow) : null;
+  },
   async importDataset(file) {
     const imported = { ...dataset, id: `dataset-import-${Date.now()}`, name: file.name.replace(/\.[^.]+$/, ""), source_label: file.name, status: "PROFILE_READY" as const, updated_at: new Date().toISOString() };
     const job = makeJob("INGEST_PROFILE");

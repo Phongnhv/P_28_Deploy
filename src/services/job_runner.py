@@ -46,6 +46,7 @@ from src.services.supabase_dataset import (
     profile_dataset as profile_supabase_dataset,
 )
 from src.services.versioned_dataset import (
+    SourceArtifactRef,
     materialize_source_artifact,
     profile_frame,
     read_verified_frame,
@@ -102,6 +103,53 @@ def _uploaded_dataset_path(dataset_id: str) -> Path | None:
         if candidate.exists():
             return candidate
     return None
+
+
+def _materialize_versioned_dataset_path(db: Session, dataset_id: str) -> tuple[Path | None, bool]:
+    """Resolve the latest immutable source artifact for a versioned dataset.
+
+    Canonical imports are profiled from ``dataset_versions`` and are not copied
+    into the legacy ``source_rows`` table. DQ execution must therefore use the
+    verified source artifact even when Supabase is configured as the default
+    backend; otherwise it evaluates the wrong canonical table and skips every
+    user-uploaded column.
+    """
+    version = (
+        db.query(DatasetVersionModel)
+        .filter_by(dataset_id=dataset_id, status="READY")
+        .order_by(DatasetVersionModel.version_number.desc())
+        .first()
+    )
+    if not version:
+        return None, False
+    artifact = (
+        db.query(GovernedArtifactModel)
+        .filter_by(
+            dataset_id=dataset_id,
+            dataset_version_id=version.id,
+            artifact_type="SOURCE_DATASET",
+        )
+        .first()
+    )
+    if not artifact or artifact.checksum != version.checksum:
+        return None, False
+    try:
+        metadata = json.loads(version.source_metadata_json or "{}")
+    except (TypeError, ValueError):
+        metadata = {}
+    storage_locator = artifact.storage_locator
+    source_ref = SourceArtifactRef(
+        bucket=metadata.get("bucket"),
+        object_key=metadata.get("object_key") or storage_locator,
+        checksum=version.checksum,
+        size_bytes=int(metadata.get("size_bytes") or 0),
+        format=metadata.get("format") or "csv",
+        filename=metadata.get("filename") or "dataset.csv",
+        storage_locator=storage_locator,
+        created_by_request=False,
+        version_id=metadata.get("version_id"),
+    )
+    return materialize_source_artifact(source_ref), storage_locator.startswith("object://")
 
 
 def _profile_uploaded_dataset(db: Session, dataset_id: str, path: Path) -> dict:
@@ -1212,6 +1260,8 @@ def run_dq_checks(
     engine = get_engine()
     source_engine = None
     source_connection = None
+    versioned_path: Path | None = None
+    versioned_temporary = False
     with Session(engine) as db:
         job = db.query(JobModel).filter(JobModel.id == job_id).first()
         if not job:
@@ -1228,11 +1278,13 @@ def run_dq_checks(
         db.commit()
 
         try:
-            source_url = _supabase_source_url()
-            if source_url:
-                source_engine = create_supabase_engine(source_url)
-                source_connection = source_engine.connect()
             dataset_id = dq_run.dataset_id
+            versioned_path, versioned_temporary = _materialize_versioned_dataset_path(db, dataset_id)
+            if versioned_path is None:
+                source_url = _supabase_source_url()
+                if source_url:
+                    source_engine = create_supabase_engine(source_url)
+                    source_connection = source_engine.connect()
             rule_ids = json.loads(dq_run.rule_ids)
 
             # Get approved rule versions
@@ -1281,7 +1333,7 @@ def run_dq_checks(
             total_checked = 0
             total_failed = 0
 
-            uploaded_path = _uploaded_dataset_path(dataset_id)
+            uploaded_path = versioned_path or _uploaded_dataset_path(dataset_id)
 
             # Report the stages this executor really performs, so the Graph 2
             # panel reflects the run instead of showing five dbt nodes that were
@@ -1507,3 +1559,5 @@ def run_dq_checks(
                 source_connection.close()
             if source_engine is not None:
                 source_engine.dispose()
+            if versioned_temporary and versioned_path is not None:
+                versioned_path.unlink(missing_ok=True)

@@ -704,6 +704,7 @@ export interface ApiClient {
   grantDatasetAccess(datasetId: string, username: string, accessLevel: DatasetAccessLevel): Promise<DatasetAccess>;
   revokeDatasetAccess(datasetId: string, username: string): Promise<void>;
   createWorkflow(datasetId: string, fresh?: boolean): Promise<WorkflowRun>;
+  getLatestWorkflow(datasetId: string): Promise<WorkflowRun | null>;
   getWorkflow(workflowRunId: string): Promise<WorkflowRun>;
   runWorkflowStep(workflowRunId: string, step: WorkflowStepKey): Promise<CreateJobResponse>;
   advanceWorkflowStep(workflowRunId: string): Promise<WorkflowRun>;

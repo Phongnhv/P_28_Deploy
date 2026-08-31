@@ -742,6 +742,7 @@ async def run_anomaly_graph(
     dataset_id: str = DEFAULT_CLI_DATASET_ID,
     investigation_mode: Literal["deepagent", "legacy"] | None = None,
     stream_id: str | None = None,
+    initialize_schema: bool = True,
 ) -> dict:
     """Chạy toàn bộ pipeline Run 3 (Anomaly Analysis & Hypothesis).
 
@@ -749,6 +750,9 @@ async def run_anomaly_graph(
         execution_run_id: ID của lần chạy test (DqRun). Nếu None, tự động lấy run mới nhất từ CSDL.
         dataset_id: ID của dataset cần phân tích bất thường.
         investigation_mode: "deepagent" hoặc "legacy". Nếu None, lấy từ config.
+        initialize_schema: Khởi tạo schema khi chạy độc lập (CLI/compatibility).
+            Workflow API chạy trên schema đã được migrate sẵn và tắt bước này để
+            tránh DDL cạnh tranh với request/job đang dùng Supabase.
     """
     import uuid
 
@@ -758,7 +762,8 @@ async def run_anomaly_graph(
     from src.models.database import DqRunModel
     from src.services.rule_store import get_engine, init_db
 
-    init_db()
+    if initialize_schema:
+        init_db()
     settings = get_settings()
     active_mode = investigation_mode or settings.anomaly_investigation_mode
 

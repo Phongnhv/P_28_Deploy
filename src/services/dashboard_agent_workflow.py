@@ -366,6 +366,71 @@ def _parse_json_list(raw: str | None) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
+def _proposal_evidence_from_versioned_snapshot(
+    dataset: DatasetModel, snapshot: dict[str, Any]
+) -> ProposalEvidence:
+    """Adapt the canonical immutable profile snapshot for the proposal agent.
+
+    Versioned imports persist aggregate evidence in ``profile_runs`` instead of
+    the legacy ``profiles``/``column_profiles`` pair. Keep the proposal agent's
+    allow-listed payload identical while sourcing it from the canonical snapshot.
+    """
+    columns = []
+    for item in snapshot.get("columns", []):
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        columns.append(
+            ProposalColumnEvidence(
+                name=str(item["name"]),
+                data_type=str(item.get("data_type") or "string"),
+                null_rate=float(item.get("null_rate") or 0.0),
+                distinct_count=int(item.get("distinct_count") or 0),
+                non_null_count=(
+                    int(item["non_null_count"])
+                    if item.get("non_null_count") is not None
+                    else None
+                ),
+                negative_rate=(
+                    float(item["negative_rate"])
+                    if item.get("negative_rate") is not None
+                    else None
+                ),
+                quantiles=item.get("quantiles") or {},
+                out_of_domain_rate=(
+                    float(item["out_of_domain_rate"])
+                    if item.get("out_of_domain_rate") is not None
+                    else None
+                ),
+                full_distinct_count=(
+                    int(item["full_distinct_count"])
+                    if item.get("full_distinct_count") is not None
+                    else None
+                ),
+                uniqueness_rate=(
+                    float(item["uniqueness_rate"])
+                    if item.get("uniqueness_rate") is not None
+                    else None
+                ),
+                is_unique_full_table=item.get("is_unique_full_table"),
+                min_value=(float(item["min_value"]) if item.get("min_value") is not None else None),
+                max_value=(float(item["max_value"]) if item.get("max_value") is not None else None),
+            )
+        )
+    if not columns:
+        raise AgentWorkflowError("The completed profile has no eligible columns for proposal generation.")
+    return ProposalEvidence(
+        dataset_id=dataset.id,
+        manifest_version=dataset.manifest_version,
+        row_count=int(snapshot["row_count"]),
+        completeness_score=float(snapshot["completeness_score"]),
+        validity_score=float(snapshot["validity_score"]),
+        duplicate_rate=float(snapshot["duplicate_rate"]),
+        evidence_keys=list(snapshot.get("evidence_keys") or []),
+        columns=columns,
+        cross_field_metrics=[],
+    )
+
+
 def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
     """Build the only payload that may be passed to the proposal graph."""
     dataset = db.query(DatasetModel).filter(DatasetModel.id == dataset_id).first()
@@ -395,6 +460,20 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
                 )
         except Exception as err:
             logger.warning("Could not auto-profile uploaded dataset: %s", err)
+
+    if not profile or not columns:
+        # Canonical versioned imports keep their completed aggregate profile in
+        # profile_runs and intentionally do not create legacy dashboard rows.
+        # Reuse the workflow's unified snapshot adapter so Graph 1B sees the
+        # same evidence Graph 1A already consumed.
+        try:
+            from src.services.rule_proposer_workflow import _profile_snapshot
+
+            return _proposal_evidence_from_versioned_snapshot(
+                dataset, _profile_snapshot(db, dataset_id)
+            )
+        except Exception as err:
+            logger.warning("Could not load versioned profile snapshot: %s", err)
 
     if not profile or not columns:
         raise AgentWorkflowError("A completed aggregate profile is required before requesting proposals.")

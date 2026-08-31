@@ -1618,17 +1618,24 @@ function App() {
       if (nextDataset)
         sessionStorage.setItem("ridepulse.dataset", nextDataset.id);
       if (nextDataset?.status === "PROFILE_READY") {
-        const [nextProposals, nextConfigurations, latestRun, nextTrends] =
+        const [nextProposals, nextConfigurations, latestRun, nextTrends, latestWorkflow] =
           await Promise.all([
             api.listProposals(nextDataset.id),
             api.listRuleConfigurations(nextDataset.id),
             api.getLatestDqRun(nextDataset.id),
             api.getQualityTrends(nextDataset.id),
+            workflowApi.getLatestWorkflow(nextDataset.id),
           ]);
         const nextProfile = nextProfiles[nextDataset.id] ?? null;
         setProfile(nextProfile);
         setQualityTrends(nextTrends);
         setActiveRun(latestRun);
+        setWorkflow(latestWorkflow);
+        setWorkflowArtifacts(
+          latestWorkflow
+            ? await workflowApi.listWorkflowArtifacts(latestWorkflow.id)
+            : [],
+        );
         if (latestRun?.status === "SUCCEEDED") {
           const [latestResults, latestAnomalies] = await Promise.all([
             api.getDqResults(latestRun.id),

@@ -1924,6 +1924,26 @@ def create_workflow(
     return serialize_run(run)
 
 
+@router.get("/datasets/{id}/workflows/latest")
+def get_latest_workflow(
+    id: str,
+    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """Restore the latest persisted workflow without creating a new run."""
+    dataset = db.get(DatasetModel, id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    require_dataset_access(db, session, id)
+    run = (
+        db.query(WorkflowRunModel)
+        .filter_by(dataset_id=id)
+        .order_by(WorkflowRunModel.created_at.desc())
+        .first()
+    )
+    return serialize_run(run) if run else None
+
+
 @router.get("/workflows/{workflow_run_id}")
 def get_workflow(
     workflow_run_id: str,
@@ -2074,12 +2094,31 @@ def run_workflow_step(
     return CreateJobResponse(job_id=job.id, status="PENDING")
 
 
+def authorize_workflow_stream(workflow_run_id: str, request: Request) -> None:
+    """Authorize an SSE stream before opening the response body.
+
+    This dependency deliberately owns a short-lived session instead of using
+    ``get_session``/``get_db``.  FastAPI keeps yield-based dependencies alive
+    until a ``StreamingResponse`` finishes, so attaching the regular database
+    dependency here would reserve a Supabase connection for the whole lifetime
+    of an EventSource (including idle keep-alive periods).
+    """
+    with Session(get_engine()) as db:
+        session = get_current_session(request, db)
+        verify_csrf(request, session)
+        enforce_demo_quota(db, request, session)
+        enforce_role(session, ["USER", "STEWARD", "ADMIN"])
+        run = db.get(WorkflowRunModel, workflow_run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Workflow run not found")
+        require_dataset_access(db, session, run.dataset_id)
+
+
 @router.get("/workflows/{workflow_run_id}/stream")
 async def stream_workflow_nodes(
     workflow_run_id: str,
     request: Request,
-    session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
-    db: Session = Depends(get_db),
+    _authorized: None = Depends(authorize_workflow_stream),
 ):
     """SSE: phát output của TỪNG node trong graph theo thời gian thực.
 
@@ -2089,11 +2128,6 @@ async def stream_workflow_nodes(
     xác thực bằng session cookie như mọi GET khác.
     """
     from src.services.node_event_stream import broker
-
-    run = db.get(WorkflowRunModel, workflow_run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Workflow run not found")
-    require_dataset_access(db, session, run.dataset_id)
 
     async def event_gen():
         sub, queue, backlog = broker.subscribe(workflow_run_id)

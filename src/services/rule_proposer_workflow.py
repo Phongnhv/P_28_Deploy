@@ -885,7 +885,11 @@ def run_analysis_report(workflow_run_id: str, job_id: str, session_id: str | Non
         if not run or run.current_step != "ANALYZE_REPORT":
             return
         steps = _decode_steps(run)
-        if _step(steps, "ANALYZE_REPORT")["status"] not in {"READY", "FAILED"}:
+        # A failed analysis is recorded as a completed workflow artifact so the
+        # DQ result remains visible.  Keep the stage re-runnable as well: a
+        # transient provider/DDL timeout must not strand the workflow after the
+        # deterministic Graph 2 result has already succeeded.
+        if _step(steps, "ANALYZE_REPORT")["status"] not in {"READY", "FAILED", "COMPLETED"}:
             return
         dq_run = (
             db.query(DqRunModel)
@@ -904,7 +908,12 @@ def run_analysis_report(workflow_run_id: str, job_id: str, session_id: str | Non
     try:
         asyncio.run(
             asyncio.wait_for(
-                run_anomaly_graph(execution_run_id=dq_run_id, dataset_id=dataset_id, stream_id=workflow_run_id),
+                run_anomaly_graph(
+                    execution_run_id=dq_run_id,
+                    dataset_id=dataset_id,
+                    stream_id=workflow_run_id,
+                    initialize_schema=False,
+                ),
                 timeout=90,
             )
         )
