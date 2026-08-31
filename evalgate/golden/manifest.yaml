@@ -1,0 +1,233 @@
+version: '1.0'
+sdih_seed: 20260819
+max_rows: 20000
+frozen_at: '2026-08-22T03:19:49.773236+00:00'
+note: Regenerate with `python -m evalgate.golden.freeze`. Changing these labels invalidates
+  every stored baseline that was scored against them.
+datasets:
+  corpus-nyc-taxi-50k:
+    status: FROZEN
+    file: tier1_sdih/corpus-nyc-taxi-50k.labels.json
+    fingerprint: 466538ac015fc510cc99dc9fe65b5898b194576b231da3ec52487321775a96a0
+    sha256: 1be973aff0035c93fddcd2038662acdb403b6669ea8ba07bf53a44595287f308
+    total_labels: 3498
+    verified_labels: 400
+    counts_by_class:
+      SIGN_FLIP: 2634
+      INVALID_CATEGORY: 300
+      DUPLICATE_ROW: 314
+      FORMAT_VIOLATION: 50
+      MISSING_VALUE: 50
+      OUTLIER: 50
+      OUT_OF_RANGE: 50
+      TYPE_VIOLATION: 50
+    applicable_classes:
+    - DUPLICATE_ROW
+    - FORMAT_VIOLATION
+    - INVALID_CATEGORY
+    - MISSING_VALUE
+    - OUTLIER
+    - OUT_OF_RANGE
+    - SIGN_FLIP
+    - TYPE_VIOLATION
+    not_applicable_classes:
+    - CROSS_FIELD_VIOLATION
+    - STALE_TIMESTAMP
+    measurable: true
+    plan_warnings: []
+  corpus-synth-clinical:
+    status: FROZEN
+    file: tier1_sdih/corpus-synth-clinical.labels.json
+    fingerprint: b4c2e9368a78c9068c1fef6397b74f0c7ce9cb36b28cc70bd9a36c8a9e628477
+    sha256: 659a3188ab13ac85005df59511f463702f15a99178ddee9b5db4d5ff30b0e3ac
+    total_labels: 500
+    verified_labels: 500
+    counts_by_class:
+      CROSS_FIELD_VIOLATION: 50
+      DUPLICATE_ROW: 50
+      FORMAT_VIOLATION: 50
+      INVALID_CATEGORY: 50
+      MISSING_VALUE: 50
+      OUTLIER: 50
+      OUT_OF_RANGE: 50
+      SIGN_FLIP: 50
+      STALE_TIMESTAMP: 50
+      TYPE_VIOLATION: 50
+    applicable_classes:
+    - CROSS_FIELD_VIOLATION
+    - DUPLICATE_ROW
+    - FORMAT_VIOLATION
+    - INVALID_CATEGORY
+    - MISSING_VALUE
+    - OUTLIER
+    - OUT_OF_RANGE
+    - SIGN_FLIP
+    - STALE_TIMESTAMP
+    - TYPE_VIOLATION
+    not_applicable_classes: []
+    measurable: true
+    plan_warnings:
+    - 'insurance_pct: targeted by 3 cell-local classes [''OUTLIER'', ''OUT_OF_RANGE'',
+      ''SIGN_FLIP'']'
+  corpus-synth-hr:
+    status: FROZEN
+    file: tier1_sdih/corpus-synth-hr.labels.json
+    fingerprint: 032f41fc513814345539d9aab3b976f820705e695ae0e4ecaebbe1ef07f2cce0
+    sha256: aa117b7e735e2a1c72ffb484a963e2f5080309714958ef44cc9fd387d0e0061e
+    total_labels: 500
+    verified_labels: 500
+    counts_by_class:
+      CROSS_FIELD_VIOLATION: 50
+      DUPLICATE_ROW: 50
+      FORMAT_VIOLATION: 50
+      INVALID_CATEGORY: 50
+      MISSING_VALUE: 50
+      OUTLIER: 50
+      OUT_OF_RANGE: 50
+      SIGN_FLIP: 50
+      STALE_TIMESTAMP: 50
+      TYPE_VIOLATION: 50
+    applicable_classes:
+    - CROSS_FIELD_VIOLATION
+    - DUPLICATE_ROW
+    - FORMAT_VIOLATION
+    - INVALID_CATEGORY
+    - MISSING_VALUE
+    - OUTLIER
+    - OUT_OF_RANGE
+    - SIGN_FLIP
+    - STALE_TIMESTAMP
+    - TYPE_VIOLATION
+    not_applicable_classes: []
+    measurable: true
+    plan_warnings:
+    - 'bonus: targeted by 2 cell-local classes [''OUTLIER'', ''SIGN_FLIP'']'
+    - 'grade: targeted by 2 cell-local classes [''FORMAT_VIOLATION'', ''MISSING_VALUE'']'
+  corpus-synth-iot:
+    status: FROZEN
+    file: tier1_sdih/corpus-synth-iot.labels.json
+    fingerprint: 8c31b9b3481ca5c1705b7c15b5bb43fcf1febd424eb24ef14cd159d5f9d01be6
+    sha256: 90c5239d486fe898295f63425f3b267e3f2f8f3235d7489aa0fdf8c12329dcb8
+    total_labels: 400
+    verified_labels: 400
+    counts_by_class:
+      DUPLICATE_ROW: 50
+      FORMAT_VIOLATION: 50
+      MISSING_VALUE: 50
+      OUTLIER: 50
+      OUT_OF_RANGE: 50
+      SIGN_FLIP: 50
+      STALE_TIMESTAMP: 50
+      TYPE_VIOLATION: 50
+    applicable_classes:
+    - DUPLICATE_ROW
+    - FORMAT_VIOLATION
+    - MISSING_VALUE
+    - OUTLIER
+    - OUT_OF_RANGE
+    - SIGN_FLIP
+    - STALE_TIMESTAMP
+    - TYPE_VIOLATION
+    not_applicable_classes:
+    - CROSS_FIELD_VIOLATION
+    - INVALID_CATEGORY
+    measurable: true
+    plan_warnings:
+    - 'reading_at: targeted by 2 cell-local classes [''STALE_TIMESTAMP'', ''TYPE_VIOLATION'']'
+  corpus-synth-retail:
+    status: FROZEN
+    file: tier1_sdih/corpus-synth-retail.labels.json
+    fingerprint: 888e29e3ecf59c078a3e71cfcf330f02ccf2ada9eec051d02c48ea3565d070de
+    sha256: 6f60cf0b2f82d665287ccd6546eb1c332144a1380d4a8ac86e7fc61d407dff13
+    total_labels: 450
+    verified_labels: 450
+    counts_by_class:
+      CROSS_FIELD_VIOLATION: 50
+      DUPLICATE_ROW: 50
+      FORMAT_VIOLATION: 50
+      INVALID_CATEGORY: 50
+      MISSING_VALUE: 50
+      OUTLIER: 50
+      OUT_OF_RANGE: 50
+      SIGN_FLIP: 50
+      TYPE_VIOLATION: 50
+    applicable_classes:
+    - CROSS_FIELD_VIOLATION
+    - DUPLICATE_ROW
+    - FORMAT_VIOLATION
+    - INVALID_CATEGORY
+    - MISSING_VALUE
+    - OUTLIER
+    - OUT_OF_RANGE
+    - SIGN_FLIP
+    - TYPE_VIOLATION
+    not_applicable_classes:
+    - STALE_TIMESTAMP
+    measurable: true
+    plan_warnings:
+    - 'line_count: targeted by 2 cell-local classes [''INVALID_CATEGORY'', ''OUT_OF_RANGE'']'
+    - 'quantity: targeted by 2 cell-local classes [''MISSING_VALUE'', ''SIGN_FLIP'']'
+  corpus-synth-tiny:
+    status: FROZEN
+    file: tier1_sdih/corpus-synth-tiny.labels.json
+    fingerprint: e8ff8ab9c62fc9ef16b1125bc7e2e5cf7bb5ac78404806a64a1ab9dc232d1d7d
+    sha256: fb3e93dda7319bafc7baf7fc71d65db89e00c2757dad5f592a40c4e1ff546bcd
+    total_labels: 16
+    verified_labels: 16
+    counts_by_class:
+      DUPLICATE_ROW: 2
+      FORMAT_VIOLATION: 2
+      INVALID_CATEGORY: 2
+      MISSING_VALUE: 2
+      OUTLIER: 2
+      OUT_OF_RANGE: 2
+      SIGN_FLIP: 2
+      TYPE_VIOLATION: 2
+    applicable_classes:
+    - DUPLICATE_ROW
+    - FORMAT_VIOLATION
+    - INVALID_CATEGORY
+    - MISSING_VALUE
+    - OUTLIER
+    - OUT_OF_RANGE
+    - SIGN_FLIP
+    - TYPE_VIOLATION
+    not_applicable_classes:
+    - CROSS_FIELD_VIOLATION
+    - STALE_TIMESTAMP
+    measurable: true
+    plan_warnings:
+    - 'amount: targeted by 4 cell-local classes [''OUTLIER'', ''OUT_OF_RANGE'', ''SIGN_FLIP'',
+      ''TYPE_VIOLATION'']'
+    - 'label: targeted by 3 cell-local classes [''FORMAT_VIOLATION'', ''INVALID_CATEGORY'',
+      ''MISSING_VALUE'']'
+  corpus-synth-wide:
+    status: FROZEN
+    file: tier1_sdih/corpus-synth-wide.labels.json
+    fingerprint: 38aa5cbd7cd002905ad2f896dc468d9896fed23be7ac3f3d23daf82231569a23
+    sha256: b8a3a295814d9cbbd646fe286a27537c1224a53f546244d6dbe847fd2dc8c556
+    total_labels: 400
+    verified_labels: 400
+    counts_by_class:
+      DUPLICATE_ROW: 50
+      FORMAT_VIOLATION: 50
+      INVALID_CATEGORY: 50
+      MISSING_VALUE: 50
+      OUTLIER: 50
+      OUT_OF_RANGE: 50
+      SIGN_FLIP: 50
+      TYPE_VIOLATION: 50
+    applicable_classes:
+    - DUPLICATE_ROW
+    - FORMAT_VIOLATION
+    - INVALID_CATEGORY
+    - MISSING_VALUE
+    - OUTLIER
+    - OUT_OF_RANGE
+    - SIGN_FLIP
+    - TYPE_VIOLATION
+    not_applicable_classes:
+    - CROSS_FIELD_VIOLATION
+    - STALE_TIMESTAMP
+    measurable: true
+    plan_warnings: []

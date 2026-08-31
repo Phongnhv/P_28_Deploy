@@ -18,7 +18,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_CONCURRENT_TABLES = 4
 
 
-async def _profile_one_table(connection_string: str, table: str, sampling_rate: float, semaphore: asyncio.Semaphore) -> tuple:
+async def _profile_one_table(
+    connection_string: str, table: str, sampling_rate: float, semaphore: asyncio.Semaphore
+) -> tuple:
     """Profile 1 bảng, chạy trong semaphore để giới hạn concurrency.
     profile_database.invoke là hàm sync (langchain tool) -> chạy trong thread riêng để không block event loop.
     """
@@ -111,6 +113,7 @@ async def raw_profiler_node(state: AgentState) -> dict:
     # 1. Quét danh sách các bảng trong database (lọc bỏ bảng hệ thống)
     try:
         from src.services.rule_store import get_engine
+
         settings = get_settings()
         if connection_string == settings.database_url:
             engine = get_engine()
@@ -158,7 +161,11 @@ async def raw_profiler_node(state: AgentState) -> dict:
         settings = get_settings()
         out_dir = getattr(settings, "output_dir", None)
         res_dir = getattr(settings, "results_dir", None)
-        base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+        base_dir = (
+            out_dir
+            if isinstance(out_dir, (str, Path))
+            else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+        )
         profiler_dir = Path(base_dir) / "profiler"
         profiler_dir.mkdir(parents=True, exist_ok=True)
         dump_file = profiler_dir / f"debug_raw_profile_{timestamp}_{run_id}.json"
@@ -204,7 +211,11 @@ async def profiler_digest_node(state: AgentState) -> dict:
         settings = get_settings()
         out_dir = getattr(settings, "output_dir", None)
         res_dir = getattr(settings, "results_dir", None)
-        base_dir = out_dir if isinstance(out_dir, (str, Path)) else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+        base_dir = (
+            out_dir
+            if isinstance(out_dir, (str, Path))
+            else (res_dir if isinstance(res_dir, (str, Path)) else "./output")
+        )
         profiler_dir = Path(base_dir) / "profiler"
         profiler_dir.mkdir(parents=True, exist_ok=True)
         dump_file = profiler_dir / f"debug_profile_digest_{timestamp}_{run_id}.json"

@@ -7,13 +7,15 @@ python-dotenv>=1.0.0
 pandas>=2.2.0
 pyarrow>=16.0.0
 
-# AI / LangChain
+# AI / LangChain / ML
 langchain>=0.3.0
 langchain-openai>=0.3.0
 langchain-anthropic>=0.3.0
 langchain-mistralai>=0.2.0
 langchain-google-genai>=0.2.0
 langgraph>=0.2.0
+deepagents>=0.3.11
+scikit-learn>=1.4.0
 
 # Database (uncomment as needed)
 sqlalchemy>=2.0.0
@@ -38,6 +40,7 @@ httpx>=0.28.0
 pyarrow>=13.0.0
 pandas
 python-multipart>=0.0.6
+regex>=2024.11.6
 
 # AI Observability & Tracing (Phoenix / Arize)
 # arize-phoenix>=4.0.0

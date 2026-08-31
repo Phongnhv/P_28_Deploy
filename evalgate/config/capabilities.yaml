@@ -1,0 +1,129 @@
+# Capability registry: product behaviours whose disappearance must block a release.
+#
+# A capability is a claim about what the system can do, expressed as a marker that
+# is cheap to verify at any git ref.  The gate does not ask "is this marker
+# present?" -- that would just re-report every known gap forever.  It asks whether
+# the marker was present at the baseline and is absent now, which is the only
+# question a regression gate should answer.
+#
+#   detect:  the capability is PRESENT when ANY detector matches
+#   invert:  true means PRESENT when NO detector matches (for "must not exist" facts)
+#
+# Detector forms:
+#   {file: <path>, pattern: <regex>}          match inside one file
+#   {under: <prefix>, suffix: <ext>, pattern: <regex>}   match inside any file below prefix
+#   {path_exists: <path>}                     the path is tracked at that ref
+#
+# Severity drives blocking: only CRITICAL regressions block a release. HIGH and
+# MEDIUM are reported so they are visible without turning every refactor into a
+# release incident.
+version: "1.0"
+
+capabilities:
+  - id: dq_score_computed
+    severity: CRITICAL
+    why: >-
+      The overall data-quality score is the product's headline number. Without a node
+      that computes it, src/agents/graph.py falls back to `final_state.get("dq_score", 100.0)`
+      and the system reports a perfect score for a run it never scored.
+    detect:
+      - {under: "src/", suffix: ".py", pattern: "anomaly_penalty"}
+      - {under: "src/", suffix: ".py", pattern: "def _get_grade"}
+
+  - id: rule_policy_asset_present
+    severity: CRITICAL
+    why: >-
+      dashboard_agent_workflow._load_rule_policy_document raises before the per-dataset
+      lookup, so a missing policy file breaks ingest, profiling, proposals and the data
+      explorer at once rather than degrading for unknown datasets only.
+    detect:
+      - {path_exists: "src/resources/rule_policies.json"}
+
+  - id: hitl_audit_on_publish
+    severity: CRITICAL
+    why: >-
+      PRODUCT_SPEC safety rule 5 requires every state transition to create an audit
+      record. Publishing approved rules into the active ruleset is the transition that
+      matters most, and it is the one a steward is accountable for.
+    detect:
+      - {file: "src/services/rule_store.py", pattern: "def publish_approved_rules[\\s\\S]{0,4000}AuditEventModel"}
+
+  - id: dq_router_not_publicly_mounted
+    severity: CRITICAL
+    why: >-
+      docs/API_CONTRACT.md calls /api/v1/dq/* compatibility/internal routes, and
+      frontend/src/api/client.ts never calls them. Mounting them unconditionally with
+      no auth dependency exposes rule approval and publication to anonymous callers.
+    detect:
+      - {file: "src/main.py", pattern: "app_env[\\s\\S]{0,200}include_router\\(\\s*dq_router"}
+      - {file: "src/api/routes.py", pattern: "dq_router\\s*=\\s*APIRouter\\([^)]*dependencies\\s*="}
+
+  - id: default_users_env_guarded
+    severity: CRITICAL
+    why: >-
+      ensure_default_users seeds admin/admin, steward/steward and user/user on every
+      init_db(). Unguarded, it recreates those accounts on each production start, and
+      deleting them does not help.
+    detect:
+      - {file: "src/services/rule_store.py", pattern: "app_env[\\s\\S]{0,300}ensure_default_users"}
+      - {file: "src/services/rule_store.py", pattern: "ensure_default_users[\\s\\S]{0,300}app_env"}
+
+  - id: execution_error_checked
+    severity: HIGH
+    why: >-
+      LangGraph's ainvoke does not raise when a node returns {"error": ...}; it routes to
+      END. A runner that does not inspect final_state["error"] reports success for a
+      pipeline that failed.
+    detect:
+      - {file: "src/agents/graph.py", pattern: "final_state\\.get\\(\"error\"\\)"}
+
+  - id: sql_text_not_public
+    severity: HIGH
+    invert: true
+    why: >-
+      docs/API_CONTRACT.md states the compiled SQL is not a public API field. A required
+      sql_text on a response model publishes table names, column names and thresholds.
+    detect:
+      - {file: "src/models/schemas.py", pattern: "^\\s*sql_text:\\s*str\\s*$"}
+
+  - id: validation_gate_respected
+    severity: HIGH
+    invert: true
+    why: >-
+      test_runner_node overwriting every generated test with {"valid": True, "error": None}
+      discards the SQL validation verdict and makes the invalid-test branch unreachable.
+    detect:
+      - {file: "src/agents/nodes/test_runner_node.py", pattern: "\"valid\":\\s*True,\\s*\"error\":\\s*None"}
+
+  - id: freshness_parse_failure_reported
+    severity: HIGH
+    why: >-
+      A timestamp the runner cannot parse currently leaves status at its optimistic
+      initial value, so an unparseable column reports FRESHNESS as passing.
+    detect:
+      - {file: "src/agents/nodes/test_runner_node.py", pattern: "parse timestamp[\\s\\S]{0,300}status\\s*=\\s*\"(ERROR|FAILED)\""}
+
+  - id: statement_timeout_configured
+    severity: HIGH
+    why: >-
+      docs/SUPABASE_DATASET_CONTRACT.md step 7 requires a statement timeout. The current
+      five-second check in run_dq_checks runs after the query has already returned.
+    detect:
+      - {under: "src/", suffix: ".py", pattern: "statement_timeout"}
+
+  - id: llm_repair_wired
+    severity: MEDIUM
+    why: >-
+      README section 6 tells users that failed SQL generation is routed to an LLM repair
+      node. llm_repair_node and llm_dbt_repair_node exist but no graph references them.
+    detect:
+      - {file: "src/agents/graph.py", pattern: "llm_(dbt_)?repair_node"}
+
+  - id: anomaly_graph_error_routing
+    severity: MEDIUM
+    why: >-
+      build_anomaly_graph wires detector to hypothesis to persist to report with plain
+      edges, so a failed detector still produces a persisted analysis and a written
+      report built on no signals.
+    detect:
+      - {file: "src/agents/graph.py", pattern: "build_anomaly_graph[\\s\\S]{0,2500}add_conditional_edges"}

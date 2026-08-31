@@ -37,21 +37,21 @@ def temp_db_url(tmp_path):
                 {"trip_id": 1, "fare_amount": 100.0, "driver_name": "Nguyen An"},
                 {"trip_id": 2, "fare_amount": 150.0, "driver_name": "Le Binh"},
                 {"trip_id": 3, "fare_amount": None, "driver_name": "Nguyen An"},  # 1 null fare, 2 distinct names
-                {"trip_id": 4, "fare_amount": 200.0, "driver_name": None},       # 1 null name
-            ]
+                {"trip_id": 4, "fare_amount": 200.0, "driver_name": None},  # 1 null name
+            ],
         )
         conn.commit()
 
-    return db_url
+    yield db_url
+
+    engine.dispose()
 
 
 def test_profile_database_tool(temp_db_url):
     """Kiểm thử tính chính xác của tool profiling trên SQLite."""
-    res_json_str = profile_database.invoke({
-        "connection_string": temp_db_url,
-        "table_name": "dich_vu_xe_trips",
-        "sampling_rate": 1.0
-    })
+    res_json_str = profile_database.invoke(
+        {"connection_string": temp_db_url, "table_name": "dich_vu_xe_trips", "sampling_rate": 1.0}
+    )
 
     res = json.loads(res_json_str)
 
@@ -80,12 +80,7 @@ def test_profile_database_tool(temp_db_url):
 @pytest.mark.asyncio
 async def test_profiler_node_execution(temp_db_url):
     """Kiểm thử Profiler Node quét toàn bộ bảng và cập nhật state."""
-    state = {
-        "metadata": {
-            "connection_string": temp_db_url,
-            "sampling_rate": 1.0
-        }
-    }
+    state = {"metadata": {"connection_string": temp_db_url, "sampling_rate": 1.0}}
 
     result = await raw_profiler_node(state)
 
@@ -104,11 +99,9 @@ async def test_profiler_node_execution(temp_db_url):
 
 def test_profile_digest(temp_db_url):
     """Kiểm thử hàm generate_profile_digest chuyển đổi thống kê."""
-    res_json_str = profile_database.invoke({
-        "connection_string": temp_db_url,
-        "table_name": "dich_vu_xe_trips",
-        "sampling_rate": 1.0
-    })
+    res_json_str = profile_database.invoke(
+        {"connection_string": temp_db_url, "table_name": "dich_vu_xe_trips", "sampling_rate": 1.0}
+    )
     raw_profile = json.loads(res_json_str)
 
     dataset_profile = {"dich_vu_xe_trips": raw_profile}

@@ -151,7 +151,7 @@ Frontend visibility không thay thế authorization. API/service phải kiểm t
 Production seed thêm tài khoản `demo-steward` với role `STEWARD` và membership
 trong workspace cấu hình bởi `DEMO_WORKSPACE_ID` (mặc định `ws-browser`).
 Frontend điền sẵn credential công khai `demo-steward` /
-`ridepulse-demo-2026` để giám khảo có thể vào nhanh; credential này không được
+`DEMO_STEWARD_PASSWORD` do nhà vận hành cấu hình trong môi trường không production để giám khảo có thể vào nhanh; credential này không được
 coi là secret hay là lớp bảo vệ duy nhất.
 
 Mọi request ghi của tài khoản demo đi qua quota guard ở dependency xác thực.

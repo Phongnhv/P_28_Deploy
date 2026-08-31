@@ -22,13 +22,18 @@ logger = logging.getLogger(__name__)
 async def anomaly_detector_node(state: AnomalyGraphState) -> dict:
     """LangGraph Node: Calculates DQ anomalies and aggregated decisions using robust estimators."""
     execution_run_id = state.get("execution_run_id") or state.get("anomaly_run_id") or "test_run"
+    version = state.get("detector_config_version") or get_settings().detector_config_version
 
     engine = get_engine()
 
     try:
         with Session(engine) as db:
-            logger.info("Running robust anomaly detection for execution run ID: %s", execution_run_id)
-            result = detect_anomalies(db, execution_run_id)
+            logger.info(
+                "Running anomaly detection for execution run ID: %s with version: %s",
+                execution_run_id,
+                version,
+            )
+            result = detect_anomalies(db, execution_run_id, detector_config_version=version)
 
             decision_data = {
                 "decision": result["decision"],
@@ -39,8 +44,16 @@ async def anomaly_detector_node(state: AnomalyGraphState) -> dict:
             }
 
             signals = result["signals"]
-            logger.info("Anomaly detection completed. Decision: %s, Score: %s, Signals Count: %d",
-                        decision_data["decision"], decision_data["score"], len(signals))
+            effective_version = result.get("detector_config_version", version)
+            rollout_mode = result.get("rollout_mode", "DISABLED")
+
+            logger.info(
+                "Anomaly detection completed. Decision: %s, Score: %s, Signals Count: %d, Mode: %s",
+                decision_data["decision"],
+                decision_data["score"],
+                len(signals),
+                rollout_mode,
+            )
 
             # Export trace JSON for debugging/audit
             try:
@@ -51,10 +64,17 @@ async def anomaly_detector_node(state: AnomalyGraphState) -> dict:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 dump_file = out_dir / f"debug_anomalies_{timestamp}_{execution_run_id}.json"
                 dump_file.write_text(
-                    json.dumps({
-                        "anomaly_decision": decision_data,
-                        "signals": signals,
-                    }, ensure_ascii=False, indent=2),
+                    json.dumps(
+                        {
+                            "detector_config_version": effective_version,
+                            "rollout_mode": rollout_mode,
+                            "anomaly_decision": decision_data,
+                            "signals": signals,
+                            "signal_errors": result.get("errors", []),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
                     encoding="utf-8",
                 )
                 logger.info("Exported anomalies trace to: %s", dump_file)
@@ -64,7 +84,9 @@ async def anomaly_detector_node(state: AnomalyGraphState) -> dict:
             return {
                 "signal_observations": signals,
                 "anomaly_decision": decision_data,
-                "anomaly_status": "SUCCEEDED"
+                "anomaly_status": "SUCCEEDED",
+                "detector_config_version": effective_version,
+                "rollout_mode": rollout_mode,
             }
 
     except Exception as exc:
@@ -76,8 +98,8 @@ async def anomaly_detector_node(state: AnomalyGraphState) -> dict:
                 "score": 0.0,
                 "confidence": 0.0,
                 "severity": "HIGH",
-                "override_reason": f"Detector exception: {exc}"
+                "override_reason": f"Detector exception: {exc}",
             },
             "anomaly_status": "FAILED",
-            "error": str(exc)
+            "error": str(exc),
         }

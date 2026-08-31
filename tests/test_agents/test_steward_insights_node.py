@@ -37,7 +37,7 @@ def test_validate_and_sanitize_hypotheses():
             "contradicting_signal_ids": [],
             "evidence_refs": [],
             "recommended_checks": [],  # Should trigger default safe check
-        }
+        },
     ]
 
     validated = validate_and_sanitize_hypotheses(raw_hypotheses, valid_signals, valid_evidence)
@@ -55,10 +55,7 @@ def test_validate_and_sanitize_hypotheses():
 @pytest.mark.asyncio
 async def test_steward_insights_node_not_required():
     """Verify agent skips if decision is NORMAL."""
-    state = {
-        "anomaly_decision": {"decision": "NORMAL", "score": 0.0, "severity": "LOW"},
-        "signal_observations": []
-    }
+    state = {"anomaly_decision": {"decision": "NORMAL", "score": 0.0, "severity": "LOW"}, "signal_observations": []}
     output = await steward_insights_node(state)
     assert output["hypothesis_status"] == "NOT_REQUIRED"
     assert output["hypotheses"] == []
@@ -76,7 +73,7 @@ async def test_steward_insights_node_fallback_on_error(test_db):
             status="FAIL",
             checked_count=100,
             failed_count=5,
-            failed_row_ids="[]"
+            failed_row_ids="[]",
         )
         session.add(failed_res)
         session.commit()
@@ -86,7 +83,17 @@ async def test_steward_insights_node_fallback_on_error(test_db):
         "anomaly_run_id": "anom_123",
         "anomaly_decision": {"decision": "ANOMALY", "score": 0.85, "severity": "HIGH"},
         "signal_observations": [
-            {"signal_id": "sig_1", "target_id": "rule_abc", "score": 0.90, "family": "BUSINESS_RULE", "target_type": "RULE", "reliability": 0.95, "detector_name": "TEST", "detector_version": "1.0", "explanation_code": "TEST"}
+            {
+                "signal_id": "sig_1",
+                "target_id": "rule_abc",
+                "score": 0.90,
+                "family": "BUSINESS_RULE",
+                "target_type": "RULE",
+                "reliability": 0.95,
+                "detector_name": "TEST",
+                "detector_version": "1.0",
+                "explanation_code": "TEST",
+            }
         ],
         "dataset_id": "test_trips",
     }
@@ -108,7 +115,17 @@ async def test_steward_insights_node_success(test_db):
         "anomaly_run_id": "anom_123",
         "anomaly_decision": {"decision": "ANOMALY", "score": 0.85, "severity": "HIGH"},
         "signal_observations": [
-            {"signal_id": "sig_1", "target_id": "rule_abc", "score": 0.90, "family": "BUSINESS_RULE", "target_type": "RULE", "reliability": 0.95, "detector_name": "TEST", "detector_version": "1.0", "explanation_code": "TEST"}
+            {
+                "signal_id": "sig_1",
+                "target_id": "rule_abc",
+                "score": 0.90,
+                "family": "BUSINESS_RULE",
+                "target_type": "RULE",
+                "reliability": 0.95,
+                "detector_name": "TEST",
+                "detector_version": "1.0",
+                "explanation_code": "TEST",
+            }
         ],
         "dataset_id": "test_trips",
     }

@@ -1,0 +1,53 @@
+name: EvalGate Pre-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      approved_target:
+        description: "Explicit localhost/staging target approved for k6"
+        required: true
+        type: string
+
+jobs:
+  pre-release:
+    runs-on: self-hosted
+    timeout-minutes: 60
+    env:
+      LANGCHAIN_TRACING_V2: "false"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -e "./evalgate[live]"
+      - name: Run provenance-bound served path
+        id: product-run
+        shell: pwsh
+        run: |
+          $manifest = python -m evalgate.product_run --profile pre_release --suite frozen-v1 --out output/evalgate-runs
+          if ($LASTEXITCODE -ne 0 -or -not $manifest) { throw "Product benchmark did not finalize a manifest" }
+          "manifest=$manifest" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+      - name: Run pre-release gate
+        run: >-
+          python -m evalgate.run --mode pre_release
+          --manifest "${{ steps.product-run.outputs.manifest }}" --out evalgate/reports
+        env:
+          APP_ENV: test
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          EVALGATE_APPROVED_TARGET: ${{ inputs.approved_target }}
+          EVALGATE_BUDGET_USD: "10.0"
+      - name: Publish report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evalgate-pre-release-report
+          path: |
+            evalgate/reports/
+            evalgate/evidence/
+            output/evalgate-runs/

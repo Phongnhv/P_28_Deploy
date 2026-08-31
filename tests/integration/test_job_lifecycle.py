@@ -1,4 +1,3 @@
-
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -15,6 +14,12 @@ async def test_job_dispatch_and_idempotency():
         assert login_res.status_code == 200
         csrf_token = login_res.json()["csrf_token"]
 
+        # POST /api/v1/jobs now requires a steward session, and get_session verifies
+        # CSRF on every authenticated request. Without the token the dispatch comes
+        # back 422 instead of 202. Before the dependency was added this endpoint
+        # accepted anonymous requests entirely.
+        client.headers["X-CSRF-Token"] = login_res.json()["csrf_token"]
+
         ikey = "test-idem-key-12345"
         dataset_id = "dataset-nyc-yellow-taxi-50k"
 
@@ -22,7 +27,7 @@ async def test_job_dispatch_and_idempotency():
         res1 = await client.post(
             "/api/v1/jobs",
             json={"type": "INGEST_PROFILE", "linked_entity": dataset_id},
-            headers={"Idempotency-Key": ikey, "X-CSRF-Token": csrf_token}
+            headers={"Idempotency-Key": ikey, "X-CSRF-Token": csrf_token},
         )
         assert res1.status_code == 202
         data = res1.json()
@@ -33,7 +38,7 @@ async def test_job_dispatch_and_idempotency():
         res2 = await client.post(
             "/api/v1/jobs",
             json={"type": "INGEST_PROFILE", "linked_entity": dataset_id},
-            headers={"Idempotency-Key": ikey, "X-CSRF-Token": csrf_token}
+            headers={"Idempotency-Key": ikey, "X-CSRF-Token": csrf_token},
         )
         assert res2.status_code == 409
 

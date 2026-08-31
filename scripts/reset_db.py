@@ -10,6 +10,7 @@ def run_cmd(cmd, check=True):
         print(f"❌ Command failed: {cmd}")
         sys.exit(res.returncode)
 
+
 def main():
     print("🚀 Bắt đầu quá trình Reset Database DataPulse...")
 
@@ -53,6 +54,7 @@ def main():
     run_cmd("docker compose exec -T db psql -U postgres -d ridepulse -f /scripts/migrations/008_split_schemas.sql")
 
     print("\n🎉 RESET DATABASE VÀ ĐỒNG BỘ CẤU TRÚC THÀNH CÔNG!")
+
 
 if __name__ == "__main__":
     main()

@@ -1,7 +1,6 @@
-"""ChromaDB RAG tool — placeholder until ChromaDB được seed với lịch sử rule.
+"""Rule history tool — queries approved rules from PostgreSQL."""
 
-Giữ nguyên signature để wiring ChromaDB thật sau này không cần sửa node.
-"""
+from src.agents.tools.rule_proposer_tools import query_historical_approved_rules
 
 
 def query_historical_rules(
@@ -9,7 +8,7 @@ def query_historical_rules(
     columns: list[str],
     top_k: int = 3,
 ) -> list[dict]:
-    """RAG placeholder. Trả về [] cho tới khi ChromaDB được seed.
+    """Tra cứu các rule lịch sử đã được phê duyệt từ PostgreSQL.
 
     Args:
         table_name: Tên bảng cần tra cứu lịch sử rule.
@@ -17,6 +16,13 @@ def query_historical_rules(
         top_k: Số lượng rule lịch sử tối đa trả về.
 
     Returns:
-        Danh sách dict rule lịch sử (rỗng trong giai đoạn stub).
+        Danh sách dict rule lịch sử.
     """
-    return []
+    try:
+        res = query_historical_approved_rules.invoke(
+            {"table_name": table_name, "limit": top_k}
+        )
+        return res.get("approved_rules", []) if isinstance(res, dict) else []
+    except Exception:
+        return []
+

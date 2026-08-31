@@ -1,0 +1,31 @@
+# Which evaluators run in which mode.
+#
+# The split is about feedback speed and cost, not about how much truth each mode is
+# allowed to tell. Every mode reports the evaluators it did not run, so a fast local
+# run can never be mistaken for a complete one.
+#
+#   local        the static checks a developer runs before pushing (~5s)
+#   ci           everything that costs nothing and needs no network -- the merge gate
+#   pre_release  ci plus anything that needs a paid model call or a live target
+version: "1.0"
+
+profiles:
+  local:
+    description: >-
+      Static checks only: contract, capability regression, vacuity, authz, secrets,
+      policy, config. Measured at ~5s versus ~6.5s for ci, so the saving is small --
+      most of the cost is importing pandas and reading files across git refs, which
+      both profiles pay. Kept because it needs no database and no archived artefacts.
+    membership_source: evalgate/core/evaluator_registry.py
+
+  ci:
+    description: "Every zero-cost evaluator. This is the merge gate."
+    membership_source: evalgate/core/evaluator_registry.py
+
+  nightly:
+    description: "CI plus paid/live AI and observability adapters."
+    membership_source: evalgate/core/evaluator_registry.py
+
+  pre_release:
+    description: "Nightly suite plus load testing against an explicitly approved target."
+    membership_source: evalgate/core/evaluator_registry.py

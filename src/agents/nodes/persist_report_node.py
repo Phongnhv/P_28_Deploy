@@ -65,6 +65,7 @@ def aggregate_graph2_status(
 def _dump_report_file(test_run_id: str, payload: dict, steward_summary: str | None = None) -> tuple[str, str | None]:
     """Ghi báo cáo kết quả test ra file JSON và Markdown phục vụ debug / audit."""
     from src.config import get_settings
+
     settings = get_settings()
     base_dir = Path(getattr(settings, "output_dir", None) or "./output")
     res_dir = Path(getattr(settings, "results_dir", None) or "./data/results")
@@ -139,11 +140,7 @@ async def persist_report_node(state: AgentState) -> dict:
             # ("yellow_tripdata.fare_amount.RANGE" -> "RANGE") nên steward_insights_node
             # gửi cho LLM một tiêu đề vô nghĩa thay vì mô tả nghiệp vụ thật.
             titles_by_rule_id = {
-                rule.get("rule_id"): (
-                    rule.get("rule_name")
-                    or rule.get("rule_description")
-                    or rule.get("title")
-                )
+                rule.get("rule_id"): (rule.get("rule_name") or rule.get("rule_description") or rule.get("title"))
                 for rule in (state.get("approved_rules") or [])
                 if rule.get("rule_id")
             }
@@ -194,15 +191,22 @@ async def persist_report_node(state: AgentState) -> dict:
                     run_id=test_run_id,
                     rule_id=rule_id_value,
                     rule_title=(
-                        titles_by_rule_id.get(rule_id_value)
-                        or res.get("rule_title")
-                        or rule_id_value
-                        or "Rule"
+                        titles_by_rule_id.get(rule_id_value) or res.get("rule_title") or rule_id_value or "Rule"
                     ),
                     status=r_status,
                     checked_count=c_count,
                     failed_count=f_count,
-                    failed_row_ids=json.dumps(res.get("sample_refs") or res.get("sample_failures") or []),
+                    # Prefer the bounded evidence list over the 20-row illustration.
+                    # Both are scalar row ids and land in the same column; the
+                    # illustration alone made detection recall unmeasurable above
+                    # 20/|defects|, because this is the only record of what a rule
+                    # flagged. Falls back for executors that do not emit it yet.
+                    failed_row_ids=json.dumps(
+                        res.get("violation_row_ids")
+                        or res.get("sample_refs")
+                        or res.get("sample_failures")
+                        or []
+                    ),
                     violation_rate=float(res.get("violation_rate") or 0.0),
                     duration_ms=float(res.get("duration_ms") or 0.0),
                     dbt_status=res.get("dbt_status") or "NOT_RUN",
@@ -212,7 +216,11 @@ async def persist_report_node(state: AgentState) -> dict:
                 session.add(dq_res)
 
             session.commit()
-            logger.info("Đã lưu decoupled run và %d results cho run_id=%s vào dq_runs/dq_results", len(test_results), test_run_id)
+            logger.info(
+                "Đã lưu decoupled run và %d results cho run_id=%s vào dq_runs/dq_results",
+                len(test_results),
+                test_run_id,
+            )
 
     try:
         await asyncio.to_thread(_save_decoupled_run)
@@ -258,6 +266,7 @@ async def persist_report_node(state: AgentState) -> dict:
 # ---------------------------------------------------------------------------
 # Standalone Test Harness (Chạy từ file output test_runner)
 # ---------------------------------------------------------------------------
+
 
 async def main():
     """Hàm chạy test độc lập cho persist_report_node từ file output thực tế.
@@ -332,5 +341,5 @@ async def main():
 if __name__ == "__main__":
     import asyncio
     import uuid
-    asyncio.run(main())
 
+    asyncio.run(main())

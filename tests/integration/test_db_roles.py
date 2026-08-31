@@ -5,11 +5,14 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import ProgrammingError
 
 # To run this test properly, the runner role password must be passed via environment variables
-RUNNER_DB_URL = os.getenv("RUNNER_DATABASE_URL", "postgresql+psycopg2://ridepulse_runner:test_password@localhost/ridepulse")
+RUNNER_DB_URL = os.getenv(
+    "RUNNER_DATABASE_URL", "postgresql+psycopg2://ridepulse_runner:test_password@localhost/ridepulse"
+)
+
 
 @pytest.mark.skipif(
     not os.getenv("RUNNER_DATABASE_URL") or "postgresql" not in os.getenv("RUNNER_DATABASE_URL"),
-    reason="Requires PostgreSQL RUNNER_DATABASE_URL to check role permissions"
+    reason="Requires PostgreSQL RUNNER_DATABASE_URL to check role permissions",
 )
 def test_runner_role_is_readonly():
     """

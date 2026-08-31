@@ -11,7 +11,7 @@ from src.agents.nodes.test_runner_node import (
 
 def test_unsafe_predicate_raises_not_asserts():
     """Chốt chặn phải dùng raise: assert bị Python xoá khi chạy với cờ -O."""
-    for payload in ('col = 1; DROP TABLE t', 'col = 1 -- comment', 'col /* x */ = 1'):
+    for payload in ("col = 1; DROP TABLE t", "col = 1 -- comment", "col /* x */ = 1"):
         with pytest.raises(ValueError, match="Security violation"):
             _assert_safe_predicate(payload)
 

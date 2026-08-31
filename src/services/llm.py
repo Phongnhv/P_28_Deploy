@@ -1,59 +1,120 @@
+import os
 from typing import Literal
 
+from langchain.chat_models import init_chat_model
+
 from src.config import get_settings
+from src.services.eval_telemetry import EvalTelemetryCallback
 
-Provider_type = Literal["openai", "anthropic", "mistral"]
+Provider_type = Literal["openai", "anthropic", "mistral", "google"]
 
-def get_llm(provider: Provider_type, temperature: float | None = None):
+
+def telemetry_callbacks(provider: Provider_type | None = None) -> list:
+    """The handlers every model call is instrumented with.
+
+    Exposed so an agent invocation can attach the same handlers at *its* level.
+    Callbacks passed to a chat model receive that model's events only -- tool
+    lifecycle events are dispatched by the callback manager of whatever invoked the
+    tool. Attaching them here and nowhere else is why the trace recorded every model
+    call an agent made and no record of a single tool it used, which left "did it
+    verify before asserting" unobservable.
+    """
+    from src.utils.metrics_tracker import get_metrics_tracker
+
+    settings = get_settings()
+    resolved = provider or settings.llm_provider
+    model_names = {
+        "openai": settings.openai_model_name,
+        "anthropic": settings.anthropic_model_name,
+        "mistral": settings.mistral_model_name,
+        "google": settings.google_model_name,
+    }
+    return [
+        get_metrics_tracker(),
+        EvalTelemetryCallback(
+            provider=resolved, model=model_names.get(resolved, str(resolved))
+        ),
+    ]
+
+
+def get_llm(provider: Provider_type, temperature: float | None = None, callbacks: list | None = None):
     """Tạo LLM instance cho provider được chỉ định.
 
     Args:
-        provider: Tên provider ("openai", "anthropic", "mistral").
+        provider: Tên provider ("openai", "anthropic", "mistral", "google").
         temperature: Nếu None, dùng settings.llm_temperature (default 0.7).
                      Truyền giá trị cụ thể để override — ví dụ 0.1 cho rule proposer.
+        callbacks: Danh sách callback handlers. Mặc định tự động gắn MetricsTracker.
     """
+    from src.utils.metrics_tracker import get_metrics_tracker
+
     settings = get_settings()
+
+    # EvalGate drives the served path with a placeholder API key, so any call that
+    # reaches a real provider dies on a 401 and the benchmark never finalises a
+    # bundle. The deterministic double keeps the graph structure and the structured
+    # output contract intact while making the run reproducible.
+    if os.getenv("EVALGATE_DETERMINISTIC_LLM") == "1":
+        from src.services.deterministic_eval_llm import DeterministicEvalLLM
+
+        return DeterministicEvalLLM()
+
     temp = temperature if temperature is not None else settings.llm_temperature
 
-    if provider == "openai":
-        from langchain_openai import ChatOpenAI
+    model_names = {
+        "openai": settings.openai_model_name,
+        "anthropic": settings.anthropic_model_name,
+        "mistral": settings.mistral_model_name,
+        "google": settings.google_model_name,
+    }
+    # Telemetry is always attached and a caller's callbacks are added to it, never
+    # substituted for it: passing callbacks= used to silently drop both the metrics
+    # tracker and the eval telemetry for that call.
+    cb_list = [
+        get_metrics_tracker(),
+        EvalTelemetryCallback(provider=provider, model=model_names[provider]),
+    ]
+    if callbacks:
+        cb_list.extend(callbacks)
 
-        return ChatOpenAI(
-            model=settings.openai_model_name,
+    if provider == "openai":
+        return init_chat_model(
+            f"openai:{settings.openai_model_name}",
             api_key=settings.openai_api_key,
             temperature=temp,
             timeout=settings.llm_request_timeout_seconds,
-            max_retries=1,
+            max_retries=3,
+            callbacks=cb_list,
+            use_responses_api=True,
         )
-    elif provider == "anthropic":
-        from langchain_anthropic import ChatAnthropic
 
-        return ChatAnthropic(
-            model=settings.anthropic_model_name,
+    elif provider == "anthropic":
+        return init_chat_model(
+            f"anthropic:{settings.anthropic_model_name}",
             api_key=settings.anthropic_api_key,
             temperature=temp,
+            timeout=settings.llm_request_timeout_seconds,
+            callbacks=cb_list,
         )
     elif provider == "mistral":
-        from langchain_mistralai import ChatMistralAI
-
-        return ChatMistralAI(
-            model=settings.mistral_model_name,
+        return init_chat_model(
+            f"mistralai:{settings.mistral_model_name}",
             api_key=settings.mistral_api_key,
             temperature=temp,
+            callbacks=cb_list,
         )
     elif provider == "google":
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
-        return ChatGoogleGenerativeAI(
-            model=settings.google_model_name,
+        return init_chat_model(
+            f"google_genai:{settings.google_model_name}",
             api_key=settings.google_api_key,
             temperature=temp,
+            callbacks=cb_list,
         )
     else:
         raise ValueError(f"Invalid provider: {provider}")
 
 
 if __name__ == "__main__":
-    llm = get_llm(provider="mistral")
+    llm = get_llm(provider="openai")
     result = llm.invoke("Hello")
     print(result)

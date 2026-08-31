@@ -6,7 +6,7 @@ services:
     container_name: ridepulse-db
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: localpassword
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localpassword}
       POSTGRES_DB: ridepulse
     ports:
       - "5432:5432"
@@ -23,8 +23,8 @@ services:
     image: minio/minio
     container_name: ridepulse-minio
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: miniopassword
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-miniopassword}
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -67,8 +67,13 @@ services:
       - LOCAL_WORKER_URL=http://worker:8001/run
       - OBJECT_STORAGE_BUCKET=ridepulse-dbt-artifacts
       - OBJECT_STORAGE_ENDPOINT_URL=http://minio:9000
-      - OBJECT_STORAGE_ACCESS_KEY_ID=minioadmin
-      - OBJECT_STORAGE_SECRET_ACCESS_KEY=miniopassword
+      - OBJECT_STORAGE_ACCESS_KEY_ID=${MINIO_ROOT_USER:-minioadmin}
+      - OBJECT_STORAGE_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD:-miniopassword}
+      # Pass-through from the host .env. A key sitting in .env is invisible to a
+      # container unless it is named here, which is why the live agent branch could
+      # not have run even with AGENT_MODE=graph. Never assign a value inline.
+      - OPENAI_API_KEY
+      - AGENT_MODE
       - LANGCHAIN_TRACING_V2
       - LANGCHAIN_API_KEY
       - LANGCHAIN_PROJECT
@@ -95,8 +100,12 @@ services:
       - RUNNER_DATABASE_URL=postgresql+psycopg2://ridepulse_runner:${RUNNER_DB_PASSWORD:-test_password}@db:5432/ridepulse
       - OBJECT_STORAGE_BUCKET=ridepulse-dbt-artifacts
       - OBJECT_STORAGE_ENDPOINT_URL=http://minio:9000
-      - OBJECT_STORAGE_ACCESS_KEY_ID=minioadmin
-      - OBJECT_STORAGE_SECRET_ACCESS_KEY=miniopassword
+      - OBJECT_STORAGE_ACCESS_KEY_ID=${MINIO_ROOT_USER:-minioadmin}
+      - OBJECT_STORAGE_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD:-miniopassword}
+      # The worker is where the graphs actually call the model, so it needs the key
+      # at least as much as the api service does. Pass-through, never inline.
+      - OPENAI_API_KEY
+      - AGENT_MODE
       - LANGCHAIN_TRACING_V2
       - LANGCHAIN_API_KEY
       - LANGCHAIN_PROJECT

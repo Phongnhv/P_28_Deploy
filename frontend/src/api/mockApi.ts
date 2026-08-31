@@ -2,6 +2,8 @@ import type {
   ApiClient,
   AuditLog,
   CreateJobResponse,
+  DataDictionary,
+  SemanticContractConfirmInput,
   Dataset,
   DatasetProfile,
   DqResult,
@@ -30,6 +32,12 @@ import type {
   AgentArtifact,
   ArtifactReviewInput,
   LoopDecisionInput,
+  GraphCatalog,
+  GraphKey,
+  GraphNodeSpec,
+  NodeKind,
+  NodeRun,
+  NodeRunStatus,
 } from "../types";
 
 const datasetId = "dataset-nyc-yellow-taxi-50k";
@@ -355,6 +363,8 @@ function completeWorkflowStep(workflowId: string, step: WorkflowStepKey) {
   workflowRuns = workflowRuns.map((item) => item.id === workflowId ? workflow : item);
 }
 
+const mockDataDictionaries = new Map<string, DataDictionary>();
+
 export const mockApi: ApiClient = {
   async createSession(username, password): Promise<SessionResponse> {
     await wait(300);
@@ -487,6 +497,24 @@ export const mockApi: ApiClient = {
     await wait(120);
     return anomalies.get(id) ?? [];
   },
+  // Điều tra nguyên nhân gốc do DeepAgent thực hiện trên backend thật. Chế độ giả
+  // lập không dựng lại chuỗi suy luận đó — trả mảng rỗng để giao diện hiện đúng
+  // trạng thái "chưa có", thay vì bịa ra giả thuyết trông như thật.
+  async getActiveRules() {
+    await wait(80);
+    return [];
+  },
+  async getAnomalySignals() {
+    await wait(80);
+    return [];
+  },
+  async getAnomalyHypotheses() {
+    await wait(80);
+    return [];
+  },
+  async submitAnomalyFeedback() {
+    await wait(80);
+  },
   async getLatestDqRun(id) {
     await wait(100);
     return [...runs].reverse().find((run) => run.dataset_id === id) ?? null;
@@ -502,6 +530,28 @@ export const mockApi: ApiClient = {
       });
     }
     return Array.from({ length: 8 }, (_, index) => ({ run_id: `historical-${index}`, created_at: new Date(Date.now() - (7 - index) * 86_400_000).toISOString(), quality_score: 92.4 + index * 0.54 - (index % 3) * 0.37, failure_rate: 0.076 - index * 0.004, total_checked: 200000, total_failed: 15200 - index * 800, rule_count: 4 }));
+  },
+  async getDataDictionary(id): Promise<DataDictionary | null> {
+    await wait(120);
+    return mockDataDictionaries.get(id) ?? null;
+  },
+  async uploadDataDictionary(id, file): Promise<DataDictionary> {
+    await wait(200);
+    const record: DataDictionary = {
+      id: `ddict-${id}`,
+      dataset_id: id,
+      source: "UPLOADED",
+      source_filename: file.name,
+      column_count: 0,
+      tables: [{ table_name: id, description: "", columns: [], business_rules: [] }],
+      updated_at: new Date().toISOString(),
+    };
+    mockDataDictionaries.set(id, record);
+    return record;
+  },
+  async deleteDataDictionary(id): Promise<void> {
+    await wait(120);
+    mockDataDictionaries.delete(id);
   },
   async queryDatasetRows(id, query: DatasetRowQuery): Promise<DatasetRowsResponse> {
     await wait(160);
@@ -636,6 +686,40 @@ export const mockApi: ApiClient = {
     addAudit(`WORKFLOW_ARTIFACT_${status}`, "workflow_artifact", id, `${status} ${existing.type} artifact in the local workflow.`);
     return structuredClone(updated);
   },
+  async bulkReviewProposals(input) {
+    await wait(200);
+    const targets = proposals.filter(
+      (item) =>
+        item.dataset_id === input.dataset_id &&
+        (input.pending_only === false || ["PROPOSED", "EDITED"].includes(item.status)),
+    );
+    const nextStatus = input.action === "approve" ? "APPROVED" : "REJECTED";
+    targets.forEach((item) => {
+      item.status = nextStatus as RuleProposal["status"];
+    });
+    addAudit(
+      input.action === "approve" ? "PROPOSAL_BULK_APPROVED" : "PROPOSAL_BULK_REJECTED",
+      "dataset",
+      input.dataset_id,
+      `${targets.length} proposals decided in bulk.`,
+    );
+    return structuredClone(proposals.filter((item) => item.dataset_id === input.dataset_id));
+  },
+  async confirmSemanticContract(id: string, input: SemanticContractConfirmInput) {
+    await wait(180);
+    const workflow = workflowRuns.find((item) => item.id === id);
+    if (!workflow) throw new Error("Workflow run not found.");
+    const existing = workflowArtifacts.find((item) => item.id === input.artifact_id);
+    if (!existing) throw new Error("Semantic contract artifact not found.");
+    if (existing.version !== input.expected_version) {
+      throw new Error("The contract changed since it was loaded. Reload before confirming.");
+    }
+    const updated: AgentArtifact = { ...existing, status: "APPROVED", payload: input.contract };
+    workflowArtifacts = workflowArtifacts.map((item) => (item.id === existing.id ? updated : item));
+    workflowRuns = workflowRuns.map((item) => (item.id === workflow.id ? workflow : item));
+    addAudit("SEMANTIC_CONTRACT_CONFIRMED", "workflow_artifact", existing.id, "Confirmed the inferred semantic contract.");
+    return { workflow: structuredClone(workflow), artifact: structuredClone(updated) };
+  },
   async continueLoop(id: string, input: LoopDecisionInput) {
     await wait(180);
     const workflow = workflowRuns.find((item) => item.id === id);
@@ -681,14 +765,221 @@ export const mockApi: ApiClient = {
     addAudit("WORKFLOW_REWOUND", "workflow", id, `Returned to ${targetStep}; downstream sessions were kept temporarily.`);
     return structuredClone(workflow);
   },
-  async createGraph1Run(_datasetId: string, _datasetVersionId?: string, _profileRunId?: string) { throw new Error("Profiler requires the real backend. Set VITE_USE_MOCK_API=false."); },
-  async getGraph1Run() { throw new Error("Profiler requires the real backend."); },
-  async getLatestGraph1Run() { throw new Error("Profiler requires the real backend."); },
-  async listGraph1Nodes() { throw new Error("Profiler requires the real backend."); },
-  async confirmGraph1Semantic() { throw new Error("Profiler requires the real backend."); },
-  async reviewGraph1Rules() { throw new Error("Profiler requires the real backend."); },
-  async createAnalysisRun() { throw new Error("Rule Proposal and Anomaly Detection require the real backend."); },
-  async getAnalysisRun() { throw new Error("Analysis requires the real backend."); },
-  async listAnalysisNodes() { throw new Error("Analysis requires the real backend."); },
-  async getAnalysisResult() { throw new Error("Analysis requires the real backend."); },
+  async getGraphCatalog() {
+    return structuredClone(mockGraphCatalog);
+  },
+  async listNodeRuns(filter) {
+    const key = filter.graphKey;
+    const datasetFilter = filter.datasetId;
+    return mockNodeRuns.filter((run) => (key ? run.graph_key === key : true)).filter((run) => !datasetFilter || run.dataset_id === datasetFilter).map((run) => structuredClone(run));
+  },
+  async getNodeRun(nodeRunId) {
+    const run = mockNodeRuns.find((item) => item.id === nodeRunId);
+    if (!run) throw new Error("Node run not found.");
+    return {
+      ...structuredClone(run),
+      input_summary: { dataset_id: run.dataset_id, columns: { type: "list", count: 18 } },
+      output_summary: { status: run.status, records: { type: "records", count: 12, fields: ["name", "role"] } },
+    };
+  },
+  async getStewardReport(runId) {
+    return {
+      run_id: runId,
+      filename: `steward_report_mock_${runId}.md`,
+      generated_at: new Date().toISOString(),
+      content: `# Steward report (mock)\n\nNo real Graph 3 run is attached in mock mode.\n`,
+    };
+  },
 };
+
+/* Mock graph topology — a trimmed mirror of src/agents/graph_catalog.py so the
+ * offline demo renders the same shapes the live backend returns. */
+const mockNode = (
+  name: string,
+  labelEn: string,
+  labelVi: string,
+  kind: NodeKind,
+  purposeEn?: string,
+  purposeVi?: string,
+): GraphNodeSpec => ({
+  name,
+  label_en: labelEn,
+  label_vi: labelVi,
+  kind,
+  purpose_en: purposeEn ?? `${labelEn} step of the pipeline.`,
+  purpose_vi: purposeVi ?? `Bước ${labelVi} trong pipeline.`,
+  inputs: [],
+  outputs: [],
+  db_tables: [],
+  source: "",
+});
+
+const mockGraphCatalog: GraphCatalog = {
+  graphs: [
+    {
+      key: "G1A",
+      builder: "build_understanding_graph",
+      label_en: "Graph 1A · Dataset understanding",
+      label_vi: "Graph 1A · Hiểu ngữ nghĩa dữ liệu",
+      run_en: "Run 1 — Proposal engine", run_vi: "Run 1 — Bộ máy đề xuất",
+      summary_en: "Turns persisted profile evidence into a draft semantic contract, then stops for steward review.",
+      summary_vi: "Biến hồ sơ dữ liệu đã lưu thành hợp đồng ngữ nghĩa nháp, rồi dừng chờ Steward duyệt.",
+      nodes: [
+        mockNode(
+          "build_profile_digest",
+          "Profile digest",
+          "Nén hồ sơ",
+          "DETERMINISTIC",
+          "Compress raw profile statistics into a compact JSON digest.",
+          "Nén số liệu hồ sơ thô thành JSON digest tinh gọn.",
+        ),
+        mockNode(
+          "data_dictionary_generator",
+          "Data dictionary",
+          "Sinh từ điển dữ liệu",
+          "LLM",
+          "Normalise field names and descriptions into a data dictionary.",
+          "Chuẩn hoá tên và mô tả trường theo Data Dictionary.",
+        ),
+        mockNode(
+          "dataset_understanding",
+          "Dataset understanding",
+          "Hiểu tập dữ liệu",
+          "LLM",
+          "Infer business role and semantic type of every column.",
+          "Suy luận vai trò nghiệp vụ và kiểu ngữ nghĩa của từng cột.",
+        ),
+      ],
+      edges: [
+        {
+          from: "build_profile_digest",
+          to: "data_dictionary_generator",
+          condition: "no dictionary supplied",
+          condition_en: "no dictionary supplied",
+          condition_vi: "chưa có từ điển",
+        },
+        {
+          from: "build_profile_digest",
+          to: "dataset_understanding",
+          condition: "dictionary already supplied",
+          condition_en: "dictionary already supplied",
+          condition_vi: "đã có từ điển",
+        },
+        { from: "data_dictionary_generator", to: "dataset_understanding" },
+        { from: "dataset_understanding", to: "END" },
+      ],
+    },
+    {
+      key: "G1B",
+      builder: "build_rule_proposal_graph",
+      label_en: "Graph 1B · Rule proposal",
+      label_vi: "Graph 1B · Sinh đề xuất luật",
+      run_en: "Run 1", run_vi: "Run 1",
+      summary_en: "Candidates, a tailored prompt, then typed rules.",
+      summary_vi: "Ứng viên, prompt riêng, rồi luật có kiểu.",
+      nodes: [
+        mockNode("rule_candidate_builder", "Rule candidates", "Sinh ứng viên luật", "DETERMINISTIC"),
+        mockNode("prompt_customizer", "Prompt customizer", "Tuỳ biến prompt", "LLM"),
+        mockNode("rule_proposer", "Rule proposer", "Đề xuất luật", "LLM"),
+      ],
+      edges: [
+        { from: "rule_candidate_builder", to: "prompt_customizer" },
+        { from: "prompt_customizer", to: "rule_proposer" },
+        { from: "rule_proposer", to: "END" },
+      ],
+    },
+    {
+      key: "G2",
+      builder: "build_execution_graph",
+      label_en: "Graph 2 · Deterministic execution",
+      label_vi: "Graph 2 · Thực thi tất định",
+      run_en: "Run 2", run_vi: "Run 2",
+      summary_en: "Compile to dbt, gate on validation, run, store.",
+      summary_vi: "Biên dịch dbt, chặn nếu sai, chạy, lưu.",
+      nodes: [
+        mockNode("test_generator", "Test generator", "Sinh test", "DETERMINISTIC"),
+        mockNode("validate_dbt_project", "Validate dbt project", "Kiểm định dbt", "DETERMINISTIC"),
+        mockNode("dbt_validation_failed", "Validation failed", "Kiểm định thất bại", "DETERMINISTIC"),
+        mockNode("test_runner", "Test runner", "Chạy test", "DETERMINISTIC"),
+        mockNode("persist_report", "Persist report", "Lưu kết quả", "DETERMINISTIC"),
+      ],
+      edges: [
+        { from: "test_generator", to: "validate_dbt_project" },
+        { from: "validate_dbt_project", to: "test_runner", condition: "valid" },
+        { from: "validate_dbt_project", to: "dbt_validation_failed", condition: "invalid" },
+        { from: "test_runner", to: "persist_report" },
+        { from: "persist_report", to: "END" },
+      ],
+    },
+    {
+      key: "G3",
+      builder: "build_anomaly_graph",
+      label_en: "Graph 3 · Anomaly & root cause",
+      label_vi: "Graph 3 · Bất thường & nguyên nhân gốc",
+      run_en: "Run 3", run_vi: "Run 3",
+      summary_en: "Detect, investigate, persist, report.",
+      summary_vi: "Phát hiện, điều tra, lưu, báo cáo.",
+      nodes: [
+        mockNode("anomaly_detector", "Anomaly detector", "Phát hiện bất thường", "DETERMINISTIC"),
+        mockNode("hypothesis_agent", "Hypothesis agent", "Agent giả thuyết", "LLM"),
+        mockNode("persist_analysis", "Persist analysis", "Lưu phân tích", "DETERMINISTIC"),
+        mockNode("report_writer", "Report writer", "Viết báo cáo", "LLM"),
+      ],
+      edges: [
+        { from: "anomaly_detector", to: "hypothesis_agent" },
+        { from: "hypothesis_agent", to: "persist_analysis" },
+        { from: "persist_analysis", to: "report_writer" },
+        { from: "report_writer", to: "END" },
+      ],
+    },
+  ],
+  step_graphs: {
+    UNDERSTAND_DATA: ["G1A"],
+    PROPOSE_RULES: ["G1B"],
+    RUN_CHECKS: ["G2"],
+    ANALYZE_REPORT: ["G3"],
+  },
+  totals: { graphs: 4, nodes: 15, llm_nodes: 6, deterministic_nodes: 9, gate_nodes: 0 },
+};
+
+const mockNodeRun = (
+  id: string,
+  graphKey: GraphKey,
+  nodeName: string,
+  kind: NodeKind,
+  sequence: number,
+  status: NodeRunStatus,
+  durationMs: number,
+): NodeRun => ({
+  id,
+  graph_run_id: `gr-mock-${graphKey}`,
+  graph_key: graphKey,
+  node_name: nodeName,
+  node_kind: kind,
+  sequence,
+  status,
+  started_at: new Date(Date.now() - durationMs).toISOString(),
+  completed_at: new Date().toISOString(),
+  duration_ms: durationMs,
+  error_message: status === "FAILED" ? "Mock failure for demonstration." : null,
+  model_name: kind === "LLM" ? "gpt-4o-mini" : null,
+  workflow_run_id: "wf-mock",
+  dataset_id: datasetId,
+  dq_run_id: graphKey === "G2" || graphKey === "G3" ? "dq-mock" : null,
+  anomaly_run_id: graphKey === "G3" ? "anom-mock" : null,
+});
+
+const mockNodeRuns: NodeRun[] = [
+  mockNodeRun("nr-1", "G1A", "build_profile_digest", "DETERMINISTIC", 1, "SUCCEEDED", 240),
+  mockNodeRun("nr-2", "G1A", "data_dictionary_generator", "LLM", 2, "SUCCEEDED", 4100),
+  mockNodeRun("nr-3", "G1A", "dataset_understanding", "LLM", 3, "SUCCEEDED", 9700),
+  mockNodeRun("nr-4", "G1B", "rule_candidate_builder", "DETERMINISTIC", 1, "SUCCEEDED", 180),
+  mockNodeRun("nr-5", "G1B", "prompt_customizer", "LLM", 2, "SUCCEEDED", 3600),
+  mockNodeRun("nr-6", "G1B", "rule_proposer", "LLM", 3, "SUCCEEDED", 12400),
+  mockNodeRun("nr-7", "G2", "test_generator", "DETERMINISTIC", 1, "SUCCEEDED", 620),
+  mockNodeRun("nr-8", "G2", "validate_dbt_project", "DETERMINISTIC", 2, "SUCCEEDED", 310),
+  mockNodeRun("nr-9", "G2", "test_runner", "DETERMINISTIC", 3, "SUCCEEDED", 8800),
+  mockNodeRun("nr-10", "G2", "persist_report", "DETERMINISTIC", 4, "SUCCEEDED", 450),
+  mockNodeRun("nr-11", "G3", "anomaly_detector", "DETERMINISTIC", 1, "SUCCEEDED", 700),
+  mockNodeRun("nr-12", "G3", "hypothesis_agent", "LLM", 2, "FAILED", 1200),
+];

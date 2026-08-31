@@ -1,13 +1,32 @@
-
+import logging
 import os
 import sys
+import uuid
+from contextlib import asynccontextmanager
+from urllib.parse import urlsplit, urlunsplit
 
 from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from src.api.data_access_routes import router as data_access_router
+from src.api.routes import dq_router, require_role, router
+from src.config import get_settings
+from src.services.rule_store import get_engine, init_db
 
 load_dotenv()
 
 # Only enable Phoenix OpenTelemetry tracing when explicitly requested and not in test/disabled mode
-if "pytest" not in sys.modules and not os.getenv("DISABLE_TRACING") and (os.getenv("ENABLE_PHOENIX") == "true" or os.getenv("PHOENIX_COLLECTOR_ENDPOINT")):
+if (
+    "pytest" not in sys.modules
+    and not os.getenv("DISABLE_TRACING")
+    and (os.getenv("ENABLE_PHOENIX") == "true" or os.getenv("PHOENIX_COLLECTOR_ENDPOINT"))
+):
     try:
         from openinference.instrumentation.langchain import LangChainInstrumentor
         from opentelemetry import trace
@@ -26,28 +45,8 @@ if "pytest" not in sys.modules and not os.getenv("DISABLE_TRACING") and (os.gete
     except Exception:
         pass
 
-
-
-import logging
-import os
-import uuid
-from contextlib import asynccontextmanager
-from urllib.parse import urlsplit, urlunsplit
-
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from sqlalchemy import text
-from sqlalchemy.orm import Session
-from starlette.exceptions import HTTPException as StarletteHTTPException
-
-from src.api.data_access_routes import router as data_access_router
-from src.api.routes import dq_router, router
-from src.config import get_settings
-from src.services.rule_store import get_engine, init_db
-
 logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -98,6 +97,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Baseline browser hardening headers on every response.
+
+    CSP ships as report-only on purpose. The dev frontend serves inline styles
+    and scripts, so enforcing the policy immediately would blank the page; the
+    report-only header collects violations first so the enforced policy can be
+    written from evidence rather than guesswork.
+    """
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    if settings.app_env == "production":
+        # Only over HTTPS; sending HSTS on plain-HTTP local development would
+        # pin the browser to a scheme the dev server does not speak.
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Content-Security-Policy-Report-Only"] = (
+        "default-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+    )
+    return response
+
+
 # Exception handlers for stable error envelope (Step 8)
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -109,13 +133,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         messages.append(f"{loc}: {err['msg']}")
     message = "; ".join(messages)
     return JSONResponse(
-        status_code=422,
-        content={
-            "code": "VALIDATION_ERROR",
-            "message": message,
-            "request_id": request_id
-        }
+        status_code=422, content={"code": "VALIDATION_ERROR", "message": message, "request_id": request_id}
     )
+
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
@@ -137,13 +157,9 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
         elif exc.status_code == 422:
             code = "CSRF_INVALID"
     return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "code": code,
-            "message": message,
-            "request_id": request_id
-        }
+        status_code=exc.status_code, content={"code": code, "message": message, "request_id": request_id}
     )
+
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
@@ -151,20 +167,23 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.error("Unhandled exception: %s", str(exc), exc_info=True)
     return JSONResponse(
         status_code=500,
-        content={
-            "code": "INTERNAL_ERROR",
-            "message": "An internal server error occurred.",
-            "request_id": request_id
-        }
+        content={"code": "INTERNAL_ERROR", "message": "An internal server error occurred.", "request_id": request_id},
     )
 
+
 app.include_router(router, prefix="/api/v1")
-app.include_router(dq_router, prefix="/api/v1")
+app.include_router(
+    dq_router,
+    prefix="/api/v1",
+    dependencies=[Depends(require_role(["USER", "STEWARD", "ADMIN"]))],
+)
 app.include_router(data_access_router)
+
 
 @app.get("/health", tags=["System"])
 async def health():
     return {"status": "ok", "env": settings.app_env}
+
 
 @app.get("/ready", tags=["System"])
 async def ready():

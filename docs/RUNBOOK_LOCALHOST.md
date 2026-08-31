@@ -58,7 +58,7 @@ Open `http://127.0.0.1:5173`. Seeded test accounts are:
 - `user` / `user`: read-only access.
 - `steward` / `steward`: profiling, proposal review and rule configuration.
 - `admin` / `admin`: create local users and grant/revoke dataset access.
-- `demo-steward` / `ridepulse-demo-2026`: judge-facing Steward account with a
+- `demo-steward`: optional judge-facing Steward account with an explicit operator password and a
   bounded backend quota (40 mutations, 3 uploads, 3 profiling starts and 2
   analysis starts per rolling 24-hour window).
 

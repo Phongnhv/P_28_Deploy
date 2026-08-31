@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 # DQ Proposal (Run 1) — POST /dq/propose
 # ---------------------------------------------------------------------------
 
+
 class ProposeRequest(BaseModel):
     dataset_id: str = Field(..., description="ID định danh dataset cần kiểm tra")
     connection_string: str | None = Field(
@@ -29,6 +30,7 @@ class ProposeResponse(BaseModel):
 # Run Status — GET /dq/runs/{run_id}
 # ---------------------------------------------------------------------------
 
+
 class RunStatusResponse(BaseModel):
     run_id: str
     dataset_id: str
@@ -40,6 +42,7 @@ class RunStatusResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Rule Review — GET /dq/runs/{run_id}/rules
 # ---------------------------------------------------------------------------
+
 
 class RuleReviewResponse(BaseModel):
     run_id: str
@@ -67,23 +70,16 @@ class RuleReviewResponse(BaseModel):
 # Rule Update — PATCH /dq/runs/{run_id}/rules/{rule_id}
 # ---------------------------------------------------------------------------
 
+
 class RuleUpdateRequest(BaseModel):
-    status: Literal["APPROVED", "REJECTED"] = Field(
-        ..., description="APPROVED hoặc REJECTED"
-    )
+    status: Literal["APPROVED", "REJECTED"] = Field(..., description="APPROVED hoặc REJECTED")
     edited_parameters: dict[str, Any] | None = Field(
         None,
         description="Tham số Steward chỉnh sửa (immutable AI params được giữ riêng)",
     )
-    severity: str | None = Field(
-        None, description="Mức độ nghiêm trọng Steward muốn override"
-    )
-    reviewer: str | None = Field(
-        None, description="Tên / email Steward thực hiện review"
-    )
-    review_note: str | None = Field(
-        None, description="Lý do reject — bắt buộc khi status=REJECTED"
-    )
+    severity: str | None = Field(None, description="Mức độ nghiêm trọng Steward muốn override")
+    reviewer: str | None = Field(None, description="Tên / email Steward thực hiện review")
+    review_note: str | None = Field(None, description="Lý do reject — bắt buộc khi status=REJECTED")
 
     @model_validator(mode="after")
     def _check_review_note_on_reject(self) -> "RuleUpdateRequest":
@@ -96,6 +92,7 @@ class RuleUpdateRequest(BaseModel):
 # Bulk Review — POST /dq/runs/{run_id}/rules/bulk-review
 # ---------------------------------------------------------------------------
 
+
 class BulkDecision(BaseModel):
     rule_id: str
     status: Literal["APPROVED", "REJECTED"]
@@ -106,9 +103,7 @@ class BulkDecision(BaseModel):
 
 
 class BulkReviewRequest(BaseModel):
-    decisions: list[BulkDecision] = Field(
-        ..., description="Danh sách quyết định duyệt/từ chối"
-    )
+    decisions: list[BulkDecision] = Field(..., description="Danh sách quyết định duyệt/từ chối")
 
 
 class BulkReviewResponse(BaseModel):
@@ -124,6 +119,7 @@ class BulkReviewResponse(BaseModel):
 # Review Summary — GET /dq/runs/{run_id}/review-summary
 # ---------------------------------------------------------------------------
 
+
 class DimensionCounts(BaseModel):
     total: int
     pending: int
@@ -137,9 +133,7 @@ class ReviewSummaryResponse(BaseModel):
     approved: int
     rejected: int
     edited: int
-    is_complete: bool = Field(
-        ..., description="True khi pending=0 và total>0 — tất cả rule đã được review"
-    )
+    is_complete: bool = Field(..., description="True khi pending=0 và total>0 — tất cả rule đã được review")
     by_dimension: dict[str, DimensionCounts]
     by_severity: dict[str, DimensionCounts]
 
@@ -148,6 +142,7 @@ class ReviewSummaryResponse(BaseModel):
 # Approved Rules — GET /dq/runs/{run_id}/approved-rules
 # (input contract cho Test Generator)
 # ---------------------------------------------------------------------------
+
 
 class ApprovedRulesResponse(BaseModel):
     run_id: str
@@ -158,6 +153,7 @@ class ApprovedRulesResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Test Execution Schemas — Run 2
 # ---------------------------------------------------------------------------
+
 
 class ExecuteTestsResponse(BaseModel):
     test_run_id: str
@@ -184,7 +180,9 @@ class TestResultResponse(BaseModel):
     violation_rate: float
     # Chỉ chứa ID dòng vi phạm, không phải nội dung bản ghi (xem test_runner_node).
     sample_failures: list[str] | None = None
-    sql_text: str
+    # `sql_text` cố ý không nằm ở đây. docs/API_CONTRACT.md: SQL đã biên dịch không
+    # phải trường API công khai — nó vẫn được giữ trong payload nội bộ của
+    # test_runner_node để debug, và bị bỏ qua khi dựng response này.
     duration_ms: float
     error: str | None = None
     created_at: str | None = None
@@ -199,6 +197,7 @@ class TestResultsListResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Active Rules & Publish Schemas
 # ---------------------------------------------------------------------------
+
 
 class PublishRulesResponse(BaseModel):
     run_id: str
@@ -230,5 +229,3 @@ class ActiveRulesListResponse(BaseModel):
 class ExecuteActiveTestsRequest(BaseModel):
     dataset_id: str = Field(default="all", description="ID định danh dataset hoặc 'all'")
     table_name: str | None = Field(default=None, description="Lọc theo bảng cụ thể")
-
-

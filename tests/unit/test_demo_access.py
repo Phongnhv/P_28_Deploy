@@ -9,13 +9,14 @@ from starlette.requests import Request
 from src.models.database import AuditEventModel, Base, SessionModel, UserAccountModel
 from src.services.demo_quota import DEMO_QUOTA_LIMITS, enforce_demo_quota, quota_action
 from src.services.session_service import (
-    DEMO_STEWARD_PUBLIC_PASSWORD,
     DEMO_STEWARD_USERNAME,
     ensure_demo_steward,
     hash_password,
     verify_password,
 )
 from src.time_utils import utc_now
+
+DEMO_STEWARD_PUBLIC_PASSWORD = "test-demo-password"
 
 
 def request_for(method: str, path: str) -> Request:
@@ -32,7 +33,11 @@ def request_for(method: str, path: str) -> Request:
     )
 
 
-def test_demo_steward_is_seeded_with_a_workspace_safe_public_credential():
+def test_demo_steward_is_seeded_with_a_workspace_safe_public_credential(monkeypatch):
+    from src.config import get_settings
+    monkeypatch.setattr(get_settings(), "enable_public_demo", True)
+    monkeypatch.setattr(get_settings(), "demo_steward_password", DEMO_STEWARD_PUBLIC_PASSWORD)
+
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
     with Session(engine) as db:
