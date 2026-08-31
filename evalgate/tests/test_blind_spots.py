@@ -100,8 +100,20 @@ def test_validation_error_counts_are_read_from_the_product_s_own_message(output:
               {"run_id": RUN_A, "total_rules": 5, "total_errors": 1,
                "errors": [{"error": "15 validation errors for TableRuleProposal"}]})
     result = roi.evaluate(write_evidence=False, output_dir=output)
-    # 15 rejected against 5 accepted.
-    assert result.metrics["schema_violation_rate"].raw == pytest.approx(15 / 20)
+
+    # One rejected item against five accepted. This assertion previously read
+    # 15/20, which mixed units: 15 counts Pydantic field errors while 5 counts
+    # rules, so a single badly-shaped proposal reported a 75% violation rate and
+    # HG-A2 escalates to CRITICAL above 50%.
+    # abs tolerance: the metric is rounded to six decimals before it is published,
+    # which is coarser than approx's default relative tolerance at this magnitude.
+    assert result.metrics["schema_violation_rate"].raw == pytest.approx(1 / 6, abs=1e-6)
+
+    # The product's own message is still where the number comes from -- the field
+    # error total is retained as severity, it just no longer forms a ratio.
+    run = roi.collect_runs(output)[0]
+    assert run.schema_rejections == 1
+    assert run.validation_errors == 15
 
 
 def test_a_run_that_never_reached_a_validator_has_no_violation_rate(output: Path):

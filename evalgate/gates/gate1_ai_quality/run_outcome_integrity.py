@@ -122,10 +122,14 @@ class RunOutcome:
     stages: set[str] = field(default_factory=set)
     reached_terminal: bool = False
     output_count: int | None = None
-    #: Structured-output items the product's validators refused.
+    #: Structured-output items the product's validators refused. Counted per item,
+    #: matching ``schema_accepted``, so the two can form a ratio.
     schema_rejections: int = 0
     #: Structured-output items the product's validators accepted.
     schema_accepted: int = 0
+    #: Individual Pydantic field errors across those refused items. Diagnostic
+    #: severity only: it shares no denominator with anything and is never a rate.
+    validation_errors: int = 0
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -207,6 +211,7 @@ def collect_context_runs(context: EvalRunContext) -> list[RunOutcome]:
             output_count=item.get("output_count"),
             schema_rejections=int(item.get("schema_rejections") or 0),
             schema_accepted=int(item.get("schema_accepted") or 0),
+            validation_errors=int(item.get("validation_errors") or 0),
             errors=[str(value)[:400] for value in item.get("errors", [])],
         )
         for item in raw_runs if isinstance(item, dict)
@@ -255,15 +260,29 @@ def _read_terminal(run: RunOutcome, base: Path) -> None:
         for entry in document.get("errors") or []:
             text = entry if isinstance(entry, str) else json.dumps(entry, ensure_ascii=False)
             run.errors.append(text[:400])
-            for found, _model in _VALIDATION_ERRORS.findall(text):
-                run.schema_rejections += int(found)
+            matches = _VALIDATION_ERRORS.findall(text)
+            if matches:
+                # One rejected item, however many individual field errors Pydantic
+                # listed for it. See schema_violation_rate for why the distinction
+                # decides whether the ratio means anything.
+                run.schema_rejections += 1
+                run.validation_errors += sum(int(found) for found, _model in matches)
 
 
 def schema_violation_rate(runs: list[RunOutcome]) -> float | None:
     """Rejected structured-output items over all items the model offered.
 
-    Only runs that reached a validator contribute. A run that died before the
-    model was ever called has no denominator and must not be scored as clean.
+    Both sides count *items*. They used to count different things: the numerator
+    summed Pydantic's field-error totals ("15 validation errors for
+    TableRuleProposal" contributed 15) while the denominator counted accepted
+    rules. One badly-shaped proposal against nine good ones therefore reported
+    15/24 = 62.5% rather than 1/10 = 10%, and HG-A2 escalates to CRITICAL at 50%.
+
+    The field-error total is still collected, as ``validation_errors``, because it
+    says how badly the shape was wrong -- but it is diagnostic, not a rate.
+
+    Only runs that reached a validator contribute. A run that died before the model
+    was ever called has no denominator and must not be scored as clean.
     """
     rejected = sum(r.schema_rejections for r in runs)
     accepted = sum(r.schema_accepted for r in runs)
@@ -334,9 +353,11 @@ def evaluate(*, write_evidence: bool = True, output_dir: Path | None = None,
                     + " across the last " + str(len(recent)) + " runs"
                 ),
                 detail=(
-                    str(sum(r.schema_rejections for r in recent)) + " rejected against "
+                    str(sum(r.schema_rejections for r in recent)) + " item(s) rejected against "
                     + str(sum(r.schema_accepted for r in recent)) + " accepted across the last "
-                    + str(len(recent)) + " runs. Runs rejected by a validator: "
+                    + str(len(recent)) + " runs ("
+                    + str(sum(r.validation_errors for r in recent))
+                    + " individual field errors). Runs rejected by a validator: "
                     + (", ".join(r.run_id[:12] for r in recent if r.schema_rejections) or "none")
                     + ". The most recent run failed with: " + str(latest.failure_kind)
                 ),
@@ -438,6 +459,7 @@ def evaluate(*, write_evidence: bool = True, output_dir: Path | None = None,
                             "output_count": r.output_count,
                             "schema_rejections": r.schema_rejections,
                             "schema_accepted": r.schema_accepted,
+                            "validation_errors": r.validation_errors,
                             "errors": r.errors,
                         }
                         for r in recent

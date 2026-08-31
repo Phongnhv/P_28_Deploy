@@ -94,3 +94,46 @@ class EvalTelemetryCallback(BaseCallbackHandler):
             "error_type": type(error).__name__,
             "latency_ms": None if started is None else round((time.perf_counter() - started) * 1000, 3),
         })
+
+    # -- tool lifecycle ----------------------------------------------------
+    #
+    # Which tools an agent reached for, and whether it reached for any before
+    # asserting something, is the only observable record of *how* it decided. The
+    # rest of this file describes model calls, which say what was asked and how much
+    # it cost but nothing about whether a claim was checked against the data.
+    #
+    # Tool name and outcome only. Arguments and results are withheld deliberately:
+    # a tool argument is a column name and a filter value, and a tool result is
+    # rows -- exactly the raw data HG-S3 exists to keep inside the boundary.
+
+    def on_tool_start(self, serialized, input_str, *, run_id, **kwargs) -> None:  # type: ignore[override]
+        key = str(run_id)
+        self._started[key] = time.perf_counter()
+        name = (serialized or {}).get("name") if isinstance(serialized, dict) else None
+        self._write({
+            "trace_id": key or uuid.uuid4().hex,
+            "event": "tool_start",
+            "tool": name or "unknown",
+            # Size, never content: enough to tell an empty call from a real one.
+            "input_chars": len(str(input_str or "")),
+        })
+
+    def on_tool_end(self, output, *, run_id, **kwargs) -> None:  # type: ignore[override]
+        key = str(run_id)
+        started = self._started.pop(key, None)
+        self._write({
+            "trace_id": key,
+            "event": "tool_end",
+            "output_chars": len(str(output or "")),
+            "latency_ms": None if started is None else round((time.perf_counter() - started) * 1000, 3),
+        })
+
+    def on_tool_error(self, error, *, run_id, **kwargs) -> None:  # type: ignore[override]
+        key = str(run_id)
+        started = self._started.pop(key, None)
+        self._write({
+            "trace_id": key,
+            "event": "tool_error",
+            "error_type": type(error).__name__,
+            "latency_ms": None if started is None else round((time.perf_counter() - started) * 1000, 3),
+        })

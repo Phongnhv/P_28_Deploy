@@ -56,6 +56,9 @@ PLACEHOLDER_PASSWORDS = frozenset(
         "miniopassword",
         "postgres",
         "your_runner_password_here",
+        # docs/guide/chapter-09.md:311, printed under the marker "# SAI: Hardcoded
+        # API key" -- the chapter teaches the anti-pattern by showing it.
+        "password123",
     }
 )
 

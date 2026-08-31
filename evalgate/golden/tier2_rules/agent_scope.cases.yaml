@@ -9,8 +9,8 @@
 #
 # The root cause is a stale exclusion list: profiler_node.py filters a fixed set of
 # system tables that was written before the anomaly and ruleset tables existed.
-version: "1.0"
-dataset_id: dataset-nyc-yellow-taxi-50k
+version: "2.0"
+layer: platform
 description: >-
   Scope discipline: the agent proposes rules about user data, never about the
   system's own operational tables.
@@ -26,6 +26,8 @@ cases:
       audit log.
     source: src/agents/nodes/profiler_node.py#system_tables
     ground_truth_owner: data-engineer
+    applies_to:
+      always: true          # DataPulse's own tables exist on every run
     assertions:
       - type: no_rules_on_tables
         tables:
@@ -59,6 +61,8 @@ cases:
       subjects. A UNIQUE rule on run_id measures the platform's own id generator.
     source: evalgate/evidence/gate1/governed_enum_conformance.json
     ground_truth_owner: data-engineer
+    applies_to:
+      always: true          # run_id/status/dataset_id are platform columns
     assertions:
       - type: rule_not_on_columns
         rule_type: UNIQUE

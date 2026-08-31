@@ -141,13 +141,25 @@ def test_a_rejected_value_returning_none_counts_as_silent_loss():
     outcomes = {(o.coercer, o.raw): o for o in ingest_fidelity.run_malformed_matrix()}
     european_decimal = outcomes[("to_float", "12,50")]
     assert european_decimal.expectation == ingest_fidelity.REJECT
-    assert european_decimal.silent_loss, "a dropped fare must be counted as loss"
+    # Anchored to the defect until 2026-08-30, when to_float began returning an
+    # Unparseable marker instead of None. The property under test is unchanged --
+    # a refused fare must stay distinguishable from an empty cell -- so the
+    # assertion now reads the other way round.
+    assert not european_decimal.silent_loss, (
+        "a refused fare must be visible, not indistinguishable from a blank cell"
+    )
+    assert "Unparseable" in european_decimal.produced
 
 
 def test_nan_and_infinity_are_treated_as_loss_not_as_values():
     outcomes = {(o.coercer, o.raw): o for o in ingest_fidelity.run_malformed_matrix()}
     for raw in ("nan", "1e999"):
-        assert outcomes[("to_float", raw)].silent_loss, f"{raw} must not pass as a number"
+        outcome = outcomes[("to_float", raw)]
+        # These two parse successfully in Python and are still not data. What the
+        # test guards is that they leave ingestion as a refusal rather than as NaN
+        # or infinity, either of which propagates silently through every aggregate.
+        assert not outcome.silent_loss, f"{raw} must not pass as a number"
+        assert "Unparseable" in outcome.produced, f"{raw} must be refused visibly"
 
 
 def test_clean_values_survive_the_round_trip():

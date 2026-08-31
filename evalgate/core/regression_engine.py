@@ -105,7 +105,17 @@ def save_run(payload: dict[str, Any], *, keep: int = 30) -> Path | None:
     # Stale runs are still recorded -- the trend line is useful and hiding them would
     # make the history lie by omission -- but they are marked unusable so they can
     # never become the reference a later comparison is measured against.
-    usable = payload.get("decision") in {"PASS", "WARNING"}
+    #
+    # Staleness is the only disqualifier, and it is a narrow one on purpose. A
+    # RELEASE_BLOCKED or FAIL run is still attributable to a revision, which is the
+    # entire requirement for a comparison point: "was this control holding then, and
+    # is it holding now" is answerable against a bad baseline just as well as
+    # against a good one. Restricting usability to PASS/WARNING -- as this did --
+    # deadlocks the whole HG-R* family on any product that has not passed yet: no
+    # run is ever eligible, resolve_baseline always answers None, and both
+    # regression_engine_v1 and HG-R3 report NOT_MEASURED forever. That is exactly
+    # the state 51 stored runs were in.
+    usable = payload.get("decision") != "EVALGATE_STALE"
     entry = {
         "run_id": run_id,
         "git_ref": payload.get("git_ref"),
@@ -218,11 +228,25 @@ def baseline_evaluator_scores(baseline: dict[str, Any]) -> dict[str, float]:
     return scores
 
 
+def profile_membership(profile: str | None) -> set[str] | None:
+    """Evaluator names a profile selects, or None when the profile is unknown.
+
+    Read from the registry rather than from ``run.load_profile`` to keep this module
+    free of an import cycle; the two derive membership from the same SPECS tuple.
+    """
+    if not profile:
+        return None
+    from evalgate.core.evaluator_registry import SPECS
+
+    return {spec.name for spec in SPECS if profile in spec.profiles}
+
+
 def evaluate(
     results: list[EvalResult],
     *,
     baseline_run_id: str | None = None,
     write_evidence: bool = True,
+    profile: str | None = None,
 ) -> EvalResult:
     baseline = resolve_baseline(baseline_run_id)
     if baseline is None:
@@ -271,6 +295,8 @@ def evaluate(
     baseline_by_evaluator = baseline_evaluator_scores(baseline)
     compared = sorted(set(current_by_evaluator) & set(baseline_by_evaluator))
 
+    # ``compared`` is the intersection, so both runs executed every name in it and a
+    # drop there is a real regression whatever the profile.
     drops: list[dict[str, Any]] = []
     for evaluator in compared:
         previous = baseline_by_evaluator[evaluator]
@@ -296,9 +322,32 @@ def evaluate(
     # EVALUATOR is excluded from both sides: this result is appended to ``results``
     # only after the comparison runs, so it is structurally absent from the current
     # mapping and would be reported as "removed" on every run.
+    #
+    # Membership is scoped to what this profile actually selects. A `local` run
+    # compares against a `ci` baseline in the ordinary case, and `ci` selects
+    # eleven evaluators `local` never runs -- reporting each as "disappeared"
+    # blocked every local run with eleven CRITICAL findings the moment a baseline
+    # was first configured. An evaluator this profile does not select is out of
+    # scope for the comparison, not missing from it.
+    # Presence is "did this evaluator report at all", not "did it produce a score".
+    # An evaluator that ran and honestly reported BLOCKED_BY_SYSTEM_CAPABILITY or
+    # NOT_MEASURED contributes no score, so scoring it as removed accused the run of
+    # deleting an evaluator that is sitting in the results. vacuity_probe_v1 does
+    # exactly that whenever there is no input-dataset artifact.
+    current_present = {result.evaluator for result in results}
+    in_scope = profile_membership(profile)
+    if in_scope is None:
+        in_scope = current_present | set(baseline_by_evaluator)
+    vanished = set(baseline_by_evaluator) - current_present - {EVALUATOR}
     composition_changed = {
-        "added": sorted(set(current_by_evaluator) - set(baseline_by_evaluator) - {EVALUATOR}),
-        "removed": sorted(set(baseline_by_evaluator) - set(current_by_evaluator) - {EVALUATOR}),
+        "added": sorted(
+            (set(current_by_evaluator) - set(baseline_by_evaluator) - {EVALUATOR}) & in_scope
+        ),
+        "removed": sorted(vanished & in_scope),
+        "out_of_profile": sorted(vanished - in_scope),
+        "reported_without_a_score": sorted(
+            (set(baseline_by_evaluator) & current_present) - set(current_by_evaluator)
+        ),
     }
 
     findings: list[Finding] = [
@@ -414,5 +463,7 @@ def evaluate(
             "score_drop_limit": SCORE_DROP_LIMIT,
             "evaluators_compared": len(compared),
             "composition_changed": composition_changed,
+            "profile": profile,
+            "baseline_profile": baseline.get("mode"),
         },
     )

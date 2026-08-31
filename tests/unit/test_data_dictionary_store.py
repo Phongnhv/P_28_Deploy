@@ -37,7 +37,7 @@ def session_with_dataset(dataset_id: str = "ds-1") -> Session:
 def test_csv_dictionary_accepts_the_header_spellings_exports_actually_use():
     # Encoded rather than a bytes literal: the notes column carries Vietnamese,
     # and the parser has to survive a real UTF-8 export.
-    payload = "Column Name,Description,Data Type,Nullable,Notes\norder_id,Ma don hang,identifier,false,PII;Cần mã hóa\n".encode("utf-8")
+    payload = "Column Name,Description,Data Type,Nullable,Notes\norder_id,Ma don hang,identifier,false,PII;Cần mã hóa\n".encode()
     document = parse_data_dictionary(payload, "dict.csv", "orders")
 
     column = document["tables"][0]["columns"][0]

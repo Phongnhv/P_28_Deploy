@@ -15,7 +15,7 @@ from src.agents.state import AnomalyGraphState
 from src.agents.tools.anomaly_investigation_tools import ANOMALY_INVESTIGATION_TOOLS
 from src.config import get_settings
 from src.models.rule_schemas import AnomalyInvestigationResponse
-from src.services.llm import get_llm
+from src.services.llm import get_llm, telemetry_callbacks
 
 # Ensure project root is in sys.path when executed directly as a script
 _project_root = str(Path(__file__).resolve().parents[3])
@@ -120,7 +120,13 @@ async def anomaly_investigation_node(state: AnomalyGraphState) -> dict:
             historical_features=json.dumps(state.get("historical_features", {}), ensure_ascii=False, default=str),
             prior_context=json.dumps(state.get("metadata", {}), ensure_ascii=False, default=str),
         )
-        result = await agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
+        # Tool events are dispatched by the caller's callback manager, not the
+        # model's, so the handlers are attached here as well. Otherwise the trace
+        # shows every model call and no tool the agent actually used.
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": prompt}]},
+            config={"callbacks": telemetry_callbacks()},
+        )
         content = _message_content(result)
         if isinstance(content, AnomalyInvestigationResponse):
             response = content

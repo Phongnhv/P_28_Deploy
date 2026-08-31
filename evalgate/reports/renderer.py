@@ -37,6 +37,7 @@ def render_json(
         "provisional_score": outcome.provisional_score,
         "score_withheld_reason": outcome.score_withheld_reason,
         "override_reason": outcome.override_reason,
+        "block_reasons": outcome.block_reasons,
         "evaluation_schema_version": (
             results[0].evaluation_schema_version if results else "2.0"
         ),
@@ -108,6 +109,19 @@ def render_markdown(
             "",
             "> **Invalid metric namespace.** " + str(outcome.metric_collisions),
         ]
+    if outcome.block_reasons:
+        # Surfaced next to the hard-gate table because a reader scanning that table
+        # for a FAIL row will otherwise conclude nothing is blocking. These reasons
+        # produce no row there: they are about evidence that was never collected.
+        parts += [
+            "",
+            "## Blocked on missing evidence",
+            "",
+            "These block the release and carry no finding id, so no hard-gate row "
+            "reports them and no suppression can excuse them.",
+            "",
+        ]
+        parts += [f"- {reason}" for reason in outcome.block_reasons]
     if outcome.suppressed_findings or outcome.unsuppressed_findings:
         parts += [
             "",

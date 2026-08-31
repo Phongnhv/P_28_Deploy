@@ -19,9 +19,9 @@ from src.models.database import (
     RuleReviewSnapshotModel,
     RuleVersionModel,
 )
+from src.services.data_dictionary_store import load_supplied_dictionary_payload
 from src.services.rule_store import ProposedRuleModel, create_run, get_engine, save_semantic_contract
 from src.services.versioned_dataset import validate_rule_spec
-from src.services.data_dictionary_store import load_supplied_dictionary_payload
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)

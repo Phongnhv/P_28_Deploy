@@ -25,7 +25,19 @@ from evalgate.schemas.eval_result import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-ROUTES = PROJECT_ROOT / "src" / "api" / "routes.py"
+API_DIR = PROJECT_ROOT / "src" / "api"
+#: Every route module the application mounts, not just the largest one. Reading only
+#: ``routes.py`` scored 83 endpoints and reported zero unauthenticated writes, while
+#: ``data_access_routes.py`` carried seven more on ``/api/v2`` -- including the grant
+#: and revoke endpoints, which are the permission surface itself. An endpoint the
+#: scanner cannot see is never a violation no matter how open it is.
+ROUTE_FILES: tuple[Path, ...] = tuple(sorted(API_DIR.glob("*routes*.py")))
+#: The primary module, and the default for ``collect_endpoints`` so single-file callers
+#: and tests passing their own fixture keep working unchanged. Named explicitly rather
+#: than taken from ``ROUTE_FILES[0]``: that ordering is alphabetical, which would make
+#: ``data_access_routes.py`` the default and silently narrow every caller that relies
+#: on it.
+ROUTES = API_DIR / "routes.py"
 #: Where routers are mounted. A dependency attached at mount time protects every
 #: endpoint on that router, and reading only the route signatures misses it entirely.
 APP_MODULE = PROJECT_ROOT / "src" / "main.py"
@@ -57,6 +69,10 @@ class Endpoint:
     line: int
     has_auth: bool
     mutating: bool
+    #: Repo-relative module the decorator was read from. Two route modules can name
+    #: their local router variable ``router`` and declare the same path, so the file
+    #: is what makes a finding addressable.
+    source: str = ""
 
     @property
     def is_violation(self) -> bool:
@@ -91,6 +107,13 @@ def routers_guarded_at_mount(app_path: Path = APP_MODULE) -> set[str]:
     unauthenticated -- a false positive that would block a release for a control that
     is present and working. Verified against the running service: those endpoints
     return 401 while this probe still called them violations.
+
+    Known limit: routers are matched by the variable name main.py uses, and route
+    modules choose their own local name. Both ``routes.py`` and
+    ``data_access_routes.py`` call theirs ``router`` while main.py imports the second
+    one as ``data_access_router``. Today neither is mounted with a dependency, so
+    nothing is mismatched; the moment one of them is, the guard would be credited to
+    both. Resolving it needs the import aliases in main.py, not just the call sites.
     """
     if not app_path.exists():
         return set()
@@ -125,6 +148,10 @@ def collect_endpoints(
 ) -> list[Endpoint]:
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
     guarded_routers = routers_guarded_at_mount(app_path)
+    try:
+        source_name = source_path.resolve().relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        source_name = source_path.name
     endpoints: list[Endpoint] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -148,19 +175,32 @@ def collect_endpoints(
                     line=node.lineno,
                     has_auth=has_auth,
                     mutating=method in MUTATING_METHODS,
+                    source=source_name,
                 )
             )
     return endpoints
 
 
+def collect_all_endpoints(
+    route_files: tuple[Path, ...] = ROUTE_FILES, app_path: Path = APP_MODULE
+) -> list[Endpoint]:
+    """Every endpoint across every mounted route module."""
+    endpoints: list[Endpoint] = []
+    for path in route_files:
+        if path.exists():
+            endpoints.extend(collect_endpoints(path, app_path))
+    return endpoints
+
+
 def evaluate(*, write_evidence: bool = True) -> EvalResult:
-    if not ROUTES.exists():
+    present = tuple(path for path in ROUTE_FILES if path.exists())
+    if not present:
         return EvalResult(
             gate=GATE, evaluator=EVALUATOR, status=EvalStatus.NOT_APPLICABLE,
-            metadata={"reason": f"{ROUTES} not found"},
+            metadata={"reason": f"no route module found under {API_DIR}"},
         )
 
-    endpoints = collect_endpoints()
+    endpoints = collect_all_endpoints(present)
     violations = [e for e in endpoints if e.is_violation]
     unauth_reads = [
         e
@@ -180,7 +220,7 @@ def evaluate(*, write_evidence: bool = True) -> EvalResult:
         target.write_text(
             json.dumps(
                 {
-                    "source": str(ROUTES.relative_to(PROJECT_ROOT)),
+                    "sources": [path.relative_to(PROJECT_ROOT).as_posix() for path in present],
                     "total_endpoints": len(endpoints),
                     "mutating_endpoints": sum(1 for e in endpoints if e.mutating),
                     "violations": [asdict(e) for e in violations],

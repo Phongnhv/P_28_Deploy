@@ -9,6 +9,34 @@ from src.services.eval_telemetry import EvalTelemetryCallback
 Provider_type = Literal["openai", "anthropic", "mistral", "google"]
 
 
+def telemetry_callbacks(provider: Provider_type | None = None) -> list:
+    """The handlers every model call is instrumented with.
+
+    Exposed so an agent invocation can attach the same handlers at *its* level.
+    Callbacks passed to a chat model receive that model's events only -- tool
+    lifecycle events are dispatched by the callback manager of whatever invoked the
+    tool. Attaching them here and nowhere else is why the trace recorded every model
+    call an agent made and no record of a single tool it used, which left "did it
+    verify before asserting" unobservable.
+    """
+    from src.utils.metrics_tracker import get_metrics_tracker
+
+    settings = get_settings()
+    resolved = provider or settings.llm_provider
+    model_names = {
+        "openai": settings.openai_model_name,
+        "anthropic": settings.anthropic_model_name,
+        "mistral": settings.mistral_model_name,
+        "google": settings.google_model_name,
+    }
+    return [
+        get_metrics_tracker(),
+        EvalTelemetryCallback(
+            provider=resolved, model=model_names.get(resolved, str(resolved))
+        ),
+    ]
+
+
 def get_llm(provider: Provider_type, temperature: float | None = None, callbacks: list | None = None):
     """Tạo LLM instance cho provider được chỉ định.
 
@@ -21,8 +49,17 @@ def get_llm(provider: Provider_type, temperature: float | None = None, callbacks
     from src.utils.metrics_tracker import get_metrics_tracker
 
     settings = get_settings()
+
+    # EvalGate drives the served path with a placeholder API key, so any call that
+    # reaches a real provider dies on a 401 and the benchmark never finalises a
+    # bundle. The deterministic double keeps the graph structure and the structured
+    # output contract intact while making the run reproducible.
+    if os.getenv("EVALGATE_DETERMINISTIC_LLM") == "1":
+        from src.services.deterministic_eval_llm import DeterministicEvalLLM
+
+        return DeterministicEvalLLM()
+
     temp = temperature if temperature is not None else settings.llm_temperature
-    cb_list = callbacks if callbacks is not None else [get_metrics_tracker()]
 
     model_names = {
         "openai": settings.openai_model_name,
@@ -30,7 +67,15 @@ def get_llm(provider: Provider_type, temperature: float | None = None, callbacks
         "mistral": settings.mistral_model_name,
         "google": settings.google_model_name,
     }
-    callbacks = [EvalTelemetryCallback(provider=provider, model=model_names[provider])]
+    # Telemetry is always attached and a caller's callbacks are added to it, never
+    # substituted for it: passing callbacks= used to silently drop both the metrics
+    # tracker and the eval telemetry for that call.
+    cb_list = [
+        get_metrics_tracker(),
+        EvalTelemetryCallback(provider=provider, model=model_names[provider]),
+    ]
+    if callbacks:
+        cb_list.extend(callbacks)
 
     if provider == "openai":
         return init_chat_model(

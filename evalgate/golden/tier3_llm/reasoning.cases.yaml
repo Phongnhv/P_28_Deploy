@@ -14,8 +14,9 @@
 #
 # Whether the explanation is *good* is a separate question and is deliberately not
 # gated here.
-version: "1.0"
-dataset_id: dataset-nyc-yellow-taxi-50k
+version: "2.0"
+layer: dataset
+dataset_id: corpus-nyc-taxi-50k
 description: >-
   Prompt-compliance of generated rule text, measured deterministically against
   archived proposals.
@@ -55,6 +56,8 @@ cases:
       steward has no basis to approve.
     source: src/agents/nodes/templates.py#_RULE_PROPOSER_USER
     ground_truth_owner: data-steward
+    applies_to:
+      always: true          # "cite a figure" is independent of any schema
     assertions:
       - type: must_cite_numbers
         field: ai_reasoning

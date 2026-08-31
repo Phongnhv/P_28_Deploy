@@ -13,6 +13,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
+from src.services.safe_regex import validate_regex
+
 logger = logging.getLogger(__name__)
 
 
@@ -358,6 +360,8 @@ class ProposedRule(BaseModel):
             )
         if rt == RuleType.REGEX_FORMAT and not p.regex:
             raise ValueError(f"Rule REGEX_FORMAT yêu cầu trường regex không rỗng (column={self.column!r})")
+        if rt == RuleType.REGEX_FORMAT and p.regex:
+            validate_regex(p.regex)
         if rt == RuleType.FRESHNESS and p.max_age_hours is None:
             raise ValueError("FRESHNESS yêu cầu max_age_hours")
         if rt == RuleType.ROW_COUNT and p.min_row_count is None:

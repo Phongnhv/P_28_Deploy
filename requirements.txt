@@ -40,6 +40,7 @@ httpx>=0.28.0
 pyarrow>=13.0.0
 pandas
 python-multipart>=0.0.6
+regex>=2024.11.6
 
 # AI Observability & Tracing (Phoenix / Arize)
 # arize-phoenix>=4.0.0

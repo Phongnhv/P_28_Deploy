@@ -61,6 +61,27 @@ def _environment(values: dict[str, str]) -> Iterator[None]:
                 os.environ[key] = old
 
 
+@contextmanager
+def _released_engine() -> Iterator[None]:
+    """Close the product's SQLAlchemy engine before the run directory is removed.
+
+    The runtime database lives inside a TemporaryDirectory. On Windows an open
+    SQLite handle makes its cleanup raise PermissionError, and that error replaces
+    whatever the run actually failed on -- which is how a plain 409 from the
+    product arrived here as an unreadable rmtree traceback. Entered after
+    ``runtime`` so its exit runs first, and on the failure path as well.
+    """
+    try:
+        yield
+    finally:
+        import src.services.rule_store as rule_store
+
+        engine = getattr(rule_store, "_engine", None)
+        if engine is not None:
+            engine.dispose()
+        rule_store._engine = None
+
+
 class BundleWriter:
     def __init__(self, root: Path, run_id: str, dataset_id: str) -> None:
         self.root, self.run_id, self.dataset_id = root, run_id, dataset_id
@@ -174,7 +195,7 @@ def _served_run(bundle: Path, run_id: str, frame: pd.DataFrame) -> tuple[str, Bu
         "DISABLE_TRACING": "1", "LANGCHAIN_TRACING_V2": "false", "LANGSMITH_TRACING": "false",
         "LANGCHAIN_API_KEY": "", "LANGSMITH_API_KEY": "",
     }
-    with runtime, _environment(env):
+    with runtime, _environment(env), _released_engine():
         from src.config import get_settings
         get_settings.cache_clear()
         import src.services.rule_store as rule_store
@@ -201,11 +222,22 @@ def _served_run(bundle: Path, run_id: str, frame: pd.DataFrame) -> tuple[str, Bu
             api.wait_job(job["job_id"])
             artifacts = api.request("GET", f"{API}/workflows/{workflow_id}/artifacts").json()
             semantic = next(item for item in artifacts if item["type"] == "SEMANTIC_CONTRACT")
-            semantic = api.request(
+            # The generic /workflow-artifacts/{id}/review path only marks the artifact
+            # approved and then calls navigate_forward, which requires PROPOSE_RULES to
+            # already be READY -- and nothing but confirm_semantic_contract sets that
+            # flag. The served path a steward actually walks is this endpoint, which
+            # carries the version check that makes the confirmation race-safe.
+            confirmed = api.request(
                 "POST",
-                f"{API}/workflow-artifacts/{semantic['id']}/review",
-                json={"action": "approve", "comment": "EvalGate deterministic semantic review"},
+                f"{API}/workflows/{workflow_id}/semantic-contract/confirm",
+                json={
+                    "artifact_id": semantic["id"],
+                    "expected_version": semantic["version"],
+                    "contract": semantic["payload"],
+                    "review_note": "EvalGate deterministic semantic review",
+                },
             ).json()
+            semantic = confirmed["artifact"]
 
             job = api.request("POST", f"{API}/workflows/{workflow_id}/steps/PROPOSE_RULES",
                               headers={"Idempotency-Key": f"{run_id}-propose"}).json()
@@ -247,7 +279,12 @@ def _served_run(bundle: Path, run_id: str, frame: pd.DataFrame) -> tuple[str, Bu
 
         trace_path = bundle / "traces" / "llm-invocations.jsonl"
         invocations = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines() if line]
-        if not any(item.get("schema") == "TableRuleProposal" for item in invocations):
+        # The proposer now asks for CandidateTableRuleDraft and binds the server-owned
+        # candidate fields back afterwards. Either name proves the same thing: a
+        # structured model call produced the rules, rather than a deterministic
+        # fallback producing them without one.
+        proposal_schemas = {"TableRuleProposal", "CandidateTableRuleDraft"}
+        if not any(item.get("schema") in proposal_schemas for item in invocations):
             raise RuntimeError("no structured LLM invocation proves the LangGraph proposal path")
         if final_workflow.get("current_step") != "ANALYZE_REPORT":
             raise RuntimeError(f"workflow did not reach its terminal state: {final_workflow}")
@@ -325,7 +362,8 @@ def create_bundle(out_dir: Path, *, profile: str = "ci", suite: str = "frozen-v1
     for name in ("input", "api", "profile", "semantic", "proposals", "review", "ruleset",
                  "execution", "anomaly", "traces"):
         (bundle / name).mkdir(parents=True, exist_ok=False)
-    frame = generate("corpus-nyc-taxi-50k", rows=5_000)
+    corpus_id = "corpus-nyc-taxi-50k"
+    frame = generate(corpus_id, rows=5_000)
     # Product startup currently writes lifecycle messages to stdout. Keep stdout a
     # machine-readable one-line manifest contract for CI callers.
     with redirect_stdout(sys.stderr):
@@ -334,7 +372,7 @@ def create_bundle(out_dir: Path, *, profile: str = "ci", suite: str = "frozen-v1
     manifest = ArtifactManifestV2(
         schema_version="2.0", finalized=True,
         run_id=run_id, git_sha=git_sha, workspace_dirty=workspace_dirty,
-        created_at=datetime.now(UTC), dataset_id=dataset_id,
+        created_at=datetime.now(UTC), dataset_id=dataset_id, corpus_id=corpus_id,
         dataset_fingerprint=input_record.sha256,
         schema_fingerprint=_json_hash([{"name": name, "dtype": str(dtype)} for name, dtype in frame.dtypes.items()]),
         model=ModelIdentity(provider="evalgate", name="structured-fake-v1", mode="deterministic-test"),

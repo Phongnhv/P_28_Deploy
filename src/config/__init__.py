@@ -23,6 +23,15 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     cors_origins: str = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173"
+    enable_public_demo: bool = False
+    demo_steward_password: str | None = None
+    rate_limit_hash_key: str | None = None
+    trusted_proxy_cidrs: str = ""
+    #: Số vòng PBKDF2 cho hash mật khẩu MỚI. Mặc định theo khuyến nghị OWASP
+    #: cho PBKDF2-HMAC-SHA256. Hạ xuống CHỈ để chạy test: bộ test dựng lại
+    #: database và seed lại tài khoản cho từng test, nên chi phí KDF thật cộng
+    #: dồn thành hàng phút mà không kiểm chứng thêm được điều gì.
+    password_hash_iterations: int = Field(default=600_000, ge=1_000)
 
     # LLM
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
@@ -76,6 +85,10 @@ class Settings(BaseSettings):
     output_dir: str = "./output"
     results_dir: str = "./output" # Backwards-compatible alias
     upload_dir: str = "./data/uploads"
+    upload_max_bytes: int = Field(default=100 * 1024 * 1024, ge=1024, le=100 * 1024 * 1024)
+    upload_max_rows: int = Field(default=1_000_000, ge=1, le=10_000_000)
+    upload_max_columns: int = Field(default=128, ge=1, le=1024)
+    upload_max_decoded_bytes: int = Field(default=512 * 1024 * 1024, ge=1024 * 1024)
 
     # Generated dbt artifacts (GCS/Cloud Run, AWS S3, or MinIO locally)
     object_storage_enabled: bool = True

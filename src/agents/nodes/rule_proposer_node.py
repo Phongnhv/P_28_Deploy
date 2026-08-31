@@ -23,6 +23,7 @@ import os
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from langchain_core.messages import SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -52,7 +53,7 @@ from src.models.rule_schemas import (
     Severity,
     TableRuleProposal,
 )
-from src.services.llm import get_llm
+from src.services.llm import get_llm, telemetry_callbacks
 
 logger = logging.getLogger(__name__)
 
@@ -402,9 +403,7 @@ def _find_requirement(rule: ProposedRule, requirements: list[dict]) -> dict | No
 
 def _load_data_dictionary() -> str:
     """Đọc data dictionary JSON từ file data_dictionary_trip_records_yellow.json."""
-    target_path = DATA_DICTIONARY_PATH
-    if not target_path.exists():
-        target_path = Path("data/data_dictionary_trip_records_yellow.json")
+    target_path = Path("data/data_dictionary_trip_records_yellow.json")
 
     if target_path.exists():
         try:
@@ -683,8 +682,8 @@ async def _propose_for_table_deepagent(
         from langchain.agents.middleware.todo import TodoListMiddleware
         from langchain.agents.middleware.tool_call_limit import ToolCallLimitMiddleware
     except ImportError:
-        TodoListMiddleware = None
-        ToolCallLimitMiddleware = None
+        TodoListMiddleware = None  # noqa: N806
+        ToolCallLimitMiddleware = None  # noqa: N806
 
     from src.agents.nodes.templates import (
         RULE_PROPOSER_AGENT_SYSTEM_PROMPT,
@@ -762,7 +761,13 @@ async def _propose_for_table_deepagent(
         data_dictionary=dict_content,
     )
 
-    result = await agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
+    # Tool events are dispatched by the caller's callback manager, not the
+    # model's, so the handlers are attached here as well. Otherwise the trace
+    # shows every model call and no tool the agent actually used.
+    result = await agent.ainvoke(
+        {"messages": [{"role": "user", "content": prompt}]},
+        config={"callbacks": telemetry_callbacks()},
+    )
     content = _message_content(result)
 
     if isinstance(content, CandidateTableRuleProposal):

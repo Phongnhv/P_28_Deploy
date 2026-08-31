@@ -5,6 +5,7 @@ import logging
 import re
 from dataclasses import asdict, dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from src.config import Settings, get_settings
@@ -221,6 +222,20 @@ class DbtArtifactStore:
             logger.warning("Failed to upload dataset %s to object storage: %s", dataset_id, e)
         return object_key
 
+    def upload_dataset_path(self, dataset_id: str, path: Path) -> str:
+        """Compatibility upload using a file object instead of buffering bytes."""
+        filename = path.name
+        object_key = f"datasets/{dataset_id}/{filename}"
+        bucket = self.settings.object_storage_bucket
+        with path.open("rb") as handle:
+            if self.settings.object_storage_provider == "gcs":
+                blob = self.client.bucket(bucket).blob(object_key)
+                blob.metadata = {"dataset-id": dataset_id, "filename": filename}
+                blob.upload_from_file(handle)
+            else:
+                self.client.put_object(Bucket=bucket, Key=object_key, Body=handle, Metadata={"dataset-id": dataset_id, "filename": filename})
+        return object_key
+
     def upload_source_file(
         self,
         object_key: str,
@@ -258,6 +273,21 @@ class DbtArtifactStore:
             etag=response.get("ETag", "").strip('"') or None,
             version_id=response.get("VersionId"),
         )
+
+    def upload_source_path(self, object_key: str, path: Path, *, checksum: str) -> DbtArtifactRef:
+        """Upload an immutable source directly from a file object."""
+        if not object_key or object_key.startswith(("/", "\\")) or ".." in object_key.split("/"):
+            raise ValueError("Unsafe source object key")
+        bucket = self.settings.object_storage_bucket
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            if self.settings.object_storage_provider == "gcs":
+                blob = self.client.bucket(bucket).blob(object_key)
+                blob.metadata = {"sha256": checksum, "size-bytes": str(size)}
+                blob.upload_from_file(handle, content_type="application/octet-stream", if_generation_match=0)
+                return DbtArtifactRef(bucket, object_key, checksum, size, blob.etag, str(blob.generation) if blob.generation else None)
+            response = self.client.put_object(Bucket=bucket, Key=object_key, Body=handle, ContentType="application/octet-stream", Metadata={"sha256": checksum, "size-bytes": str(size)}, IfNoneMatch="*")
+        return DbtArtifactRef(bucket, object_key, checksum, size, response.get("ETag", "").strip('"') or None, response.get("VersionId"))
 
     def download_source_file(self, artifact: DbtArtifactRef | dict[str, Any]) -> bytes:
         """Download a source object and verify its recorded size/checksum."""

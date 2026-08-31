@@ -29,6 +29,7 @@ from src.models.database import DatasetVersionModel, GovernedArtifactModel, Rule
 from src.models.rule_schemas import RuleType
 from src.services.dbt_artifact_store import get_dbt_artifact_store, validate_run_id
 from src.services.rule_store import get_approved_rules, get_engine
+from src.services.safe_regex import validate_regex
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ def _build_row_predicate(
         return f"({quoted_col} IS NOT NULL AND {quoted_col} NOT IN ({in_list}))", binds
 
     if rule_type in (RuleType.REGEX_FORMAT.value, "REGEX_FORMAT"):
-        regex_pattern = params.get("regex") or ""
+        regex_pattern = validate_regex(str(params.get("regex") or ""))
         p_regex = f"p_regex_{rule_idx}"
         binds[p_regex] = regex_pattern
         if dialect_name == "postgresql":

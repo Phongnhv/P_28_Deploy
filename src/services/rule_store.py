@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import re
 import uuid
 from datetime import UTC, datetime
 
@@ -32,12 +31,53 @@ from src.models.database import (
     SourceRowModel,
 )
 from src.models.rule_schemas import RuleStatus
-from src.services.session_service import ensure_default_users, ensure_default_workspace, ensure_demo_steward
+from src.services.safe_regex import safe_search, start_regex_budget, validate_regex
+from src.services.session_service import (
+    ensure_default_users,
+    ensure_default_workspace,
+    ensure_demo_steward,
+    reconcile_public_demo_security,
+    validate_security_settings,
+)
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
 _engine = None  # lazy-initialised
+
+
+def _audit_fields(
+    *,
+    actor_role: str,
+    action_code: str,
+    entity_id: str,
+    detail: dict,
+    entity_type: str = "rule_proposal",
+    session_id: str | None = None,
+) -> dict:
+    """Shape one audit row's fields; the caller constructs and adds the model.
+
+    PRODUCT_SPEC safety rule 5 requires every rule state transition to leave a
+    record. The row is written inside the transition rather than in the API layer
+    because review and publication are reachable from the worker, from scripts and
+    from tests without any HTTP session -- a trail that exists on only one of those
+    paths cannot answer "who approved this rule" months later.
+
+    Only the boilerplate lives here. Each transition still constructs its own
+    ``AuditEventModel`` and adds it to the session holding the state change, so the
+    audit row and the change it describes commit together, and so a reader of the
+    transition can see that it records itself.
+    """
+    return {
+        "id": f"evt_{uuid.uuid4().hex}",
+        "session_id": session_id,
+        "actor_role": actor_role,
+        "action_code": action_code,
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "detail_json": json.dumps(detail, ensure_ascii=False, default=str),
+        "created_at": utc_now(),
+    }
 
 
 def should_seed_legacy_demo_dataset(app_env: str) -> bool:
@@ -72,6 +112,18 @@ def get_engine():
 
         _engine = create_engine(db_url, connect_args=connect_args, **engine_options)
 
+        @event.listens_for(_engine, "before_cursor_execute")
+        def _reset_regex_budget(_conn, _cursor, _statement, _params, _context, _many):
+            """Cấp ngân sách regex mới cho mỗi câu lệnh.
+
+            `MATCH_TIMEOUT_SECONDS` chỉ chặn từng lần gọi, mà hàm REGEXP của
+            SQLite chạy một lần cho mỗi dòng: 50 000 dòng × 24 ms (vừa dưới
+            ngưỡng) đốt khoảng 20 phút CPU mà không lần gọi nào báo động.
+            Đặt ở đây thay vì bọc từng nơi gọi để không chỗ nào bị bỏ sót.
+            """
+            if "sqlite" in db_url:
+                start_regex_budget()
+
         @event.listens_for(_engine, "connect")
         def _set_sqlite_pragma(dbapi_conn, _connection_record):
             if "sqlite" in db_url:
@@ -80,7 +132,7 @@ def get_engine():
                 def _sqlite_regexp(expr, item):
                     if item is None:
                         return False
-                    return re.search(expr, str(item)) is not None
+                    return safe_search(str(expr), item)
 
                 dbapi_conn.create_function("REGEXP", 2, _sqlite_regexp)
 
@@ -319,6 +371,7 @@ def init_db() -> None:
     """Tạo tất cả bảng nếu chưa tồn tại. Tự động đồng bộ legacy approved rules vào active_rules."""
     engine = get_engine()
     settings = get_settings()
+    validate_security_settings()
     if settings.app_env == "production":
         # Production schema changes are a controlled release operation. Running
         # create/alter DDL in every Cloud Run startup races active revisions,
@@ -337,6 +390,7 @@ def init_db() -> None:
     try:
         with Session(engine) as session:
             ensure_default_users(session)
+            reconcile_public_demo_security(session)
             # Seeded after the accounts exist: the workspace row needs a real
             # owner, and the versioned import route needs an ACTIVE membership.
             ensure_demo_steward(session)
@@ -1086,6 +1140,7 @@ def review_rule(
             elif row.rule_type == "REGEX_FORMAT":
                 if not isinstance(edited_parameters, dict) or "regex" not in edited_parameters:
                     raise ValueError("edited_parameters không hợp lệ cho rule REGEX_FORMAT")
+                validate_regex(str(edited_parameters["regex"]))
 
         db_status = "APPROVED" if status == "APPROVED" else "REJECTED"
         row.status = db_status
@@ -1131,6 +1186,21 @@ def review_rule(
 
             if proposed_row.parameters:
                 orig_params = json.loads(proposed_row.parameters)
+
+        session.add(AuditEventModel(**_audit_fields(
+            actor_role=reviewer or "SYSTEM",
+            action_code="RULE_APPROVED" if db_status == "APPROVED" else "RULE_REJECTED",
+            entity_id=row.id,
+            detail={
+                "run_id": run_id,
+                "dataset_id": row.dataset_id,
+                "rule_type": row.rule_type,
+                "reviewer": reviewer,
+                "severity": row.severity,
+                "edited_parameters": edited_parameters,
+                "review_note": review_note,
+            },
+        )))
 
         session.commit()
 
@@ -1197,6 +1267,28 @@ def bulk_review(run_id: str, decisions: list[dict]) -> tuple[list[dict], list[st
             updated.append(res)
         else:
             not_found.append(d["rule_id"])
+
+    # Each rule already carries its own AuditEventModel row from review_rule. This
+    # second record is for the batch itself: a steward who approved forty rules in
+    # one action took one decision, and reconstructing that from forty separate rows
+    # loses the fact that they were decided together.
+    if updated:
+        reviewers = {d.get("reviewer") for d in decisions if d.get("reviewer")}
+        with Session(get_engine()) as session:
+            session.add(AuditEventModel(**_audit_fields(
+                actor_role=next(iter(reviewers)) if len(reviewers) == 1 else "SYSTEM",
+                action_code="RULE_BULK_REVIEWED",
+                entity_id=run_id,
+                entity_type="rule_run",
+                detail={
+                    "run_id": run_id,
+                    "reviewed_rule_ids": [r["rule_id"] for r in updated],
+                    "not_found_rule_ids": not_found,
+                    "reviewers": sorted(reviewers),
+                },
+            )))
+            session.commit()
+
     return updated, not_found
 
 
@@ -1404,7 +1496,7 @@ def publish_approved_rules(run_id: str) -> int:
                     params["accepted_values"] = spec["allowed_values"]
             elif rule_type == "REGEX_FORMAT":
                 if "regex" in spec:
-                    params["regex"] = spec["regex"]
+                    params["regex"] = validate_regex(str(spec["regex"]))
             elif rule_type == "CROSS_FIELD_COMPARISON":
                 if "target_column" in spec:
                     params["target_column"] = spec["target_column"]
@@ -1471,8 +1563,28 @@ def publish_approved_rules(run_id: str) -> int:
             if rv:
                 rv.status = "MERGED"
 
+            # One record per rule, keyed on the rule id, because publication is the
+            # transition that makes a rule able to run against real data. A single
+            # event for the whole run would not let anyone ask of a given active rule
+            # "when did this become active, and on whose approval".
+            session.add(AuditEventModel(**_audit_fields(
+                actor_role=(proposed_source.reviewer if proposed_source and proposed_source.reviewer else "SYSTEM"),
+                action_code="RULE_PUBLISHED",
+                entity_id=p.id,
+                detail={
+                    "run_id": run_id,
+                    "dataset_id": p.dataset_id,
+                    "table_name": table_name,
+                    "rule_type": p.rule_type,
+                    "parameters": clean_params,
+                    "approved_by": proposed_source.reviewer if proposed_source else None,
+                },
+            )))
+
             merged_count += 1
 
+        # One commit for the whole publication: the active rules, the MERGED status
+        # changes and their audit rows land together or not at all.
         session.commit()
 
     logger.info("Đã publish %d rules vào active_rules từ run_id=%s", merged_count, run_id)

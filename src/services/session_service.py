@@ -1,16 +1,24 @@
+import hashlib
+import hmac
+import ipaddress
 import logging
 import os
 import secrets
 import uuid
-from collections import defaultdict, deque
 from datetime import timedelta
 from hashlib import pbkdf2_hmac
-from time import monotonic
 
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
-from src.models.database import SessionModel, UserAccountModel, WorkspaceMembershipModel, WorkspaceModel
+from src.config import get_settings
+from src.models.database import (
+    LoginAttemptModel,
+    SessionModel,
+    UserAccountModel,
+    WorkspaceMembershipModel,
+    WorkspaceModel,
+)
 from src.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -24,35 +32,86 @@ DEFAULT_USERS = (
 )
 DEMO_STEWARD_USERNAME = "demo-steward"
 DEMO_STEWARD_DISPLAY_NAME = "Demo Steward"
-# This credential is intentionally public in the frontend for judge access.
-# It is protected by the backend quota guard in ``demo_quota.py``.
-DEMO_STEWARD_PUBLIC_PASSWORD = "ridepulse-demo-2026"
 DEMO_STEWARD_WORKSPACE_ID = (os.getenv("DEMO_WORKSPACE_ID") or "ws-browser").strip()
 LOGIN_WINDOW_SECONDS = 15 * 60
-MAX_LOGIN_ATTEMPTS = 5
-_login_attempts: dict[str, deque[float]] = defaultdict(deque)
+MAX_IP_ACCOUNT_ATTEMPTS = 5
+MAX_ACCOUNT_ATTEMPTS = 10
+
+#: Khoá HMAC dự phòng khi `RATE_LIMIT_HASH_KEY` chưa được cấu hình.
+#: `validate_security_settings()` bắt buộc phải có khoá thật ở production,
+#: nhưng staging và dev thì không — và một hằng số nằm trong mã nguồn khiến
+#: HMAC tương đương hash trần: ai đọc được `login_attempts` là dựng được bảng
+#: tra ngược ra username và IP. Khoá ngẫu nhiên theo tiến trình đánh đổi việc
+#: mất bộ đếm khi restart để lấy lại tính chất đó.
+_EPHEMERAL_RATE_LIMIT_KEY = secrets.token_hex(32)
+
+#: Số vòng của định dạng hash cũ (không mang tham số). Hash cũ vẫn xác thực
+#: được và sẽ được nâng cấp âm thầm ở lần đăng nhập thành công kế tiếp.
+_LEGACY_PBKDF2_ITERATIONS = 120_000
+
+_HASH_SCHEME = "pbkdf2"
+
+
+def pbkdf2_iterations() -> int:
+    """Số vòng dùng cho hash MỚI. Mặc định 600 000 theo khuyến nghị OWASP."""
+    return get_settings().password_hash_iterations
 
 
 def hash_password(password: str, salt: bytes | None = None) -> str:
-    """Return a PBKDF2 hash suitable for persisted local demo accounts."""
+    """Return a PBKDF2 hash suitable for persisted local demo accounts.
+
+    Định dạng mang theo tham số: ``pbkdf2$<iterations>$<salt>$<digest>``. Không
+    ghi số vòng vào chuỗi thì mọi lần nâng số vòng đều khoá hết tài khoản cũ ra
+    ngoài, và trên thực tế điều đó khiến số vòng không bao giờ được nâng.
+    """
+    iterations = pbkdf2_iterations()
     actual_salt = salt or secrets.token_bytes(16)
-    digest = pbkdf2_hmac("sha256", password.encode("utf-8"), actual_salt, 120_000)
-    return f"{actual_salt.hex()}${digest.hex()}"
+    digest = pbkdf2_hmac("sha256", password.encode("utf-8"), actual_salt, iterations)
+    return f"{_HASH_SCHEME}${iterations}${actual_salt.hex()}${digest.hex()}"
+
+
+def _parse_encoded(encoded: str) -> tuple[bytes, bytes, int]:
+    """Tách (salt, digest, iterations) từ cả định dạng cũ lẫn mới."""
+    parts = encoded.split("$")
+    if len(parts) == 4 and parts[0] == _HASH_SCHEME:
+        return bytes.fromhex(parts[2]), bytes.fromhex(parts[3]), int(parts[1])
+    if len(parts) == 2:
+        # Định dạng cũ, không mang tham số — mặc định số vòng của thời điểm đó.
+        return bytes.fromhex(parts[0]), bytes.fromhex(parts[1]), _LEGACY_PBKDF2_ITERATIONS
+    raise ValueError("Unrecognised password hash format")
 
 
 def verify_password(password: str, encoded: str) -> bool:
     try:
-        salt_hex, digest_hex = encoded.split("$", 1)
-        expected = bytes.fromhex(digest_hex)
-        actual = pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), 120_000)
+        salt, expected, iterations = _parse_encoded(encoded)
+        actual = pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
     except (TypeError, ValueError):
         return False
     return secrets.compare_digest(actual, expected)
 
 
+def needs_rehash(encoded: str) -> bool:
+    """True khi hash dùng tham số yếu hơn tiêu chuẩn hiện hành."""
+    try:
+        _salt, _digest, iterations = _parse_encoded(encoded)
+    except (TypeError, ValueError):
+        return True
+    return iterations < pbkdf2_iterations()
+
+
+#: Hash "mồi" dùng cho đường đăng nhập thất bại. Băm một mật khẩu ngẫu nhiên
+#: một lần lúc import, để mỗi lần đăng nhập đều tiêu tốn đúng một lần PBKDF2
+#: kể cả khi username không tồn tại. Không đầu vào nào khớp được với nó.
+_DUMMY_PASSWORD_HASH = hash_password(secrets.token_hex(16))
+
+
 def ensure_default_users(db: Session) -> None:
     """Seed demo accounts from secrets, never from production source defaults."""
-    production = os.getenv("APP_ENV") == "production"
+    # Đọc qua Settings chứ không phải os.getenv: `app_env` là một Literal đã
+    # được pydantic kiểm tra, nên một giá trị viết sai (`prod`, `Production`)
+    # bị từ chối ngay lúc khởi động. Đọc thẳng biến môi trường sẽ đi vòng qua
+    # tầng kiểm tra đó và lặng lẽ coi giá trị sai là "không phải production".
+    production = get_settings().app_env == "production"
     for username, display_name, role, password_env in DEFAULT_USERS:
         # Secret Manager values supplied through stdin commonly retain a final
         # newline; it is not part of the intended password.
@@ -132,9 +191,15 @@ def ensure_default_workspace(db: Session, *, created_by: str | None = None) -> W
 
 
 def ensure_demo_steward(db: Session) -> None:
-    """Seed the bounded, judge-facing Steward account and its workspace seat."""
-    configured_password = (os.getenv("DEMO_STEWARD_DEMO_PASSWORD") or "").strip()
-    password = configured_password or DEMO_STEWARD_PUBLIC_PASSWORD
+    """Seed the explicitly enabled non-production demo Steward."""
+    settings = get_settings()
+    if not settings.enable_public_demo:
+        return
+    if settings.app_env == "production":
+        raise RuntimeError("Public demo access is not permitted in production")
+    password = (settings.demo_steward_password or "").strip()
+    if not password:
+        raise RuntimeError("DEMO_STEWARD_PASSWORD is required when ENABLE_PUBLIC_DEMO=true")
     account = db.query(UserAccountModel).filter(UserAccountModel.username == DEMO_STEWARD_USERNAME).first()
     if not account:
         account = UserAccountModel(
@@ -148,8 +213,9 @@ def ensure_demo_steward(db: Session) -> None:
         )
         db.add(account)
         db.flush()
-    elif account.created_by == "system-seed-demo" and configured_password:
-        account.password_hash = hash_password(configured_password)
+    elif account.created_by == "system-seed-demo":
+        account.password_hash = hash_password(password)
+        account.status = "ACTIVE"
 
     db.commit()
     try:
@@ -180,36 +246,174 @@ def ensure_demo_steward(db: Session) -> None:
         logger.warning("Demo Steward workspace membership could not be seeded", exc_info=True)
 
 
-def _login_attempt_key(request: Request, username: str) -> str:
-    forwarded_for = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
-    client_host = forwarded_for or (request.client.host if request.client else "unknown")
-    return f"{client_host}:{username}"
+def reconcile_public_demo_security(db: Session) -> None:
+    """Deactivate legacy public demo identities whenever public demo is disabled."""
+    settings = get_settings()
+    if settings.enable_public_demo and settings.app_env != "production":
+        return
+    accounts = db.query(UserAccountModel).filter(UserAccountModel.created_by == "system-seed-demo").all()
+    usernames = [account.username for account in accounts]
+    for account in accounts:
+        account.status = "DISABLED"
+    if usernames:
+        db.query(SessionModel).filter(SessionModel.username.in_(usernames)).delete(synchronize_session=False)
+    db.flush()
 
 
-def _enforce_login_rate_limit(key: str) -> None:
-    now = monotonic()
-    attempts = _login_attempts[key]
-    while attempts and now - attempts[0] >= LOGIN_WINDOW_SECONDS:
-        attempts.popleft()
-    if len(attempts) >= MAX_LOGIN_ATTEMPTS:
-        raise HTTPException(status_code=429, detail={"code": "LOGIN_RATE_LIMITED", "message": "Too many sign-in attempts. Try again later."})
+def validate_security_settings() -> None:
+    settings = get_settings()
+    if settings.app_env == "production" and settings.enable_public_demo:
+        raise RuntimeError("ENABLE_PUBLIC_DEMO must be false in production")
+    if settings.app_env == "production" and not settings.rate_limit_hash_key:
+        raise RuntimeError("RATE_LIMIT_HASH_KEY is required in production")
+    if settings.app_env == "production" and not settings.trusted_proxy_cidrs.strip():
+        # Sau load balancer, `_client_ip` luôn trả IP của LB nếu không có CIDR
+        # tin cậy nào được khai báo — chiều IP trong giới hạn đăng nhập biến mất
+        # mà không có cảnh báo nào.
+        raise RuntimeError("TRUSTED_PROXY_CIDRS is required in production")
 
 
-def _record_failed_login(key: str) -> None:
-    _login_attempts[key].append(monotonic())
+def _trusted_proxy_networks() -> list[ipaddress._BaseNetwork]:
+    networks = []
+    for raw in get_settings().trusted_proxy_cidrs.split(","):
+        value = raw.strip()
+        if value:
+            networks.append(ipaddress.ip_network(value, strict=False))
+    return networks
+
+
+def _client_ip(request: Request) -> str:
+    peer = request.client.host if request.client else "unknown"
+    try:
+        trusted = any(ipaddress.ip_address(peer) in network for network in _trusted_proxy_networks())
+    except ValueError:
+        trusted = False
+    if trusted:
+        forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+        if forwarded:
+            try:
+                return str(ipaddress.ip_address(forwarded))
+            except ValueError:
+                pass
+    return peer
+
+
+def _attempt_hash(scope: str, value: str) -> str:
+    settings = get_settings()
+    key = settings.rate_limit_hash_key or _EPHEMERAL_RATE_LIMIT_KEY
+    return hmac.new(key.encode(), f"{scope}:{value}".encode(), hashlib.sha256).hexdigest()
+
+
+def _rate_limit_keys(request: Request, username: str) -> dict[str, tuple[str, int]]:
+    return {
+        "IP_ACCOUNT": (_attempt_hash("IP_ACCOUNT", f"{_client_ip(request)}:{username}"), MAX_IP_ACCOUNT_ATTEMPTS),
+        "ACCOUNT": (_attempt_hash("ACCOUNT", username), MAX_ACCOUNT_ATTEMPTS),
+    }
+
+
+def audit_security_event(
+    action_code: str,
+    entity_id: str,
+    *,
+    entity_type: str = "account",
+    actor_role: str = "ANONYMOUS",
+    detail: dict | None = None,
+) -> None:
+    """Ghi một sự kiện bảo mật vào nhật ký kiểm toán.
+
+    `login_attempts` là BỘ ĐẾM để chặn, không phải nhật ký để điều tra: nó bị
+    xoá khi hết cửa sổ 15 phút và khi đăng nhập thành công. Không có những dòng
+    audit này thì một đợt brute-force đã diễn ra không để lại dấu vết nào.
+
+    Dùng SESSION RIÊNG có chủ đích. `add_audit_event` gọi `commit()`, nên chia
+    sẻ session của caller sẽ commit luôn phần việc dang dở của request đó —
+    ngay trước một lệnh `raise`. Session riêng cũng đảm bảo dòng audit tồn tại
+    kể cả khi transaction chính bị rollback, đúng thứ ta cần cho sự kiện từ chối.
+
+    Lỗi ghi audit không bao giờ được làm hỏng đường xác thực — nuốt và log lại.
+    """
+    try:
+        from src.services.job_runner import add_audit_event
+        from src.services.rule_store import get_engine
+
+        with Session(get_engine()) as audit_db:
+            add_audit_event(
+                audit_db,
+                session_id=None,
+                actor_role=actor_role,
+                action_code=action_code,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                detail=detail or {},
+            )
+    except Exception:
+        logger.warning("Không ghi được sự kiện bảo mật %s", action_code, exc_info=True)
+
+
+def _enforce_login_rate_limit(
+    db: Session, keys: dict[str, tuple[str, int]], *, username: str = "", ip: str = ""
+) -> None:
+    now = utc_now()
+    cutoff = now - timedelta(seconds=LOGIN_WINDOW_SECONDS)
+    db.query(LoginAttemptModel).filter(LoginAttemptModel.attempted_at < cutoff).delete(synchronize_session=False)
+    for scope, (key_hash, limit) in keys.items():
+        attempts = (
+            db.query(LoginAttemptModel)
+            .filter_by(scope=scope, key_hash=key_hash)
+            .filter(LoginAttemptModel.attempted_at >= cutoff)
+            .order_by(LoginAttemptModel.attempted_at.asc())
+            .all()
+        )
+        if len(attempts) >= limit:
+            retry_after = max(1, int((attempts[0].attempted_at + timedelta(seconds=LOGIN_WINDOW_SECONDS) - now).total_seconds()))
+            audit_security_event("LOGIN_RATE_LIMITED", username, detail={"ip": ip})
+            db.commit()
+            raise HTTPException(
+                status_code=429,
+                detail={"code": "LOGIN_RATE_LIMITED", "message": "Too many sign-in attempts. Try again later."},
+                headers={"Retry-After": str(retry_after)},
+            )
+    db.flush()
+
+
+def _record_failed_login(
+    db: Session, keys: dict[str, tuple[str, int]], *, username: str = "", ip: str = ""
+) -> None:
+    now = utc_now()
+    for scope, (key_hash, _limit) in keys.items():
+        db.add(LoginAttemptModel(id=f"login-{uuid.uuid4().hex}", scope=scope, key_hash=key_hash, attempted_at=now))
+    audit_security_event("LOGIN_FAILED", username, detail={"ip": ip})
+    db.commit()
 
 
 def create_user_session(request: Request, username: str, password: str, db: Session) -> SessionModel:
     """Authenticate an active persisted account and create its cookie session."""
     normalized_username = username.strip().lower()
-    attempt_key = _login_attempt_key(request, normalized_username)
-    _enforce_login_rate_limit(attempt_key)
-    account = db.query(UserAccountModel).filter(UserAccountModel.username == normalized_username).first()
-    if not account or account.status != "ACTIVE" or not verify_password(password, account.password_hash):
-        _record_failed_login(attempt_key)
+    client_ip = _client_ip(request)
+    attempt_keys = _rate_limit_keys(request, normalized_username)
+    account = db.query(UserAccountModel).filter(UserAccountModel.username == normalized_username).with_for_update().first()
+    _enforce_login_rate_limit(db, attempt_keys, username=normalized_username, ip=client_ip)
+
+    # Always spend the KDF, even when no account matched. Short-circuiting past
+    # verify_password for an unknown username answers in about a millisecond
+    # while a real one costs the full PBKDF2 run -- a gap that is measurable
+    # over the network and enumerates every valid username. Compute the result
+    # before branching; folding this into the `or` chain restores the leak.
+    account_ok = account is not None and account.status == "ACTIVE"
+    password_ok = verify_password(
+        password, account.password_hash if account_ok else _DUMMY_PASSWORD_HASH
+    )
+    if not (account_ok and password_ok):
+        _record_failed_login(db, attempt_keys, username=normalized_username, ip=client_ip)
         raise HTTPException(status_code=401, detail={"code": "UNAUTHORIZED", "message": "Invalid username or password"})
 
-    _login_attempts.pop(attempt_key, None)
+    # Nâng cấp âm thầm: mật khẩu vừa được xác thực nên đây là lần duy nhất ta
+    # cầm bản rõ và có thể băm lại theo tham số hiện hành.
+    if needs_rehash(account.password_hash):
+        account.password_hash = hash_password(password)
+
+    hashes = [key_hash for key_hash, _limit in attempt_keys.values()]
+    db.query(LoginAttemptModel).filter(LoginAttemptModel.key_hash.in_(hashes)).delete(synchronize_session=False)
 
     # A user may have the workspace open in multiple tabs/devices.  Creating
     # a new session must not revoke those still-valid sessions, otherwise a

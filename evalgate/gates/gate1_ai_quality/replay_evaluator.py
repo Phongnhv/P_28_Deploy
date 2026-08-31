@@ -48,6 +48,10 @@ class RuleOutcome:
     violation_count: int
     total_rows: int
     sample_ids: set[str]
+    #: True when the artifact recorded fewer flagged rows than the rule actually
+    #: found. Recall computed from a truncated list is bounded by the truncation
+    #: rather than by the agent, so it is reported, never published as a score.
+    truncated: bool = False
 
 
 def _parse_rule_id(rule_id: str) -> tuple[str | None, str]:
@@ -97,11 +101,37 @@ def load_archived_runs(
     return runs
 
 
+def _flagged_rows(entry: dict[str, Any]) -> tuple[set[str], bool]:
+    """The rows a rule flagged, and whether that record is complete.
+
+    ``violation_row_ids`` is the machine-readable evidence list; ``sample_refs`` is
+    a 20-row illustration for a human reader. Scoring recall off the illustration
+    caps it at 20/|defects| -- about 0.8% on this fixture, against a gate demanding
+    80% -- so the two are read in that order and a shortfall is reported rather
+    than silently scored.
+    """
+    raw = (
+        entry.get("violation_row_ids")
+        or entry.get("sample_refs")
+        or entry.get("sample_failures")
+        or []
+    )
+    ids = {
+        str(value.get("source_row_id") if isinstance(value, dict) else value)
+        for value in raw
+        if value is not None
+    }
+    declared = int(entry.get("violation_count") or entry.get("failed_count") or 0)
+    truncated = bool(entry.get("violation_row_ids_truncated")) or (declared > len(ids))
+    return ids, truncated
+
+
 def _outcomes(run: dict[str, Any]) -> list[RuleOutcome]:
     outcomes: list[RuleOutcome] = []
     for entry in run.get("test_results", []):
         rule_id = entry.get("rule_id", "")
         column, rule_type = _parse_rule_id(rule_id)
+        sample_ids, truncated = _flagged_rows(entry)
         outcomes.append(
             RuleOutcome(
                 rule_id=rule_id,
@@ -110,11 +140,8 @@ def _outcomes(run: dict[str, Any]) -> list[RuleOutcome]:
                 status=entry.get("status", ""),
                 violation_count=int(entry.get("violation_count") or 0),
                 total_rows=int(entry.get("total_rows") or 0),
-                sample_ids={
-                    str(value.get("source_row_id") if isinstance(value, dict) else value)
-                    for value in (entry.get("sample_refs") or entry.get("sample_failures") or [])
-                    if value is not None
-                },
+                sample_ids=sample_ids,
+                truncated=truncated,
             )
         )
     return outcomes
@@ -181,11 +208,15 @@ def score_run(
     class_recalls = list(recall_by_class.values())
     macro_recall = sum(class_recalls) / len(class_recalls) if class_recalls else 0.0
 
+    truncated_rules = sorted({o.rule_id for o in outcomes if o.truncated})
+
     return {
         "path": run.get("__path__"),
         "test_run_id": run.get("test_run_id"),
         "dataset_id": run.get("dataset_id"),
         "rule_count": len(outcomes),
+        "truncated_rules": truncated_rules,
+        "evidence_complete": not truncated_rules,
         "total_flagged_rows": total_flagged,
         "count_only_violations": sum(
             outcome.violation_count for outcome in outcomes if outcome.violation_count and not outcome.sample_ids
@@ -260,6 +291,18 @@ def evaluate(
     ]
     min_recall = min(primary["recall_by_class"].values(), default=0.0)
 
+    # Truncated evidence makes recall a lower bound, not a measurement. A rule that
+    # found 2,584 offending rows but recorded 20 of them cannot be distinguished
+    # from one that found nothing, so HG-A1 is left NOT_EVALUATED rather than
+    # asserted: "we did not record it" and "the agent missed it" are different
+    # claims, and only the second is about the product.
+    #
+    # HG-A1 is mandatory outside local, so an unevaluated gate still blocks the
+    # release -- it just stops blaming the agent for a gap in the artifact.
+    evidence_complete = bool(primary["evidence_complete"])
+    if not evidence_complete:
+        zero_recall = []
+
     findings = [
         Finding(
             id="HG-A1",
@@ -319,7 +362,24 @@ def evaluate(
                 raw=primary["f1"], unit="ratio", normalized=norm.ratio(primary["f1"])
             ),
             "min_recall_per_class": MetricValue(
-                raw=min_recall, unit="ratio", normalized=norm.ratio(min_recall)
+                raw=min_recall if evidence_complete else None,
+                unit="ratio",
+                normalized=norm.ratio(min_recall) if evidence_complete else None,
+                status=None if evidence_complete else EvalStatus.NOT_MEASURED,
+                note=(
+                    None
+                    if evidence_complete
+                    else (
+                        f"{len(primary['truncated_rules'])} rule(s) recorded fewer flagged "
+                        "rows than they found; recall is a lower bound, not a measurement"
+                    )
+                ),
+            ),
+            "evidence_complete": MetricValue(
+                raw=evidence_complete,
+                unit="boolean",
+                normalized=norm.boolean(evidence_complete),
+                note="every rule recorded the full set of rows it flagged",
             ),
             "archived_runs_scored": MetricValue(
                 raw=len(scored), unit="count", normalized=None
@@ -342,6 +402,8 @@ def evaluate(
             ),
             "primary_run": primary["path"],
             "reported_dq_score": primary["reported_dq_score"],
+            "evidence_complete": evidence_complete,
+            "truncated_rules": primary["truncated_rules"][:10],
         },
     )
 

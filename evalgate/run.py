@@ -74,12 +74,9 @@ def _git_ref() -> str:
         return "unknown"
 
 
-def _nyc_ground_truth() -> dict[str, dict[str, list[str]]]:
-    """Row-level ground truth for the fixture, including pre-seeded defects."""
-    from evalgate.corpus.generator import generate
+def _truth_from_frame(frame) -> dict[str, dict[str, list[str]]]:
     from evalgate.corpus.nyc_preexisting import recover_labels
 
-    frame = generate("corpus-nyc-taxi-50k")
     labels, _ = recover_labels(frame)
     truth: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
     for label in labels:
@@ -88,6 +85,44 @@ def _nyc_ground_truth() -> dict[str, dict[str, list[str]]]:
         name: {column: sorted(set(row_ids)) for column, row_ids in columns.items()}
         for name, columns in truth.items()
     }
+
+
+def _nyc_ground_truth(context: EvalRunContext | None = None) -> dict[str, dict[str, list[str]]]:
+    """Row-level ground truth for the exact frame the product ingested.
+
+    Truth is recovered from the bundle's own ``input-dataset`` artifact, never
+    regenerated from the archetype. Regenerating looks equivalent and is not:
+    ``product_run.create_bundle`` ingests ``generate("corpus-nyc-taxi-50k", rows=5_000)``
+    while this function used to call ``generate("corpus-nyc-taxi-50k")``, which
+    defaults to the archetype's full 50,000 rows.
+
+    The two frames disagreed by a factor of ten. Recall is
+    ``|predicted ∩ truth| / |truth|``, so the denominator counted 3,098 defects
+    while the agent had only ever seen the first 5,000 rows -- and roughly nine
+    tenths of the truth row ids referred to rows that were not in its input at all
+    and could not have been predicted by any agent. The reported
+    ``min_recall_per_class`` of 0.0 was measured against a dataset that was never
+    evaluated, and it is the metric behind HG-A1, the only release blocker.
+
+    Deriving truth from the artifact makes the two structurally identical: there is
+    one frame, and it is the one whose checksum the manifest already pins.
+    """
+    if context is not None and context.records("input-dataset"):
+        import pandas as pd
+
+        path = context.path_for(context.require_records("input-dataset")[0])
+        frame = (
+            pd.read_parquet(path)
+            if path.suffix.lower() == ".parquet"
+            else pd.read_csv(path)
+        )
+        return _truth_from_frame(frame)
+
+    # Diagnostic path only: no manifest, so there is no ingested frame to recover
+    # truth from. Release evaluation always supplies a context.
+    from evalgate.corpus.generator import generate
+
+    return _truth_from_frame(generate("corpus-nyc-taxi-50k"))
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +145,7 @@ def _registry(baseline_ref: str = "HEAD", context: EvalRunContext | None = None)
         from evalgate.gates.gate1_ai_quality import replay_evaluator
 
         return replay_evaluator.evaluate(
-            _nyc_ground_truth(), write_evidence=_WRITE[0], context=context
+            _nyc_ground_truth(context), write_evidence=_WRITE[0], context=context
         )
 
     def capability() -> EvalResult:
@@ -193,19 +228,41 @@ def load_profile(mode: str) -> list[str]:
     return [spec.name for spec in SPECS if mode in spec.profiles]
 
 
+def _upload_handlers() -> list[str]:
+    """Where the product accepts a file upload, measured rather than asserted.
+
+    This used to be the sentence "no upload endpoint exists". It stopped being true
+    and nothing noticed, because a hand-written reason is never re-checked against
+    the code it describes -- so the same report could carry contract_conformance
+    reporting SCOPE-UPLOAD implemented at three sites next to this claiming none.
+    """
+    from evalgate.gates.gate5_reliability.config_static_check import _grep
+
+    return _grep(r"UploadFile\s*=\s*File\(", PROJECT_ROOT / "src" / "api")
+
+
 def _declared_but_not_run(selected: list[str]) -> list[EvalResult]:
-    """Evaluators the plan defines that this run cannot execute."""
+    """Evaluators the plan defines that this run cannot execute.
+
+    A reason here is a statement about the product, and it is read as evidence. Where
+    one can be derived from the code, derive it; a constant is only acceptable for
+    facts about EvalGate's own environment, like a missing package or a paid call.
+    """
+    uploads = _upload_handlers()
     blocked = [
         ("input_data", "gx_corpus_integrity_v1", EvalStatus.NOT_IMPLEMENTED,
          "requires the great-expectations package"),
         ("input_data", "evidently_drift_v1", EvalStatus.NOT_IMPLEMENTED,
          "requires the evidently package"),
-        ("ai_security", "upload_probe_v1", EvalStatus.BLOCKED_BY_SYSTEM_CAPABILITY,
-         "no upload endpoint exists, so malicious files cannot be submitted"),
+        ("ai_security", "upload_probe_v1",
+         EvalStatus.NOT_EXECUTED if uploads else EvalStatus.BLOCKED_BY_SYSTEM_CAPABILITY,
+         f"{len(uploads)} upload handler(s) exist ({', '.join(uploads[:3])}); "
+         "the probe is not selected in this profile"
+         if uploads else "no upload endpoint exists, so malicious files cannot be submitted"),
         ("ai_quality", "generalization_evaluator_v1", EvalStatus.BLOCKED_BY_SYSTEM_CAPABILITY,
          "six of seven corpus datasets cannot be ingested; variance is undefined"),
-        ("ai_quality", "live_sdih_detection_v1", EvalStatus.BLOCKED_BY_SYSTEM_CAPABILITY,
-         "get_dataset_rule_policy raises for every dataset, so the agent cannot be invoked"),
+        ("ai_quality", "live_sdih_detection_v1", EvalStatus.NOT_EXECUTED,
+         "requires a paid model call against a live agent; runs in nightly and pre_release only"),
         ("ai_security", "promptfoo_injection_v1", EvalStatus.NOT_EXECUTED,
          "requires npx promptfoo, network access and a paid model call"),
         ("ai_quality", "geval_domain_v1", EvalStatus.NOT_EXECUTED,
@@ -461,7 +518,10 @@ def main(argv: list[str] | None = None) -> int:
 
     regression = (
         regression_engine.evaluate(
-            results, baseline_run_id=approved_baseline, write_evidence=write
+            results,
+            baseline_run_id=approved_baseline,
+            write_evidence=write,
+            profile=args.mode,
         )
         if approved_baseline
         else EvalResult(
