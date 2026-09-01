@@ -46,6 +46,7 @@ from src.services.supabase_dataset import (
     profile_dataset as profile_supabase_dataset,
 )
 from src.services.versioned_dataset import (
+    SourceArtifactRef,
     materialize_source_artifact,
     profile_frame,
     read_verified_frame,
@@ -102,6 +103,60 @@ def _uploaded_dataset_path(dataset_id: str) -> Path | None:
         if candidate.exists():
             return candidate
     return None
+
+
+def _materialize_versioned_dataset_path(db: Session, dataset_id: str) -> tuple[Path | None, bool]:
+    """Materialize and verify the latest immutable source artifact.
+
+    Canonical imports are profiled from ``dataset_versions`` and are not copied
+    into the legacy ``source_rows`` table. DQ execution must therefore use the
+    verified source artifact even when Supabase is configured as the default
+    backend. Returns ``(path, temporary)``; only object-storage downloads are
+    temporary and owned by the caller.
+    """
+    version = (
+        db.query(DatasetVersionModel)
+        .filter_by(dataset_id=dataset_id, status="READY")
+        .order_by(DatasetVersionModel.version_number.desc())
+        .first()
+    )
+    if not version:
+        return None, False
+    try:
+        metadata = json.loads(version.source_metadata_json or "{}")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("READY dataset version has invalid source metadata") from exc
+    artifact = (
+        db.query(GovernedArtifactModel)
+        .filter_by(
+            dataset_id=dataset_id,
+            dataset_version_id=version.id,
+            artifact_type="SOURCE_DATASET",
+        )
+        .first()
+    )
+    if not artifact or artifact.checksum != version.checksum:
+        raise ValueError("READY dataset version has no matching SOURCE_DATASET artifact")
+    storage_locator = artifact.storage_locator
+    source_ref = SourceArtifactRef(
+        bucket=metadata.get("bucket"),
+        object_key=metadata.get("object_key") or storage_locator,
+        checksum=version.checksum,
+        size_bytes=int(metadata.get("size_bytes") or 0),
+        format=metadata.get("format") or "csv",
+        filename=metadata.get("filename") or "dataset.csv",
+        storage_locator=storage_locator,
+        created_by_request=False,
+        version_id=metadata.get("version_id"),
+    )
+    path = materialize_source_artifact(source_ref)
+    read_verified_frame(
+        path,
+        checksum=version.checksum,
+        size_bytes=source_ref.size_bytes,
+        schema=metadata.get("schema"),
+    )
+    return path, storage_locator.startswith("object://")
 
 
 def _profile_uploaded_dataset(db: Session, dataset_id: str, path: Path) -> dict:
@@ -541,7 +596,7 @@ def run_ingest_profile(
                     detail={"job_id": job_id, "row_count": profile_payload["row_count"], "source": "uploaded-file"},
                 )
                 return
-            if _supabase_source_url():
+            if dataset_id == DEMO_TAXI_DATASET_ID and _supabase_source_url():
                 job.progress = 35.0
                 job.message = "Profiling canonical Supabase rows..."
                 db.commit()
@@ -1201,6 +1256,7 @@ def run_dq_checks(
     *,
     trigger_anomaly: bool = True,
     finalize_job: bool = True,
+    workflow_run_id: str | None = None,
 ):
     """
     Dashboard execution adapter.
@@ -1212,6 +1268,8 @@ def run_dq_checks(
     engine = get_engine()
     source_engine = None
     source_connection = None
+    versioned_path: Path | None = None
+    versioned_temporary = False
     with Session(engine) as db:
         job = db.query(JobModel).filter(JobModel.id == job_id).first()
         if not job:
@@ -1224,15 +1282,19 @@ def run_dq_checks(
         job.status = "RUNNING"
         job.progress = 10.0
         job.message = "Claiming approved rule set..."
+        job.error = None
         dq_run.status = "RUNNING"
+        dq_run.error_message = None
         db.commit()
 
         try:
-            source_url = _supabase_source_url()
-            if source_url:
-                source_engine = create_supabase_engine(source_url)
-                source_connection = source_engine.connect()
             dataset_id = dq_run.dataset_id
+            versioned_path, versioned_temporary = _materialize_versioned_dataset_path(db, dataset_id)
+            if versioned_path is None and dataset_id == DEMO_TAXI_DATASET_ID:
+                source_url = _supabase_source_url()
+                if source_url:
+                    source_engine = create_supabase_engine(source_url)
+                    source_connection = source_engine.connect()
             rule_ids = json.loads(dq_run.rule_ids)
 
             # Get approved rule versions
@@ -1281,12 +1343,16 @@ def run_dq_checks(
             total_checked = 0
             total_failed = 0
 
-            uploaded_path = _uploaded_dataset_path(dataset_id)
+            uploaded_path = versioned_path or _uploaded_dataset_path(dataset_id)
 
             # Report the stages this executor really performs, so the Graph 2
             # panel reflects the run instead of showing five dbt nodes that were
             # never part of this path.
-            start_graph_run(dataset_id=dataset_id, dq_run_id=run_id)
+            start_graph_run(
+                workflow_run_id=workflow_run_id,
+                dataset_id=dataset_id,
+                dq_run_id=run_id,
+            )
             with record_stage(
                 "G2_DIRECT", "compile_rules", "DETERMINISTIC", {"rules": len(rule_versions)}
             ) as compile_summary:
@@ -1416,6 +1482,7 @@ def run_dq_checks(
             dq_run.total_failed = total_failed
             dq_run.total_checked = total_checked
             dq_run.completed_at = utc_now()
+            dq_run.error_message = None
 
             # The steward workflow owns the subsequent anomaly analysis.  Its
             # single visible job must remain running until the report artifact
@@ -1423,6 +1490,7 @@ def run_dq_checks(
             job.status = "SUCCEEDED" if finalize_job else "RUNNING"
             job.progress = 100.0 if finalize_job else 90.0
             job.message = "Completed" if finalize_job else "Checks completed; preparing analysis report..."
+            job.error = None
             completed_at = utc_now()
             db.query(RuleConfigurationModel).filter(
                 RuleConfigurationModel.rule_proposal_id.in_([rule.rule_proposal_id for rule in rule_versions])
@@ -1507,3 +1575,5 @@ def run_dq_checks(
                 source_connection.close()
             if source_engine is not None:
                 source_engine.dispose()
+            if versioned_temporary and versioned_path is not None:
+                versioned_path.unlink(missing_ok=True)

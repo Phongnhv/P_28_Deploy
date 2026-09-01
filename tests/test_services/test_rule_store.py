@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session
 
 import src.services.rule_store as rule_store_module
+from src.config import Settings
 from src.main import app
 from src.models.database import DqResultModel, JobModel, RuleConfigurationModel, RuleProposalModel, RuleVersionModel
 from src.services.rule_store import (
@@ -140,6 +141,16 @@ def test_legacy_demo_dataset_requires_explicit_production_opt_in(monkeypatch):
     assert should_seed_legacy_demo_dataset("production") is True
     monkeypatch.setenv("SEED_LEGACY_DEMO_DATASET", "false")
     assert should_seed_legacy_demo_dataset("development") is False
+
+
+def test_production_disables_legacy_proposer_fallback_by_default():
+    settings = Settings(_env_file=None, app_env="production")
+    assert settings.rule_proposer_allow_legacy_fallback is False
+
+
+def test_production_legacy_proposer_fallback_requires_explicit_opt_in():
+    settings = Settings(_env_file=None, app_env="production", rule_proposer_allow_legacy_fallback=True)
+    assert settings.rule_proposer_allow_legacy_fallback is True
 
 
 def test_publish_api_endpoints():

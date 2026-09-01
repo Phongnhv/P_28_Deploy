@@ -168,7 +168,7 @@ export function NodeDetailDrawer({
         if (!cancelled) setDetail(value);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Unable to load node detail.");
+        if (!cancelled) setError(err instanceof Error ? err.message : (language === "vi" ? "Không thể tải chi tiết node." : "Unable to load node detail."));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -211,7 +211,7 @@ export function NodeDetailDrawer({
             <h3>{vi ? node.label_vi : node.label_en}</h3>
             <code>{node.name}</code>
           </div>
-          <button type="button" className="graph-drawer-close" onClick={onClose} aria-label="Close">
+          <button type="button" className="graph-drawer-close" onClick={onClose} aria-label={vi ? "Đóng" : "Close"}>
             ✕
           </button>
         </header>
@@ -226,7 +226,17 @@ export function NodeDetailDrawer({
             <section className="graph-drawer-metrics">
               <div>
                 <span>{vi ? "Trạng thái" : "Status"}</span>
-                <strong className={`state-${run.status.toLowerCase()}`}>{run.status}</strong>
+                <strong className={`state-${run.status.toLowerCase()}`}>
+                  {run.status === "SUCCEEDED"
+                    ? (vi ? "THÀNH CÔNG" : "SUCCEEDED")
+                    : run.status === "FAILED"
+                      ? (vi ? "THẤT BẠI" : "FAILED")
+                      : run.status === "RUNNING"
+                        ? (vi ? "ĐANG CHẠY" : "RUNNING")
+                        : run.status === "SKIPPED"
+                          ? (vi ? "BỎ QUA" : "SKIPPED")
+                          : run.status}
+                </strong>
               </div>
               <div>
                 <span>{vi ? "Thời lượng" : "Duration"}</span>

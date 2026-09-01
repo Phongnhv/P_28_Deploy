@@ -172,7 +172,19 @@ async def main():
         sys.exit(1)
 
     logger.info(f"Initializing database and running job {job_id} of type {job_type}")
-    init_db()
+    # Canonical jobs are dispatched by an API/migration-managed database. Running
+    # the development DDL reconciliation here as well races the API startup and
+    # can deadlock shared Supabase tables before the job is claimed.
+    canonical_job_types = {
+        "INGEST_PROFILE",
+        "GRAPH1_EXECUTION",
+        "GRAPH1_CONTINUATION",
+        "ANALYSIS_GRAPH2_GRAPH3",
+    }
+    if job_type not in canonical_job_types:
+        init_db()
+    else:
+        logger.info("Skipping worker startup schema mutation for canonical job")
 
     engine = get_engine()
     linked_entity = None

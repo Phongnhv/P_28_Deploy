@@ -11,8 +11,10 @@ stream deterministically, so the response body is fully drainable).
 import uuid
 
 import pytest
+from fastapi.routing import APIRoute
 from sqlalchemy.orm import Session
 
+from src.api.routes import get_db, router
 from src.models.database import WorkflowRunModel
 from src.services.node_event_stream import broker
 from src.services.rule_store import get_engine
@@ -42,11 +44,30 @@ async def _login_steward(client) -> dict:
     return {"X-CSRF-Token": res.json()["csrf_token"]}
 
 
+def test_stream_route_does_not_hold_request_db_dependency():
+    """SSE auth must finish its DB session before the streaming body starts."""
+    route = next(
+        route
+        for route in router.routes
+        if isinstance(route, APIRoute) and route.path == "/workflows/{workflow_run_id}/stream"
+    )
+    dependency_calls = {dependency.call for dependency in route.dependant.dependencies}
+    assert get_db not in dependency_calls
+
+
 @pytest.mark.asyncio
 async def test_stream_requires_authentication(client):
     run_id = _seed_workflow_run()
     r = await client.get(f"/api/v1/workflows/{run_id}/stream")
     assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_latest_workflow_restores_persisted_state_without_creating_a_run(steward_client):
+    run_id = _seed_workflow_run()
+    response = await steward_client.get(f"/api/v1/datasets/{_DATASET_ID}/workflows/latest")
+    assert response.status_code == 200
+    assert response.json()["id"] == run_id
 
 
 @pytest.mark.asyncio

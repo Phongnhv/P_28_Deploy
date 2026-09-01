@@ -865,13 +865,18 @@ async def _propose_for_table(
                             status="FAILED",
                             error=str(agent_exc),
                         )
+                        if not getattr(settings, "rule_proposer_allow_legacy_fallback", True):
+                            logger.exception(
+                                "[%s] DeepAgent gặp lỗi (%s); legacy fallback đã bị tắt",
+                                table_name,
+                                agent_exc,
+                            )
+                            raise
                         logger.exception(
                             "[%s] DeepAgent gặp lỗi (%s), fallback sang 1-shot structured LLM",
                             table_name,
                             agent_exc,
                         )
-                        if not getattr(settings, "rule_proposer_allow_legacy_fallback", True):
-                            raise
 
                 if candidates is not None:
                     coverage_requirements = json.dumps(candidates, ensure_ascii=False)

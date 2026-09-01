@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DataDictionary, Dataset } from "../../types";
 
 /**
@@ -84,23 +84,32 @@ export function Step1DataPreparation({
   const [showProfile, setShowProfile] = useState(false);
   const [showObservatory, setShowObservatory] = useState(false);
 
-  // Everything below the picker describes one dataset. Switching datasets must
-  // collapse it, or the panels keep showing the previous dataset's numbers
-  // under the new dataset's name.
-  //
-  // Keyed on the id alone. Depending on the `dataset` object meant any refresh
-  // that rebuilt the list — polling a job, finishing an upload — produced a new
-  // object identity and re-ran this, silently collapsing the profile panel the
-  // user had just opened.
   const datasetId = dataset?.id;
+  const prevDatasetIdRef = useRef<string | undefined>(datasetId);
+  const loadDictionaryRef = useRef(loadDictionary);
+  loadDictionaryRef.current = loadDictionary;
+
+  // Auto-reveal profile panel when profiling finishes
+  const prevProfilingRef = useRef(profiling);
   useEffect(() => {
-    setShowProfile(false);
-    setShowObservatory(false);
-    setDictionaryError("");
-    setDictionary(null);
+    if (prevProfilingRef.current && !profiling && profileReady) {
+      setShowProfile(true);
+    }
+    prevProfilingRef.current = profiling;
+  }, [profiling, profileReady]);
+
+  // Only collapse and reset panels when switching to a DIFFERENT dataset ID
+  useEffect(() => {
+    if (prevDatasetIdRef.current !== datasetId) {
+      prevDatasetIdRef.current = datasetId;
+      setShowProfile(false);
+      setShowObservatory(false);
+      setDictionaryError("");
+      setDictionary(null);
+    }
     if (!datasetId) return;
     let cancelled = false;
-    loadDictionary(datasetId)
+    loadDictionaryRef.current(datasetId)
       .then((value) => {
         if (!cancelled) setDictionary(value);
       })
@@ -110,7 +119,7 @@ export function Step1DataPreparation({
     return () => {
       cancelled = true;
     };
-  }, [datasetId, loadDictionary]);
+  }, [datasetId]);
 
   async function handleDictionaryUpload(file: File) {
     if (!dataset) return;
@@ -352,11 +361,9 @@ export function Step1DataPreparation({
             disabled={!dataset || profiling}
             aria-expanded={showProfile}
             onClick={() => {
-              setShowProfile((prev) => {
-                const next = !prev;
-                if (next && !profileReady) onProfileDataset();
-                return next;
-              });
+              const openingProfile = !showProfile;
+              setShowProfile(openingProfile);
+              if (openingProfile && !profileReady) onProfileDataset();
             }}
           >
             {profiling

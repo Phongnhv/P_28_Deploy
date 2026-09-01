@@ -1,0 +1,23 @@
+.gcloudignore
+.git/
+.git/**
+
+# Never upload local credentials or runtime environments to Cloud Build.
+.env
+.env.*
+!.env.example
+.venv-e2e/
+venv/
+env/
+
+# Local test/runtime artifacts.
+.pytest-*/
+pytest_tmp/
+output/
+data/
+*.db
+*.sqlite3
+
+# The Cloud Run image only needs the backend sources.
+frontend/node_modules/
+frontend/dist/

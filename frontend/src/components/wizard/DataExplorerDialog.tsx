@@ -143,9 +143,11 @@ export function DataExplorerDialog({
             <span className="eyebrow">{vi ? "XEM NHANH DỮ LIỆU" : "DATA PREVIEW"}</span>
             <h3>{dataset.name}</h3>
             <p>
-              {vi
-                ? `${columns.length} cột · ${PREVIEW_LIMIT} dòng đầu trong tổng số ${dataset.row_count.toLocaleString()} dòng.`
-                : `${columns.length} columns · first ${PREVIEW_LIMIT} of ${dataset.row_count.toLocaleString()} rows.`}
+              {!response && loading
+                ? (vi ? "Đang tải bản xem trước…" : "Loading preview…")
+                : vi
+                  ? `${columns.length} cột · ${PREVIEW_LIMIT} dòng đầu trong tổng số ${dataset.row_count.toLocaleString()} dòng.`
+                  : `${columns.length} columns · first ${PREVIEW_LIMIT} of ${dataset.row_count.toLocaleString()} rows.`}
             </p>
           </div>
           <button type="button" className="explorer-dialog-close" onClick={onClose} aria-label={vi ? "Đóng" : "Close"}>

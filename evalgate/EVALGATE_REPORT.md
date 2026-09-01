@@ -1,5 +1,3900 @@
 # EVALGATE — BÁO CÁO TRIỂN KHAI, KIẾN TRÚC & TỰ ĐÁNH GIÁ
 
+> **ĐỌC MỤC 20 TRƯỚC.** Toàn bộ điểm số trong §1–§19 thuộc các run mà phán quyết
+> **chưa bao giờ có hiệu lực** — hoặc `EVALGATE_STALE` vì cây làm việc bẩn, hoặc điểm# PROMPT — READ-ONLY REVIEW TOÀN BỘ HỆ THỐNG AI
+>
+>
+>
+>
+> Bạn là **Senior AI System Reviewer / AI Architect / Technical Auditor**.
+>
+>
+>
+> Nhiệm vụ của bạn là **đọc, hiểu và phân tích toàn bộ hệ thống AI hiện tại ở chế độ READ-ONLY**.
+>
+>
+>
+> ## NGUYÊN TẮC BẮT BUỘC
+>
+>
+>
+> **TUYỆT ĐỐI KHÔNG ĐƯỢC THAY ĐỔI HỆ THỐNG.**
+>
+>
+>
+> Bạn chỉ được:
+>
+>
+>
+> * Xem file.
+>
+> * Đọc nội dung file.
+>
+> * Phân tích.
+>
+> * Đối chiếu thông tin giữa các file.
+>
+> * Mô tả kiến trúc và nhiệm vụ.
+>
+> * Chỉ ra vấn đề hoặc điểm chưa rõ.
+>
+>
+>
+> Bạn **KHÔNG ĐƯỢC**:
+>
+>
+>
+> * Viết code.
+>
+> * Sửa code.
+>
+> * Tạo code mới.
+>
+> * Xóa code.
+>
+> * Refactor code.
+>
+> * Tạo file mới.
+>
+> * Xóa file.
+>
+> * Đổi tên file.
+>
+> * Di chuyển file.
+>
+> * Sửa bất kỳ file `.md` nào.
+>
+> * Sửa configuration.
+>
+> * Sửa `.env`.
+>
+> * Cài package.
+>
+> * Chạy migration.
+>
+> * Thay đổi database.
+>
+> * Commit Git.
+>
+> * Push Git.
+>
+> * Tạo branch.
+>
+> * Tự động sửa lỗi.
+>
+> * Thực hiện bất kỳ thao tác nào làm thay đổi filesystem hoặc repository.
+>
+>
+>
+> Nếu phát hiện lỗi, **chỉ báo cáo lỗi và đề xuất hướng xử lý bằng văn bản**.
+>
+>
+>
+> Không được tự sửa.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 1 — KHẢO SÁT TOÀN BỘ HỆ THỐNG
+>
+>
+>
+> Đầu tiên hãy xem cấu trúc thư mục của project để hiểu hệ thống đang gồm những thành phần nào.
+>
+>
+>
+> Phân loại các thành phần chính, ví dụ:
+>
+>
+>
+> * Documentation
+>
+> * Backend
+>
+> * Frontend
+>
+> * AI/LLM
+>
+> * Agent
+>
+> * LangGraph
+>
+> * RAG
+>
+> * Database
+>
+> * Data pipeline
+>
+> * API
+>
+> * Evaluation
+>
+> * Testing
+>
+> * Observability
+>
+> * Deployment
+>
+> * Docker
+>
+> * Config
+>
+> * Scripts
+>
+> * Assets
+>
+> * Logs
+>
+>
+>
+> Mục tiêu của bước này chỉ là xây dựng **System Map**.
+>
+>
+>
+> Không được thay đổi bất kỳ file nào.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 2 — ĐỌC TOÀN BỘ FILE `.md`
+>
+>
+>
+> Hãy tìm và đọc **toàn bộ file có phần mở rộng `.md` trong repository**, bao gồm cả các thư mục con.
+>
+>
+>
+> Ví dụ có thể gồm:
+>
+>
+>
+> * `README.md`
+>
+> * `PRD.md`
+>
+> * `PRODUCT_BRIEF.md`
+>
+> * `AI_SPEC.md`
+>
+> * `ARCHITECTURE.md`
+>
+> * `TASKS.md`
+>
+> * `ROADMAP.md`
+>
+> * `EVALUATION.md`
+>
+> * `CONTRIBUTING.md`
+>
+> * `docs/**/*.md`
+>
+> * hoặc bất kỳ `.md` nào khác.
+>
+>
+>
+> Không được chỉ đọc README.
+>
+>
+>
+> Phải kiểm tra toàn bộ repository để xác định tất cả các file Markdown hiện có.
+>
+>
+>
+> Với mỗi file `.md`, hãy cho biết:
+>
+>
+>
+> | File | Mục đích | Nội dung chính | Thành phần hệ thống liên quan | Thành viên liên quan |
+>
+> | ---- | -------- | -------------- | ----------------------------- | -------------------- |
+>
+>
+>
+> Sau đó giải thích ngắn gọn:
+>
+>
+>
+> * File này dùng để làm gì?
+>
+> * Nó mô tả phần nào của hệ thống?
+>
+> * Nó có liên quan đến file `.md` nào khác?
+>
+> * Có thông tin nào bị trùng lặp không?
+>
+> * Có thông tin nào mâu thuẫn với tài liệu khác không?
+>
+> * Có phần nào đã lỗi thời hoặc chưa rõ không?
+>
+>
+>
+> **Không chỉnh sửa tài liệu dù phát hiện lỗi.**
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 3 — XÁC ĐỊNH MỤC TIÊU TOÀN BỘ HỆ THỐNG
+>
+>
+>
+> Dựa **chủ yếu trên bằng chứng trong các file `.md`**, hãy xác định:
+>
+>
+>
+> 1. Hệ thống đang giải quyết bài toán gì?
+>
+> 2. User chính là ai?
+>
+> 3. Input của hệ thống là gì?
+>
+> 4. Output của hệ thống là gì?
+>
+> 5. AI được sử dụng ở đâu?
+>
+> 6. LLM được sử dụng ở đâu?
+>
+> 7. Agent được sử dụng ở đâu?
+>
+> 8. Các Tool của Agent là gì?
+>
+> 9. Database/Data Source là gì?
+>
+> 10. Frontend có nhiệm vụ gì?
+>
+> 11. Backend có nhiệm vụ gì?
+>
+> 12. Evaluation được thực hiện thế nào?
+>
+> 13. Flow từ User → System → AI → Result diễn ra như thế nào?
+>
+>
+>
+> Hãy mô tả dưới dạng:
+>
+>
+>
+> ```text
+>
+> User
+>
+>   ↓
+>
+> Frontend
+>
+>   ↓
+>
+> Backend/API
+>
+>   ↓
+>
+> AI/Agent
+>
+>   ↓
+>
+> Tools/Data
+>
+>   ↓
+>
+> Processing/Evaluation
+>
+>   ↓
+>
+> Result
+>
+>   ↓
+>
+> User
+>
+> ```
+>
+>
+>
+> Điều chỉnh flow dựa trên hệ thống thực tế.
+>
+>
+>
+> **Không được tự tưởng tượng thành phần không tồn tại.**
+>
+>
+>
+> Nếu tài liệu không đủ bằng chứng, ghi:
+>
+>
+>
+>> Chưa đủ bằng chứng trong repository để xác nhận.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 4 — PHÂN TÍCH NHIỆM VỤ TỪNG THÀNH VIÊN
+>
+>
+>
+> Đây là phần quan trọng nhất.
+>
+>
+>
+> Tìm trong toàn bộ `.md` tất cả thông tin liên quan đến:
+>
+>
+>
+> * Member
+>
+> * Team
+>
+> * Owner
+>
+> * Reviewer
+>
+> * Assignee
+>
+> * Contributor
+>
+> * Responsibility
+>
+> * Ownership
+>
+> * Task
+>
+> * PR
+>
+> * Milestone
+>
+> * Role
+>
+> * Deliverable
+>
+>
+>
+> Sau đó xác định **tất cả thành viên của project**.
+>
+>
+>
+> Với mỗi thành viên, phân tích chi tiết:
+>
+>
+>
+> ### 1. Thông tin vai trò
+>
+>
+>
+> * Họ tên.
+>
+> * Role chính.
+>
+> * Role phụ nếu có.
+>
+> * Phạm vi ownership.
+>
+>
+>
+> ### 2. Nhiệm vụ cụ thể
+>
+>
+>
+> Liệt kê tất cả nhiệm vụ được giao dựa trên tài liệu.
+>
+>
+>
+> Không chỉ ghi chung chung như:
+>
+>
+>
+>> Làm Backend.
+>
+>
+>
+> Mà phải phân rã, ví dụ:
+>
+>
+>
+> ```text
+>
+> Backend
+>
+> ├── Thiết kế API
+>
+> ├── Implement FastAPI
+>
+> ├── Kết nối database
+>
+> ├── Agent integration
+>
+> ├── Persistence
+>
+> ├── Error handling
+>
+> ├── Logging
+>
+> ├── Testing
+>
+> └── Deployment integration
+>
+> ```
+>
+>
+>
+> ### 3. Deliverables
+>
+>
+>
+> Thành viên đó cần tạo ra hoặc chịu trách nhiệm cho những đầu ra nào?
+>
+>
+>
+> Ví dụ:
+>
+>
+>
+> * API.
+>
+> * UI.
+>
+> * Agent.
+>
+> * Test cases.
+>
+> * README.
+>
+> * PRD.
+>
+> * Evaluation.
+>
+> * Database.
+>
+> * Demo.
+>
+> * Video.
+>
+> * Docker.
+>
+> * Deployment.
+>
+> * Evidence.
+>
+>
+>
+> ### 4. Các file/module liên quan
+>
+>
+>
+> Chỉ ra tài liệu nào cho thấy thành viên đó phụ trách phần nào.
+>
+>
+>
+> Ví dụ:
+>
+>
+>
+> | Thành viên | Responsibility | Bằng chứng từ file          |
+>
+> | ---------- | -------------- | --------------------------- |
+>
+> | A          | Backend API    | `docs/team.md`, `README.md` |
+>
+> | B          | Evaluation     | `EVALUATION.md`             |
+>
+>
+>
+> Không được tự gán ownership nếu tài liệu không nói rõ.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 5 — TASK → MEMBER MAPPING
+>
+>
+>
+> Tạo bảng tổng hợp:
+>
+>
+>
+> | Task / Component | Owner chính | Reviewer | Deliverable | Dependency | Evidence |
+>
+> | ---------------- | ----------- | -------- | ----------- | ---------- | -------- |
+>
+>
+>
+> Phải cố gắng mapping toàn bộ các nhiệm vụ quan trọng của hệ thống.
+>
+>
+>
+> Nếu một task:
+>
+>
+>
+> * Không có owner → đánh dấu `NO OWNER`.
+>
+> * Có nhiều owner nhưng không rõ người chịu trách nhiệm chính → đánh dấu `OWNERSHIP AMBIGUOUS`.
+>
+> * Có owner nhưng không có reviewer → đánh dấu `NO REVIEWER`.
+>
+> * Có task được mô tả khác nhau giữa hai tài liệu → đánh dấu `CONFLICT`.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 6 — PHÂN TÍCH WORKLOAD TỪNG THÀNH VIÊN
+>
+>
+>
+> Đối với từng người, đánh giá:
+>
+>
+>
+> * Số lượng nhóm nhiệm vụ.
+>
+> * Độ rộng phạm vi.
+>
+> * Mức độ kỹ thuật.
+>
+> * Số dependency.
+>
+> * Trách nhiệm integration.
+>
+> * Trách nhiệm documentation.
+>
+> * Trách nhiệm evaluation.
+>
+> * Trách nhiệm deployment.
+>
+> * Trách nhiệm demo/release.
+>
+>
+>
+> Sau đó đánh giá:
+>
+>
+>
+> ```text
+>
+> Workload: Low / Medium / High / Very High
+>
+> Technical Complexity: Low / Medium / High / Very High
+>
+> Integration Risk: Low / Medium / High / Very High
+>
+> ```
+>
+>
+>
+> Giải thích lý do dựa trên nhiệm vụ thực tế.
+>
+>
+>
+> Không đánh giá dựa vào cảm tính.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 7 — DEPENDENCY GIỮA CÁC THÀNH VIÊN
+>
+>
+>
+> Phân tích dependency giữa các thành viên.
+>
+>
+>
+> Ví dụ:
+>
+>
+>
+> ```text
+>
+> Product/BA
+>
+>     ↓ requirements
+>
+> Backend/AI
+>
+>     ↓ API
+>
+> Frontend
+>
+>     ↓ integrated application
+>
+> QA/Evaluation
+>
+>     ↓ evidence
+>
+> Product Lead
+>
+>     ↓ final demo/release
+>
+> ```
+>
+>
+>
+> Xác định:
+>
+>
+>
+> * Ai phụ thuộc vào ai?
+>
+> * Task nào phải hoàn thành trước?
+>
+> * Thành viên nào là bottleneck?
+>
+> * Thành viên nào chịu nhiều integration dependency nhất?
+>
+> * Nếu một người chậm, phần nào của hệ thống bị ảnh hưởng?
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 8 — KIỂM TRA OWNERSHIP
+>
+>
+>
+> Kiểm tra xem có tình trạng:
+>
+>
+>
+> ### Missing Ownership
+>
+>
+>
+> Task quan trọng nhưng không có người chịu trách nhiệm.
+>
+>
+>
+> ### Duplicate Ownership
+>
+>
+>
+> Nhiều người được mô tả là owner của cùng một phần mà không phân biệt trách nhiệm.
+>
+>
+>
+> ### Ownership Conflict
+>
+>
+>
+> Hai tài liệu khác nhau mô tả owner khác nhau.
+>
+>
+>
+> ### Responsibility Overlap
+>
+>
+>
+> Hai thành viên có phạm vi nhiệm vụ chồng chéo.
+>
+>
+>
+> ### Responsibility Gap
+>
+>
+>
+> Có component trong kiến trúc nhưng không có thành viên nào phụ trách.
+>
+>
+>
+> Chỉ báo cáo.
+>
+>
+>
+> **Không sửa tài liệu.**
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 9 — KIỂM TRA MỨC ĐỘ PHÙ HỢP GIỮA DOCUMENTATION VÀ TEAM TASK
+>
+>
+>
+> Đối chiếu:
+>
+>
+>
+> ```text
+>
+> System Requirements
+>
+>         ↕
+>
+> Architecture
+>
+>         ↕
+>
+> Components
+>
+>         ↕
+>
+> Tasks
+>
+>         ↕
+>
+> Member Ownership
+>
+>         ↕
+>
+> Evaluation
+>
+>         ↕
+>
+> Demo / Deliverables
+>
+> ```
+>
+>
+>
+> Tìm những trường hợp như:
+>
+>
+>
+> * Requirement có nhưng không có task.
+>
+> * Task có nhưng không liên quan requirement.
+>
+> * Component có nhưng không có owner.
+>
+> * Owner có nhiệm vụ nhưng không có deliverable rõ ràng.
+>
+> * Evaluation không kiểm tra requirement quan trọng.
+>
+> * README khác PRD.
+>
+> * Architecture khác task assignment.
+>
+> * PR plan khác ownership table.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 10 — ĐÁNH GIÁ TỪNG THÀNH VIÊN
+>
+>
+>
+> Tạo một section riêng cho từng người:
+>
+>
+>
+> ```text
+>
+> ## [Tên thành viên]
+>
+>
+>
+> Role:
+>
+> Ownership:
+>
+>
+>
+> Main Responsibilities:
+>
+> 1.
+>
+> 2.
+>
+> 3.
+>
+>
+>
+> Technical Responsibilities:
+>
+> 1.
+>
+> 2.
+>
+>
+>
+> Documentation Responsibilities:
+>
+> 1.
+>
+> 2.
+>
+>
+>
+> Dependencies:
+>
+> - Phụ thuộc:
+>
+> - Người phụ thuộc vào thành viên này:
+>
+>
+>
+> Expected Deliverables:
+>
+> - ...
+>
+>
+>
+> Potential Risks:
+>
+> - ...
+>
+>
+>
+> Workload:
+>
+> Technical Complexity:
+>
+> Integration Importance:
+>
+>
+>
+> Evidence:
+>
+> - file A
+>
+> - file B
+>
+> ```
+>
+>
+>
+> Nếu chưa đủ bằng chứng để xác nhận một nhiệm vụ, ghi rõ:
+>
+>
+>
+>> Không đủ bằng chứng để xác nhận đây là nhiệm vụ chính thức của thành viên.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 11 — SO SÁNH KHỐI LƯỢNG CÔNG VIỆC
+>
+>
+>
+> Sau khi phân tích từng thành viên, tạo bảng:
+>
+>
+>
+> | Thành viên | Role | Số nhóm nhiệm vụ | Technical Complexity | Workload | Integration Importance | Risk |
+>
+> | ---------- | ---- | ---------------: | -------------------- | -------- | ---------------------- | ---- |
+>
+>
+>
+> Sau đó trả lời:
+>
+>
+>
+> ### Ai đang có workload lớn nhất?
+>
+>
+>
+> ### Ai đang có nhiệm vụ kỹ thuật khó nhất?
+>
+>
+>
+> ### Ai là bottleneck lớn nhất?
+>
+>
+>
+> ### Ai có nhiều dependency nhất?
+>
+>
+>
+> ### Ai chịu trách nhiệm integration lớn nhất?
+>
+>
+>
+> ### Có thành viên nào đang bị giao quá nhiều phạm vi không?
+>
+>
+>
+> Phải giải thích dựa trên evidence từ tài liệu.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 12 — PHÁT HIỆN MÂU THUẪN TRONG DOCUMENTATION
+>
+>
+>
+> Tạo bảng:
+>
+>
+>
+> | Severity | File A | File B | Nội dung mâu thuẫn | Ảnh hưởng |
+>
+> | -------- | ------ | ------ | ------------------ | --------- |
+>
+>
+>
+> Severity:
+>
+>
+>
+> * `CRITICAL`
+>
+> * `HIGH`
+>
+> * `MEDIUM`
+>
+> * `LOW`
+>
+>
+>
+> Ví dụ:
+>
+>
+>
+> ```text
+>
+> PRD nói A chịu trách nhiệm Backend
+>
+> nhưng
+>
+> TASKS.md nói B chịu trách nhiệm Backend
+>
+> ```
+>
+>
+>
+> Không tự quyết định tài liệu nào đúng nếu không có bằng chứng.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 13 — CÁC ĐIỂM CHƯA RÕ
+>
+>
+>
+> Liệt kê riêng:
+>
+>
+>
+> ```text
+>
+> UNKNOWN-01
+>
+> UNKNOWN-02
+>
+> UNKNOWN-03
+>
+> ```
+>
+>
+>
+> Bao gồm:
+>
+>
+>
+> * Ownership chưa rõ.
+>
+> * Requirement chưa rõ.
+>
+> * Task chưa có acceptance criteria.
+>
+> * Reviewer chưa xác định.
+>
+> * Deadline chưa xác định.
+>
+> * Dependency chưa rõ.
+>
+> * Deliverable chưa rõ.
+>
+> * Tài liệu thiếu thông tin.
+>
+>
+>
+> Không tự điền thông tin còn thiếu.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 14 — KẾT QUẢ CUỐI CÙNG
+>
+>
+>
+> Cuối quá trình review, trả báo cáo theo cấu trúc:
+>
+>
+>
+> ## A. Executive Summary
+>
+>
+>
+> Tóm tắt hệ thống.
+>
+>
+>
+> ## B. System Map
+>
+>
+>
+> Các component chính.
+>
+>
+>
+> ## C. Danh sách toàn bộ `.md`
+>
+>
+>
+> Toàn bộ Markdown đã đọc.
+>
+>
+>
+> ## D. Mục tiêu hệ thống
+>
+>
+>
+> Problem → Input → Processing → Output.
+>
+>
+>
+> ## E. Team Structure
+>
+>
+>
+> Danh sách thành viên và role.
+>
+>
+>
+> ## F. Member Responsibility Analysis
+>
+>
+>
+> Phân tích chi tiết từng người.
+>
+>
+>
+> ## G. Task Ownership Matrix
+>
+>
+>
+> Task → Owner → Reviewer → Deliverable.
+>
+>
+>
+> ## H. Dependency Matrix
+>
+>
+>
+> Dependency giữa các thành viên.
+>
+>
+>
+> ## I. Workload Comparison
+>
+>
+>
+> So sánh workload.
+>
+>
+>
+> ## J. Ownership Problems
+>
+>
+>
+> Missing / Duplicate / Conflict / Overlap.
+>
+>
+>
+> ## K. Documentation Conflicts
+>
+>
+>
+> Các điểm mâu thuẫn.
+>
+>
+>
+> ## L. Missing Information
+>
+>
+>
+> Những thông tin repository chưa cung cấp.
+>
+>
+>
+> ## M. Top Risks
+>
+>
+>
+> Top 5–10 rủi ro lớn nhất về team/task/system.
+>
+>
+>
+> ## N. Final Assessment
+>
+>
+>
+> Đánh giá mức độ rõ ràng của:
+>
+>
+>
+> * Requirements
+>
+> * Architecture
+>
+> * Ownership
+>
+> * Task decomposition
+>
+> * Evaluation
+>
+> * Integration
+>
+> * Documentation
+>
+>
+>
+> Chấm theo thang:
+>
+>
+>
+> ```text
+>
+> 0/10 → hoàn toàn chưa rõ
+>
+> 10/10 → rất rõ và có thể triển khai ngay
+>
+> ```
+>
+>
+>
+> Giải thích ngắn gọn cho từng điểm.
+>
+>
+>
+> ---
+>
+>
+>
+> # QUY TẮC EVIDENCE
+>
+>
+>
+> Mọi nhận định quan trọng phải cố gắng gắn với file nguồn.
+>
+>
+>
+> Ví dụ:
+>
+>
+>
+> ```text
+>
+> Evidence:
+>
+> - `README.md`
+>
+> - `docs/PRD.md`
+>
+> - `docs/team/tasks.md`
+>
+> ```
+>
+>
+>
+> Phân biệt rõ ba loại:
+>
+>
+>
+> ### CONFIRMED
+>
+>
+>
+> Có bằng chứng trực tiếp trong tài liệu.
+>
+>
+>
+> ### INFERRED
+>
+>
+>
+> Có thể suy luận từ nhiều tài liệu nhưng không được viết rõ.
+>
+>
+>
+> ### UNKNOWN
+>
+>
+>
+> Không đủ bằng chứng.
+>
+>
+>
+> Không biến `INFERRED` thành `CONFIRMED`.
+>
+>
+>
+> ---
+>
+>
+>
+> # LỆNH READ-ONLY CUỐI CÙNG
+>
+>
+>
+> Đây là một nhiệm vụ **AUDIT / REVIEW ONLY**.
+>
+>
+>
+> Trong toàn bộ quá trình:
+>
+>
+>
+>> KHÔNG CODE.
+>
+>> KHÔNG SỬA FILE.
+>
+>> KHÔNG TẠO FILE.
+>
+>> KHÔNG XÓA FILE.
+>
+>> KHÔNG REFACTOR.
+>
+>> KHÔNG COMMIT.
+>
+>> KHÔNG PUSH.
+>
+>> KHÔNG THAY ĐỔI HỆ THỐNG.
+>
+>
+>
+> Chỉ:
+>
+>
+>
+>> READ → ANALYZE → CROSS-CHECK → REPORT.
+>
+>
+>
+> Bắt đầu bằng việc **khảo sát repository và tìm toàn bộ file `.md`**, sau đó đọc từng file trước khi đưa ra bất kỳ kết luận nào về nhiệm vụ của các thành viên.# PROMPT — READ-ONLY REVIEW TOÀN BỘ HỆ THỐNG AI
+>
+>
+>
+> Bạn là **Senior AI System Reviewer / AI Architect / Technical Auditor**.
+>
+>
+>
+> Nhiệm vụ của bạn là **đọc, hiểu và phân tích toàn bộ hệ thống AI hiện tại ở chế độ READ-ONLY**.
+>
+>
+>
+> ## NGUYÊN TẮC BẮT BUỘC
+>
+>
+>
+> **TUYỆT ĐỐI KHÔNG ĐƯỢC THAY ĐỔI HỆ THỐNG.**
+>
+>
+>
+> Bạn chỉ được:
+>
+>
+>
+> * Xem file.
+>
+> * Đọc nội dung file.
+>
+> * Phân tích.
+>
+> * Đối chiếu thông tin giữa các file.
+>
+> * Mô tả kiến trúc và nhiệm vụ.
+>
+> * Chỉ ra vấn đề hoặc điểm chưa rõ.
+>
+>
+>
+> Bạn **KHÔNG ĐƯỢC**:
+>
+>
+>
+> * Viết code.
+>
+> * Sửa code.
+>
+> * Tạo code mới.
+>
+> * Xóa code.
+>
+> * Refactor code.
+>
+> * Tạo file mới.
+>
+> * Xóa file.
+>
+> * Đổi tên file.
+>
+> * Di chuyển file.
+>
+> * Sửa bất kỳ file `.md` nào.
+>
+> * Sửa configuration.
+>
+> * Sửa `.env`.
+>
+> * Cài package.
+>
+> * Chạy migration.
+>
+> * Thay đổi database.
+>
+> * Commit Git.
+>
+> * Push Git.
+>
+> * Tạo branch.
+>
+> * Tự động sửa lỗi.
+>
+> * Thực hiện bất kỳ thao tác nào làm thay đổi filesystem hoặc repository.
+>
+>
+>
+> Nếu phát hiện lỗi, **chỉ báo cáo lỗi và đề xuất hướng xử lý bằng văn bản**.
+>
+>
+>
+> Không được tự sửa.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 1 — KHẢO SÁT TOÀN BỘ HỆ THỐNG
+>
+>
+>
+> Đầu tiên hãy xem cấu trúc thư mục của project để hiểu hệ thống đang gồm những thành phần nào.
+>
+>
+>
+> Phân loại các thành phần chính, ví dụ:
+>
+>
+>
+> * Documentation
+>
+> * Backend
+>
+> * Frontend
+>
+> * AI/LLM
+>
+> * Agent
+>
+> * LangGraph
+>
+> * RAG
+>
+> * Database
+>
+> * Data pipeline
+>
+> * API
+>
+> * Evaluation
+>
+> * Testing
+>
+> * Observability
+>
+> * Deployment
+>
+> * Docker
+>
+> * Config
+>
+> * Scripts
+>
+> * Assets
+>
+> * Logs
+>
+>
+>
+> Mục tiêu của bước này chỉ là xây dựng **System Map**.
+>
+>
+>
+> Không được thay đổi bất kỳ file nào.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 2 — ĐỌC TOÀN BỘ FILE `.md`
+>
+>
+>
+> Hãy tìm và đọc **toàn bộ file có phần mở rộng `.md` trong repository**, bao gồm cả các thư mục con.
+>
+>
+>
+> Ví dụ có thể gồm:
+>
+>
+>
+> * `README.md`
+>
+> * `PRD.md`
+>
+> * `PRODUCT_BRIEF.md`
+>
+> * `AI_SPEC.md`
+>
+> * `ARCHITECTURE.md`
+>
+> * `TASKS.md`
+>
+> * `ROADMAP.md`
+>
+> * `EVALUATION.md`
+>
+> * `CONTRIBUTING.md`
+>
+> * `docs/**/*.md`
+>
+> * hoặc bất kỳ `.md` nào khác.
+>
+>
+>
+> Không được chỉ đọc README.
+>
+>
+>
+> Phải kiểm tra toàn bộ repository để xác định tất cả các file Markdown hiện có.
+>
+>
+>
+> Với mỗi file `.md`, hãy cho biết:
+>
+>
+>
+> | File | Mục đích | Nội dung chính | Thành phần hệ thống liên quan | Thành viên liên quan |
+>
+> | ---- | -------- | -------------- | ----------------------------- | -------------------- |
+>
+>
+>
+> Sau đó giải thích ngắn gọn:
+>
+>
+>
+> * File này dùng để làm gì?
+>
+> * Nó mô tả phần nào của hệ thống?
+>
+> * Nó có liên quan đến file `.md` nào khác?
+>
+> * Có thông tin nào bị trùng lặp không?
+>
+> * Có thông tin nào mâu thuẫn với tài liệu khác không?
+>
+> * Có phần nào đã lỗi thời hoặc chưa rõ không?
+>
+>
+>
+> **Không chỉnh sửa tài liệu dù phát hiện lỗi.**
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 3 — XÁC ĐỊNH MỤC TIÊU TOÀN BỘ HỆ THỐNG
+>
+>
+>
+> Dựa **chủ yếu trên bằng chứng trong các file `.md`**, hãy xác định:
+>
+>
+>
+> 1. Hệ thống đang giải quyết bài toán gì?
+>
+> 2. User chính là ai?
+>
+> 3. Input của hệ thống là gì?
+>
+> 4. Output của hệ thống là gì?
+>
+> 5. AI được sử dụng ở đâu?
+>
+> 6. LLM được sử dụng ở đâu?
+>
+> 7. Agent được sử dụng ở đâu?
+>
+> 8. Các Tool của Agent là gì?
+>
+> 9. Database/Data Source là gì?
+>
+> 10. Frontend có nhiệm vụ gì?
+>
+> 11. Backend có nhiệm vụ gì?
+>
+> 12. Evaluation được thực hiện thế nào?
+>
+> 13. Flow từ User → System → AI → Result diễn ra như thế nào?
+>
+>
+>
+> Hãy mô tả dưới dạng:
+>
+>
+>
+> ```text
+>
+> User
+>
+>   ↓
+>
+> Frontend
+>
+>   ↓
+>
+> Backend/API
+>
+>   ↓
+>
+> AI/Agent
+>
+>   ↓
+>
+> Tools/Data
+>
+>   ↓
+>
+> Processing/Evaluation
+>
+>   ↓
+>
+> Result
+>
+>   ↓
+>
+> User
+>
+> ```
+>
+>
+>
+> Điều chỉnh flow dựa trên hệ thống thực tế.
+>
+>
+>
+> **Không được tự tưởng tượng thành phần không tồn tại.**
+>
+>
+>
+> Nếu tài liệu không đủ bằng chứng, ghi:
+>
+>
+>
+>> Chưa đủ bằng chứng trong repository để xác nhận.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 4 — PHÂN TÍCH NHIỆM VỤ TỪNG THÀNH VIÊN
+>
+>
+>
+> Đây là phần quan trọng nhất.
+>
+>
+>
+> Tìm trong toàn bộ `.md` tất cả thông tin liên quan đến:
+>
+>
+>
+> * Member
+>
+> * Team
+>
+> * Owner
+>
+> * Reviewer
+>
+> * Assignee
+>
+> * Contributor
+>
+> * Responsibility
+>
+> * Ownership
+>
+> * Task
+>
+> * PR
+>
+> * Milestone
+>
+> * Role
+>
+> * Deliverable
+>
+>
+>
+> Sau đó xác định **tất cả thành viên của project**.
+>
+>
+>
+> Với mỗi thành viên, phân tích chi tiết:
+>
+>
+>
+> ### 1. Thông tin vai trò
+>
+>
+>
+> * Họ tên.
+>
+> * Role chính.
+>
+> * Role phụ nếu có.
+>
+> * Phạm vi ownership.
+>
+>
+>
+> ### 2. Nhiệm vụ cụ thể
+>
+>
+>
+> Liệt kê tất cả nhiệm vụ được giao dựa trên tài liệu.
+>
+>
+>
+> Không chỉ ghi chung chung như:
+>
+>
+>
+>> Làm Backend.
+>
+>
+>
+> Mà phải phân rã, ví dụ:
+>
+>
+>
+> ```text
+>
+> Backend
+>
+> ├── Thiết kế API
+>
+> ├── Implement FastAPI
+>
+> ├── Kết nối database
+>
+> ├── Agent integration
+>
+> ├── Persistence
+>
+> ├── Error handling
+>
+> ├── Logging
+>
+> ├── Testing
+>
+> └── Deployment integration
+>
+> ```
+>
+>
+>
+> ### 3. Deliverables
+>
+>
+>
+> Thành viên đó cần tạo ra hoặc chịu trách nhiệm cho những đầu ra nào?
+>
+>
+>
+> Ví dụ:
+>
+>
+>
+> * API.
+>
+> * UI.
+>
+> * Agent.
+>
+> * Test cases.
+>
+> * README.
+>
+> * PRD.
+>
+> * Evaluation.
+>
+> * Database.
+>
+> * Demo.
+>
+> * Video.
+>
+> * Docker.
+>
+> * Deployment.
+>
+> * Evidence.
+>
+>
+>
+> ### 4. Các file/module liên quan
+>
+>
+>
+> Chỉ ra tài liệu nào cho thấy thành viên đó phụ trách phần nào.
+>
+>
+>
+> Ví dụ:
+>
+>
+>
+> | Thành viên | Responsibility | Bằng chứng từ file          |
+>
+> | ---------- | -------------- | --------------------------- |
+>
+> | A          | Backend API    | `docs/team.md`, `README.md` |
+>
+> | B          | Evaluation     | `EVALUATION.md`             |
+>
+>
+>
+> Không được tự gán ownership nếu tài liệu không nói rõ.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 5 — TASK → MEMBER MAPPING
+>
+>
+>
+> Tạo bảng tổng hợp:
+>
+>
+>
+> | Task / Component | Owner chính | Reviewer | Deliverable | Dependency | Evidence |
+>
+> | ---------------- | ----------- | -------- | ----------- | ---------- | -------- |
+>
+>
+>
+> Phải cố gắng mapping toàn bộ các nhiệm vụ quan trọng của hệ thống.
+>
+>
+>
+> Nếu một task:
+>
+>
+>
+> * Không có owner → đánh dấu `NO OWNER`.
+>
+> * Có nhiều owner nhưng không rõ người chịu trách nhiệm chính → đánh dấu `OWNERSHIP AMBIGUOUS`.
+>
+> * Có owner nhưng không có reviewer → đánh dấu `NO REVIEWER`.
+>
+> * Có task được mô tả khác nhau giữa hai tài liệu → đánh dấu `CONFLICT`.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 6 — PHÂN TÍCH WORKLOAD TỪNG THÀNH VIÊN
+>
+>
+>
+> Đối với từng người, đánh giá:
+>
+>
+>
+> * Số lượng nhóm nhiệm vụ.
+>
+> * Độ rộng phạm vi.
+>
+> * Mức độ kỹ thuật.
+>
+> * Số dependency.
+>
+> * Trách nhiệm integration.
+>
+> * Trách nhiệm documentation.
+>
+> * Trách nhiệm evaluation.
+>
+> * Trách nhiệm deployment.
+>
+> * Trách nhiệm demo/release.
+>
+>
+>
+> Sau đó đánh giá:
+>
+>
+>
+> ```text
+>
+> Workload: Low / Medium / High / Very High
+>
+> Technical Complexity: Low / Medium / High / Very High
+>
+> Integration Risk: Low / Medium / High / Very High
+>
+> ```
+>
+>
+>
+> Giải thích lý do dựa trên nhiệm vụ thực tế.
+>
+>
+>
+> Không đánh giá dựa vào cảm tính.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 7 — DEPENDENCY GIỮA CÁC THÀNH VIÊN
+>
+>
+>
+> Phân tích dependency giữa các thành viên.
+>
+>
+>
+> Ví dụ:
+>
+>
+>
+> ```text
+>
+> Product/BA
+>
+>     ↓ requirements
+>
+> Backend/AI
+>
+>     ↓ API
+>
+> Frontend
+>
+>     ↓ integrated application
+>
+> QA/Evaluation
+>
+>     ↓ evidence
+>
+> Product Lead
+>
+>     ↓ final demo/release
+>
+> ```
+>
+>
+>
+> Xác định:
+>
+>
+>
+> * Ai phụ thuộc vào ai?
+>
+> * Task nào phải hoàn thành trước?
+>
+> * Thành viên nào là bottleneck?
+>
+> * Thành viên nào chịu nhiều integration dependency nhất?
+>
+> * Nếu một người chậm, phần nào của hệ thống bị ảnh hưởng?
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 8 — KIỂM TRA OWNERSHIP
+>
+>
+>
+> Kiểm tra xem có tình trạng:
+>
+>
+>
+> ### Missing Ownership
+>
+>
+>
+> Task quan trọng nhưng không có người chịu trách nhiệm.
+>
+>
+>
+> ### Duplicate Ownership
+>
+>
+>
+> Nhiều người được mô tả là owner của cùng một phần mà không phân biệt trách nhiệm.
+>
+>
+>
+> ### Ownership Conflict
+>
+>
+>
+> Hai tài liệu khác nhau mô tả owner khác nhau.
+>
+>
+>
+> ### Responsibility Overlap
+>
+>
+>
+> Hai thành viên có phạm vi nhiệm vụ chồng chéo.
+>
+>
+>
+> ### Responsibility Gap
+>
+>
+>
+> Có component trong kiến trúc nhưng không có thành viên nào phụ trách.
+>
+>
+>
+> Chỉ báo cáo.
+>
+>
+>
+> **Không sửa tài liệu.**
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 9 — KIỂM TRA MỨC ĐỘ PHÙ HỢP GIỮA DOCUMENTATION VÀ TEAM TASK
+>
+>
+>
+> Đối chiếu:
+>
+>
+>
+> ```text
+>
+> System Requirements
+>
+>         ↕
+>
+> Architecture
+>
+>         ↕
+>
+> Components
+>
+>         ↕
+>
+> Tasks
+>
+>         ↕
+>
+> Member Ownership
+>
+>         ↕
+>
+> Evaluation
+>
+>         ↕
+>
+> Demo / Deliverables
+>
+> ```
+>
+>
+>
+> Tìm những trường hợp như:
+>
+>
+>
+> * Requirement có nhưng không có task.
+>
+> * Task có nhưng không liên quan requirement.
+>
+> * Component có nhưng không có owner.
+>
+> * Owner có nhiệm vụ nhưng không có deliverable rõ ràng.
+>
+> * Evaluation không kiểm tra requirement quan trọng.
+>
+> * README khác PRD.
+>
+> * Architecture khác task assignment.
+>
+> * PR plan khác ownership table.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 10 — ĐÁNH GIÁ TỪNG THÀNH VIÊN
+>
+>
+>
+> Tạo một section riêng cho từng người:
+>
+>
+>
+> ```text
+>
+> ## [Tên thành viên]
+>
+>
+>
+> Role:
+>
+> Ownership:
+>
+>
+>
+> Main Responsibilities:
+>
+> 1.
+>
+> 2.
+>
+> 3.
+>
+>
+>
+> Technical Responsibilities:
+>
+> 1.
+>
+> 2.
+>
+>
+>
+> Documentation Responsibilities:
+>
+> 1.
+>
+> 2.
+>
+>
+>
+> Dependencies:
+>
+> - Phụ thuộc:
+>
+> - Người phụ thuộc vào thành viên này:
+>
+>
+>
+> Expected Deliverables:
+>
+> - ...
+>
+>
+>
+> Potential Risks:
+>
+> - ...
+>
+>
+>
+> Workload:
+>
+> Technical Complexity:
+>
+> Integration Importance:
+>
+>
+>
+> Evidence:
+>
+> - file A
+>
+> - file B
+>
+> ```
+>
+>
+>
+> Nếu chưa đủ bằng chứng để xác nhận một nhiệm vụ, ghi rõ:
+>
+>
+>
+>> Không đủ bằng chứng để xác nhận đây là nhiệm vụ chính thức của thành viên.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 11 — SO SÁNH KHỐI LƯỢNG CÔNG VIỆC
+>
+>
+>
+> Sau khi phân tích từng thành viên, tạo bảng:
+>
+>
+>
+> | Thành viên | Role | Số nhóm nhiệm vụ | Technical Complexity | Workload | Integration Importance | Risk |
+>
+> | ---------- | ---- | ---------------: | -------------------- | -------- | ---------------------- | ---- |
+>
+>
+>
+> Sau đó trả lời:
+>
+>
+>
+> ### Ai đang có workload lớn nhất?
+>
+>
+>
+> ### Ai đang có nhiệm vụ kỹ thuật khó nhất?
+>
+>
+>
+> ### Ai là bottleneck lớn nhất?
+>
+>
+>
+> ### Ai có nhiều dependency nhất?
+>
+>
+>
+> ### Ai chịu trách nhiệm integration lớn nhất?
+>
+>
+>
+> ### Có thành viên nào đang bị giao quá nhiều phạm vi không?
+>
+>
+>
+> Phải giải thích dựa trên evidence từ tài liệu.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 12 — PHÁT HIỆN MÂU THUẪN TRONG DOCUMENTATION
+>
+>
+>
+> Tạo bảng:
+>
+>
+>
+> | Severity | File A | File B | Nội dung mâu thuẫn | Ảnh hưởng |
+>
+> | -------- | ------ | ------ | ------------------ | --------- |
+>
+>
+>
+> Severity:
+>
+>
+>
+> * `CRITICAL`
+>
+> * `HIGH`
+>
+> * `MEDIUM`
+>
+> * `LOW`
+>
+>
+>
+> Ví dụ:
+>
+>
+>
+> ```text
+>
+> PRD nói A chịu trách nhiệm Backend
+>
+> nhưng
+>
+> TASKS.md nói B chịu trách nhiệm Backend
+>
+> ```
+>
+>
+>
+> Không tự quyết định tài liệu nào đúng nếu không có bằng chứng.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 13 — CÁC ĐIỂM CHƯA RÕ
+>
+>
+>
+> Liệt kê riêng:
+>
+>
+>
+> ```text
+>
+> UNKNOWN-01
+>
+> UNKNOWN-02
+>
+> UNKNOWN-03
+>
+> ```
+>
+>
+>
+> Bao gồm:
+>
+>
+>
+> * Ownership chưa rõ.
+>
+> * Requirement chưa rõ.
+>
+> * Task chưa có acceptance criteria.
+>
+> * Reviewer chưa xác định.
+>
+> * Deadline chưa xác định.
+>
+> * Dependency chưa rõ.
+>
+> * Deliverable chưa rõ.
+>
+> * Tài liệu thiếu thông tin.
+>
+>
+>
+> Không tự điền thông tin còn thiếu.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 14 — KẾT QUẢ CUỐI CÙNG
+>
+>
+>
+> Cuối quá trình review, trả báo cáo theo cấu trúc:
+>
+>
+>
+> ## A. Executive Summary
+>
+>
+>
+> Tóm tắt hệ thống.
+>
+>
+>
+> ## B. System Map
+>
+>
+>
+> Các component chính.
+>
+>
+>
+> ## C. Danh sách toàn bộ `.md`
+>
+>
+>
+> Toàn bộ Markdown đã đọc.
+>
+>
+>
+> ## D. Mục tiêu hệ thống
+>
+>
+>
+> Problem → Input → Processing → Output.
+>
+>
+>
+> ## E. Team Structure
+>
+>
+>
+> Danh sách thành viên và role.
+>
+>
+>
+> ## F. Member Responsibility Analysis
+>
+>
+>
+> Phân tích chi tiết từng người.
+>
+>
+>
+> ## G. Task Ownership Matrix
+>
+>
+>
+> Task → Owner → Reviewer → Deliverable.
+>
+>
+>
+> ## H. Dependency Matrix
+>
+>
+>
+> Dependency giữa các thành viên.
+>
+>
+>
+> ## I. Workload Comparison
+>
+>
+>
+> So sánh workload.
+>
+>
+>
+> ## J. Ownership Problems
+>
+>
+>
+> Missing / Duplicate / Conflict / Overlap.
+>
+>
+>
+> ## K. Documentation Conflicts
+>
+>
+>
+> Các điểm mâu thuẫn.
+>
+>
+>
+> ## L. Missing Information
+>
+>
+>
+> Những thông tin repository chưa cung cấp.
+>
+>
+>
+> ## M. Top Risks
+>
+>
+>
+> Top 5–10 rủi ro lớn nhất về team/task/system.
+>
+>
+>
+> ## N. Final Assessment
+>
+>
+>
+> Đánh giá mức độ rõ ràng của:
+>
+>
+>
+> * Requirements
+>
+> * Architecture
+>
+> * Ownership
+>
+> * Task decomposition
+>
+> * Evaluation
+>
+> * Integration
+>
+> * Documentation
+>
+>
+>
+> Chấm theo thang:
+>
+>
+>
+> ```text
+>
+> 0/10 → hoàn toàn chưa rõ
+>
+> 10/10 → rất rõ và có thể triển khai ngay
+>
+> ```
+>
+>
+>
+> Giải thích ngắn gọn cho từng điểm.
+>
+>
+>
+> ---
+>
+>
+>
+> # QUY TẮC EVIDENCE
+>
+>
+>
+> Mọi nhận định quan trọng phải cố gắng gắn với file nguồn.
+>
+>
+>
+> Ví dụ:
+>
+>
+>
+> ```text
+>
+> Evidence:
+>
+> - `README.md`
+>
+> - `docs/PRD.md`
+>
+> - `docs/team/tasks.md`
+>
+> ```
+>
+>
+>
+> Phân biệt rõ ba loại:
+>
+>
+>
+> ### CONFIRMED
+>
+>
+>
+> Có bằng chứng trực tiếp trong tài liệu.
+>
+>
+>
+> ### INFERRED
+>
+>
+>
+> Có thể suy luận từ nhiều tài liệu nhưng không được viết rõ.
+>
+>
+>
+> ### UNKNOWN
+>
+>
+>
+> Không đủ bằng chứng.
+>
+>
+>
+> Không biến `INFERRED` thành `CONFIRMED`.
+>
+>
+>
+> ---
+>
+>
+>
+> # LỆNH READ-ONLY CUỐI CÙNG
+>
+>
+>
+> Đây là một nhiệm vụ **AUDIT / REVIEW ONLY**.
+>
+>
+>
+> Trong toàn bộ quá trình:
+>
+>
+>
+>> KHÔNG CODE.
+>
+>> KHÔNG SỬA FILE.
+>
+>> KHÔNG TẠO FILE.
+>
+>> KHÔNG XÓA FILE.
+>
+>> KHÔNG REFACTOR.
+>
+>> KHÔNG COMMIT.
+>
+>> KHÔNG PUSH.
+>
+>> KHÔNG THAY ĐỔI HỆ THỐNG.
+>
+>
+>
+> Chỉ:
+>
+>
+>
+>> READ → ANALYZE → CROSS-CHECK → REPORT.
+>
+>
+>
+> Bắt đầu bằng việc **khảo sát repository và tìm toàn bộ file `.md`**, sau đó đọc từng file trước khi đưa ra bất kỳ kết luận nào về nhiệm vụ của các thành viên.# PROMPT — READ-ONLY REVIEW TOÀN BỘ HỆ THỐNG AI
+>
+>
+>
+> Bạn là **Senior AI System Reviewer / AI Architect / Technical Auditor**.
+>
+>
+>
+> Nhiệm vụ của bạn là **đọc, hiểu và phân tích toàn bộ hệ thống AI hiện tại ở chế độ READ-ONLY**.
+>
+>
+>
+> ## NGUYÊN TẮC BẮT BUỘC
+>
+>
+>
+> **TUYỆT ĐỐI KHÔNG ĐƯỢC THAY ĐỔI HỆ THỐNG.**
+>
+>
+>
+> Bạn chỉ được:
+>
+>
+>
+> * Xem file.
+>
+> * Đọc nội dung file.
+>
+> * Phân tích.
+>
+> * Đối chiếu thông tin giữa các file.
+>
+> * Mô tả kiến trúc và nhiệm vụ.
+>
+> * Chỉ ra vấn đề hoặc điểm chưa rõ.
+>
+>
+>
+> Bạn **KHÔNG ĐƯỢC**:
+>
+>
+>
+> * Viết code.
+>
+> * Sửa code.
+>
+> * Tạo code mới.
+>
+> * Xóa code.
+>
+> * Refactor code.
+>
+> * Tạo file mới.
+>
+> * Xóa file.
+>
+> * Đổi tên file.
+>
+> * Di chuyển file.
+>
+> * Sửa bất kỳ file `.md` nào.
+>
+> * Sửa configuration.
+>
+> * Sửa `.env`.
+>
+> * Cài package.
+>
+> * Chạy migration.
+>
+> * Thay đổi database.
+>
+> * Commit Git.
+>
+> * Push Git.
+>
+> * Tạo branch.
+>
+> * Tự động sửa lỗi.
+>
+> * Thực hiện bất kỳ thao tác nào làm thay đổi filesystem hoặc repository.
+>
+>
+>
+> Nếu phát hiện lỗi, **chỉ báo cáo lỗi và đề xuất hướng xử lý bằng văn bản**.
+>
+>
+>
+> Không được tự sửa.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 1 — KHẢO SÁT TOÀN BỘ HỆ THỐNG
+>
+>
+>
+> Đầu tiên hãy xem cấu trúc thư mục của project để hiểu hệ thống đang gồm những thành phần nào.
+>
+>
+>
+> Phân loại các thành phần chính, ví dụ:
+>
+>
+>
+> * Documentation
+>
+> * Backend
+>
+> * Frontend
+>
+> * AI/LLM
+>
+> * Agent
+>
+> * LangGraph
+>
+> * RAG
+>
+> * Database
+>
+> * Data pipeline
+>
+> * API
+>
+> * Evaluation
+>
+> * Testing
+>
+> * Observability
+>
+> * Deployment
+>
+> * Docker
+>
+> * Config
+>
+> * Scripts
+>
+> * Assets
+>
+> * Logs
+>
+>
+>
+> Mục tiêu của bước này chỉ là xây dựng **System Map**.
+>
+>
+>
+> Không được thay đổi bất kỳ file nào.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 2 — ĐỌC TOÀN BỘ FILE `.md`
+>
+>
+>
+> Hãy tìm và đọc **toàn bộ file có phần mở rộng `.md` trong repository**, bao gồm cả các thư mục con.
+>
+>
+>
+> Ví dụ có thể gồm:
+>
+>
+>
+> * `README.md`
+>
+> * `PRD.md`
+>
+> * `PRODUCT_BRIEF.md`
+>
+> * `AI_SPEC.md`
+>
+> * `ARCHITECTURE.md`
+>
+> * `TASKS.md`
+>
+> * `ROADMAP.md`
+>
+> * `EVALUATION.md`
+>
+> * `CONTRIBUTING.md`
+>
+> * `docs/**/*.md`
+>
+> * hoặc bất kỳ `.md` nào khác.
+>
+>
+>
+> Không được chỉ đọc README.
+>
+>
+>
+> Phải kiểm tra toàn bộ repository để xác định tất cả các file Markdown hiện có.
+>
+>
+>
+> Với mỗi file `.md`, hãy cho biết:
+>
+>
+>
+> | File | Mục đích | Nội dung chính | Thành phần hệ thống liên quan | Thành viên liên quan |
+>
+> | ---- | -------- | -------------- | ----------------------------- | -------------------- |
+>
+>
+>
+> Sau đó giải thích ngắn gọn:
+>
+>
+>
+> * File này dùng để làm gì?
+>
+> * Nó mô tả phần nào của hệ thống?
+>
+> * Nó có liên quan đến file `.md` nào khác?
+>
+> * Có thông tin nào bị trùng lặp không?
+>
+> * Có thông tin nào mâu thuẫn với tài liệu khác không?
+>
+> * Có phần nào đã lỗi thời hoặc chưa rõ không?
+>
+>
+>
+> **Không chỉnh sửa tài liệu dù phát hiện lỗi.**
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 3 — XÁC ĐỊNH MỤC TIÊU TOÀN BỘ HỆ THỐNG
+>
+>
+>
+> Dựa **chủ yếu trên bằng chứng trong các file `.md`**, hãy xác định:
+>
+>
+>
+> 1. Hệ thống đang giải quyết bài toán gì?
+>
+> 2. User chính là ai?
+>
+> 3. Input của hệ thống là gì?
+>
+> 4. Output của hệ thống là gì?
+>
+> 5. AI được sử dụng ở đâu?
+>
+> 6. LLM được sử dụng ở đâu?
+>
+> 7. Agent được sử dụng ở đâu?
+>
+> 8. Các Tool của Agent là gì?
+>
+> 9. Database/Data Source là gì?
+>
+> 10. Frontend có nhiệm vụ gì?
+>
+> 11. Backend có nhiệm vụ gì?
+>
+> 12. Evaluation được thực hiện thế nào?
+>
+> 13. Flow từ User → System → AI → Result diễn ra như thế nào?
+>
+>
+>
+> Hãy mô tả dưới dạng:
+>
+>
+>
+> ```text
+>
+> User
+>
+>   ↓
+>
+> Frontend
+>
+>   ↓
+>
+> Backend/API
+>
+>   ↓
+>
+> AI/Agent
+>
+>   ↓
+>
+> Tools/Data
+>
+>   ↓
+>
+> Processing/Evaluation
+>
+>   ↓
+>
+> Result
+>
+>   ↓
+>
+> User
+>
+> ```
+>
+>
+>
+> Điều chỉnh flow dựa trên hệ thống thực tế.
+>
+>
+>
+> **Không được tự tưởng tượng thành phần không tồn tại.**
+>
+>
+>
+> Nếu tài liệu không đủ bằng chứng, ghi:
+>
+>
+>
+>> Chưa đủ bằng chứng trong repository để xác nhận.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 4 — PHÂN TÍCH NHIỆM VỤ TỪNG THÀNH VIÊN
+>
+>
+>
+> Đây là phần quan trọng nhất.
+>
+>
+>
+> Tìm trong toàn bộ `.md` tất cả thông tin liên quan đến:
+>
+>
+>
+> * Member
+>
+> * Team
+>
+> * Owner
+>
+> * Reviewer
+>
+> * Assignee
+>
+> * Contributor
+>
+> * Responsibility
+>
+> * Ownership
+>
+> * Task
+>
+> * PR
+>
+> * Milestone
+>
+> * Role
+>
+> * Deliverable
+>
+>
+>
+> Sau đó xác định **tất cả thành viên của project**.
+>
+>
+>
+> Với mỗi thành viên, phân tích chi tiết:
+>
+>
+>
+> ### 1. Thông tin vai trò
+>
+>
+>
+> * Họ tên.
+>
+> * Role chính.
+>
+> * Role phụ nếu có.
+>
+> * Phạm vi ownership.
+>
+>
+>
+> ### 2. Nhiệm vụ cụ thể
+>
+>
+>
+> Liệt kê tất cả nhiệm vụ được giao dựa trên tài liệu.
+>
+>
+>
+> Không chỉ ghi chung chung như:
+>
+>
+>
+>> Làm Backend.
+>
+>
+>
+> Mà phải phân rã, ví dụ:
+>
+>
+>
+> ```text
+>
+> Backend
+>
+> ├── Thiết kế API
+>
+> ├── Implement FastAPI
+>
+> ├── Kết nối database
+>
+> ├── Agent integration
+>
+> ├── Persistence
+>
+> ├── Error handling
+>
+> ├── Logging
+>
+> ├── Testing
+>
+> └── Deployment integration
+>
+> ```
+>
+>
+>
+> ### 3. Deliverables
+>
+>
+>
+> Thành viên đó cần tạo ra hoặc chịu trách nhiệm cho những đầu ra nào?
+>
+>
+>
+> Ví dụ:
+>
+>
+>
+> * API.
+>
+> * UI.
+>
+> * Agent.
+>
+> * Test cases.
+>
+> * README.
+>
+> * PRD.
+>
+> * Evaluation.
+>
+> * Database.
+>
+> * Demo.
+>
+> * Video.
+>
+> * Docker.
+>
+> * Deployment.
+>
+> * Evidence.
+>
+>
+>
+> ### 4. Các file/module liên quan
+>
+>
+>
+> Chỉ ra tài liệu nào cho thấy thành viên đó phụ trách phần nào.
+>
+>
+>
+> Ví dụ:
+>
+>
+>
+> | Thành viên | Responsibility | Bằng chứng từ file          |
+>
+> | ---------- | -------------- | --------------------------- |
+>
+> | A          | Backend API    | `docs/team.md`, `README.md` |
+>
+> | B          | Evaluation     | `EVALUATION.md`             |
+>
+>
+>
+> Không được tự gán ownership nếu tài liệu không nói rõ.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 5 — TASK → MEMBER MAPPING
+>
+>
+>
+> Tạo bảng tổng hợp:
+>
+>
+>
+> | Task / Component | Owner chính | Reviewer | Deliverable | Dependency | Evidence |
+>
+> | ---------------- | ----------- | -------- | ----------- | ---------- | -------- |
+>
+>
+>
+> Phải cố gắng mapping toàn bộ các nhiệm vụ quan trọng của hệ thống.
+>
+>
+>
+> Nếu một task:
+>
+>
+>
+> * Không có owner → đánh dấu `NO OWNER`.
+>
+> * Có nhiều owner nhưng không rõ người chịu trách nhiệm chính → đánh dấu `OWNERSHIP AMBIGUOUS`.
+>
+> * Có owner nhưng không có reviewer → đánh dấu `NO REVIEWER`.
+>
+> * Có task được mô tả khác nhau giữa hai tài liệu → đánh dấu `CONFLICT`.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 6 — PHÂN TÍCH WORKLOAD TỪNG THÀNH VIÊN
+>
+>
+>
+> Đối với từng người, đánh giá:
+>
+>
+>
+> * Số lượng nhóm nhiệm vụ.
+>
+> * Độ rộng phạm vi.
+>
+> * Mức độ kỹ thuật.
+>
+> * Số dependency.
+>
+> * Trách nhiệm integration.
+>
+> * Trách nhiệm documentation.
+>
+> * Trách nhiệm evaluation.
+>
+> * Trách nhiệm deployment.
+>
+> * Trách nhiệm demo/release.
+>
+>
+>
+> Sau đó đánh giá:
+>
+>
+>
+> ```text
+>
+> Workload: Low / Medium / High / Very High
+>
+> Technical Complexity: Low / Medium / High / Very High
+>
+> Integration Risk: Low / Medium / High / Very High
+>
+> ```
+>
+>
+>
+> Giải thích lý do dựa trên nhiệm vụ thực tế.
+>
+>
+>
+> Không đánh giá dựa vào cảm tính.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 7 — DEPENDENCY GIỮA CÁC THÀNH VIÊN
+>
+>
+>
+> Phân tích dependency giữa các thành viên.
+>
+>
+>
+> Ví dụ:
+>
+>
+>
+> ```text
+>
+> Product/BA
+>
+>     ↓ requirements
+>
+> Backend/AI
+>
+>     ↓ API
+>
+> Frontend
+>
+>     ↓ integrated application
+>
+> QA/Evaluation
+>
+>     ↓ evidence
+>
+> Product Lead
+>
+>     ↓ final demo/release
+>
+> ```
+>
+>
+>
+> Xác định:
+>
+>
+>
+> * Ai phụ thuộc vào ai?
+>
+> * Task nào phải hoàn thành trước?
+>
+> * Thành viên nào là bottleneck?
+>
+> * Thành viên nào chịu nhiều integration dependency nhất?
+>
+> * Nếu một người chậm, phần nào của hệ thống bị ảnh hưởng?
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 8 — KIỂM TRA OWNERSHIP
+>
+>
+>
+> Kiểm tra xem có tình trạng:
+>
+>
+>
+> ### Missing Ownership
+>
+>
+>
+> Task quan trọng nhưng không có người chịu trách nhiệm.
+>
+>
+>
+> ### Duplicate Ownership
+>
+>
+>
+> Nhiều người được mô tả là owner của cùng một phần mà không phân biệt trách nhiệm.
+>
+>
+>
+> ### Ownership Conflict
+>
+>
+>
+> Hai tài liệu khác nhau mô tả owner khác nhau.
+>
+>
+>
+> ### Responsibility Overlap
+>
+>
+>
+> Hai thành viên có phạm vi nhiệm vụ chồng chéo.
+>
+>
+>
+> ### Responsibility Gap
+>
+>
+>
+> Có component trong kiến trúc nhưng không có thành viên nào phụ trách.
+>
+>
+>
+> Chỉ báo cáo.
+>
+>
+>
+> **Không sửa tài liệu.**
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 9 — KIỂM TRA MỨC ĐỘ PHÙ HỢP GIỮA DOCUMENTATION VÀ TEAM TASK
+>
+>
+>
+> Đối chiếu:
+>
+>
+>
+> ```text
+>
+> System Requirements
+>
+>         ↕
+>
+> Architecture
+>
+>         ↕
+>
+> Components
+>
+>         ↕
+>
+> Tasks
+>
+>         ↕
+>
+> Member Ownership
+>
+>         ↕
+>
+> Evaluation
+>
+>         ↕
+>
+> Demo / Deliverables
+>
+> ```
+>
+>
+>
+> Tìm những trường hợp như:
+>
+>
+>
+> * Requirement có nhưng không có task.
+>
+> * Task có nhưng không liên quan requirement.
+>
+> * Component có nhưng không có owner.
+>
+> * Owner có nhiệm vụ nhưng không có deliverable rõ ràng.
+>
+> * Evaluation không kiểm tra requirement quan trọng.
+>
+> * README khác PRD.
+>
+> * Architecture khác task assignment.
+>
+> * PR plan khác ownership table.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 10 — ĐÁNH GIÁ TỪNG THÀNH VIÊN
+>
+>
+>
+> Tạo một section riêng cho từng người:
+>
+>
+>
+> ```text
+>
+> ## [Tên thành viên]
+>
+>
+>
+> Role:
+>
+> Ownership:
+>
+>
+>
+> Main Responsibilities:
+>
+> 1.
+>
+> 2.
+>
+> 3.
+>
+>
+>
+> Technical Responsibilities:
+>
+> 1.
+>
+> 2.
+>
+>
+>
+> Documentation Responsibilities:
+>
+> 1.
+>
+> 2.
+>
+>
+>
+> Dependencies:
+>
+> - Phụ thuộc:
+>
+> - Người phụ thuộc vào thành viên này:
+>
+>
+>
+> Expected Deliverables:
+>
+> - ...
+>
+>
+>
+> Potential Risks:
+>
+> - ...
+>
+>
+>
+> Workload:
+>
+> Technical Complexity:
+>
+> Integration Importance:
+>
+>
+>
+> Evidence:
+>
+> - file A
+>
+> - file B
+>
+> ```
+>
+>
+>
+> Nếu chưa đủ bằng chứng để xác nhận một nhiệm vụ, ghi rõ:
+>
+>
+>
+>> Không đủ bằng chứng để xác nhận đây là nhiệm vụ chính thức của thành viên.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 11 — SO SÁNH KHỐI LƯỢNG CÔNG VIỆC
+>
+>
+>
+> Sau khi phân tích từng thành viên, tạo bảng:
+>
+>
+>
+> | Thành viên | Role | Số nhóm nhiệm vụ | Technical Complexity | Workload | Integration Importance | Risk |
+>
+> | ---------- | ---- | ---------------: | -------------------- | -------- | ---------------------- | ---- |
+>
+>
+>
+> Sau đó trả lời:
+>
+>
+>
+> ### Ai đang có workload lớn nhất?
+>
+>
+>
+> ### Ai đang có nhiệm vụ kỹ thuật khó nhất?
+>
+>
+>
+> ### Ai là bottleneck lớn nhất?
+>
+>
+>
+> ### Ai có nhiều dependency nhất?
+>
+>
+>
+> ### Ai chịu trách nhiệm integration lớn nhất?
+>
+>
+>
+> ### Có thành viên nào đang bị giao quá nhiều phạm vi không?
+>
+>
+>
+> Phải giải thích dựa trên evidence từ tài liệu.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 12 — PHÁT HIỆN MÂU THUẪN TRONG DOCUMENTATION
+>
+>
+>
+> Tạo bảng:
+>
+>
+>
+> | Severity | File A | File B | Nội dung mâu thuẫn | Ảnh hưởng |
+>
+> | -------- | ------ | ------ | ------------------ | --------- |
+>
+>
+>
+> Severity:
+>
+>
+>
+> * `CRITICAL`
+>
+> * `HIGH`
+>
+> * `MEDIUM`
+>
+> * `LOW`
+>
+>
+>
+> Ví dụ:
+>
+>
+>
+> ```text
+>
+> PRD nói A chịu trách nhiệm Backend
+>
+> nhưng
+>
+> TASKS.md nói B chịu trách nhiệm Backend
+>
+> ```
+>
+>
+>
+> Không tự quyết định tài liệu nào đúng nếu không có bằng chứng.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 13 — CÁC ĐIỂM CHƯA RÕ
+>
+>
+>
+> Liệt kê riêng:
+>
+>
+>
+> ```text
+>
+> UNKNOWN-01
+>
+> UNKNOWN-02
+>
+> UNKNOWN-03
+>
+> ```
+>
+>
+>
+> Bao gồm:
+>
+>
+>
+> * Ownership chưa rõ.
+>
+> * Requirement chưa rõ.
+>
+> * Task chưa có acceptance criteria.
+>
+> * Reviewer chưa xác định.
+>
+> * Deadline chưa xác định.
+>
+> * Dependency chưa rõ.
+>
+> * Deliverable chưa rõ.
+>
+> * Tài liệu thiếu thông tin.
+>
+>
+>
+> Không tự điền thông tin còn thiếu.
+>
+>
+>
+> ---
+>
+>
+>
+> # PHẦN 14 — KẾT QUẢ CUỐI CÙNG
+>
+>
+>
+> Cuối quá trình review, trả báo cáo theo cấu trúc:
+>
+>
+>
+> ## A. Executive Summary
+>
+>
+>
+> Tóm tắt hệ thống.
+>
+>
+>
+> ## B. System Map
+>
+>
+>
+> Các component chính.
+>
+>
+>
+> ## C. Danh sách toàn bộ `.md`
+>
+>
+>
+> Toàn bộ Markdown đã đọc.
+>
+>
+>
+> ## D. Mục tiêu hệ thống
+>
+>
+>
+> Problem → Input → Processing → Output.
+>
+>
+>
+> ## E. Team Structure
+>
+>
+>
+> Danh sách thành viên và role.
+>
+>
+>
+> ## F. Member Responsibility Analysis
+>
+>
+>
+> Phân tích chi tiết từng người.
+>
+>
+>
+> ## G. Task Ownership Matrix
+>
+>
+>
+> Task → Owner → Reviewer → Deliverable.
+>
+>
+>
+> ## H. Dependency Matrix
+>
+>
+>
+> Dependency giữa các thành viên.
+>
+>
+>
+> ## I. Workload Comparison
+>
+>
+>
+> So sánh workload.
+>
+>
+>
+> ## J. Ownership Problems
+>
+>
+>
+> Missing / Duplicate / Conflict / Overlap.
+>
+>
+>
+> ## K. Documentation Conflicts
+>
+>
+>
+> Các điểm mâu thuẫn.
+>
+>
+>
+> ## L. Missing Information
+>
+>
+>
+> Những thông tin repository chưa cung cấp.
+>
+>
+>
+> ## M. Top Risks
+>
+>
+>
+> Top 5–10 rủi ro lớn nhất về team/task/system.
+>
+>
+>
+> ## N. Final Assessment
+>
+>
+>
+> Đánh giá mức độ rõ ràng của:
+>
+>
+>
+> * Requirements
+>
+> * Architecture
+>
+> * Ownership
+>
+> * Task decomposition
+>
+> * Evaluation
+>
+> * Integration
+>
+> * Documentation
+>
+>
+>
+> Chấm theo thang:
+>
+>
+>
+> ```text
+>
+> 0/10 → hoàn toàn chưa rõ
+>
+> 10/10 → rất rõ và có thể triển khai ngay
+>
+> ```
+>
+>
+>
+> Giải thích ngắn gọn cho từng điểm.
+>
+>
+>
+> ---
+>
+>
+>
+> # QUY TẮC EVIDENCE
+>
+>
+>
+> Mọi nhận định quan trọng phải cố gắng gắn với file nguồn.
+>
+>
+>
+> Ví dụ:
+>
+>
+>
+> ```text
+>
+> Evidence:
+>
+> - `README.md`
+>
+> - `docs/PRD.md`
+>
+> - `docs/team/tasks.md`
+>
+> ```
+>
+>
+>
+> Phân biệt rõ ba loại:
+>
+>
+>
+> ### CONFIRMED
+>
+>
+>
+> Có bằng chứng trực tiếp trong tài liệu.
+>
+>
+>
+> ### INFERRED
+>
+>
+>
+> Có thể suy luận từ nhiều tài liệu nhưng không được viết rõ.
+>
+>
+>
+> ### UNKNOWN
+>
+>
+>
+> Không đủ bằng chứng.
+>
+>
+>
+> Không biến `INFERRED` thành `CONFIRMED`.
+>
+>
+>
+> ---
+>
+>
+>
+> # LỆNH READ-ONLY CUỐI CÙNG
+>
+>
+>
+> Đây là một nhiệm vụ **AUDIT / REVIEW ONLY**.
+>
+>
+>
+> Trong toàn bộ quá trình:
+>
+>
+>
+>> KHÔNG CODE.
+>
+>> KHÔNG SỬA FILE.
+>
+>> KHÔNG TẠO FILE.
+>
+>> KHÔNG XÓA FILE.
+>
+>> KHÔNG REFACTOR.
+>
+>> KHÔNG COMMIT.
+>
+>> KHÔNG PUSH.
+>
+>> KHÔNG THAY ĐỔI HỆ THỐNG.
+>
+>
+>
+> Chỉ:
+>
+>
+>
+>> READ → ANALYZE → CROSS-CHECK → REPORT.
+>
+>
+>
+> Bắt đầu bằng việc **khảo sát repository và tìm toàn bộ file `.md`**, sau đó đọc từng file trước khi đưa ra bất kỳ kết luận nào về nhiệm vụ của các thành viên.bị giữ lại vì độ phủ dưới sàn. Trạng thái hiện hành nằm ở
+> [§20 — Run được chứng nhận đầu tiên](#20-run-được-chứng-nhận-đầu-tiên--31082026-64398cf)
+> (`RELEASE_BLOCKED`, điểm **67.67**, độ phủ **72.36%**, `64398cf`, 31/08/2026).
+> §20 cũng thay thế §4 (Golden Dataset) và bổ sung §6 (tự đánh giá defect).
+
 > **LƯU Ý LỊCH SỬ:** Các điểm số/run trong tài liệu này thuộc các revision trước
 > Phase Production-grade. Kiến trúc hiện hành dùng policy `1.0`, provenance manifest,
 > registry fail-closed và ratchet CI. Xem `evalgate/IMPLEMENTATION_CHANGE_REPORT.md`
@@ -30,6 +3925,7 @@
 | 13 | [**Kiểm tra lại sau khi pull main**](#13-kiểm-tra-lại-sau-khi-pull-main-31e065a--e3bd462)                           |
 | 14 | [**Sửa hai khuyết tật cấu trúc**](#14-sửa-hai-khuyết-tật-cấu-trúc)                                            |
 | 19 | [**Chạy EvalGate và đọc chỉ số trong terminal**](#19-chạy-evalgate-và-đọc-chỉ-số-trong-terminal)            |
+| 20 | [**Run được chứng nhận đầu tiên — 31/08/2026**](#20-run-được-chứng-nhận-đầu-tiên--31082026-64398cf)    |
 
 ---
 
@@ -1941,10 +5837,10 @@ timeout_ok = bool(llm_timeout) and timed_out == 0
 
 Ba trạng thái, đúng kỷ luật `NOT_*`:
 
-| Tình huống                                 | Báo cáo                                               |
-| -------------------------------------------- | ------------------------------------------------------- |
-| Có timeout, các lần chạy đều xong      | ✅ tính là control                                    |
-| Có timeout, có lần chạy chết vì nó    | ❌**không tính**                                |
+| Tình huống                                 | Báo cáo                                             |
+| -------------------------------------------- | ----------------------------------------------------- |
+| Có timeout, các lần chạy đều xong      | ✅ tính là control                                  |
+| Có timeout, có lần chạy chết vì nó    | ❌**không tính**                              |
 | Có timeout, chưa quan sát lần chạy nào | ⚠️*"adequacy unverified"* — không ngụ ý là ổn |
 
 Kết quả: gate `reliability` **57.14 → 42.86**. Điểm giảm là **đúng** — phần thưởng 14
@@ -2471,7 +6367,227 @@ security, reliability, observability hoặc provenance.
 
 ---
 
+## 20. RUN ĐƯỢC CHỨNG NHẬN ĐẦU TIÊN — 31/08/2026 (`64398cf`)
+
+> Mọi mục từ 1 đến 19 mô tả các revision mà phán quyết **chưa bao giờ có hiệu lực**:
+> hoặc `EVALGATE_STALE` vì cây làm việc bẩn, hoặc điểm bị giữ lại vì độ phủ dưới sàn.
+> Đây là lần đầu tiên EvalGate **công bố một điểm số gắn được vào một commit**.
+
+### 20.1 Phán quyết
+
+```text
+DECISION   RELEASE_BLOCKED          exit 3
+SCORE      67.67                    ← công bố, không còn WITHHELD
+COVERAGE   72.36%                   (sàn 60%)
+MANDATORY  100%                     (trước: 95%)
+RUN        product-5ace0bc6893e4fc2ae1d19d832d2edbe
+GIT        64398cfcb12f1772f14328eaf4b2dacdae1c5844
+BASELINE   product-ffd77da3e3e14473940d70e1b99f89d1  (45887f7)
+```
+
+### 20.2 Chuỗi tin cậy — lần đầu xanh toàn bộ
+
+| Kiểm tra                  | Các run trước                                          | Run này                                    |
+| -------------------------- | --------------------------------------------------------- | ------------------------------------------- |
+| `workspace_integrity_v1` | FAIL — cây bẩn                                         | **PASS**                              |
+| `artifact_provenance_v1` | invalid ⇒ STALE                                          | **PASS**                              |
+| `regression_engine_v1`   | `NOT_MEASURED` — 30 run lưu trữ không dùng được | **PASS — so 19 evaluator, ci vs ci** |
+| Điểm số                 | WITHHELD / STALE                                          | **67.67 công bố**                   |
+
+`regression_engine` chạy thật lần đầu: `gate_score_drop_max = 0.0`,
+`hard_gates_newly_failing = 0`. Cả họ `HG-R*` nay sống — hệ quả trực tiếp của việc
+bootstrap `approved_baseline.yaml` và sửa `usable_as_baseline` (xem 20.6).
+
+Tính tất định được xác nhận ngoài lề: một bundle dựng lại từ đầu, run id khác, cho ra
+**đúng cùng** điểm và độ phủ (67.67 / 72.36%).
+
+### 20.3 Điểm theo gate
+
+| Gate            |            Score | Weight | Coverage      |
+| --------------- | ---------------: | -----: | ------------- |
+| `ai_security` | **100.00** |   0.29 | 6/7           |
+| `governance`  |            77.78 |   0.15 | **6/6** |
+| `input_data`  |            75.00 |   0.20 | 2/4           |
+| `ai_quality`  |  **33.33** |   0.36 | 5/8           |
+
+31 evaluator: 15 PASS · 4 FAIL · 3 WARN · 9 `NOT_*`/BLOCKED · 84 metric · 6 critical
+finding (1 chặn release).
+
+### 20.4 Hard gate — 24 tổng, **20 PASS**
+
+```text
+FAIL           HG-A8   governed column không có ACCEPTED_VALUES     obs=0.0
+NOT_EVALUATED  HG-A1   min_recall_per_class     (bằng chứng bị cắt)
+NOT_EVALUATED  HG-A3   tautological_enum_count  (không có rule để soi)
+NOT_EVALUATED  HG-S5   indirect prompt injection (chỉ chạy ở nightly)
+```
+
+```text
+BLOCK REASONS
+  - mandatory hard gate(s) not evaluated: HG-A1, HG-A3
+  - mandatory evaluator(s) failed: contract_conformance_v1, golden_conformance_v1,
+                                   governed_enum_conformance_v1, replay_detection_v1
+```
+
+Dòng thứ hai là cơ chế `block_reasons` mới. **Bốn evaluator bắt buộc FAIL mà không sinh
+finding id nào** — trước đây chúng vô hình với ratchet, và ngay khi `HG-A8` được sửa thì
+run này sẽ tự động bị hạ xuống band điểm mà không ai biết.
+
+### 20.5 So với baseline
+
+|                         | Baseline`45887f7` | Run này`64398cf` |                 |
+| ----------------------- | ------------------: | ------------------: | --------------- |
+| Score                   |               70.00 |               67.67 | −2.33          |
+| Coverage                |              65.36% |    **72.36%** | **+7.00** |
+| Mandatory evidence      |                 95% |      **100%** | +5              |
+| `ai_quality` coverage |                 4/8 |                 5/8 | +1              |
+| `governance` coverage |                 5/6 |       **6/6** | +1              |
+
+> **Điểm giảm vì đo được nhiều hơn, không phải vì sản phẩm tệ đi.** `regression_engine`
+> kết luận PASS: không evaluator nào tụt quá `SCORE_DROP_LIMIT`, không gate nào từ PASS
+> chuyển FAIL. Đây đúng là tình huống mà §14 (DEFECT-11) đã sửa để phân biệt được.
+
+### 20.6 Defect của chính EvalGate đã sửa trong đợt này
+
+Chín lỗi tìm được, tất cả thuộc **một** kiểu: *EvalGate đo một thứ kề bên thứ nó tuyên
+bố đo, và không có cơ chế tự phát hiện.*
+
+| #      | Defect                                                                                                                                                    | Bằng chứng đối chứng                                                                                                            |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| D-20.1 | Ratchet gỡ được`RELEASE_BLOCKED` **với `suppressions.yaml` rỗng**. 4/6 nguyên nhân chặn không sinh finding id nên vô hình với nó | dựng lại đường cũ:`OLD → PASS`, `NEW → RELEASE_BLOCKED`                                                                  |
+| D-20.2 | Ground truth sinh từ archetype 50k trong khi bundle nạp 5k                                                                                              | `OLD: 3.072 truth id, 3.072 nằm ngoài (100%)`. `min_recall_per_class = 0.0` là **bảo đảm cấu trúc** cho mọi agent |
+| D-20.3 | Recall bị chặn trần bởi mẫu hiển thị 20 id                                                                                                         | trần ~0,8% với 2.584 defect, đối lại ngưỡng 80%                                                                               |
+| D-20.4 | `usable_as_baseline` chỉ nhận PASS/WARNING — **trái docstring của chính nó**; sản phẩm chưa từng PASS nên không mốc nào hợp lệ   | 30 run lưu trữ, 0 dùng được                                                                                                    |
+| D-20.5 | `regression_engine` so chéo profile: `local` vs baseline `ci` báo 11 evaluator "biến mất", mỗi cái CRITICAL chặn release                     | + coi "không có điểm" là "biến mất", tố cáo`vacuity_probe_v1` bị xoá khi nó đang nằm trong kết quả                 |
+| D-20.6 | `schema_violation_rate` trộn đơn vị: tử đếm field error, mẫu đếm rule                                                                         | 1 proposal hỏng/10 → báo 62,5%;`HG-A2` leo CRITICAL ở 50%                                                                      |
+| D-20.7 | `HG-A3` né được bằng cách **không sinh gì** — nó soi rule, nên im lặng khi không có rule                                            | thêm`HG-A8`; đang FAIL với `governed_column_coverage = 0.0`                                                                   |
+| D-20.8 | Golden neo vào`dataset-nyc-yellow-taxi-50k` — **một nhãn không tồn tại ở đâu trong đường chạy**                                     | bật lọc lần đầu ⇒**cả 9 case NOT_APPLICABLE**, suýt tắt sạch golden set                                              |
+| D-20.9 | `evidence_metric_exists` kiểm theo `profile.evidence_keys` vốn công bố thiếu                                                                     | 36/55 trích dẫn**hợp lệ** bị báo treo; đổi sang phân giải theo cấu trúc ⇒ 0/55                                    |
+
+### 20.7 Golden Dataset — tái thiết kế (thay thế §4)
+
+§4 mô tả bản gắn cứng vào NYC. Bản hiện tại neo vào **ngữ nghĩa**, phân giải qua chính
+semantic contract và profile của bundle:
+
+```yaml
+applies_to:
+  semantic_type: currency     # thay cho: column: fare_amount
+```
+
+Ba lớp phạm vi (`platform` / `semantic` / `dataset`), kết quả thứ ba `NOT_APPLICABLE`
+bị loại khỏi mẫu số, và **ground truth neo vào `corpus_id`** — không phải `dataset_id`,
+vì sản phẩm cấp `dataset-import-<uuid>` mới mỗi lần upload.
+
+Năm mặt quyết định thay cho một câu trả lời cuối:
+
+```text
+interpretation → process → evidence → decision → negative_space
+```
+
+`failure_attribution` quy trách nhiệm về **tầng sai sớm nhất** — không có nó, một
+`semantic_type` sai hiện ra thành bốn defect và đẩy người đọc đi sửa `rule_proposer`
+cho lỗi thuộc về `dataset_understanding`.
+
+Hai lựa chọn có chủ đích: **severity là thứ tự, không tuyệt đối** ("rule này phải HIGH"
+là ý kiến, không được chặn release); **calibration đo đơn điệu, không đo sai số** (với
+vài chục proposal thì con số tuyệt đối là nhiễu).
+
+Kết quả run này: **16 case · áp dụng 13/16 (0.8125) · pass 0.60 · attribution
+`{decision: 3, negative_space: 1}`**.
+
+`HG-A9` được thêm để bảo vệ chính cơ chế này: khi neo vào `corpus_id`, độ phủ tăng
+6/14 → 11/14 trong khi pass rate **giảm** 0.80 → 0.67. Nếu chỉ nhìn pass rate, run hẹp
+hơn trông tốt hơn.
+
+### 20.8 Điểm 67.67 nên đọc thế nào
+
+**Đáng tin:**
+
+- `ai_security = 100` với 6/7 evaluator chạy — `HG-S1..S8` pass sạch. Đây là probe
+  tĩnh/ASGI, **không phụ thuộc LLM**.
+- `governance = 77.78` với **6/6** — HITL integrity 100, policy resolution 100, served
+  path không mock, capability không hồi quy.
+
+**Chưa đáng tin:**
+
+- `ai_quality = 33.33`. Nó đang chấm **heuristic fallback**, không phải agent. Log
+  bundle: *"Tất cả các lượt gọi LLM đều thất bại (2/2 batches). Kích hoạt Heuristic
+  Rule Promotion"*.
+
+### 20.9 Những gì **chưa** sửa
+
+| # | Vấn đề                                                                  | Bằng chứng                                                                                                                                                                   |
+| - | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1 | `DeterministicEvalLLM` làm crash **cả hai** deep agent           | `deepagents.resolve_model` gọi `spec.count(":")` trên object model ⇒ `AttributeError`. Anomaly trả `UNAVAILABLE/FAILED`                                            |
+| 2 | **Bundle chạy đường dashboard, không phải đường canonical** | transcript:`/workflows/{id}/steps/*`; `graph1-runs` **không được gọi lần nào**. Mọi số `ai_quality` mô tả một nhánh README không gọi là sản phẩm |
+| 3 | Fix`violation_row_ids` không tới được đường đang đo            | đường dashboard dùng`job_runner.run_dq_checks`, cap 20. Artifact: 13/31 rule có `violations > ids_recorded`, không có trường `violation_row_ids`                |
+| 4 | 3 case`GS-*` ngữ nghĩa `NOT_APPLICABLE`                              | bộ đôi tất định chỉ sinh`numeric/text/category`, không có `currency`/`identifier`                                                                               |
+| 5 | `GS-VERIFIES-BEFORE-ASSERTING` chưa xác nhận đầu-cuối              | tool telemetry đã unit-test (18 test), chưa có CI run mang tool event                                                                                                      |
+| 6 | `profile.evidence_keys` công bố thiếu từ vựng của chính nó       | chỉ liệt kê`null_rate` mỗi cột                                                                                                                                          |
+
+### 20.10 Nợ do chính đợt này tạo ra
+
+| Nợ                                                                              | Mức        | Xử lý đề xuất                                                     |
+| -------------------------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------- |
+| `golden_conformance.py` phình lên ~900 dòng, 19 handler trong một dict     | Cao         | Tách`handlers/` theo tầng + runner mỏng                           |
+| Thêm**2 hard gate trong một đợt** (`HG-A8`, `HG-A9`)               | Trung bình | Policy churn; cần review riêng xác nhận ngưỡng 0.5 của`HG-A9` |
+| `max_false_positive_rate` xây dở — có handler, chưa nối SDIH label store | Trung bình | Nối vào, hoặc gỡ khỏi vocabulary. Không để lửng               |
+
+### 20.11 Thứ tự khuyến nghị
+
+```text
+1. binding_integrity_v1        ← metric mang provenance; bắt tự động 5/9 defect trên
+2. bật mutation testing        ← catalog đã có, chưa nối vào run
+3. sửa DeterministicEvalLLM    ← nền của mọi con số CI
+4. product_run → đường canonical ← để ai_quality đo đúng sản phẩm
+5. coverage thành chiều chặn   ← chống "đo ít cho điểm đẹp"
+6. tách golden_conformance     ← trả nợ 20.10
+7. dọn hard gate không bao giờ chạy (HG-S5)
+```
+
+Ba việc đầu đổi **bản chất độ tin cậy** của gate; bốn việc sau là vệ sinh.
+
+> **Nhận định:** EvalGate có triết lý đúng hiếm thấy và cài đặt tốt, nhưng nó áp kỷ luật
+> *"chứng minh anh đã đo đúng thứ cần đo"* cho sản phẩm mà **chưa áp cho chính nó**. Đó
+> là toàn bộ khoảng cách còn lại.
+
+---
+
 ## PHỤ LỤC — TRẠNG THÁI
+
+### Hiện tại
+
+```text
+Ngày:                          2026-08-31
+Nhánh:                         chien-eval @ 64398cf
+Lần chạy EvalGate:             product-5ace0bc6893e4fc2ae1d19d832d2edbe
+Phán quyết:                    RELEASE_BLOCKED (exit 3), điểm 67.67, độ phủ 72.36%
+                               → CÓ HIỆU LỰC: điểm được công bố, không còn WITHHELD
+Baseline so sánh:              product-ffd77da3 (45887f7) — regression_engine PASS
+Self-test EvalGate:            316 pass, 4 skip
+Test sản phẩm (tests/):        422 pass, 10 skip, 4 FAIL
+                               → 4 lỗi đều ở test_isolation_forest_detector.py, do
+                                 scikit-learn (requirements.txt:18) chưa cài ở venv local.
+                                 Đã fail y hệt TRƯỚC đợt này. Cần xác nhận lại trên CI.
+Evaluator / metric:            31 / 84
+Critical finding:              6 (1 chặn release)
+Hard gate:                     24 tổng — 20 PASS / 1 FAIL (HG-A8) / 3 NOT_EVALUATED
+                               NOT_EVALUATED: HG-A1, HG-A3 (sản phẩm), HG-S5 (nightly)
+Golden tier 1:                 7/7 archetype, freeze --verify OK
+Golden tier 2/3:               16 case, áp dụng 13/16 (0.8125), pass 0.60
+                               attribution: {decision: 3, negative_space: 1}
+ruff check src/ tests/ evalgate/: SẠCH
+File sản phẩm (src/) bị sửa:   KHÔNG — cây sạch tại thời điểm chạy
+                               → đây là lý do phán quyết CÓ hiệu lực
+Chi phí LLM của EvalGate:      $0.00 (geval_domain_v1, promptfoo_injection_v1 = NOT_EXECUTED)
+Dependency cài thêm:           KHÔNG
+git add / commit / push:       KHÔNG THỰC HIỆN (commit do người vận hành đẩy)
+Mục 20.9 (chưa sửa):           6 mục — dẫn đầu là DeterministicEvalLLM và đường canonical
+Mục 20.10 (nợ đợt này):        3 mục — dẫn đầu là golden_conformance.py ~900 dòng
+Mục 20.11 (thứ tự tiếp):       PROPOSED — chưa thực hiện
+```
+
+### Trước đó (giữ lại làm mốc lịch sử)
 
 ```text
 Ngày:                          2026-08-23
@@ -2493,3 +6609,8 @@ steward_local.db:              checksum không đổi (đã kiểm trước/sau)
 Mục 17.8 (việc còn lại):       PROPOSED — chưa thực hiện
 Mục 18 (hướng phát triển):     PROPOSED — thiết kế, chưa viết một dòng code nào
 ```
+
+> Điểm giữa hai khối **không so sánh trực tiếp được**: 43.41 là điểm của một run
+> `EVALGATE_STALE` với 20 hard gate và 30 evaluator; 67.67 là điểm của một run có hiệu
+> lực với 24 hard gate và 31 evaluator. Mốc so sánh hợp lệ duy nhất là baseline
+> `product-ffd77da3` trong §20.5.

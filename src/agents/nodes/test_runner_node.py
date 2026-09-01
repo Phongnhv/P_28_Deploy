@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -95,7 +96,7 @@ def _execute_supabase_rules(rules: list[dict], dataset_id: str, database_url: st
     """
     source_engine = create_supabase_engine(database_url)
     results: list[dict] = []
-    with source_engine.connect() as connection:
+    with _disposable_engine_connection(source_engine) as connection:
         for index, rule in enumerate(rules):
             started = time.perf_counter()
             rule_type = str(rule.get("rule_type") or "").upper()
@@ -215,6 +216,16 @@ def _execute_supabase_rules(rules: list[dict], dataset_id: str, database_url: st
                     "duration_ms": round((time.perf_counter() - started) * 1000, 2), "error": str(exc),
                 })
     return results
+
+
+@contextmanager
+def _disposable_engine_connection(engine):
+    """Return one connection and always tear down this per-run source engine."""
+    try:
+        with engine.connect() as connection:
+            yield connection
+    finally:
+        engine.dispose()
 
 
 def _resolve_identity_column(table_name: str) -> str | None:

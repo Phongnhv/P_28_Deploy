@@ -4,7 +4,9 @@ import pytest
 from sqlalchemy.orm import Session
 
 from src.models.database import (
+    DatasetAccessModel,
     DatasetGovernanceModel,
+    DatasetModel,
     DatasetVersionModel,
     ProfileRunSnapshotModel,
     WorkspaceMembershipModel,
@@ -111,6 +113,38 @@ async def test_explorer_v2_does_not_fallback_for_unknown_profile_run(client, gov
 
     assert response.status_code == 404
     assert response.json()["code"] == "RESOURCE_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_legacy_rows_adapter_rejects_non_demo_dataset(steward_client, test_db):
+    with Session(test_db) as db:
+        db.add(
+            DatasetModel(
+                id="custom-legacy-shaped",
+                name="Custom legacy-shaped dataset",
+                description="Test-only dataset without a version manifest",
+                status="REGISTERED",
+                row_count=0,
+                source_label="custom",
+                manifest_version="1.0.0",
+                checksum="custom-checksum",
+            )
+        )
+        db.add(
+            DatasetAccessModel(
+                id="access-custom-legacy-shaped-steward",
+                dataset_id="custom-legacy-shaped",
+                username="steward",
+                access_level="MANAGE",
+                granted_by="system-seed",
+            )
+        )
+        db.commit()
+
+    response = await steward_client.get("/api/v1/datasets/custom-legacy-shaped/rows", params={"limit": 1})
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "VERSIONED_SOURCE_REQUIRED"
 
 
 def test_accessible_dataset_listing_uses_governance_without_version_scope(test_db, governed_local_dataset):

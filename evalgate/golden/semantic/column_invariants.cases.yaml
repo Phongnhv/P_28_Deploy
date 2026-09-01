@@ -1,0 +1,147 @@
+# Expectations bound to what a column MEANS, not to what it is called.
+#
+# GC-E1, GC-E2 and GC-E4 in tier2_rules state real invariants -- a fare cannot be
+# negative, a business key cannot be null, pickup cannot follow dropoff -- but they
+# state them about `fare_amount`, `vendor_id` and `pickup_at`. Written that way the
+# expectation only exists for one taxi fixture, and a product that accepts arbitrary
+# uploads has no ground truth for anything else.
+#
+# The invariants themselves were never about taxis. Restated against semantic_type
+# and business_role they resolve, per dataset, to whichever columns carry that
+# meaning -- so the same case covers a clinical `insurance_pct`, a retail `price`
+# and an HR `bonus` with nothing new written.
+#
+# Where these overlap with the tier2 cases they are deliberately the stronger form:
+# tier2 asserts the rule exists on one named column, these assert it exists on every
+# column of that kind. Keep both until the semantic vocabulary is pinned to an enum
+# (semantic_type is currently a free-form string), because a selector that silently
+# matches nothing would otherwise remove the coverage without anyone noticing.
+version: "2.0"
+layer: semantic
+description: >-
+  Column-level invariants resolved through the bundle's own semantic contract, so
+  they apply to every dataset that carries a column of the given meaning.
+
+cases:
+  - id: GS-CURRENCY-NON-NEGATIVE
+    tier: 2
+    severity: HIGH
+    intent: >-
+      A monetary amount below zero is not a rare value, it is an impossible one. The
+      lower bound is therefore a business fact and must be asserted, not learned
+      from a distribution that already contains the defect it is supposed to catch.
+    source: src/resources/rule_policies.json#governed_value_sets
+    ground_truth_owner: data-engineer
+    applies_to:
+      semantic_type: currency
+    assertions:
+      - type: rule_proposed
+        rule_type: RANGE
+      - type: parameter_bound
+        rule_type: RANGE
+        parameter: min
+        minimum: 0
+        note: "a learned lower bound admits every negative value already present"
+      - type: evidence_references_metric
+        metrics: [min_value, negative_rate]
+        note: "the threshold must cite the figures that decide it"
+
+  - id: GS-IDENTIFIER-NOT-NULL
+    tier: 2
+    severity: HIGH
+    intent: >-
+      A column the agent itself identified as a business key cannot be optional. If
+      it proposed the meaning and then failed to protect it, the interpretation was
+      decorative.
+    source: src/models/semantic_contract.py#SemanticColumn
+    ground_truth_owner: data-steward
+    applies_to:
+      semantic_type: identifier
+    assertions:
+      - type: nullable_expected_is
+        nullable_expected: false
+      - type: rule_proposed
+        rule_type: NOT_NULL
+
+  - id: GS-EVENT-ORDER-IS-CROSS-FIELD
+    tier: 2
+    severity: HIGH
+    intent: >-
+      An ordering between two timestamps is a relationship, so it belongs in a
+      CROSS_FIELD_COMPARISON. Two independent range checks cannot express it: each
+      one passes on a row where the pair is inverted.
+    source: eval/results/E1_E5_EVALUATION.md#E4
+    ground_truth_owner: data-engineer
+    applies_to:
+      relationship: ordered_pair
+    assertions:
+      - type: rule_proposed
+        rule_type: CROSS_FIELD_COMPARISON
+
+  - id: GS-EVIDENCE-RESOLVES-TO-REAL-METRICS
+    tier: 2
+    severity: HIGH
+    intent: >-
+      Every citation must name a figure the profile actually published. A reference
+      that resolves to nothing is indistinguishable from an invented one, and the
+      steward has no way to check it.
+    source: evalgate/golden/applicability.py#evidence_keys
+    ground_truth_owner: data-steward
+    applies_to:
+      always: true
+    assertions:
+      - type: evidence_metric_exists
+        note: "checked against profile.evidence_keys, the published vocabulary"
+
+  - id: GS-CONFIDENCE-IS-INFORMATIVE
+    tier: 2
+    severity: MEDIUM
+    intent: >-
+      A steward triages a review queue by confidence. That is only defensible if
+      high-confidence proposals are at least as likely to be right as low-confidence
+      ones. Monotonicity is asserted rather than a calibration target: with a few
+      dozen proposals an absolute error figure is noise, while an inversion is a
+      real signal that the score carries no information.
+    source: src/models/rule_schemas.py#RuleConfidence
+    ground_truth_owner: data-steward
+    applies_to:
+      always: true
+    assertions:
+      - type: confidence_monotonic
+        confidence_field: confidence
+
+  - id: GS-COLD-START-ABSTAINS
+    tier: 2
+    severity: HIGH
+    intent: >-
+      With no prior run to compare against, INSUFFICIENT_HISTORY is the only honest
+      answer an anomaly detector can give. NORMAL asserts stability that has not
+      been observed, and a steward reading NORMAL cannot tell the two apart. This is
+      the one property of the anomaly decision a single-run bundle can settle, so it
+      is asserted before any ANOMALY/NORMAL ground truth exists.
+    source: docs/ARCHITECTURE.md#insufficient-history
+    ground_truth_owner: data-steward
+    applies_to:
+      always: true
+    assertions:
+      - type: must_abstain
+        max_history_runs: 1
+
+  - id: GS-VERIFIES-BEFORE-ASSERTING
+    tier: 2
+    severity: HIGH
+    intent: >-
+      The rule proposer is given a tool that runs a candidate against the real data
+      before it is proposed. Whether it used one is invisible in the output -- a
+      verified rule and a guessed rule are identical once written down -- so it is
+      read from the tool lifecycle instead. An agent that only ever looks statistics
+      up is still guessing, just with more context.
+    source: src/agents/tools/rule_proposer_tools.py#dry_run_rule_candidate
+    ground_truth_owner: data-engineer
+    applies_to:
+      always: true
+    assertions:
+      - type: tools_were_used
+        min_calls: 1
+      - type: must_verify_before_asserting
+        verifying_tools: [dry_run_rule_candidate, get_column_deep_stats]
