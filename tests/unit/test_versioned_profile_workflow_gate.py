@@ -123,14 +123,17 @@ def test_semantic_payload_infers_roles_without_any_legacy_column_rows():
     assert payload["rows"] == 250
 
 
-def test_proposal_evidence_reads_the_canonical_versioned_snapshot():
+def test_graph_1b_builds_evidence_from_the_same_versioned_profile():
     db = seeded_session()
 
     evidence = build_proposal_evidence(db, DATASET_ID)
 
     assert evidence.row_count == 250
+    assert evidence.manifest_version == "versioned-v1"
     assert [column.name for column in evidence.columns] == ["id", "release_date", "rating"]
     assert evidence.columns[0].is_unique_full_table is True
+    assert "profile.column.rating.null_rate" in evidence.evidence_keys
+    assert "sample_value" not in evidence.model_dump_json()
 
 
 def test_a_dataset_with_neither_profile_is_still_reported_as_unprofiled():

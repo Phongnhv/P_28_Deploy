@@ -18,23 +18,48 @@ live run; only the loader changes.
 from __future__ import annotations
 
 import json
-import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from evalgate.core.context import EvalRunContext
+from evalgate.gates.gate1_ai_quality.golden_handlers import (
+    _HANDLERS,
+    AssertionOutcome,
+    CaseOutcome,
+    HandlerContext,
+    _confidence_monotonic,
+    _enum_from_policy,
+    _evidence_metric_exists,
+    _evidence_references_metric,
+    _evidence_refs,
+    _forbidden_tokens,
+    _max_false_positive_rate,
+    _min_violations,
+    _must_abstain,
+    _must_cite_numbers,
+    _must_verify_before_asserting,
+    _no_rules_on_tables,
+    _nullable_expected_is,
+    _parameter_bound,
+    _params,
+    _relationship_declared,
+    _rule_not_on_columns,
+    _rule_proposed,
+    _semantic_type_is,
+    _severity_ranks_above,
+    _target_columns,
+    _tools_were_used,
+)
 from evalgate.golden.applicability import (
     DatasetContext,
     Scope,
     build_dataset_context,
     resolve,
-    resolve_evidence_ref,
     semantic_vocabulary,
 )
 from evalgate.golden.schema import (
     LAYER_ORDER,
-    Assertion,
     GoldenCase,
     load_all_cases,
     load_all_suites,
@@ -51,6 +76,47 @@ from evalgate.schemas.eval_result import (
     Threshold,
 )
 
+__all__ = [
+    "AssertionOutcome",
+    "CaseOutcome",
+    "EVALUATOR",
+    "EVIDENCE_DIR",
+    "GATE",
+    "HandlerContext",
+    "PROJECT_ROOT",
+    "PROPOSAL_DIRS",
+    "REPORTS_DIR",
+    "_HANDLERS",
+    "_confidence_monotonic",
+    "_enum_from_policy",
+    "_evidence_metric_exists",
+    "_evidence_references_metric",
+    "_evidence_refs",
+    "_forbidden_tokens",
+    "_max_false_positive_rate",
+    "_min_violations",
+    "_must_abstain",
+    "_must_cite_numbers",
+    "_must_verify_before_asserting",
+    "_no_rules_on_tables",
+    "_nullable_expected_is",
+    "_parameter_bound",
+    "_params",
+    "_relationship_declared",
+    "_rule_not_on_columns",
+    "_rule_proposed",
+    "_semantic_type_is",
+    "_severity_ranks_above",
+    "_target_columns",
+    "_tools_were_used",
+    "evaluate",
+    "load_anomaly",
+    "load_proposals",
+    "load_results",
+    "load_tool_events",
+    "run_case",
+]
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 PROPOSAL_DIRS = (
     PROJECT_ROOT / "output" / "hitl",
@@ -62,61 +128,11 @@ EVIDENCE_DIR = PROJECT_ROOT / "evalgate" / "evidence" / "gate1"
 GATE = "ai_quality"
 EVALUATOR = "golden_conformance_v1"
 
-_NUMERAL = re.compile(r"\d")
-
-
-@dataclass
-class AssertionOutcome:
-    type: str
-    passed: bool
-    observed: str
-    #: False when the artefacts contain nothing this assertion could inspect. An
-    #: unmeasurable assertion must not count as a failure -- "we did not look" and
-    #: "we looked and it was wrong" are different claims, and conflating them makes
-    #: the pass rate meaningless.
-    measurable: bool = True
-
-
-@dataclass
-class CaseOutcome:
-    id: str
-    tier: int
-    severity: str
-    intent: str
-    source: str
-    passed: bool
-    assertions: list[AssertionOutcome]
-    measurable: bool = True
-    #: False when the case is not a statement about this dataset at all. Distinct
-    #: from ``measurable``: "there is no currency column here" is not the same claim
-    #: as "there was nothing in the artefacts to inspect", and neither is a failure.
-    applicable: bool = True
-    applicability_reason: str = ""
-    #: Which decision surface failed first. A wrong semantic type produces a wrong
-    #: candidate, a wrong rule and a wrong finding, and reporting all four sends a
-    #: reader to fix rule_proposer for a defect owned by dataset_understanding.
-    failed_layer: str | None = None
-
-
-@dataclass
-class HandlerContext:
-    """Everything an assertion can be evaluated against."""
-
-    rules: list[dict[str, Any]]
-    results: list[dict[str, Any]]
-    scope: Scope
-    dataset: DatasetContext | None
-    #: Graph 3's own output. A second decision surface with its own ground truth,
-    #: and the only place an abstention can be observed.
-    anomaly: dict[str, Any] = field(default_factory=dict)
-    #: Tool lifecycle events from the run trace. The only record of *how* the agent
-    #: decided; a verified rule and a guessed one are identical once written down.
-    tool_events: list[dict[str, Any]] = field(default_factory=list)
-
 
 # ---------------------------------------------------------------------------
 # Loading the agent's output
 # ---------------------------------------------------------------------------
+
 
 def load_proposals(context: EvalRunContext | None = None) -> list[dict[str, Any]]:
     """Every archived proposed rule, flattened, with its artefact recorded."""
@@ -172,476 +188,9 @@ def load_tool_events(context: EvalRunContext | None = None) -> list[dict[str, An
     return events
 
 
-def _params(rule: dict[str, Any]) -> dict[str, Any]:
-    return rule.get("effective_parameters") or rule.get("parameters") or {}
-
-
 # ---------------------------------------------------------------------------
-# Assertion evaluation
+# Runner logic
 # ---------------------------------------------------------------------------
-
-def _rule_proposed(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    """A rule of this type exists on every column the case is about.
-
-    The column-existence check is the one correction that matters here. This was
-    the only handler with no unmeasurable branch, so a case naming ``fare_amount``
-    returned a hard FAIL against a clinical dataset -- penalising the agent for not
-    proposing a rule on a column that does not exist. "The column is absent" and
-    "the column is there and got no rule" are different findings and only the
-    second is about the agent.
-    """
-    rules = ctx.rules
-    targets = _target_columns(a, ctx)
-    known = set(ctx.dataset.columns) if ctx.dataset and ctx.dataset.columns else None
-    if known is not None:
-        present = [c for c in targets if c in known]
-        if not present:
-            return AssertionOutcome(
-                a.type, False,
-                f"column(s) {targets[:4]} are not in this dataset",
-                measurable=False,
-            )
-        targets = present
-    missing = [
-        column for column in targets
-        if not any(r.get("rule_type") == a.rule_type and r.get("column") == column for r in rules)
-    ]
-    return AssertionOutcome(
-        a.type, not missing,
-        f"{len(targets) - len(missing)}/{len(targets)} column(s) have a {a.rule_type} rule"
-        + (f"; missing on {missing[:4]}" if missing else ""),
-    )
-
-
-def _rule_not_on_columns(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    rules = ctx.rules
-    hits = [
-        f"{r.get('table_name')}.{r.get('column')}"
-        for r in rules
-        if r.get("rule_type") == a.rule_type and r.get("column") in set(a.columns)
-    ]
-    return AssertionOutcome(
-        a.type, not hits,
-        "none" if not hits else f"{len(hits)} violation(s): {sorted(set(hits))[:4]}",
-    )
-
-
-def _enum_from_policy(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    rules = ctx.rules
-    forbidden = set(a.must_exclude)
-    offending: list[str] = []
-    checked = 0
-    for rule in rules:
-        if rule.get("rule_type") != "ACCEPTED_VALUES" or rule.get("column") != a.column:
-            continue
-        checked += 1
-        admitted = forbidden & {str(v) for v in (_params(rule).get("accepted_values") or [])}
-        if admitted:
-            offending.append(f"{rule['__artifact__']}: {sorted(admitted)}")
-    if checked == 0:
-        return AssertionOutcome(
-            a.type, False, f"no ACCEPTED_VALUES rule on {a.column} to check", measurable=False
-        )
-    return AssertionOutcome(
-        a.type, not offending,
-        f"{len(offending)}/{checked} proposal(s) admit an excluded value",
-    )
-
-
-def _parameter_bound(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    rules = ctx.rules
-    targets = set(_target_columns(a, ctx))
-    seen: list[float] = []
-    for rule in rules:
-        if rule.get("rule_type") != a.rule_type or rule.get("column") not in targets:
-            continue
-        value = _params(rule).get(a.parameter)
-        if isinstance(value, (int, float)):
-            seen.append(float(value))
-    if not seen:
-        return AssertionOutcome(
-            a.type, False, f"no {a.rule_type}.{a.parameter} on {a.column}", measurable=False
-        )
-    bad = [
-        v for v in seen
-        if (a.minimum is not None and v < a.minimum)
-        or (a.maximum is not None and v > a.maximum)
-    ]
-    return AssertionOutcome(
-        a.type, not bad,
-        f"{len(bad)}/{len(seen)} value(s) outside bound; observed {sorted(set(seen))[:5]}",
-    )
-
-
-def _no_rules_on_tables(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    rules = ctx.rules
-    forbidden = set(a.tables)
-    counts: dict[str, int] = {}
-    for rule in rules:
-        table = rule.get("table_name")
-        if table in forbidden:
-            counts[table] = counts.get(table, 0) + 1
-    total = sum(counts.values())
-    top = sorted(counts.items(), key=lambda kv: -kv[1])[:4]
-    return AssertionOutcome(
-        a.type, total == 0,
-        "none" if total == 0 else f"{total} rule(s) on operational tables, top: {top}",
-    )
-
-
-def _min_violations(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    results = ctx.results
-    best = 0
-    seen = False
-    for entry in results:
-        if not str(entry.get("rule_id", "")).endswith(a.rule_suffix or ""):
-            continue
-        seen = True
-        best = max(best, int(entry.get("failed_count") or entry.get("violation_count") or 0))
-    if not seen:
-        return AssertionOutcome(
-            a.type, False, f"no execution result for *{a.rule_suffix}", measurable=False
-        )
-    return AssertionOutcome(
-        a.type, best >= (a.at_least or 0),
-        f"best run flagged {best}, required {a.at_least}",
-    )
-
-
-def _forbidden_tokens(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    rules = ctx.rules
-    offenders: list[str] = []
-    checked = 0
-    for rule in rules:
-        text = str(rule.get(a.field or "") or "")
-        if not text:
-            continue
-        checked += 1
-        found = [t for t in a.tokens if t in text]
-        if found:
-            offenders.append(f"{rule.get('rule_id', '?')}: {found[:3]}")
-    if checked == 0:
-        return AssertionOutcome(
-            a.type, False, f"no rule carries a {a.field} to check", measurable=False
-        )
-    rate = len(offenders) / checked
-    return AssertionOutcome(
-        a.type, not offenders,
-        f"{len(offenders)}/{checked} ({rate:.1%}) contain a forbidden token; "
-        f"e.g. {offenders[:2]}" if offenders else f"0/{checked}",
-    )
-
-
-def _must_cite_numbers(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    rules = ctx.rules
-    missing = 0
-    checked = 0
-    for rule in rules:
-        text = str(rule.get(a.field or "") or "")
-        if not text:
-            continue
-        checked += 1
-        if not _NUMERAL.search(text):
-            missing += 1
-    if checked == 0:
-        return AssertionOutcome(
-            a.type, False, f"no rule carries a {a.field} to check", measurable=False
-        )
-    return AssertionOutcome(
-        a.type, missing == 0,
-        f"{missing}/{checked} rationale(s) cite no figure at all",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Layered assertions
-# ---------------------------------------------------------------------------
-
-def _target_columns(a: Assertion, ctx: HandlerContext) -> list[str]:
-    """Columns this assertion is about: the explicit one, else the resolved scope."""
-    if a.column:
-        return [a.column]
-    return list(ctx.scope.columns)
-
-
-def _semantic_type_is(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    if ctx.dataset is None or not ctx.dataset.has_semantic_contract:
-        return AssertionOutcome(a.type, False, "no semantic contract in the bundle", measurable=False)
-    wrong = [
-        f"{name}={(ctx.dataset.semantic_for(name).semantic_type if ctx.dataset.semantic_for(name) else '?')}"
-        for name in _target_columns(a, ctx)
-        if not (
-            (item := ctx.dataset.semantic_for(name)) and item.semantic_type == a.semantic_type
-        )
-    ]
-    return AssertionOutcome(
-        a.type, not wrong,
-        "all match" if not wrong else f"{len(wrong)} column(s) not {a.semantic_type}: {wrong[:4]}",
-    )
-
-
-def _nullable_expected_is(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    if ctx.dataset is None or not ctx.dataset.has_semantic_contract:
-        return AssertionOutcome(a.type, False, "no semantic contract in the bundle", measurable=False)
-    wrong = [
-        name
-        for name in _target_columns(a, ctx)
-        if (item := ctx.dataset.semantic_for(name)) and item.nullable_expected != a.nullable_expected
-    ]
-    return AssertionOutcome(
-        a.type, not wrong,
-        "all match" if not wrong
-        else f"{len(wrong)} column(s) not nullable_expected={a.nullable_expected}: {wrong[:4]}",
-    )
-
-
-def _relationship_declared(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    if ctx.dataset is None or not ctx.dataset.has_semantic_contract:
-        return AssertionOutcome(a.type, False, "no semantic contract in the bundle", measurable=False)
-    declared = len(ctx.dataset.relationships)
-    return AssertionOutcome(
-        a.type, declared > 0, f"{declared} relationship(s) declared in the contract"
-    )
-
-
-def _evidence_refs(rule: dict) -> list[str]:
-    refs = rule.get("selected_evidence_refs") or rule.get("evidence_refs") or []
-    return [str(ref) for ref in refs if ref]
-
-
-def _evidence_metric_exists(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    """Every citation must resolve to a figure the profile actually published.
-
-    Checked against ``profile.evidence_keys``, the vocabulary the product itself
-    emits, so this asks whether the reference is real -- not whether the number
-    supports the threshold, which is a separate and harder question.
-
-    ``policy.*`` references name the governed policy rather than the profile and are
-    accepted without resolution; a policy assertion is verified by HG-A3.
-    """
-    if ctx.dataset is None or not ctx.dataset.profile_columns:
-        return AssertionOutcome(a.type, False, "no profile to resolve citations against", measurable=False)
-    dangling: list[str] = []
-    checked = 0
-    for rule in ctx.rules:
-        for ref in _evidence_refs(rule):
-            if ref.startswith("policy."):
-                continue
-            checked += 1
-            if not resolve_evidence_ref(ref, ctx.dataset):
-                dangling.append(f"{rule.get('rule_id', rule.get('id', '?'))}: {ref}")
-    if checked == 0:
-        return AssertionOutcome(a.type, False, "no profile-backed citation to check", measurable=False)
-    return AssertionOutcome(
-        a.type, not dangling,
-        f"{len(dangling)}/{checked} citation(s) resolve to nothing"
-        + (f"; e.g. {dangling[:2]}" if dangling else ""),
-    )
-
-
-def _evidence_references_metric(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    """The citation must name the metric that decides the threshold.
-
-    A rule may cite a real figure that has nothing to do with its own parameter --
-    a RANGE lower bound justified by a null rate is grounded in the wrong number.
-    """
-    wanted = set(a.metrics)
-    targets = set(_target_columns(a, ctx))
-    relevant = [r for r in ctx.rules if r.get("column") in targets]
-    if not relevant:
-        return AssertionOutcome(a.type, False, "no rule on the scoped column(s)", measurable=False)
-    missing = [
-        str(r.get("rule_id") or r.get("id") or "?")
-        for r in relevant
-        if not any(metric in ref for ref in _evidence_refs(r) for metric in wanted)
-    ]
-    return AssertionOutcome(
-        a.type, not missing,
-        f"{len(missing)}/{len(relevant)} rule(s) cite none of {sorted(wanted)}"
-        + (f"; e.g. {missing[:2]}" if missing else ""),
-    )
-
-
-_SEVERITY_RANK = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
-
-
-def _severity_ranks_above(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    """Ordinal, never absolute. See Assertion.ranks_above for why."""
-    targets = set(_target_columns(a, ctx))
-    mine = [_SEVERITY_RANK.get(str(r.get("severity", "")).upper(), 0)
-            for r in ctx.rules if r.get("column") in targets]
-    theirs = [_SEVERITY_RANK.get(str(r.get("severity", "")).upper(), 0)
-              for r in ctx.rules if r.get("column") in set(a.ranks_above)]
-    if not mine or not theirs:
-        return AssertionOutcome(a.type, False, "one side of the ordering has no rule", measurable=False)
-    return AssertionOutcome(
-        a.type, min(mine) >= max(theirs),
-        f"scoped min severity {min(mine)} vs compared max {max(theirs)}",
-    )
-
-
-def _confidence_monotonic(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    """High-confidence proposals must not be less accurate than low-confidence ones.
-
-    Accuracy proxy: a rule that executed and reported a definite PASS/FAIL is
-    treated as sound; one that errored is not. It is a weak proxy on purpose --
-    the claim being tested is that the score carries *any* information, not that
-    it is calibrated to a target.
-    """
-    field_name = a.confidence_field or "confidence"
-    scored: list[tuple[float, bool]] = []
-    status_by_rule = {
-        str(entry.get("rule_id", "")): str(entry.get("status", "")).upper()
-        for entry in ctx.results
-    }
-    for rule in ctx.rules:
-        raw = rule.get(field_name)
-        value = raw.get("overall") if isinstance(raw, dict) else raw
-        if not isinstance(value, (int, float)):
-            continue
-        rule_id = str(rule.get("rule_id") or rule.get("id") or "")
-        status = next(
-            (s for key, s in status_by_rule.items() if rule_id and rule_id in key), None
-        )
-        if status is None:
-            continue
-        scored.append((float(value), status in {"PASS", "FAIL"}))
-    if len(scored) < 4:
-        return AssertionOutcome(
-            a.type, False, f"only {len(scored)} executed proposal(s) carry a confidence",
-            measurable=False,
-        )
-    scored.sort(key=lambda pair: pair[0])
-    half = len(scored) // 2
-    low = sum(1 for _, ok in scored[:half] if ok) / half
-    high = sum(1 for _, ok in scored[half:] if ok) / (len(scored) - half)
-    return AssertionOutcome(
-        a.type, high >= low,
-        f"low-confidence half {low:.2f} vs high-confidence half {high:.2f}",
-    )
-
-
-def _max_false_positive_rate(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    """Rows flagged that no label calls defective.
-
-    SDIH injects at disjoint row positions, so every unlabelled row is known clean
-    and the negative space needs no extra ground truth -- only the complement.
-    """
-    flagged: set[str] = set()
-    for entry in ctx.results:
-        for value in entry.get("violation_row_ids") or entry.get("sample_refs") or []:
-            flagged.add(str(value))
-    if not flagged:
-        return AssertionOutcome(a.type, True, "nothing was flagged")
-    truth = set(a.columns)  # populated by the caller from the label store
-    if not truth:
-        return AssertionOutcome(a.type, False, "no label set supplied", measurable=False)
-    false_positives = flagged - truth
-    rate = len(false_positives) / len(flagged)
-    limit = a.max_rate if a.max_rate is not None else 0.0
-    return AssertionOutcome(
-        a.type, rate <= limit,
-        f"{len(false_positives)}/{len(flagged)} flagged rows are unlabelled ({rate:.1%})",
-    )
-
-
-def _must_abstain(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    """With too little history, INSUFFICIENT_HISTORY is the only honest answer.
-
-    A detector that answers NORMAL on its first run has not observed stability, it
-    has assumed it -- and a steward reading NORMAL cannot tell the two apart. This
-    is the one property of an anomaly decision that a single-run bundle can settle,
-    which is why it is asserted before any ANOMALY/NORMAL ground truth exists.
-
-    A crashed detector is reported as its own observation. It also failed to
-    abstain, but "answered NORMAL without evidence" and "never produced a decision"
-    send a reader to different places.
-    """
-    if not ctx.anomaly:
-        return AssertionOutcome(a.type, False, "no anomaly report in the bundle", measurable=False)
-    decision = str(ctx.anomaly.get("decision") or "").upper()
-    status = str(ctx.anomaly.get("status") or "").upper()
-    if not decision:
-        return AssertionOutcome(a.type, False, "anomaly report carries no decision", measurable=False)
-    if decision == "INSUFFICIENT_HISTORY":
-        return AssertionOutcome(a.type, True, "abstained on insufficient history")
-    if status == "FAILED" or decision == "UNAVAILABLE":
-        error = str(ctx.anomaly.get("error") or "no error recorded")[:120]
-        return AssertionOutcome(
-            a.type, False, f"detector produced no decision ({decision}/{status}): {error}"
-        )
-    return AssertionOutcome(
-        a.type, False,
-        f"claimed {decision} with {len(ctx.anomaly.get('hypotheses') or [])} hypothesis(es) "
-        "and no prior run to compare against",
-    )
-
-
-def _tools_were_used(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    """Did the agent consult the data at all before answering?
-
-    Reported unmeasurable rather than failed when the trace carries no tool events,
-    because an empty trace has two causes -- the agent used no tools, or the run was
-    not instrumented -- and only the first is about the agent.
-    """
-    starts = [e for e in ctx.tool_events if e.get("event") == "tool_start"]
-    if not ctx.tool_events:
-        return AssertionOutcome(
-            a.type, False, "no tool lifecycle in the trace; run may be uninstrumented",
-            measurable=False,
-        )
-    minimum = a.min_calls if a.min_calls is not None else 1
-    names = sorted({str(e.get("tool")) for e in starts})
-    return AssertionOutcome(
-        a.type, len(starts) >= minimum,
-        f"{len(starts)} tool call(s) across {names[:5]}",
-    )
-
-
-def _must_verify_before_asserting(a: Assertion, ctx: HandlerContext) -> AssertionOutcome:
-    """Not merely that a tool ran, but that a *verifying* one did.
-
-    Reading a column's statistics is lookup; dry-running a candidate against the
-    real data is verification. An agent that only ever looks up is still guessing,
-    just with more context.
-    """
-    if not ctx.tool_events:
-        return AssertionOutcome(
-            a.type, False, "no tool lifecycle in the trace; run may be uninstrumented",
-            measurable=False,
-        )
-    verifying = set(a.verifying_tools) or {"dry_run_rule_candidate"}
-    used = {
-        str(e.get("tool")) for e in ctx.tool_events if e.get("event") == "tool_start"
-    }
-    hit = sorted(used & verifying)
-    return AssertionOutcome(
-        a.type, bool(hit),
-        f"verifying tools used: {hit}" if hit else f"none of {sorted(verifying)} was called; used {sorted(used)[:5]}",
-    )
-
-
-_HANDLERS = {
-    "tools_were_used": _tools_were_used,
-    "must_verify_before_asserting": _must_verify_before_asserting,
-    "semantic_type_is": _semantic_type_is,
-    "nullable_expected_is": _nullable_expected_is,
-    "relationship_declared": _relationship_declared,
-    "evidence_metric_exists": _evidence_metric_exists,
-    "evidence_references_metric": _evidence_references_metric,
-    "severity_ranks_above": _severity_ranks_above,
-    "confidence_monotonic": _confidence_monotonic,
-    "max_false_positive_rate": _max_false_positive_rate,
-    "must_abstain": _must_abstain,
-    "rule_proposed": _rule_proposed,
-    "rule_not_on_columns": _rule_not_on_columns,
-    "enum_from_policy": _enum_from_policy,
-    "parameter_bound": _parameter_bound,
-    "no_rules_on_tables": _no_rules_on_tables,
-    "min_violations": _min_violations,
-    "forbidden_tokens": _forbidden_tokens,
-    "must_cite_numbers": _must_cite_numbers,
-}
 
 
 def run_case(

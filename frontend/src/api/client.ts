@@ -123,22 +123,31 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-async function requestWithTransientRetry<T>(path: string, options: RequestInit): Promise<T> {
-  try {
-    return await request<T>(path, options);
-  } catch (error) {
-    // A workflow-step request supplies an idempotency key, so one short retry
-    // is safe when the local API briefly drops a TCP connection while starting
-    // or recovering. HTTP errors are deliberately not retried.
-    if (!(error instanceof TypeError)) throw error;
-    await new Promise((resolve) => window.setTimeout(resolve, 500));
+async function requestWithTransientRetry<T>(
+  path: string,
+  options: RequestInit = {},
+  retries = 2,
+  delayMs = 400,
+): Promise<T> {
+  let attempt = 0;
+  while (true) {
     try {
       return await request<T>(path, options);
-    } catch (retryError) {
-      if (retryError instanceof TypeError) {
-        throw new ApiError(503, "API_UNREACHABLE", "Cannot reach the API service. Confirm that the local backend is running, then try again.");
+    } catch (error) {
+      // Retry transient network dropouts / TCP connection drops when starting or warming up.
+      // HTTP error statuses (4xx, 5xx) are deliberate and not retried.
+      if (!(error instanceof TypeError) || attempt >= retries) {
+        if (error instanceof TypeError) {
+          throw new ApiError(
+            503,
+            "API_UNREACHABLE",
+            "Cannot reach the API service. Confirm that the local backend is running, then try again.",
+          );
+        }
+        throw error;
       }
-      throw retryError;
+      attempt += 1;
+      await new Promise((resolve) => window.setTimeout(resolve, delayMs * attempt));
     }
   }
 }
@@ -212,19 +221,19 @@ export const realApiClient: ApiClient = {
     await request<void>(`/api/v1/datasets/${id}`, { method: "DELETE" });
   },
   async startIngestion(datasetId, idempotencyKey) {
-    return request<CreateJobResponse>(`/api/v1/datasets/${datasetId}/ingestions`, {
+    return requestWithTransientRetry<CreateJobResponse>(`/api/v1/datasets/${datasetId}/ingestions`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
     });
   },
   getJob(jobId) {
-    return request<Job>(`/api/v1/jobs/${jobId}`);
+    return requestWithTransientRetry<Job>(`/api/v1/jobs/${jobId}`);
   },
   getProfile(datasetId) {
-    return request<DatasetProfile | null>(`/api/v1/datasets/${datasetId}/profile`);
+    return requestWithTransientRetry<DatasetProfile | null>(`/api/v1/datasets/${datasetId}/profile`);
   },
   async startRuleProposals(datasetId, idempotencyKey) {
-    return request<CreateJobResponse>(`/api/v1/datasets/${datasetId}/rule-proposals`, {
+    return requestWithTransientRetry<CreateJobResponse>(`/api/v1/datasets/${datasetId}/rule-proposals`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
     });
@@ -261,20 +270,20 @@ export const realApiClient: ApiClient = {
     });
   },
   async startDqRun(ruleIds, idempotencyKey) {
-    return request<DqRunCreateResponse>("/api/v1/dq-runs", {
+    return requestWithTransientRetry<DqRunCreateResponse>("/api/v1/dq-runs", {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
       body: JSON.stringify({ rule_ids: ruleIds }),
     });
   },
   getDqRun(runId) {
-    return request<DqRun>(`/api/v1/dq-runs/${runId}`);
+    return requestWithTransientRetry<DqRun>(`/api/v1/dq-runs/${runId}`);
   },
   getDqResults(runId) {
-    return request<DqResult[]>(`/api/v1/dq-runs/${runId}/results`);
+    return requestWithTransientRetry<DqResult[]>(`/api/v1/dq-runs/${runId}/results`);
   },
   getDqAnomalies(runId) {
-    return request<DqAnomaly[]>(`/api/v1/dq-runs/${runId}/anomalies`);
+    return requestWithTransientRetry<DqAnomaly[]>(`/api/v1/dq-runs/${runId}/anomalies`);
   },
   async getActiveRules(datasetId) {
     const response = await request<{ total_rules: number; rules: ActiveRule[] }>(
@@ -283,12 +292,12 @@ export const realApiClient: ApiClient = {
     return response.rules;
   },
   getAnomalySignals(runId) {
-    return request<AnomalySignal[]>(
+    return requestWithTransientRetry<AnomalySignal[]>(
       `/api/v1/dq/anomaly-runs/${encodeURIComponent(runId)}/signals`,
     );
   },
   getAnomalyHypotheses(runId) {
-    return request<AnomalyHypothesis[]>(
+    return requestWithTransientRetry<AnomalyHypothesis[]>(
       `/api/v1/dq/anomaly-runs/${encodeURIComponent(runId)}/hypotheses`,
     );
   },
@@ -299,10 +308,10 @@ export const realApiClient: ApiClient = {
     );
   },
   getLatestDqRun(datasetId) {
-    return request<DqRun | null>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/dq-runs/latest`);
+    return requestWithTransientRetry<DqRun | null>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/dq-runs/latest`);
   },
   getQualityTrends(datasetId) {
-    return request<QualityTrendPoint[]>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/quality-trends`);
+    return requestWithTransientRetry<QualityTrendPoint[]>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/quality-trends`);
   },
   queryDatasetRows(datasetId, query: DatasetRowQuery) {
     const params = new URLSearchParams();
@@ -406,7 +415,7 @@ export const realApiClient: ApiClient = {
     });
   },
   getGraphCatalog() {
-    return request<GraphCatalog>("/api/v1/graph/catalog");
+    return requestWithTransientRetry<GraphCatalog>("/api/v1/graph/catalog");
   },
   listNodeRuns(filter: NodeRunFilter) {
     const params = new URLSearchParams();
@@ -418,12 +427,12 @@ export const realApiClient: ApiClient = {
     if (filter.graphRunId) params.set("graph_run_id", filter.graphRunId);
     if (filter.limit) params.set("limit", String(filter.limit));
     const query = params.toString();
-    return request<NodeRun[]>(`/api/v1/graph/node-runs${query ? `?${query}` : ""}`);
+    return requestWithTransientRetry<NodeRun[]>(`/api/v1/graph/node-runs${query ? `?${query}` : ""}`);
   },
   getNodeRun(nodeRunId: string) {
-    return request<NodeRunDetail>(`/api/v1/graph/node-runs/${encodeURIComponent(nodeRunId)}`);
+    return requestWithTransientRetry<NodeRunDetail>(`/api/v1/graph/node-runs/${encodeURIComponent(nodeRunId)}`);
   },
   getStewardReport(runId: string) {
-    return request<StewardReport>(`/api/v1/dq-runs/${encodeURIComponent(runId)}/steward-report`);
+    return requestWithTransientRetry<StewardReport>(`/api/v1/dq-runs/${encodeURIComponent(runId)}/steward-report`);
   },
 };

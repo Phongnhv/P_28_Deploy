@@ -106,13 +106,13 @@ def _uploaded_dataset_path(dataset_id: str) -> Path | None:
 
 
 def _materialize_versioned_dataset_path(db: Session, dataset_id: str) -> tuple[Path | None, bool]:
-    """Resolve the latest immutable source artifact for a versioned dataset.
+    """Materialize and verify the latest immutable source artifact.
 
     Canonical imports are profiled from ``dataset_versions`` and are not copied
     into the legacy ``source_rows`` table. DQ execution must therefore use the
     verified source artifact even when Supabase is configured as the default
-    backend; otherwise it evaluates the wrong canonical table and skips every
-    user-uploaded column.
+    backend. Returns ``(path, temporary)``; only object-storage downloads are
+    temporary and owned by the caller.
     """
     version = (
         db.query(DatasetVersionModel)
@@ -122,6 +122,10 @@ def _materialize_versioned_dataset_path(db: Session, dataset_id: str) -> tuple[P
     )
     if not version:
         return None, False
+    try:
+        metadata = json.loads(version.source_metadata_json or "{}")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("READY dataset version has invalid source metadata") from exc
     artifact = (
         db.query(GovernedArtifactModel)
         .filter_by(
@@ -132,11 +136,7 @@ def _materialize_versioned_dataset_path(db: Session, dataset_id: str) -> tuple[P
         .first()
     )
     if not artifact or artifact.checksum != version.checksum:
-        return None, False
-    try:
-        metadata = json.loads(version.source_metadata_json or "{}")
-    except (TypeError, ValueError):
-        metadata = {}
+        raise ValueError("READY dataset version has no matching SOURCE_DATASET artifact")
     storage_locator = artifact.storage_locator
     source_ref = SourceArtifactRef(
         bucket=metadata.get("bucket"),
@@ -149,7 +149,14 @@ def _materialize_versioned_dataset_path(db: Session, dataset_id: str) -> tuple[P
         created_by_request=False,
         version_id=metadata.get("version_id"),
     )
-    return materialize_source_artifact(source_ref), storage_locator.startswith("object://")
+    path = materialize_source_artifact(source_ref)
+    read_verified_frame(
+        path,
+        checksum=version.checksum,
+        size_bytes=source_ref.size_bytes,
+        schema=metadata.get("schema"),
+    )
+    return path, storage_locator.startswith("object://")
 
 
 def _profile_uploaded_dataset(db: Session, dataset_id: str, path: Path) -> dict:
@@ -1275,7 +1282,9 @@ def run_dq_checks(
         job.status = "RUNNING"
         job.progress = 10.0
         job.message = "Claiming approved rule set..."
+        job.error = None
         dq_run.status = "RUNNING"
+        dq_run.error_message = None
         db.commit()
 
         try:
@@ -1473,6 +1482,7 @@ def run_dq_checks(
             dq_run.total_failed = total_failed
             dq_run.total_checked = total_checked
             dq_run.completed_at = utc_now()
+            dq_run.error_message = None
 
             # The steward workflow owns the subsequent anomaly analysis.  Its
             # single visible job must remain running until the report artifact
@@ -1480,6 +1490,7 @@ def run_dq_checks(
             job.status = "SUCCEEDED" if finalize_job else "RUNNING"
             job.progress = 100.0 if finalize_job else 90.0
             job.message = "Completed" if finalize_job else "Checks completed; preparing analysis report..."
+            job.error = None
             completed_at = utc_now()
             db.query(RuleConfigurationModel).filter(
                 RuleConfigurationModel.rule_proposal_id.in_([rule.rule_proposal_id for rule in rule_versions])

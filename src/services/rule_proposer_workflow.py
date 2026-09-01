@@ -227,6 +227,16 @@ def _snapshot_from_versioned_profile(snapshot: ProfileRunSnapshotModel) -> dict[
         "profile.duplicate_rate",
     ]
     evidence_keys.extend(f"profile.column.{column['name']}.null_rate" for column in columns)
+    cross_field_metrics = [
+        item
+        for item in metrics.get("cross_field_metrics", [])
+        if isinstance(item, dict)
+    ]
+    evidence_keys.extend(
+        f"profile.cross_field.{metric.get('left_column')}.{metric.get('operator')}.{metric.get('right_column')}.violation_rate"
+        for metric in cross_field_metrics
+        if metric.get("left_column") and metric.get("operator") and metric.get("right_column")
+    )
     completed = snapshot.completed_at or snapshot.created_at
     return {
         "dataset_id": snapshot.dataset_id,
@@ -239,6 +249,7 @@ def _snapshot_from_versioned_profile(snapshot: ProfileRunSnapshotModel) -> dict[
         "evidence_keys": evidence_keys,
         "profile_generated_at": completed.isoformat() if completed else None,
         "columns": columns,
+        "cross_field_metrics": cross_field_metrics,
     }
 
 

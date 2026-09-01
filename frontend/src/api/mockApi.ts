@@ -438,9 +438,15 @@ export const mockApi: ApiClient = {
   },
   async getProfile(id) {
     await wait(200);
+    if (id === datasetId && profile && dataset.status !== "PROFILE_READY") {
+      dataset.status = "PROFILE_READY";
+    }
     return id === datasetId && dataset.status === "PROFILE_READY" ? profile : null;
   },
   async startRuleProposals(id, _idempotencyKey) {
+    if (id === datasetId && profile && dataset.status !== "PROFILE_READY") {
+      dataset.status = "PROFILE_READY";
+    }
     if (id !== datasetId || dataset.status !== "PROFILE_READY") throw new Error("A completed profile is required before requesting proposals.");
     const job = makeJob("PROPOSE_RULES");
     void finishJob(job.id, job.type).then(() => addAudit("PROPOSALS_CREATED", "dataset", datasetId, "Generated typed proposals from aggregate evidence."));

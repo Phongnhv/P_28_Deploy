@@ -29,6 +29,7 @@ import { DatasetCatalogView } from "./components/wizard/DatasetCatalogView";
 import { GraphStagePanel } from "./components/graph/GraphStagePanel";
 import { GraphObservatoryPage } from "./components/graph/GraphObservatoryPage";
 import { StewardReportPanel } from "./components/graph/StewardReportPanel";
+import { Step6ResultsSummary } from "./components/wizard/Step6ResultsSummary";
 import type {
   ActiveRule,
   AnomalyFeedbackLabel,
@@ -547,7 +548,7 @@ function SemanticContractPanel({
                   ? language === "vi" ? "Đang phân tích…" : "Running analysis…"
                   : payload
                     ? language === "vi" ? "↻ Chạy lại" : "↻ Run again"
-                    : language === "vi" ? "⚡ Chạy agent hiểu dữ liệu" : "⚡ Run Understand Agent"}
+                    : language === "vi" ? "Chạy agent hiểu dữ liệu" : "Run Understand Agent"}
               </button>
               {/* The confirm endpoint has existed since the workflow was built
                   but nothing ever called it, so the contract could be produced
@@ -614,34 +615,48 @@ function SemanticContractPanel({
                     </div>
                   </div>
                   <div style={{ overflowX: "auto", border: "1px solid var(--border, #e2e8f0)", borderRadius: "8px" }}>
-                    <div className="semantic-schema-grid">
-                      <div className="semantic-schema-grid-header">
-                        <tr style={{ background: "var(--surface-muted, #f1f5f9)", textAlign: "left", borderBottom: "2px solid var(--border, #cbd5e1)" }}>
-                          <th style={{ padding: "10px 12px" }}>{t("datasets.colName")}</th>
-                          <th style={{ padding: "10px 12px" }}>{t("datasets.colSemanticType")}</th>
-                          <th style={{ padding: "10px 12px" }}>{t("datasets.colNullable")}</th>
-                          <th style={{ padding: "10px 12px" }}>{t("datasets.colConfidence")}</th>
-                          <th style={{ padding: "10px 12px" }}>{t("datasets.colDescription")}</th>
+                    <table className="semantic-contract-table">
+                      <thead>
+                        <tr>
+                          <th>{t("datasets.colName")}</th>
+                          <th>{t("datasets.colSemanticType")}</th>
+                          <th>{t("datasets.colNullable")}</th>
+                          <th>{t("datasets.colConfidence")}</th>
+                          <th>{t("datasets.colDescription")}</th>
                         </tr>
-                      </div>
-                      <div className="semantic-schema-grid-items">
-                        {contractColumns.map((col, idx) => (
-                          <article className="semantic-schema-card" key={String(col.name ?? idx)}>
-                            <td style={{ padding: "10px 12px", fontWeight: 600 }}><code>{String(col.name ?? "")}</code></td>
-                            <td style={{ padding: "10px 12px" }}><span className="status-pill info">{String(col.semantic_type ?? "unknown")}</span></td>
-                            <td style={{ padding: "10px 12px" }}>{col.nullable ? t("datasets.yes") : t("datasets.no")}</td>
-                            <td style={{ padding: "10px 12px" }}>
-                              <span className={`confidence-value ${Number(col.confidence ?? 0) >= 0.8 ? "high" : "low"}`}>
-                                {typeof col.confidence === "number" ? `${(col.confidence * 100).toFixed(0)}%` : "N/A"}
-                              </span>
-                            </td>
-                            <td style={{ padding: "10px 12px", color: "var(--muted)", fontSize: "12px" }}>
-                              {String(col.description ?? col.reasoning ?? col.type ?? "—")}
-                            </td>
-                          </article>
-                        ))}
-                      </div>
-                    </div>
+                      </thead>
+                      <tbody>
+                        {contractColumns.map((col, idx) => {
+                          const isNullable = col.nullable ?? col.nullable_expected ?? true;
+                          const confidenceVal = typeof col.confidence === "number"
+                            ? col.confidence
+                            : parseFloat(String(col.confidence ?? "1"));
+                          const confRatio = !isNaN(confidenceVal) && confidenceVal > 1 ? confidenceVal / 100 : confidenceVal;
+                          const confText = !isNaN(confidenceVal) ? `${(confRatio * 100).toFixed(0)}%` : "N/A";
+                          const descText = String(col.description ?? col.reasoning ?? col.business_role ?? col.type ?? "—");
+
+                          return (
+                            <tr key={String(col.name ?? idx)}>
+                              <td style={{ fontWeight: 600 }}><code>{String(col.name ?? "")}</code></td>
+                              <td><span className="status-pill info">{String(col.semantic_type ?? "unknown")}</span></td>
+                              <td>
+                                <span className={`status-pill ${isNullable ? "warning" : "success"}`}>
+                                  {isNullable ? t("datasets.yes") : t("datasets.no")}
+                                </span>
+                              </td>
+                              <td>
+                                <span className={`confidence-value ${!isNaN(confRatio) && confRatio >= 0.8 ? "high" : "low"}`}>
+                                  {confText}
+                                </span>
+                              </td>
+                              <td style={{ color: "var(--muted)", fontSize: "13px" }}>
+                                {descText}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               )}
@@ -653,6 +668,447 @@ function SemanticContractPanel({
           )}
         </section>
       )}
+    </div>
+  );
+}
+
+function RuleProposerPanel({
+  dataset,
+  profile,
+  workflow,
+  artifacts,
+  proposals,
+  configurations,
+  canOperate,
+  busy,
+  bulkReviewBusy,
+  understandingArtifact,
+  contractConfirmed,
+  onConfirmContract,
+  onRequestProposals,
+  onApproveRule,
+  onRejectRule,
+  onEditRule,
+  onDeleteRule,
+  onBulkReview,
+  onCreateManualRule,
+  onSaveConfiguration,
+  language,
+}: {
+  dataset?: Dataset;
+  profile: DatasetProfile | null;
+  workflow: WorkflowRun | null;
+  artifacts: AgentArtifact[];
+  proposals: RuleProposal[];
+  configurations: RuleConfiguration[];
+  canOperate: boolean;
+  busy: boolean;
+  bulkReviewBusy: boolean;
+  understandingArtifact?: AgentArtifact;
+  contractConfirmed: boolean;
+  onConfirmContract: () => void;
+  onRequestProposals: () => void;
+  onApproveRule: (id: string) => void;
+  onRejectRule: (id: string) => void;
+  onEditRule: (proposal: RuleProposal) => void;
+  onDeleteRule: (id: string) => void;
+  onBulkReview: (decision: "approve" | "reject") => void;
+  onCreateManualRule: () => void;
+  onSaveConfiguration: (id: string, input: RuleConfigurationInput) => void;
+  language: "en" | "vi";
+}) {
+  const [expandedConfigurationId, setExpandedConfigurationId] = useState<string | null>(null);
+  const datasetProposals = useMemo(
+    () => proposals.filter(
+      (p) => p &&
+        (!dataset?.id || p.dataset_id === dataset.id) &&
+        (!workflow?.id || p.workflow_run_id === workflow.id),
+    ),
+    [proposals, dataset?.id, workflow?.id],
+  );
+  const approvedCount = datasetProposals.filter((p) => p && p.status === "APPROVED").length;
+  const rejectedCount = datasetProposals.filter((p) => p && p.status === "REJECTED").length;
+  const pendingCount = datasetProposals.filter((p) => p && ["PROPOSED", "EDITED"].includes(p.status)).length;
+
+  if (!dataset) return null;
+
+  return (
+    <div className="datasets-page">
+      <section className="panel" style={{ padding: "24px" }}>
+        <div className="panel-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <span className="eyebrow">{language === "vi" ? "NĂNG LỰC AGENT" : "AGENT CAPABILITY"}</span>
+            <h2>{language === "vi" ? `Sinh & Đề xuất luật cho ${dataset.name}` : `Rule Generation & Proposals for ${dataset.name}`}</h2>
+            <p className="muted">
+              {understandingArtifact && !contractConfirmed
+                ? (language === "vi"
+                    ? "Hợp đồng ngữ nghĩa chưa được xác nhận. Vui lòng quay lại Bước 2 để xác nhận trước khi sinh luật."
+                    : "The semantic contract is not confirmed yet. Please confirm in Step 2 before generating rules.")
+                : datasetProposals.length > 0
+                  ? (language === "vi"
+                      ? `Đã có ${datasetProposals.length} đề xuất luật cho tập dữ liệu này. Bạn có thể duyệt hoặc sinh lại luật.`
+                      : `${datasetProposals.length} proposals exist for this dataset. You can review or regenerate rules.`)
+                  : (language === "vi"
+                      ? "Agent đọc hợp đồng ngữ nghĩa và đề xuất bộ luật kiểm định chất lượng dữ liệu."
+                      : "The agent reads the semantic contract and proposes a set of quality validation rules.")}
+            </p>
+          </div>
+          <div className="contract-actions" style={{ display: "flex", gap: "8px" }}>
+            {understandingArtifact && !contractConfirmed && (
+              <button
+                className="button secondary"
+                disabled={!canOperate || busy}
+                onClick={onConfirmContract}
+              >
+                {language === "vi" ? "Xác nhận hợp đồng" : "Confirm contract"}
+              </button>
+            )}
+            {canOperate && (
+              <button
+                className="button secondary"
+                disabled={busy}
+                onClick={onCreateManualRule}
+              >
+                {language === "vi" ? "+ Thêm luật thủ công" : "+ Add manual rule"}
+              </button>
+            )}
+            <button
+              className="button primary"
+              disabled={!canOperate || busy || Boolean(understandingArtifact && !contractConfirmed)}
+              onClick={onRequestProposals}
+            >
+              {busy
+                ? (language === "vi" ? "Đang sinh luật…" : "Generating…")
+                : datasetProposals.length > 0
+                    ? (language === "vi" ? "↻ Sinh lại luật" : "↻ Regenerate rules")
+                    : (language === "vi" ? "Sinh Rule" : "Generate rules")}
+            </button>
+          </div>
+        </div>
+
+        <div className="understanding-holder" style={{ marginTop: "16px" }}>
+          <div className="understanding-summary" style={{ padding: "16px", background: "var(--surface-muted, #f8fafc)", borderRadius: "8px", borderLeft: "4px solid var(--accent, #2563eb)" }}>
+            <span className="eyebrow">
+              GRAPH 1B · {language === "vi" ? "ĐỀ XUẤT LUẬT KIỂM ĐỊNH AI" : "AI RULE PROPOSAL"}
+            </span>
+            <p style={{ marginTop: "8px", fontSize: "15px", lineHeight: "1.5", color: "var(--ink)" }}>
+              {datasetProposals.length > 0
+                ? (language === "vi"
+                    ? `Agent đã đề xuất ${datasetProposals.length} quy tắc kiểm định. Đã duyệt: ${approvedCount}, Từ chối: ${rejectedCount}, Chờ duyệt: ${pendingCount}.`
+                    : `Agent proposed ${datasetProposals.length} rules. Approved: ${approvedCount}, Rejected: ${rejectedCount}, Pending: ${pendingCount}.`)
+                : (language === "vi"
+                    ? "Chưa có quy tắc nào được đề xuất. Hãy nhấn 'Sinh Rule' để agent đề xuất bộ quy tắc."
+                    : "No rules proposed yet. Click 'Generate rules' to let the agent propose a ruleset.")}
+            </p>
+          </div>
+
+          <div className="understanding-meta" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginTop: "16px", marginBottom: "20px" }}>
+            <div>
+              <span>{language === "vi" ? "Tổng số luật đề xuất" : "Total Proposed Rules"}</span>
+              <strong>{datasetProposals.length}</strong>
+            </div>
+            <div>
+              <span>{language === "vi" ? "Đã phê duyệt" : "Approved"}</span>
+              <strong style={{ color: "var(--success, #16a34a)" }}>{approvedCount}</strong>
+            </div>
+            <div>
+              <span>{language === "vi" ? "Đã từ chối" : "Rejected"}</span>
+              <strong style={{ color: "var(--danger, #dc2626)" }}>{rejectedCount}</strong>
+            </div>
+            <div>
+              <span>{language === "vi" ? "Chờ xem xét" : "Pending Review"}</span>
+              <strong style={{ color: "var(--warning, #d97706)" }}>{pendingCount}</strong>
+            </div>
+          </div>
+
+          {/* PROPOSALS LIST SECTION */}
+          {datasetProposals.length > 0 ? (
+            <div className="understanding-section" style={{ marginTop: "20px" }}>
+              <div className="panel-heading" style={{ marginBottom: "16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <span className="eyebrow">{language === "vi" ? "HÀNG ĐỢI DUYỆT LUẬT" : "RULE REVIEW QUEUE"}</span>
+                  <h3 style={{ margin: 0 }}>
+                    {language === "vi" ? `Đề xuất luật kiểm tra (${datasetProposals.length})` : `Rule Proposals (${datasetProposals.length})`}
+                  </h3>
+                </div>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <button
+                    className="button ghost danger"
+                    disabled={!canOperate || bulkReviewBusy}
+                    onClick={() => onBulkReview("reject")}
+                  >
+                    {language === "vi" ? "Từ chối tất cả" : "Reject all"}
+                  </button>
+                  <button
+                    className="button primary"
+                    disabled={!canOperate || bulkReviewBusy}
+                    onClick={() => onBulkReview("approve")}
+                  >
+                    {language === "vi" ? "Duyệt tất cả" : "Approve all"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="proposal-list" style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                {datasetProposals.map((proposal) => (
+                  <ProposalCard
+                    key={proposal.id}
+                    proposal={proposal}
+                    canOperate={canOperate}
+                    onApprove={() => onApproveRule(proposal.id)}
+                    onReject={() => onRejectRule(proposal.id)}
+                    onEdit={() => onEditRule(proposal)}
+                    onDelete={() => onDeleteRule(proposal.id)}
+                    configuration={configurations.find((item) => item.rule_id === proposal.id)}
+                    onSaveConfiguration={(input) => onSaveConfiguration(proposal.id, input)}
+                    configurationExpanded={expandedConfigurationId === proposal.id}
+                    onToggleConfiguration={() =>
+                      setExpandedConfigurationId((current) =>
+                        current === proposal.id ? null : proposal.id,
+                      )
+                    }
+                  />
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="workflow-artifact-empty" style={{ marginTop: "16px", padding: "20px", background: "var(--color-bg-subtle, #f8fafc)", borderRadius: "8px", textAlign: "center" }}>
+              {language === "vi"
+                ? "Chưa có đề xuất luật nào. Bấm 'Sinh Rule' để agent đọc Hợp đồng ngữ nghĩa và tạo bộ luật kiểm tra."
+                : "No rule proposals yet. Click 'Generate rules' to have the agent infer rules from the Semantic Contract."}
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function DeterministicExecutionPanel({
+  dataset,
+  activeRun,
+  results,
+  anomalies,
+  approvedRules,
+  workflowArtifacts,
+  canOperate,
+  busy,
+  onRun,
+  language,
+}: {
+  dataset?: Dataset;
+  activeRun: DqRun | null;
+  results: DqResult[];
+  anomalies: DqAnomaly[];
+  approvedRules: RuleProposal[];
+  workflowArtifacts: AgentArtifact[];
+  canOperate: boolean;
+  busy: boolean;
+  onRun: () => void;
+  language: "en" | "vi";
+}) {
+  const isVi = language === "vi";
+  const approvedCount = approvedRules.length;
+
+  if (!dataset) return null;
+
+  return (
+    <div className="datasets-page">
+      <section className="panel" style={{ padding: "24px" }}>
+        <div className="panel-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <span className="eyebrow">{isVi ? "NĂNG LỰC THỰC THI" : "EXECUTION CAPABILITY"}</span>
+            <h2>{isVi ? `Thực thi & Kiểm định chất lượng cho ${dataset.name}` : `Execution & Quality Verification for ${dataset.name}`}</h2>
+            <p className="muted">
+              {approvedCount === 0
+                ? (isVi
+                    ? "Chưa có quy tắc nào được phê duyệt. Vui lòng quay lại Bước 3 để duyệt quy tắc trước khi chạy."
+                    : "No rules approved yet. Please return to Step 3 and approve rules before running.")
+                : (isVi
+                    ? `Sẵn sàng thực thi ${approvedCount} quy tắc đã phê duyệt qua công cụ dbt / SQL runner.`
+                    : `Ready to execute ${approvedCount} approved rules via dbt / SQL runner.`)}
+            </p>
+          </div>
+          <div className="contract-actions" style={{ display: "flex", gap: "8px" }}>
+            <button
+              className="button primary"
+              disabled={!approvedCount || busy || !canOperate}
+              onClick={onRun}
+            >
+              {busy
+                ? (isVi ? "Đang thực thi…" : "Executing…")
+                : (isVi ? "Chạy luật đã duyệt →" : "Run approved rules →")}
+            </button>
+          </div>
+        </div>
+
+        <div className="understanding-holder" style={{ marginTop: "16px" }}>
+          <div className="understanding-summary" style={{ padding: "16px", background: "var(--surface-muted, #f8fafc)", borderRadius: "8px", borderLeft: "4px solid var(--accent, #2563eb)" }}>
+            <span className="eyebrow">
+              GRAPH 2 · {isVi ? "KẾT QUẢ THỰC THI QUY TẮC" : "RULE EXECUTION OUTCOMES"}
+            </span>
+            <p style={{ marginTop: "8px", fontSize: "15px", lineHeight: "1.5", color: "var(--ink)" }}>
+              {activeRun
+                ? (isVi
+                    ? `Lượt chạy gần nhất (${activeRun.id}) tạo lúc ${formatTime(activeRun.created_at)}: Đã kiểm tra ${activeRun.total_checked.toLocaleString()} bản ghi, phát hiện ${activeRun.total_failed.toLocaleString()} lỗi vi phạm.`
+                    : `Latest run (${activeRun.id}) created at ${formatTime(activeRun.created_at)}: Checked ${activeRun.total_checked.toLocaleString()} rows, detected ${activeRun.total_failed.toLocaleString()} violations.`)
+                : (isVi
+                    ? "Chưa thực thi lượt kiểm định nào cho bộ dữ liệu này. Nhấn 'Chạy luật đã duyệt' để bắt đầu."
+                    : "No execution run for this dataset yet. Click 'Run approved rules' to start.")}
+            </p>
+          </div>
+
+          <div className="understanding-meta" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginTop: "16px", marginBottom: "20px" }}>
+            <div>
+              <span>{isVi ? "Luật đã duyệt" : "Approved Rules"}</span>
+              <strong>{approvedCount}</strong>
+            </div>
+            <div>
+              <span>{isVi ? "Số dòng kiểm tra" : "Checked Rows"}</span>
+              <strong>{activeRun ? activeRun.total_checked.toLocaleString() : "—"}</strong>
+            </div>
+            <div>
+              <span>{isVi ? "Số dòng vi phạm" : "Failed Rows"}</span>
+              <strong style={{ color: activeRun && activeRun.total_failed > 0 ? "var(--danger, #dc2626)" : "var(--success, #16a34a)" }}>
+                {activeRun ? activeRun.total_failed.toLocaleString() : "—"}
+              </strong>
+            </div>
+            <div>
+              <span>{isVi ? "Trạng thái lượt chạy" : "Execution Status"}</span>
+              <strong>
+                {activeRun
+                  ? (activeRun.status === "SUCCEEDED"
+                      ? (isVi ? "THÀNH CÔNG" : "SUCCEEDED")
+                      : activeRun.status === "FAILED"
+                        ? (isVi ? "THẤT BẠI" : "FAILED")
+                        : activeRun.status === "RUNNING"
+                          ? (isVi ? "ĐANG CHẠY" : "RUNNING")
+                          : (activeRun.status as string) === "CANCELLED"
+                            ? (isVi ? "ĐÃ HỦY" : "CANCELLED")
+                            : activeRun.status)
+                  : (isVi ? "CHƯA CHẠY" : "NOT RUN")}
+              </strong>
+            </div>
+          </div>
+
+          {/* RESULTS TABLE SECTION */}
+          {results.length > 0 ? (
+            <div className="understanding-section" style={{ marginTop: "20px" }}>
+              <div className="panel-heading" style={{ marginBottom: "16px" }}>
+                <div>
+                  <span className="eyebrow">{isVi ? "KẾT QUẢ TỪNG QUY TẮC" : "RULE OUTCOMES"}</span>
+                  <h3 style={{ margin: 0 }}>
+                    {isVi ? `Chi tiết kiểm tra (${results.length} quy tắc)` : `Check Details (${results.length} rules)`}
+                  </h3>
+                </div>
+              </div>
+
+              <div className="results-table" style={{ border: "1px solid var(--border, #e2e8f0)", borderRadius: "8px", overflow: "hidden" }}>
+                <div className="result-header">
+                  <span>{isVi ? "QUY TẮC" : "RULE"}</span>
+                  <span>{isVi ? "TRẠNG THÁI" : "STATUS"}</span>
+                  <span>{isVi ? "ĐÃ KIỂM TRA" : "CHECKED"}</span>
+                  <span>{isVi ? "VI PHẠM" : "FAILED"}</span>
+                  <span>{isVi ? "MẪU ID LỖI" : "FAILED IDS"}</span>
+                </div>
+                {results.map((result) => (
+                  <div className="result-row" key={result.rule_id}>
+                    <strong>{result.rule_title}</strong>
+                    <StatusPill
+                      label={
+                        result.status === "PASS"
+                          ? (isVi ? "ĐẠT" : "PASS")
+                          : result.status === "FAIL"
+                            ? (isVi ? "LỖI" : "FAIL")
+                            : result.status === "SKIPPED"
+                              ? (isVi ? "BỎ QUA" : "SKIPPED")
+                              : result.status
+                      }
+                      tone={
+                        result.status === "PASS"
+                          ? "success"
+                          : result.status === "SKIPPED"
+                            ? "warning"
+                            : "danger"
+                      }
+                    />
+                    <span>{result.checked_count.toLocaleString()}</span>
+                    <span style={{ color: result.failed_count > 0 ? "var(--danger, #dc2626)" : "var(--ink)" }}>
+                      {result.failed_count.toLocaleString()}
+                    </span>
+                    <span>
+                      {result.failed_row_ids.length > 0
+                        ? result.failed_row_ids.slice(0, 3).join(", ")
+                        : "—"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="workflow-artifact-empty" style={{ marginTop: "16px", padding: "20px", background: "var(--color-bg-subtle, #f8fafc)", borderRadius: "8px", textAlign: "center" }}>
+              {isVi
+                ? "Chưa có kết quả kiểm tra nào. Hãy bấm 'Chạy luật đã duyệt' để bắt đầu thực thi."
+                : "No check results available. Click 'Run approved rules' to execute."}
+            </div>
+          )}
+
+          {/* ANOMALIES SECTION IF PRESENT */}
+          {anomalies.length > 0 && (
+            <div className="understanding-section" style={{ marginTop: "20px" }}>
+              <div className="panel-heading" style={{ marginBottom: "12px" }}>
+                <div>
+                  <span className="eyebrow">{isVi ? "PHÁT HIỆN BẤT THƯỜNG" : "ANOMALY DETECTION"}</span>
+                  <h3 style={{ margin: 0 }}>{isVi ? "Cảnh báo dịch chuyển dữ liệu" : "Signals requiring attention"}</h3>
+                </div>
+                <StatusPill label={`${anomalies.length} ${isVi ? "bất thường" : "detected"}`} tone="warning" />
+              </div>
+              <div className="anomaly-list" style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                {anomalies.map((anomaly) => (
+                  <article className="anomaly-card" key={`${anomaly.rule_id}-${anomaly.anomaly_type}`}>
+                    <div className="anomaly-card-top">
+                      <strong>{anomaly.rule_title}</strong>
+                      <span>
+                        {anomaly.anomaly_type === "Z_SCORE_SPIKE"
+                          ? (isVi ? "Đột biến so với lịch sử" : "Historical spike")
+                          : (isVi ? "Tỷ lệ lỗi cao" : "High failure rate")}
+                      </span>
+                    </div>
+                    <div className="anomaly-metrics">
+                      <div>
+                        <small>{isVi ? "HIỆN TẠI" : "CURRENT"}</small>
+                        <strong>{(anomaly.current_rate * 100).toFixed(2)}%</strong>
+                      </div>
+                      <div>
+                        <small>{isVi ? "MỐC LỊCH SỬ" : "BASELINE"}</small>
+                        <strong>
+                          {anomaly.historical_mean == null
+                            ? (isVi ? "Khởi đầu" : "Cold start")
+                            : `${(anomaly.historical_mean * 100).toFixed(2)}%`}
+                        </strong>
+                      </div>
+                      <div>
+                        <small>Z-SCORE</small>
+                        <strong>
+                          {anomaly.z_score == null ? "—" : anomaly.z_score.toFixed(2)}
+                        </strong>
+                      </div>
+                    </div>
+                    <p>{anomaly.reason}</p>
+                  </article>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ACTIVE RULES PANEL */}
+          <ActiveRulesPanel
+            datasetId={dataset.id}
+            language={language}
+            refreshKey={workflowArtifacts.length}
+          />
+        </div>
+      </section>
     </div>
   );
 }
@@ -1304,34 +1760,6 @@ function WorkflowPage({
             {dataset.name} · revision {workflow.iteration}
           </p>
         </div>
-        <div className="page-heading-actions">
-          <button
-            type="button"
-            className="step-nav-button"
-            onClick={onBackToDatasetSelection}
-            disabled={isRunning}
-          >
-            Change dataset
-          </button>
-          <button
-            type="button"
-            className="step-nav-button backward"
-            onClick={() =>
-              previousWorkflowStep && onRewindStep(previousWorkflowStep.key)
-            }
-            disabled={!canMoveBackward}
-          >
-            ← Back
-          </button>
-          <button
-            type="button"
-            className="step-nav-button forward"
-            onClick={onAdvanceStep}
-            disabled={!canMoveForward}
-          >
-            Continue →
-          </button>
-        </div>
       </div>
       {/* The two-phase rail was removed: it was a disabled, non-interactive
           restatement of the wizard stepper already at the top of the page, and
@@ -1456,7 +1884,7 @@ function WorkflowPage({
           {currentPhaseIndex !== 3 && <div className="workflow-actions">
             {currentStep &&
               ["READY", "FAILED", "COMPLETED"].includes(currentStep.status) &&
-              !["UPLOAD_PROFILE"].includes(
+              !["UPLOAD_PROFILE", "PROPOSE_RULES"].includes(
                 currentStep.key,
               ) && (
                 <button
@@ -2116,6 +2544,8 @@ function App() {
     }
   }
 
+
+
   async function createAdminUser(input: UserCreateInput) {
     try {
       await api.createUser(input);
@@ -2276,11 +2706,6 @@ function App() {
       }
       let currentWorkflow = workflow;
       if (!currentWorkflow) {
-        // Selecting a dataset clears the workflow, so the first click on a run
-        // button lands here. This used to create the workflow and return, which
-        // meant the button had to be pressed twice: the first press looked like
-        // it had done nothing. Every caller of this function is an explicit run
-        // request, so create the workflow and then carry out what was asked.
         currentWorkflow = await workflowApi.createWorkflow(dataset.id, fresh);
         setWorkflow(currentWorkflow);
         setWorkflowArtifacts(
@@ -2327,7 +2752,15 @@ function App() {
         workflowApi,
       );
     } catch (err) {
-      setError(getErrorMessage(err, "Unable to run workflow step."));
+      setError(
+        getErrorMessage(
+          err,
+          language === "vi"
+            ? "Không thể thực thi bước workflow."
+            : "Unable to run workflow step.",
+          language,
+        ),
+      );
     } finally {
       setWorkflowActionBusy(false);
     }
@@ -2354,7 +2787,15 @@ function App() {
           : "Semantic contract confirmed.",
       );
     } catch (err) {
-      setError(getErrorMessage(err, "Unable to confirm the semantic contract."));
+      setError(
+        getErrorMessage(
+          err,
+          language === "vi"
+            ? "Không thể xác nhận hợp đồng ngữ nghĩa."
+            : "Unable to confirm the semantic contract.",
+          language,
+        ),
+      );
     } finally {
       setWorkflowActionBusy(false);
     }
@@ -2362,7 +2803,7 @@ function App() {
 
   async function bulkReviewProposals(action: "approve" | "reject") {
     if (!dataset || !canOperate || bulkReviewBusy) return;
-    const pending = proposals.filter((item) => ["PROPOSED", "EDITED"].includes(item.status));
+    const pending = proposals.filter((item) => item.dataset_id === dataset.id && ["PROPOSED", "EDITED"].includes(item.status));
     if (pending.length === 0) {
       setToast(
         language === "vi"
@@ -2383,6 +2824,7 @@ function App() {
     try {
       const updated = await api.bulkReviewProposals({
         dataset_id: dataset.id,
+        workflow_run_id: workflow?.id,
         action,
         pending_only: true,
       });
@@ -2600,6 +3042,11 @@ function App() {
                   title: t("wizard.step5Title"),
                   desc: t("wizard.step5Desc"),
                 },
+                {
+                  id: 6,
+                  title: t("wizard.step6Title"),
+                  desc: t("wizard.step6Desc"),
+                },
               ].map((step, idx) => (
                 <div key={step.id} style={{ display: "contents" }}>
                   {idx > 0 && (
@@ -2609,6 +3056,7 @@ function App() {
                   )}
                   <button
                     type="button"
+                    disabled={step.id > wizardStep}
                     className={`wizard-step-node ${
                       wizardStep === step.id
                         ? "active"
@@ -2617,8 +3065,10 @@ function App() {
                           : ""
                     }`}
                     onClick={() => {
-                      setShowAdmin(false);
-                      setWizardStep(step.id);
+                      if (step.id <= wizardStep) {
+                        setShowAdmin(false);
+                        setWizardStep(step.id);
+                      }
                     }}
                   >
                     <div className="wizard-step-badge">
@@ -2837,261 +3287,96 @@ function App() {
                 </div>
               )}
 
-              {/* STEP 3: Rule Engineering */}
+              {/* STEP 3: Graph 1B — Rule Engineering */}
               {wizardStep === 3 && (
                 <div>
-                  <WorkflowPage
-                    dataset={dataset}
-                    profile={profile}
-                    datasets={datasets}
-                    workflow={workflow}
-                    artifacts={workflowArtifacts}
-                    proposals={proposals}
-                    configurations={ruleConfigurations}
-                    activeJob={activeJob}
-                    busy={workflowActionBusy}
-                    canOperate={canOperate}
-                    onStartStep={(step, fresh) =>
-                      void startWorkflowStep(step, fresh)
-                    }
-                    onAdvanceStep={() => void navigateForwardWorkflowStep()}
-                    onReviewArtifact={(id, input) =>
-                      void reviewWorkflowArtifact(id, input)
-                    }
-                    onLoopDecision={(input) => void decideWorkflowLoop(input)}
-                    onApproveRule={(id) => void reviewProposal(id, "approve")}
-                    onRejectRule={(id) => void reviewProposal(id, "reject")}
-                    onEditRule={setEditingProposal}
-                    onDeleteRule={(id) => void deleteProposal(id)}
-                    onSaveConfiguration={(id, input) =>
-                      void saveRuleConfiguration(id, input)
-                    }
-                    onCreateManualRule={() => setManualRuleOpen(true)}
-                    onRewindStep={(step) => void rewindWorkflowStage(step)}
-                    onSelectDataset={(id) => void selectDataset(id)}
-                    onUploadPreview={(file) => void importDataset(file)}
-                    onBackToDatasetSelection={() => setWizardStep(1)}
-                    nodeProgress={activeJobNodeProgress}
-                    graphPanel={
-                      <GraphStagePanel
-                        catalog={graphCatalog}
-                        runs={workflowNodeRuns}
-                        graphKeys={["G1B"]}
-                        language={language}
-                        loadNodeDetail={loadNodeDetail}
-                      />
-                    }
+                  <div className="page-heading">
+                    <div>
+                      <span className="eyebrow">RUN 2 · {t("wizard.step3Title").toUpperCase()}</span>
+                      <h1>{t("wizard.step3Title")}</h1>
+                      <p>{t("wizard.step3Desc")}</p>
+                    </div>
+                  </div>
+                  <GraphStagePanel
+                    catalog={graphCatalog}
+                    runs={workflowNodeRuns}
+                    graphKeys={["G1B"]}
+                    language={language}
+                    loadNodeDetail={loadNodeDetail}
                   />
-                  {/* Only the active workflow's proposals belong in this queue.
-                      Legacy/unscoped rows remain available to the old direct
-                      proposer path, but must not look like Graph 1B output. */}
-                  {/* Generating rules is its own decision, so it gets its own
-                      control. The queue below stays closed until it is asked
-                      for: opening step 3 straight onto forty rows buried the
-                      contract those rows were derived from. */}
-                  <section className="prep-section rule-gate">
-                    <header className="prep-section-head">
-                      <span className="prep-section-index">2</span>
-                      <div className="prep-section-title">
-                        <h2>{language === "vi" ? "Sinh luật từ hợp đồng" : "Generate rules"}</h2>
-                        <p>
-                          {understandingArtifact && !contractConfirmed
-                            ? language === "vi"
-                              ? "Hợp đồng ngữ nghĩa chưa được xác nhận. Xác nhận trước rồi mới sinh được luật."
-                              : "The semantic contract is not confirmed yet. Confirm it before generating rules."
-                            : proposals.length > 0
-                              ? language === "vi"
-                                ? `Đã có ${proposals.length} đề xuất cho bộ dữ liệu này.`
-                                : `${proposals.length} proposals already exist for this dataset.`
-                              : language === "vi"
-                                ? "Agent đọc hợp đồng ngữ nghĩa ở trên và đề xuất bộ luật kiểm tra."
-                                : "The agent reads the contract above and proposes a rule set."}
-                        </p>
-                      </div>
-                      <div className="rule-gate-actions">
-                        {understandingArtifact && !contractConfirmed && (
-                          <button
-                            className="button secondary"
-                            disabled={!canOperate || workflowActionBusy || Boolean(activeJob)}
-                            onClick={() => void confirmSemanticContract(understandingArtifact)}
-                          >
-                            {language === "vi" ? "Xác nhận hợp đồng" : "Confirm contract"}
-                          </button>
-                        )}
-                        {proposals.length > 0 && (
-                          <button
-                            className="button secondary"
-                            onClick={() => setRuleQueueOpen((open) => !open)}
-                          >
-                            {ruleQueueOpen
-                              ? language === "vi" ? "Ẩn hàng đợi" : "Hide queue"
-                              : language === "vi" ? `Xem ${proposals.length} đề xuất` : `Review ${proposals.length} proposals`}
-                          </button>
-                        )}
-                        <button
-                          className="button primary"
-                          disabled={
-                            !canOperate ||
-                            Boolean(activeJob) ||
-                            workflowActionBusy ||
-                            (Boolean(understandingArtifact) && !contractConfirmed)
-                          }
-                          title={
-                            understandingArtifact && !contractConfirmed
-                              ? language === "vi"
-                                ? "Xác nhận hợp đồng ngữ nghĩa trước khi sinh luật."
-                                : "Confirm the semantic contract before generating rules."
-                              : undefined
-                          }
-                          onClick={() => {
-                            setRuleQueueOpen(true);
-                            void requestProposals();
-                          }}
-                        >
-                          {activeJob
-                            ? language === "vi" ? "Đang sinh luật…" : "Generating…"
-                            : proposals.length > 0
-                              ? language === "vi" ? "↻ Sinh lại luật" : "↻ Regenerate rules"
-                              : language === "vi" ? "⚡ Sinh Rule" : "⚡ Generate rules"}
-                        </button>
-                      </div>
-                    </header>
-                  </section>
-
-                  {proposals.length > 0 && ruleQueueOpen && (
-                    <section className="standalone-review prep-section">
-                      <header className="prep-section-head">
-                        <span className="prep-section-index">3</span>
-                        <div className="prep-section-title">
-                          <h2>{language === "vi" ? "Duyệt đề xuất luật" : "Review rule proposals"}</h2>
-                          <p>
-                            {language === "vi"
-                              ? `${proposals.length} đề xuất cho ${dataset?.name ?? "bộ dữ liệu này"}`
-                              : `${proposals.length} proposals for ${dataset?.name ?? "this dataset"}`}
-                          </p>
-                        </div>
-                      </header>
-                      <ReviewSummaryPanel proposals={proposals} />
-                      <div className="proposal-list">
-                        {proposals.map((proposal) => (
-                          <ProposalCard
-                            key={proposal.id}
-                            proposal={proposal}
-                            canOperate={canOperate}
-                            configuration={ruleConfigurations.find(
-                              (item) => item.rule_id === proposal.id,
-                            )}
-                            configurationExpanded={
-                              expandedConfiguration === proposal.id
-                            }
-                            onToggleConfiguration={() =>
-                              setExpandedConfiguration(
-                                expandedConfiguration === proposal.id
-                                  ? null
-                                  : proposal.id,
-                              )
-                            }
-                            onSaveConfiguration={(input) =>
-                              void saveRuleConfiguration(proposal.id, input)
-                            }
-                            onApprove={() => void reviewProposal(proposal.id, "approve")}
-                            onReject={() => void reviewProposal(proposal.id, "reject")}
-                            onEdit={() => setEditingProposal(proposal)}
-                            onDelete={() => void deleteProposal(proposal.id)}
-                          />
-                        ))}
-                      </div>
-                      {/* Repeated at the foot of the list: after scrolling forty
-                          rules, the controls at the top are long gone. */}
-                      <div className="bulk-review-bar">
-                        <span>
-                          {language === "vi"
-                            ? `${proposals.filter((p) => ["PROPOSED", "EDITED"].includes(p.status)).length} đề xuất đang chờ quyết định`
-                            : `${proposals.filter((p) => ["PROPOSED", "EDITED"].includes(p.status)).length} awaiting a decision`}
-                        </span>
-                        <div className="rule-gate-actions">
-                          <button
-                            className="button ghost danger"
-                            disabled={!canOperate || bulkReviewBusy}
-                            onClick={() => void bulkReviewProposals("reject")}
-                          >
-                            {language === "vi" ? "Từ chối tất cả" : "Reject all rules"}
-                          </button>
-                          <button
-                            className="button primary"
-                            disabled={!canOperate || bulkReviewBusy}
-                            onClick={() => void bulkReviewProposals("approve")}
-                          >
-                            {language === "vi" ? "Duyệt tất cả" : "Approve all rules"}
-                          </button>
-                        </div>
-                      </div>
-                    </section>
-                  )}
+                  <div style={{ marginTop: "24px" }}>
+                    <RuleProposerPanel
+                      dataset={dataset}
+                      profile={profile}
+                      workflow={workflow}
+                      artifacts={workflowArtifacts}
+                      proposals={proposals}
+                      configurations={ruleConfigurations}
+                      canOperate={canOperate}
+                      busy={workflowActionBusy || Boolean(activeJob)}
+                      bulkReviewBusy={bulkReviewBusy}
+                      understandingArtifact={understandingArtifact}
+                      contractConfirmed={contractConfirmed}
+                      onRequestProposals={() => {
+                        setRuleQueueOpen(true);
+                        void requestProposals();
+                      }}
+                      onConfirmContract={() => {
+                        if (understandingArtifact) void confirmSemanticContract(understandingArtifact);
+                      }}
+                      onApproveRule={(id) => void reviewProposal(id, "approve")}
+                      onRejectRule={(id) => void reviewProposal(id, "reject")}
+                      onEditRule={setEditingProposal}
+                      onDeleteRule={(id) => void deleteProposal(id)}
+                      onBulkReview={(decision) => void bulkReviewProposals(decision)}
+                      onCreateManualRule={() => setManualRuleOpen(true)}
+                      onSaveConfiguration={(id, input) => void saveRuleConfiguration(id, input)}
+                      language={language}
+                    />
+                  </div>
                 </div>
               )}
-
               {/* STEP 4: Graph 2 — deterministic execution */}
               {wizardStep === 4 && (
                 <div>
-                  <RunsPage
-                    activeRun={activeRun}
-                    results={dqResults}
-                    anomalies={dqAnomalies}
-                    approvedCount={approvedRules.length}
-                    busy={Boolean(activeJob)}
-                    canOperate={canOperate}
-                    datasetId={dataset?.id}
-                    onRun={() => void runApprovedRules()}
-                    graphPanel={
-                      <>
-                        <GraphStagePanel
-                          catalog={graphCatalog}
-                        runs={workflowNodeRuns}
-                          /* G2_DIRECT is what the button on this step runs; the
-                             dbt graph (G2) belongs to the analysis workflow and
-                             is shown after it so both paths stay visible. */
-                          graphKeys={["G2_DIRECT", "G2"]}
-                          language={language}
-                          loadNodeDetail={loadNodeDetail}
-                        />
-                        {/* Graph 3: ANOMALY_REPORT from workflow artifacts */}
-                        {workflowArtifacts.filter((a) => a.type === "ANOMALY_REPORT").slice(-1).map((anomalyArtifact) => {
-                          const p = anomalyArtifact.payload as Record<string, unknown>;
-                          const dec = String(p.decision ?? "UNAVAILABLE");
-                          const hyps = Array.isArray(p.hypotheses) ? (p.hypotheses as Record<string, unknown>[]) : [];
-                          const tone: "danger" | "success" | "warning" = dec === "ANOMALY" || dec === "CRITICAL" ? "danger" : dec === "NORMAL" ? "success" : "warning";
-                          return (
-                            <div key={anomalyArtifact.id} style={{ marginTop: "24px", padding: "24px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px" }}>
-                              <span className="eyebrow">GRAPH 3 — AI ANOMALY ANALYSIS</span>
-                              <h3 style={{ fontSize: "16px", fontWeight: 700, margin: "8px 0 16px" }}>Steward Insights</h3>
-                              <div style={{ display: "flex", gap: "12px", alignItems: "center", marginBottom: "16px", flexWrap: "wrap" }}>
-                                <StatusPill label={dec === "INSUFFICIENT_HISTORY" ? "NOT ENOUGH HISTORY" : dec} tone={tone} />
-                                {typeof p.score === "number" && <span style={{ fontSize: "13px", color: "var(--muted)" }}>Score: <strong>{(p.score as number).toFixed(1)}</strong></span>}
-                                {typeof p.confidence === "number" && <span style={{ fontSize: "13px", color: "var(--muted)" }}>Confidence: <strong>{Math.round((p.confidence as number) * 100)}%</strong></span>}
-                              </div>
-                              {hyps.map((h, i) => (
-                                <div key={i} style={{ padding: "10px 14px", background: "var(--surface-muted, #f8fafc)", borderRadius: "8px", border: "1px solid var(--border)", marginBottom: "8px" }}>
-                                  <p style={{ margin: 0, fontWeight: 600, fontSize: "14px" }}>{String(h.summary ?? "No hypothesis.")}</p>
-                                  {typeof h.confidence === "number" && <span style={{ fontSize: "12px", color: "var(--muted)" }}>Confidence: {Math.round((h.confidence as number) * 100)}%</span>}
-                                </div>
-                              ))}
-                            </div>
-                          );
-                        })}
-                      </>
-                    }
+                  <div className="page-heading">
+                    <div>
+                      <span className="eyebrow">
+                        RUN 3 · {language === "vi" ? "GRAPH 2 · THỰC THI KIỂM ĐỊNH" : "GRAPH 2 · DETERMINISTIC EXECUTION"}
+                      </span>
+                      <h1>
+                        {language === "vi"
+                          ? "Graph 2 · Thực thi & Kiểm định"
+                          : "Graph 2 · Deterministic Execution"}
+                      </h1>
+                      <p>
+                        {language === "vi"
+                          ? "Biên dịch sang dbt/SQL runner, thực thi bộ quy tắc đã duyệt và đo lường tỷ lệ vi phạm."
+                          : "Compile to dbt/SQL runner, execute approved ruleset, and measure failure rates."}
+                      </p>
+                    </div>
+                  </div>
+                  <GraphStagePanel
+                    catalog={graphCatalog}
+                    runs={workflowNodeRuns}
+                    graphKeys={["G2_DIRECT", "G2"]}
+                    language={language}
+                    loadNodeDetail={loadNodeDetail}
                   />
-                  {dataset && (
-                    <ActiveRulesPanel
-                      datasetId={dataset.id}
-                      refreshKey={workflowArtifacts.length}
+                  <div style={{ marginTop: "24px" }}>
+                    <DeterministicExecutionPanel
+                      dataset={dataset}
+                      activeRun={activeRun}
+                      results={dqResults}
+                      anomalies={dqAnomalies}
+                      approvedRules={approvedRules}
+                      workflowArtifacts={workflowArtifacts}
+                      canOperate={canOperate}
+                      busy={Boolean(activeJob)}
+                      onRun={() => void runApprovedRules()}
+                      language={language}
                     />
-                  )}
-                  {/* The audit history used to be pasted onto the bottom of this
-                      step, pushing the results it was meant to annotate off the
-                      screen. It now lives behind the topbar log button, which
-                      opens it over whatever page you are on. */}
+                  </div>
                 </div>
               )}
 
@@ -3100,9 +3385,19 @@ function App() {
                 <div>
                   <div className="page-heading">
                     <div>
-                      <span className="eyebrow">RUN 3 · {t("wizard.step5Title").toUpperCase()}</span>
-                      <h1>{t("wizard.step5Title")}</h1>
-                      <p>{t("wizard.step5Desc")}</p>
+                      <span className="eyebrow">
+                        RUN 3 · {language === "vi" ? "GRAPH 3 · BẤT THƯỜNG & NGUYÊN NHÂN GỐC" : "GRAPH 3 · ANOMALY & ROOT CAUSE"}
+                      </span>
+                      <h1>
+                        {language === "vi"
+                          ? "Graph 3 · Bất thường & Nguyên nhân gốc"
+                          : "Graph 3 · Anomaly Detection & Root Cause"}
+                      </h1>
+                      <p>
+                        {language === "vi"
+                          ? "Phát hiện bất thường trong dữ liệu, suy luận giả thuyết nguyên nhân gốc và tạo báo cáo Steward."
+                          : "Detect anomalies in quality metrics, infer root cause hypotheses, and generate Steward report."}
+                      </p>
                     </div>
                     <div className="run-header-actions">
                       <button
@@ -3140,44 +3435,84 @@ function App() {
                         : "Graph 3 starts when you use the button above after Graph 2 completes. The nodes below reflect the current analysis state."
                     }
                   />
-                  {activeRun && workflowArtifacts.some((artifact) => artifact.type === "ANOMALY_REPORT") ? (
-                    <>
-                      <div style={{ marginTop: "24px" }}>
+                  <div className="datasets-page" style={{ marginTop: "24px" }}>
+                    {activeRun && workflowArtifacts.some((artifact) => artifact.type === "ANOMALY_REPORT") ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
                         <StewardReportPanel
                           runId={activeRun.id}
                           language={language}
                           loadReport={loadStewardReport}
                         />
-                      </div>
-                      <div style={{ marginTop: "24px" }}>
-                        <AnomalyInvestigationPanel runId={activeRun.id} canOperate={canOperate} />
-                      </div>
-                      <div style={{ marginTop: "32px" }}>
+                        <AnomalyInvestigationPanel
+                          runId={activeRun.id}
+                          canOperate={canOperate}
+                          language={language}
+                        />
                         <AnomalyStatisticsPanel
                           anomalies={dqAnomalies}
                           results={dqResults}
                           language={language}
                         />
                       </div>
-                    </>
-                  ) : (
-                    /* Graph 3 only has anything to say once Graph 2 has run.
-                       Say that plainly instead of showing an empty screen. */
-                    <section className="panel investigation-panel" style={{ marginTop: "24px" }}>
-                      <div className="panel-heading">
-                        <div>
-                          <span className="eyebrow">ĐIỀU TRA NGUYÊN NHÂN GỐC</span>
-                          <h3>Giả thuyết từ agent</h3>
+                    ) : (
+                      <section className="panel investigation-panel" style={{ padding: "24px" }}>
+                        <div className="panel-heading">
+                          <div>
+                            <span className="eyebrow">
+                              {language === "vi"
+                                ? "GRAPH 3 · ĐIỀU TRA NGUYÊN NHÂN GỐC"
+                                : "GRAPH 3 · ROOT CAUSE INVESTIGATION"}
+                            </span>
+                            <h2>
+                              {language === "vi"
+                                ? "Giả thuyết & Phân tích từ AI Agent"
+                                : "Hypotheses & Analysis from AI Agent"}
+                            </h2>
+                            <p className="muted">
+                              {language === "vi"
+                                ? "Chạy bộ luật đã duyệt ở Bước 4 để kích hoạt Graph 3 phân tích kết quả."
+                                : "Execute approved rules in Step 4 to trigger Graph 3 analysis."}
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                      <p className="investigation-note">
-                        Graph 2 đã có kết quả. Bấm “Chạy Graph 3 analysis” ở phía
-                        trên để agent phân tích bất thường và tạo báo cáo nguyên
-                        nhân gốc.
-                      </p>
-                    </section>
-                  )}
+                        <p className="investigation-note" style={{ marginTop: "16px", fontSize: "14px", lineHeight: "1.6" }}>
+                          {activeRun
+                            ? (language === "vi"
+                                ? "Graph 2 đã có kết quả. Bấm 'Chạy Graph 3 analysis' ở phía trên để agent phân tích bất thường và tạo báo cáo nguyên nhân gốc."
+                                : "Graph 2 has results. Use 'Run Graph 3 analysis' above to investigate anomalies and create the root-cause report.")
+                            : (language === "vi"
+                                ? "Chạy luật đã duyệt ở Bước 4 để tạo kết quả, sau đó kích hoạt Graph 3."
+                                : "Run the approved rules in Step 4 to create results, then start Graph 3.")}
+                        </p>
+                      </section>
+                    )}
+                  </div>
                 </div>
+              )}
+
+              {/* STEP 6: Final Results Summary & Executive Data Quality Scorecard */}
+              {wizardStep === 6 && (
+                <Step6ResultsSummary
+                  dataset={dataset}
+                  profile={profile}
+                  workflow={workflow}
+                  workflowArtifacts={workflowArtifacts}
+                  understandingArtifact={understandingArtifact}
+                  contractConfirmed={contractConfirmed}
+                  proposals={proposals}
+                  approvedRules={approvedRules}
+                  ruleConfigurations={ruleConfigurations}
+                  activeRun={activeRun}
+                  dqResults={dqResults}
+                  dqAnomalies={dqAnomalies}
+                  qualityTrends={qualityTrends}
+                  graphCatalog={graphCatalog}
+                  workflowNodeRuns={workflowNodeRuns}
+                  language={language}
+                  onStartNewRun={() => setWizardStep(1)}
+                  onNavigateToStep={(step) => setWizardStep(step)}
+                  onOpenObservatory={() => setShowGraphs(true)}
+                />
               )}
 
               {/* Wizard Bottom Nav Controls */}
@@ -3192,22 +3527,29 @@ function App() {
                 </button>
 
                 <span className="muted" style={{ fontWeight: 600 }}>
-                  {t("wizard.stepProgress", { current: wizardStep, total: 5 })}
+                  {t("wizard.stepProgress", { current: wizardStep, total: 6 })}
                 </span>
 
                 <button
                   type="button"
                   className="button primary"
-                  disabled={wizardStep === 5 || (!dataset && wizardStep === 1) || (wizardStep === 1 && !profile)}
+                  disabled={
+                    wizardStep === 6 ||
+                    (!dataset && wizardStep === 1) ||
+                    (wizardStep === 1 && !profile) ||
+                    (wizardStep === 2 && !contractConfirmed)
+                  }
                   title={
                     !dataset && wizardStep === 1
                       ? (t("wizard.selectDatasetTooltip") || "Vui lòng chọn hoặc tải lên một bộ dữ liệu ở Bước 1")
                       : wizardStep === 1 && !profile
                         ? (language === "vi" ? "Hãy tạo profile cho tập dữ liệu trước" : "Build the dataset profile first")
-                        : ""
+                        : wizardStep === 2 && !contractConfirmed
+                          ? (language === "vi" ? "Vui lòng bấm 'Xác nhận hợp đồng' trước khi tiếp tục" : "Please confirm the semantic contract before continuing")
+                          : ""
                   }
                   onClick={() => {
-                    setWizardStep((prev) => Math.min(5, prev + 1));
+                    setWizardStep((prev) => Math.min(6, prev + 1));
                   }}
                 >
                   {t("wizard.next")}
@@ -3892,6 +4234,9 @@ function ProposalCard({
   configurationExpanded: boolean;
   onToggleConfiguration: () => void;
 }) {
+  const { language } = useI18n();
+  const isVi = language === "vi";
+
   const pending = ["PROPOSED", "EDITED"].includes(proposal.status);
   const editable = pending || proposal.status === "APPROVED";
   const canApprove = proposal.status !== "APPROVED";
@@ -3902,6 +4247,32 @@ function ProposalCard({
       : proposal.status === "APPROVED"
         ? "success"
         : "warning";
+
+  const title = isVi ? (proposal.title_vi || proposal.title) : proposal.title;
+  const description = isVi ? (proposal.description_vi || proposal.description) : proposal.description;
+  const evidenceSummary = isVi ? (proposal.evidence_summary_vi || proposal.evidence_summary) : proposal.evidence_summary;
+
+  const sourceLabel =
+    proposal.source === "MANUAL"
+      ? (isVi ? "Luật thủ công" : "Manual rule")
+      : (isVi ? "Đề xuất AI Agent" : "Agent proposal");
+
+  const statusLabel =
+    proposal.status === "APPROVED"
+      ? (isVi ? "ĐÃ DUYỆT" : "APPROVED")
+      : proposal.status === "REJECTED"
+        ? (isVi ? "TỪ CHỐI" : "REJECTED")
+        : proposal.status === "EDITED"
+          ? (isVi ? "ĐÃ SỬA" : "EDITED")
+          : (isVi ? "MỚI ĐỀ XUẤT" : "PROPOSED");
+
+  const severityLabel =
+    proposal.severity === "HIGH"
+      ? (isVi ? "Mức độ cao" : "High severity")
+      : proposal.severity === "MEDIUM"
+        ? (isVi ? "Mức độ vừa" : "Medium severity")
+        : (isVi ? "Mức độ thấp" : "Low severity");
+
   return (
     <article className={`proposal-card ${proposal.status.toLowerCase()}`}>
       <div className="proposal-top">
@@ -3909,25 +4280,23 @@ function ProposalCard({
           <span>✦</span>
           {proposal.rule.type.replaceAll("_", " ")}
         </div>
-        <span className="proposal-source">
-          {proposal.source === "MANUAL" ? "Manual rule" : "Agent proposal"}
-        </span>
-        <StatusPill label={proposal.status} tone={tone} />
+        <span className="proposal-source">{sourceLabel}</span>
+        <StatusPill label={statusLabel} tone={tone} />
         <span className={`severity ${proposal.severity.toLowerCase()}`}>
-          {proposal.severity} severity
+          {severityLabel}
         </span>
       </div>
       <div className="proposal-main">
         <div className="proposal-content">
-          <h3>{proposal.title}</h3>
-          <p>{proposal.description}</p>
+          <h3>{title}</h3>
+          <p>{description}</p>
           <div className="rule-code">
-            <span>TYPE</span>
+            <span>{isVi ? "LOẠI LUẬT" : "TYPE"}</span>
             <code>{formatRule(proposal.rule)}</code>
           </div>
         </div>
         <div className="confidence">
-          <span>CONFIDENCE</span>
+          <span>{isVi ? "ĐỘ TIN CẬY" : "CONFIDENCE"}</span>
           <strong>{Math.round(proposal.confidence * 100)}%</strong>
           <div className="confidence-track">
             <span style={{ width: `${proposal.confidence * 100}%` }} />
@@ -3935,8 +4304,8 @@ function ProposalCard({
         </div>
       </div>
       <div className="evidence-row">
-        <span className="evidence-label">EVIDENCE</span>
-        <span>{proposal.evidence_summary}</span>
+        <span className="evidence-label">{isVi ? "BẰNG CHỨNG" : "EVIDENCE"}</span>
+        <span>{evidenceSummary}</span>
         {proposal.evidence_refs.map((ref) => (
           <code key={ref}>{ref}</code>
         ))}
@@ -3947,36 +4316,33 @@ function ProposalCard({
           {canReject && (
             <button className="button ghost proposal-action reject" onClick={onReject}>
               {proposal.status === "APPROVED"
-                ? "Reject approved rule"
-                : "Reject"}
+                ? (isVi ? "Từ chối luật đã duyệt" : "Reject approved rule")
+                : (isVi ? "Từ chối" : "Reject")}
             </button>
           )}
           <button className="button secondary proposal-action edit" onClick={onEdit}>
             {pending
-              ? "Edit"
+              ? (isVi ? "Chỉnh sửa" : "Edit")
               : proposal.status === "APPROVED"
-                ? "Edit approved rule"
-                : "Edit rejected rule"}
+                ? (isVi ? "Sửa luật đã duyệt" : "Edit approved rule")
+                : (isVi ? "Sửa luật từ chối" : "Edit rejected rule")}
           </button>
-          {/* Kept on screen even once it no longer applies. Hiding it left an
-              approved rule showing only "reject" and "edit", which reads as a
-              missing action rather than as a decision already made. */}
           <button
             className="button primary proposal-action approve"
             onClick={onApprove}
             disabled={!canApprove}
-            title={canApprove ? undefined : "Rule đã được duyệt"}
+            title={canApprove ? undefined : (isVi ? "Rule đã được duyệt" : "Rule is approved")}
           >
             {!canApprove
-              ? "✓ Đã duyệt"
+              ? (isVi ? "✓ Đã duyệt" : "✓ Approved")
               : proposal.status === "REJECTED"
-                ? "Re-approve rule"
-                : "Approve rule"}
+                ? (isVi ? "Duyệt lại" : "Re-approve rule")
+                : (isVi ? "Duyệt quy tắc" : "Approve rule")}
             {canApprove && <span> →</span>}
           </button>
           {proposal.status !== "APPROVED" && (
             <button className="button ghost proposal-action delete" onClick={onDelete}>
-              Delete
+              {isVi ? "Xóa" : "Delete"}
             </button>
           )}
         </div>
@@ -3993,14 +4359,17 @@ function ProposalCard({
   );
 }
 
-const BASIS_LABEL: Record<ProposalBasis, string> = {
-  SCHEMA_CONSTRAINT: "Ràng buộc schema",
-  DATA_PROFILE: "Hồ sơ dữ liệu",
-  DATA_DICTIONARY: "Từ điển dữ liệu",
-  HISTORICAL_RULE: "Luật đã dùng trước đây",
-  POLICY: "Chính sách quản trị",
-  MIXED: "Nhiều nguồn",
-};
+function getBasisLabel(basis: ProposalBasis, language: "en" | "vi"): string {
+  const labels: Record<ProposalBasis, { vi: string; en: string }> = {
+    SCHEMA_CONSTRAINT: { vi: "Ràng buộc schema", en: "Schema constraint" },
+    DATA_PROFILE: { vi: "Hồ sơ dữ liệu", en: "Data profile" },
+    DATA_DICTIONARY: { vi: "Từ điển dữ liệu", en: "Data dictionary" },
+    HISTORICAL_RULE: { vi: "Luật đã dùng trước đây", en: "Historical rule" },
+    POLICY: { vi: "Chính sách quản trị", en: "Governance policy" },
+    MIXED: { vi: "Nhiều nguồn", en: "Mixed sources" },
+  };
+  return labels[basis]?.[language] ?? String(basis);
+}
 
 /**
  * Phần "vì sao" của một đề xuất luật.
@@ -4015,23 +4384,26 @@ const BASIS_LABEL: Record<ProposalBasis, string> = {
  */
 function ProposalRationale({ proposal }: { proposal: RuleProposal }) {
   const [open, setOpen] = useState(false);
+  const { language } = useI18n();
+  const isVi = language === "vi";
 
   const provenance = proposal.parameter_provenance ?? [];
   const assumptions = proposal.assumptions ?? [];
   const breakdown = proposal.confidence_breakdown;
+  const businessRationale = isVi ? (proposal.business_rationale_vi || proposal.business_rationale) : proposal.business_rationale;
+
   const hasDetail =
-    Boolean(proposal.business_rationale) ||
+    Boolean(businessRationale) ||
     provenance.length > 0 ||
     assumptions.length > 0 ||
     Boolean(breakdown);
 
   if (!hasDetail) {
-    // Không bịa ra chỗ trống trông như đã có nội dung: nói thẳng là agent không
-    // kèm lý do, vì đó cũng là một tín hiệu để người duyệt cân nhắc.
     return (
       <p className="rationale-absent">
-        Đề xuất này không kèm lý do chi tiết
-        {proposal.model_name ? ` (${proposal.model_name})` : ""}.
+        {isVi
+          ? `Đề xuất này không kèm lý do chi tiết${proposal.model_name ? ` (${proposal.model_name})` : ""}.`
+          : `No detailed rationale provided for this proposal${proposal.model_name ? ` (${proposal.model_name})` : ""}.`}
       </p>
     );
   }
@@ -4046,11 +4418,11 @@ function ProposalRationale({ proposal }: { proposal: RuleProposal }) {
           onClick={() => setOpen((value) => !value)}
         >
           <span className="rationale-caret">{open ? "▾" : "▸"}</span>
-          Vì sao có luật này
+          {isVi ? "Vì sao có luật này" : "Why this rule"}
         </button>
         {proposal.proposal_basis && (
           <span className={`basis-badge ${proposal.proposal_basis.toLowerCase()}`}>
-            {BASIS_LABEL[proposal.proposal_basis]}
+            {getBasisLabel(proposal.proposal_basis, language)}
           </span>
         )}
         {proposal.model_name && (
@@ -4060,22 +4432,22 @@ function ProposalRationale({ proposal }: { proposal: RuleProposal }) {
 
       {open && (
         <div className="rationale-body">
-          {proposal.business_rationale && (
+          {businessRationale && (
             <section className="rationale-block">
-              <h4>Lý do nghiệp vụ</h4>
-              <p>{proposal.business_rationale}</p>
+              <h4>{isVi ? "Lý do nghiệp vụ" : "Business rationale"}</h4>
+              <p>{businessRationale}</p>
             </section>
           )}
 
           {breakdown && (
             <section className="rationale-block">
-              <h4>Độ tin cậy đến từ đâu</h4>
+              <h4>{isVi ? "Độ tin cậy đến từ đâu" : "Confidence breakdown"}</h4>
               <div className="confidence-bars">
                 {(
                   [
-                    ["Sức mạnh bằng chứng", breakdown.evidence_strength],
-                    ["Ủng hộ từ nghiệp vụ", breakdown.business_support],
-                    ["Tính đại diện của mẫu", breakdown.sample_representativeness],
+                    [isVi ? "Sức mạnh bằng chứng" : "Evidence strength", breakdown.evidence_strength],
+                    [isVi ? "Ủng hộ từ nghiệp vụ" : "Business support", breakdown.business_support],
+                    [isVi ? "Tính đại diện của mẫu" : "Sample representativeness", breakdown.sample_representativeness],
                   ] as const
                 ).map(([label, value]) => (
                   <div className="confidence-bar" key={label}>
@@ -4095,15 +4467,15 @@ function ProposalRationale({ proposal }: { proposal: RuleProposal }) {
 
           {provenance.length > 0 && (
             <section className="rationale-block">
-              <h4>Tham số lấy từ đâu</h4>
+              <h4>{isVi ? "Tham số lấy từ đâu" : "Parameter provenance"}</h4>
               <div className="rationale-table-scroll">
                 <table className="rationale-table">
                   <thead>
                     <tr>
-                      <th>Tham số</th>
-                      <th>Nguồn</th>
-                      <th>Tham chiếu</th>
-                      <th>Cách suy ra</th>
+                      <th>{isVi ? "Tham số" : "Parameter"}</th>
+                      <th>{isVi ? "Nguồn" : "Source"}</th>
+                      <th>{isVi ? "Tham chiếu" : "Reference"}</th>
+                      <th>{isVi ? "Cách suy ra" : "Derivation"}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -4112,7 +4484,7 @@ function ProposalRationale({ proposal }: { proposal: RuleProposal }) {
                         <td>
                           <code>{item.parameter_name}</code>
                         </td>
-                        <td>{BASIS_LABEL[item.source_type]}</td>
+                        <td>{getBasisLabel(item.source_type, language)}</td>
                         <td>
                           <code>{item.source_ref}</code>
                         </td>
@@ -4127,7 +4499,7 @@ function ProposalRationale({ proposal }: { proposal: RuleProposal }) {
 
           {assumptions.length > 0 && (
             <section className="rationale-block">
-              <h4>Agent đã giả định</h4>
+              <h4>{isVi ? "Agent đã giả định" : "Agent assumptions"}</h4>
               <ul className="rationale-list">
                 {assumptions.map((item) => (
                   <li key={item}>{item}</li>
@@ -4152,6 +4524,9 @@ function RuleConfigurationControl({
   onToggle: () => void;
   onSave: (input: RuleConfigurationInput) => void;
 }) {
+  const { language } = useI18n();
+  const isVi = language === "vi";
+
   const [executionStatus, setExecutionStatus] = useState<
     RuleConfiguration["execution_status"]
   >(configuration?.execution_status ?? "ACTIVE");
@@ -4166,10 +4541,10 @@ function RuleConfigurationControl({
   }, [configuration]);
   const frequencyLabel =
     frequency === "MANUAL"
-      ? "Manual only"
+      ? (isVi ? "Thủ công" : "Manual only")
       : frequency === "HOURLY"
-        ? "Hourly"
-        : "Daily";
+        ? (isVi ? "Hàng giờ" : "Hourly")
+        : (isVi ? "Hàng ngày" : "Daily");
   const panelId = `rule-settings-${configuration?.rule_id ?? "default"}`;
   return (
     <section className={`rule-settings-shell ${expanded ? "expanded" : ""}`}>
@@ -4184,16 +4559,20 @@ function RuleConfigurationControl({
           className={`configuration-state ${executionStatus.toLowerCase()}`}
         >
           <i />
-          {executionStatus === "ACTIVE" ? "Active" : "Paused"}
+          {executionStatus === "ACTIVE"
+            ? (isVi ? "Đang hoạt động" : "Active")
+            : (isVi ? "Tạm dừng" : "Paused")}
         </span>
         <span className="configuration-summary">
-          <strong>Execution settings</strong>
+          <strong>{isVi ? "Cấu hình thực thi" : "Execution settings"}</strong>
           <small>
             {frequencyLabel} · {timezone}
           </small>
         </span>
         <span className="configuration-action">
-          {expanded ? "Hide options" : "Configure"}
+          {expanded
+            ? (isVi ? "Ẩn tùy chọn" : "Hide options")
+            : (isVi ? "Cấu hình" : "Configure")}
           <i aria-hidden="true">⌄</i>
         </span>
       </button>
@@ -4201,7 +4580,7 @@ function RuleConfigurationControl({
         <div className="rule-settings" id={panelId}>
           <div className="rule-settings-fields">
             <label>
-              Status
+              {isVi ? "Trạng thái" : "Status"}
               <select
                 value={executionStatus}
                 onChange={(event) =>
@@ -4210,12 +4589,12 @@ function RuleConfigurationControl({
                   )
                 }
               >
-                <option value="ACTIVE">Active</option>
-                <option value="PAUSED">Paused</option>
+                <option value="ACTIVE">{isVi ? "Đang hoạt động" : "Active"}</option>
+                <option value="PAUSED">{isVi ? "Tạm dừng" : "Paused"}</option>
               </select>
             </label>
             <label>
-              Schedule
+              {isVi ? "Lịch thực thi" : "Schedule"}
               <select
                 value={frequency}
                 onChange={(event) =>
@@ -4225,17 +4604,17 @@ function RuleConfigurationControl({
                   )
                 }
               >
-                <option value="MANUAL">Manual only</option>
-                <option value="HOURLY">Hourly</option>
-                <option value="DAILY">Daily</option>
+                <option value="MANUAL">{isVi ? "Chạy thủ công" : "Manual only"}</option>
+                <option value="HOURLY">{isVi ? "Hàng giờ" : "Hourly"}</option>
+                <option value="DAILY">{isVi ? "Hàng ngày" : "Daily"}</option>
               </select>
             </label>
             <label>
-              Timezone
+              {isVi ? "Múi giờ" : "Timezone"}
               <input
                 value={timezone}
                 onChange={(event) => setTimezone(event.target.value)}
-                aria-label="Timezone"
+                aria-label={isVi ? "Múi giờ" : "Timezone"}
               />
             </label>
             <button
@@ -4248,7 +4627,7 @@ function RuleConfigurationControl({
                 })
               }
             >
-              Save settings
+              {isVi ? "Lưu cài đặt" : "Save settings"}
             </button>
           </div>
         </div>
@@ -4264,7 +4643,16 @@ function RuleConfigurationControl({
  * bước 3 mà không có chỗ nào xác nhận luật nào đã thực sự được xuất bản và đang
  * chạy. Đề xuất và luật đang hoạt động là hai thứ khác nhau.
  */
-function ActiveRulesPanel({ datasetId, refreshKey = 0 }: { datasetId: string; refreshKey?: number }) {
+function ActiveRulesPanel({
+  datasetId,
+  refreshKey = 0,
+  language = "en",
+}: {
+  datasetId: string;
+  refreshKey?: number;
+  language?: "en" | "vi";
+}) {
+  const isVi = language === "vi";
   const [rules, setRules] = useState<ActiveRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -4283,7 +4671,7 @@ function ActiveRulesPanel({ datasetId, refreshKey = 0 }: { datasetId: string; re
         setError(
           cause instanceof ApiError
             ? cause.message
-            : "Không tải được bộ luật đang hoạt động.",
+            : (isVi ? "Không tải được bộ luật đang hoạt động." : "Unable to load active ruleset."),
         );
       })
       .finally(() => {
@@ -4292,7 +4680,7 @@ function ActiveRulesPanel({ datasetId, refreshKey = 0 }: { datasetId: string; re
     return () => {
       cancelled = true;
     };
-  }, [datasetId, refreshKey]);
+  }, [datasetId, isVi, refreshKey]);
 
   const active = rules.filter((rule) => rule.status === "ACTIVE");
 
@@ -4300,34 +4688,36 @@ function ActiveRulesPanel({ datasetId, refreshKey = 0 }: { datasetId: string; re
     <section className="panel active-rules-panel">
       <div className="panel-heading">
         <div>
-          <span className="eyebrow">BỘ LUẬT ĐANG CHẠY</span>
-          <h3>Active ruleset</h3>
+          <span className="eyebrow">{isVi ? "BỘ LUẬT ĐANG CHẠY" : "ACTIVE RULESET"}</span>
+          <h3>{isVi ? "Bộ quy tắc đang hoạt động" : "Active ruleset"}</h3>
         </div>
         <span className="panel-caption">
-          {active.length} đang hoạt động
-          {rules.length !== active.length && ` · ${rules.length - active.length} đã tắt`}
+          {active.length} {isVi ? "đang hoạt động" : "active"}
+          {rules.length !== active.length &&
+            ` · ${rules.length - active.length} ${isVi ? "đã tắt" : "disabled"}`}
         </span>
       </div>
       {loading ? (
-        <p className="investigation-note">Đang tải…</p>
+        <p className="investigation-note">{isVi ? "Đang tải…" : "Loading…"}</p>
       ) : error ? (
         <p className="investigation-note error">{error}</p>
       ) : rules.length === 0 ? (
         <p className="investigation-note">
-          Chưa có luật nào được xuất bản. Duyệt và xuất bản ở bước 3 để luật bắt
-          đầu canh dữ liệu.
+          {isVi
+            ? "Chưa có luật nào được xuất bản. Duyệt và xuất bản ở bước 3 để luật bắt đầu canh dữ liệu."
+            : "No rules published yet. Approve and publish rules in Step 3 to start monitoring."}
         </p>
       ) : (
         <div className="active-rules-scroll">
           <table className="active-rules-table">
             <thead>
               <tr>
-                <th>Luật</th>
-                <th>Cột</th>
-                <th>Loại</th>
-                <th>Chiều</th>
-                <th>Mức</th>
-                <th>Trạng thái</th>
+                <th>{isVi ? "Luật" : "Rule"}</th>
+                <th>{isVi ? "Cột" : "Column"}</th>
+                <th>{isVi ? "Loại" : "Type"}</th>
+                <th>{isVi ? "Chiều" : "Dimension"}</th>
+                <th>{isVi ? "Mức" : "Severity"}</th>
+                <th>{isVi ? "Trạng thái" : "Status"}</th>
               </tr>
             </thead>
             <tbody>
@@ -4344,7 +4734,11 @@ function ActiveRulesPanel({ datasetId, refreshKey = 0 }: { datasetId: string; re
                   </td>
                   <td>
                     <StatusPill
-                      label={rule.status}
+                      label={
+                        rule.status === "ACTIVE"
+                          ? (isVi ? "HOẠT ĐỘNG" : "ACTIVE")
+                          : (isVi ? "ĐÃ TẮT" : "INACTIVE")
+                      }
                       tone={rule.status === "ACTIVE" ? "success" : "neutral"}
                     />
                   </td>
@@ -4367,6 +4761,9 @@ function ActiveRulesPanel({ datasetId, refreshKey = 0 }: { datasetId: string; re
  * tại chỗ cho cùng con số mà không phải đoán ánh xạ ID.
  */
 function ReviewSummaryPanel({ proposals }: { proposals: RuleProposal[] }) {
+  const { language } = useI18n();
+  const isVi = language === "vi";
+
   const summary = useMemo(() => {
     const counts = { total: proposals.length, pending: 0, approved: 0, rejected: 0, edited: 0 };
     for (const proposal of proposals) {
@@ -4388,9 +4785,9 @@ function ReviewSummaryPanel({ proposals }: { proposals: RuleProposal[] }) {
   return (
     <section className="review-summary">
       <div className="rs-head">
-        <span className="rs-title">Tiến độ duyệt</span>
+        <span className="rs-title">{isVi ? "Tiến độ duyệt" : "Review progress"}</span>
         <span className="rs-count">
-          {reviewed}/{summary.total} đã quyết định
+          {isVi ? `${reviewed}/${summary.total} đã quyết định` : `${reviewed}/${summary.total} decided`}
         </span>
       </div>
       <div className="rs-track">
@@ -4398,10 +4795,10 @@ function ReviewSummaryPanel({ proposals }: { proposals: RuleProposal[] }) {
         <span className="rs-rejected" style={{ width: `${(summary.rejected / summary.total) * 100}%` }} />
       </div>
       <div className="rs-legend">
-        <span><b className="dot approved" />{summary.approved} duyệt</span>
-        <span><b className="dot rejected" />{summary.rejected} từ chối</span>
-        <span><b className="dot pending" />{summary.pending} chờ</span>
-        {summary.edited > 0 && <span className="rs-edited">{summary.edited} đã sửa tham số</span>}
+        <span><b className="dot approved" />{summary.approved} {isVi ? "duyệt" : "approved"}</span>
+        <span><b className="dot rejected" />{summary.rejected} {isVi ? "từ chối" : "rejected"}</span>
+        <span><b className="dot pending" />{summary.pending} {isVi ? "chờ" : "pending"}</span>
+        {summary.edited > 0 && <span className="rs-edited">{summary.edited} {isVi ? "đã sửa tham số" : "edited parameters"}</span>}
         <span className="rs-percent">{percent}%</span>
       </div>
     </section>
@@ -4483,10 +4880,13 @@ const HYPOTHESIS_LABEL: Record<string, string> = {
 function AnomalyInvestigationPanel({
   runId,
   canOperate,
+  language = "vi",
 }: {
   runId: string;
   canOperate: boolean;
+  language?: "en" | "vi";
 }) {
+  const isVi = language === "vi";
   const [signals, setSignals] = useState<AnomalySignal[]>([]);
   const [hypotheses, setHypotheses] = useState<AnomalyHypothesis[]>([]);
   const [loading, setLoading] = useState(true);
@@ -4549,13 +4949,18 @@ function AnomalyInvestigationPanel({
 
   return (
     <section className="panel investigation-panel">
-      <div className="panel-heading">
+      <div className="panel-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
-          <span className="eyebrow">ĐIỀU TRA NGUYÊN NHÂN GỐC</span>
-          <h3>Giả thuyết từ agent</h3>
+          <span className="eyebrow">{isVi ? "GRAPH 3 · ĐIỀU TRA NGUYÊN NHÂN GỐC" : "GRAPH 3 · ROOT CAUSE INVESTIGATION"}</span>
+          <h2>{isVi ? "Giả thuyết & Bằng chứng từ AI Agent" : "Root Cause Hypotheses & Evidence from AI Agent"}</h2>
+          <p className="muted">
+            {isVi
+              ? "Agent suy luận các giả thuyết nguyên nhân gốc kèm bằng chứng hai chiều và khuyến nghị."
+              : "Agent inferred root cause hypotheses with two-way evidence and recommendations."}
+          </p>
         </div>
         <span className="panel-caption">
-          {signals.length} tín hiệu · {hypotheses.length} giả thuyết
+          {signals.length} {isVi ? "tín hiệu" : "signals"} · {hypotheses.length} {isVi ? "giả thuyết" : "hypotheses"}
         </span>
       </div>
 
@@ -5778,6 +6183,9 @@ function RuleSpecEditor({
   rule: RuleSpec;
   onChange: (rule: RuleSpec) => void;
 }) {
+  const { language } = useI18n();
+  const isVi = language === "vi";
+
   const update = (patch: Partial<RuleSpec>) => onChange({ ...rule, ...patch });
   const csv = (values: string[] | undefined) => (values ?? []).join(", ");
   const parseCsv = (value: string) =>
@@ -5787,14 +6195,14 @@ function RuleSpecEditor({
       .filter(Boolean);
   return (
     <div className="rule-editor">
-      <span className="eyebrow">TYPED RULE PARAMETERS</span>
+      <span className="eyebrow">{isVi ? "THAM SỐ QUY TẮC" : "TYPED RULE PARAMETERS"}</span>
       <div className="rule-type-readonly">
         <strong>{rule.type.replaceAll("_", " ")}</strong>
         <code>{formatRule(rule)}</code>
       </div>
       {rule.type === "not_null" && (
         <label>
-          Column
+          {isVi ? "Tên cột" : "Column"}
           <input
             value={rule.column ?? ""}
             onChange={(event) => update({ column: event.target.value })}
@@ -5804,7 +6212,7 @@ function RuleSpecEditor({
       {rule.type === "numeric_range" && (
         <>
           <label>
-            Column
+            {isVi ? "Tên cột" : "Column"}
             <input
               value={rule.column ?? ""}
               onChange={(event) => update({ column: event.target.value })}
@@ -5812,7 +6220,7 @@ function RuleSpecEditor({
           </label>
           <div className="dialog-fields">
             <label>
-              Minimum
+              {isVi ? "Giá trị nhỏ nhất (Minimum)" : "Minimum"}
               <input
                 type="number"
                 value={rule.min_value ?? ""}
@@ -5827,7 +6235,7 @@ function RuleSpecEditor({
               />
             </label>
             <label>
-              Maximum
+              {isVi ? "Giá trị lớn nhất (Maximum)" : "Maximum"}
               <input
                 type="number"
                 value={rule.max_value ?? ""}
@@ -5847,14 +6255,14 @@ function RuleSpecEditor({
       {rule.type === "accepted_values" && (
         <>
           <label>
-            Column
+            {isVi ? "Tên cột" : "Column"}
             <input
               value={rule.column ?? ""}
               onChange={(event) => update({ column: event.target.value })}
             />
           </label>
           <label>
-            Allowed values
+            {isVi ? "Các giá trị hợp lệ (ngăn cách bởi dấu phẩy)" : "Allowed values (comma-separated)"}
             <input
               value={csv(rule.allowed_values)}
               onChange={(event) =>
@@ -5867,7 +6275,7 @@ function RuleSpecEditor({
       {rule.type === "cross_field_comparison" && (
         <>
           <label>
-            Columns
+            {isVi ? "Danh sách cột (ngăn cách bởi dấu phẩy)" : "Columns (comma-separated)"}
             <input
               value={csv(rule.columns)}
               onChange={(event) =>
@@ -5876,7 +6284,7 @@ function RuleSpecEditor({
             />
           </label>
           <label>
-            Operator
+            {isVi ? "Toán tử so sánh" : "Operator"}
             <select
               value={rule.operator ?? "≤"}
               onChange={(event) => update({ operator: event.target.value })}
@@ -5891,7 +6299,7 @@ function RuleSpecEditor({
       )}
       {rule.type === "duplicate_fingerprint" && (
         <label>
-          Fingerprint columns
+          {isVi ? "Các cột tạo dấu vết (ngăn cách bởi dấu phẩy)" : "Fingerprint columns (comma-separated)"}
           <input
             value={csv(rule.fingerprint_columns)}
             onChange={(event) =>
@@ -5911,6 +6319,9 @@ function ManualRuleDialog({
   onClose: () => void;
   onSave: (input: ManualRuleInput) => void;
 }) {
+  const { language } = useI18n();
+  const isVi = language === "vi";
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [severity, setSeverity] = useState<RuleProposal["severity"]>("MEDIUM");
@@ -5931,79 +6342,82 @@ function ManualRuleDialog({
       <section className="dialog" role="dialog" aria-modal="true">
         <div className="dialog-heading">
           <div>
-            <span className="eyebrow">DATA STEWARD AUTHORING</span>
-            <h2>Add manual rule</h2>
+            <span className="eyebrow">
+              {isVi ? "THỦ CÔNG BỞI DATA STEWARD" : "DATA STEWARD AUTHORING"}
+            </span>
+            <h2>{isVi ? "Thêm quy tắc thủ công" : "Add manual rule"}</h2>
           </div>
           <button
             className="icon-button"
             onClick={onClose}
-            aria-label="Close dialog"
+            aria-label={isVi ? "Đóng hộp thoại" : "Close dialog"}
           >
             ×
           </button>
         </div>
         <p className="muted">
-          Create a typed rule without waiting for the Agent. It enters the
-          review queue and must be approved before execution.
+          {isVi
+            ? "Tạo quy tắc mới thủ công mà không cần chờ Agent. Quy tắc sẽ vào hàng đợi duyệt và phải được phê duyệt trước khi thực thi."
+            : "Create a typed rule without waiting for the Agent. It enters the review queue and must be approved before execution."}
         </p>
         <label>
-          Title
+          {isVi ? "Tiêu đề" : "Title"}
           <input
             value={title}
             onChange={(event) => setTitle(event.target.value)}
-            placeholder="e.g. Pickup location must be known"
+            placeholder={isVi ? "Ví dụ: Điểm đón khách phải được xác định" : "e.g. Pickup location must be known"}
           />
         </label>
         <label>
-          Description
+          {isVi ? "Mô tả" : "Description"}
           <textarea
             value={description}
             onChange={(event) => setDescription(event.target.value)}
             rows={3}
-            placeholder="Explain the quality expectation"
+            placeholder={isVi ? "Giải thích kỳ vọng chất lượng dữ liệu" : "Explain the quality expectation"}
           />
         </label>
         <label>
-          Severity
+          {isVi ? "Mức độ nghiêm trọng" : "Severity"}
           <select
             value={severity}
             onChange={(event) =>
               setSeverity(event.target.value as RuleProposal["severity"])
             }
           >
-            <option>LOW</option>
-            <option>MEDIUM</option>
-            <option>HIGH</option>
+            <option value="LOW">{isVi ? "Thấp (LOW)" : "LOW"}</option>
+            <option value="MEDIUM">{isVi ? "Vừa (MEDIUM)" : "MEDIUM"}</option>
+            <option value="HIGH">{isVi ? "Cao (HIGH)" : "HIGH"}</option>
           </select>
         </label>
         <label>
-          Rule type
+          {isVi ? "Loại quy tắc" : "Rule type"}
           <select
             value={type}
             onChange={(event) =>
               changeType(event.target.value as RuleSpec["type"])
             }
           >
-            <option value="not_null">Not null</option>
-            <option value="numeric_range">Numeric range</option>
-            <option value="accepted_values">Accepted values</option>
+            <option value="not_null">{isVi ? "Bắt buộc không null (Not null)" : "Not null"}</option>
+            <option value="numeric_range">{isVi ? "Khoảng giá trị số (Numeric range)" : "Numeric range"}</option>
+            <option value="accepted_values">{isVi ? "Danh mục giá trị hợp lệ (Accepted values)" : "Accepted values"}</option>
             <option value="cross_field_comparison">
-              Cross-field comparison
+              {isVi ? "So sánh giữa các cột (Cross-field comparison)" : "Cross-field comparison"}
             </option>
-            <option value="duplicate_fingerprint">Duplicate fingerprint</option>
+            <option value="duplicate_fingerprint">{isVi ? "Trùng lặp dấu vết (Duplicate fingerprint)" : "Duplicate fingerprint"}</option>
           </select>
         </label>
         <RuleSpecEditor rule={rule} onChange={setRule} />
         <div className="dialog-actions">
           <button className="button ghost" onClick={onClose}>
-            Cancel
+            {isVi ? "Hủy" : "Cancel"}
           </button>
           <button
             className="button primary"
             disabled={!title.trim() || !description.trim()}
             onClick={() => onSave({ title, description, severity, rule })}
           >
-            Create rule
+            {isVi ? "Tạo quy tắc" : "Create rule"}
           </button>
         </div>
       </section>
@@ -6025,8 +6439,11 @@ function EditDialog({
     rule: RuleSpec;
   }) => void;
 }) {
-  const [title, setTitle] = useState(proposal.title);
-  const [description, setDescription] = useState(proposal.description);
+  const { language } = useI18n();
+  const isVi = language === "vi";
+
+  const [title, setTitle] = useState(isVi ? (proposal.title_vi || proposal.title) : proposal.title);
+  const [description, setDescription] = useState(isVi ? (proposal.description_vi || proposal.description) : proposal.description);
   const [severity, setSeverity] = useState(proposal.severity);
   const [rule, setRule] = useState<RuleSpec>({
     ...proposal.rule,
@@ -6049,30 +6466,31 @@ function EditDialog({
       <section className="dialog" role="dialog" aria-modal="true">
         <div className="dialog-heading">
           <div>
-            <span className="eyebrow">HITL REVIEW</span>
-            <h2>Edit proposal</h2>
+            <span className="eyebrow">{isVi ? "DUYỆT QUY TẮC HITL" : "HITL REVIEW"}</span>
+            <h2>{isVi ? "Chỉnh sửa quy tắc đề xuất" : "Edit proposal"}</h2>
           </div>
           <button
             className="icon-button"
             onClick={onClose}
-            aria-label="Close dialog"
+            aria-label={isVi ? "Đóng hộp thoại" : "Close dialog"}
           >
             ×
           </button>
         </div>
         <p className="muted">
-          Edit the typed specification and metadata. The server remains
-          responsible for validation and compilation.
+          {isVi
+            ? "Chỉnh sửa thông số kỹ thuật và mô tả của quy tắc. Hệ thống sẽ tự động kiểm tra cú pháp và biên dịch."
+            : "Edit the typed specification and metadata. The server remains responsible for validation and compilation."}
         </p>
         <label>
-          Title
+          {isVi ? "Tiêu đề" : "Title"}
           <input
             value={title}
             onChange={(event) => setTitle(event.target.value)}
           />
         </label>
         <label>
-          Description
+          {isVi ? "Mô tả" : "Description"}
           <textarea
             value={description}
             onChange={(event) => setDescription(event.target.value)}
@@ -6080,28 +6498,28 @@ function EditDialog({
           />
         </label>
         <label>
-          Severity
+          {isVi ? "Mức độ nghiêm trọng" : "Severity"}
           <select
             value={severity}
             onChange={(event) =>
               setSeverity(event.target.value as RuleProposal["severity"])
             }
           >
-            <option>LOW</option>
-            <option>MEDIUM</option>
-            <option>HIGH</option>
+            <option value="LOW">{isVi ? "Thấp (LOW)" : "LOW"}</option>
+            <option value="MEDIUM">{isVi ? "Vừa (MEDIUM)" : "MEDIUM"}</option>
+            <option value="HIGH">{isVi ? "Cao (HIGH)" : "HIGH"}</option>
           </select>
         </label>
         <RuleSpecEditor rule={rule} onChange={setRule} />
         <div className="dialog-actions">
           <button className="button ghost" onClick={onClose}>
-            Cancel
+            {isVi ? "Hủy" : "Cancel"}
           </button>
           <button
             className="button primary"
             onClick={() => onSave({ title, description, severity, rule })}
           >
-            Save edit
+            {isVi ? "Lưu thay đổi" : "Save edit"}
           </button>
         </div>
       </section>

@@ -418,6 +418,16 @@ def _proposal_evidence_from_versioned_snapshot(
         )
     if not columns:
         raise AgentWorkflowError("The completed profile has no eligible columns for proposal generation.")
+    cross_field_metrics = [
+        ProposalCrossFieldEvidence.model_validate(item)
+        for item in snapshot.get("cross_field_metrics", [])
+        if isinstance(item, dict)
+    ]
+    evidence_keys = list(snapshot.get("evidence_keys") or [])
+    evidence_keys.extend(
+        f"profile.cross_field.{metric.left_column}.{metric.operator}.{metric.right_column}.violation_rate"
+        for metric in cross_field_metrics
+    )
     return ProposalEvidence(
         dataset_id=dataset.id,
         manifest_version=dataset.manifest_version,
@@ -425,9 +435,9 @@ def _proposal_evidence_from_versioned_snapshot(
         completeness_score=float(snapshot["completeness_score"]),
         validity_score=float(snapshot["validity_score"]),
         duplicate_rate=float(snapshot["duplicate_rate"]),
-        evidence_keys=list(snapshot.get("evidence_keys") or []),
+        evidence_keys=list(dict.fromkeys(evidence_keys)),
         columns=columns,
-        cross_field_metrics=[],
+        cross_field_metrics=cross_field_metrics,
     )
 
 
@@ -461,11 +471,13 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
         except Exception as err:
             logger.warning("Could not auto-profile uploaded dataset: %s", err)
 
-    if not profile or not columns:
-        # Canonical versioned imports keep their completed aggregate profile in
-        # profile_runs and intentionally do not create legacy dashboard rows.
-        # Reuse the workflow's unified snapshot adapter so Graph 1B sees the
-        # same evidence Graph 1A already consumed.
+    safe_columns: list[ProposalColumnEvidence] = []
+    cross_field_metrics: list[ProposalCrossFieldEvidence] = []
+
+    # Versioned imports have no legacy ProfileModel/ColumnProfileModel rows.
+    # Keep Graph 1B on the exact snapshot adapter used by Graph 1A instead of
+    # rebuilding a second, weaker mapping from the versioned profile payload.
+    if dataset.manifest_version == "versioned-v1":
         try:
             from src.services.rule_proposer_workflow import _profile_snapshot
 
@@ -473,32 +485,35 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
                 dataset, _profile_snapshot(db, dataset_id)
             )
         except Exception as err:
-            logger.warning("Could not load versioned profile snapshot: %s", err)
+            raise AgentWorkflowError(
+                "A completed versioned profile snapshot is required before requesting proposals."
+            ) from err
 
-    if not profile or not columns:
-        raise AgentWorkflowError("A completed aggregate profile is required before requesting proposals.")
-
-    safe_columns = [
-        ProposalColumnEvidence(
-            name=column.name,
-            data_type=column.data_type,
-            null_rate=column.null_rate,
-            distinct_count=column.distinct_count,
-            non_null_count=column.non_null_count,
-            negative_rate=column.negative_rate,
-            quantiles=_parse_json_dict(column.quantiles_json),
-            out_of_domain_rate=column.out_of_domain_rate,
-            full_distinct_count=column.full_distinct_count,
-            uniqueness_rate=column.uniqueness_rate,
-            is_unique_full_table=column.is_unique_full_table,
-            min_value=column.min_value,
-            max_value=column.max_value,
-        )
-        for column in columns
-        if column.name != "source_row_id"
-    ]
+    if profile and columns:
+        safe_columns = [
+            ProposalColumnEvidence(
+                name=column.name,
+                data_type=column.data_type,
+                null_rate=column.null_rate,
+                distinct_count=column.distinct_count,
+                non_null_count=column.non_null_count,
+                negative_rate=column.negative_rate,
+                quantiles=_parse_json_dict(column.quantiles_json),
+                out_of_domain_rate=column.out_of_domain_rate,
+                full_distinct_count=column.full_distinct_count,
+                uniqueness_rate=column.uniqueness_rate,
+                is_unique_full_table=column.is_unique_full_table,
+                min_value=column.min_value,
+                max_value=column.max_value,
+            )
+            for column in columns
+            if column.name != "source_row_id"
+        ]
+        cross_field_metrics = [
+            ProposalCrossFieldEvidence.model_validate(item) for item in _parse_json_list(profile.cross_field_metrics_json)
+        ]
     if not safe_columns:
-        raise AgentWorkflowError("The completed profile has no eligible columns for proposal generation.")
+        raise AgentWorkflowError("A completed aggregate profile is required before requesting proposals.")
 
     evidence_keys = [
         "profile.row_count",
@@ -529,13 +544,14 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
                 ]
             )
 
-    cross_field_metrics = [
-        ProposalCrossFieldEvidence.model_validate(item) for item in _parse_json_list(profile.cross_field_metrics_json)
-    ]
-    evidence_keys.extend(
-        f"profile.cross_field.{metric.left_column}.{metric.operator}.{metric.right_column}.violation_rate"
-        for metric in cross_field_metrics
-    )
+    if profile and profile.cross_field_metrics_json:
+        cross_field_metrics = [
+            ProposalCrossFieldEvidence.model_validate(item) for item in _parse_json_list(profile.cross_field_metrics_json)
+        ]
+        evidence_keys.extend(
+            f"profile.cross_field.{metric.left_column}.{metric.operator}.{metric.right_column}.violation_rate"
+            for metric in cross_field_metrics
+        )
 
     policy = get_dataset_rule_policy(dataset_id, safe_columns)
     if policy:
@@ -549,13 +565,18 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
         if policy.duplicate_fingerprint_columns:
             evidence_keys.append("policy.duplicate_fingerprint")
 
+    row_count = profile.row_count if profile else dataset.row_count
+    completeness_score = profile.completeness_score if profile else 100.0
+    validity_score = profile.validity_score if profile else 100.0
+    duplicate_rate = profile.duplicate_rate if profile else 0.0
+
     return ProposalEvidence(
         dataset_id=dataset_id,
         manifest_version=dataset.manifest_version,
-        row_count=profile.row_count,
-        completeness_score=profile.completeness_score,
-        validity_score=profile.validity_score,
-        duplicate_rate=profile.duplicate_rate,
+        row_count=row_count,
+        completeness_score=completeness_score,
+        validity_score=validity_score,
+        duplicate_rate=duplicate_rate,
         evidence_keys=list(dict.fromkeys(evidence_keys)),
         columns=safe_columns,
         cross_field_metrics=cross_field_metrics,

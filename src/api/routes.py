@@ -2810,15 +2810,7 @@ def list_proposals(
     GET /api/v1/rule-proposals - Returns rule proposals for a dataset.
     """
     require_dataset_access(db, session, dataset_id)
-    query = db.query(RuleProposalModel).filter(RuleProposalModel.dataset_id == dataset_id)
-    if workflow_run_id:
-        query = query.filter(
-            or_(
-                RuleProposalModel.workflow_run_id == workflow_run_id,
-                RuleProposalModel.workflow_run_id.is_(None),
-            )
-        )
-        query = query.filter(RuleProposalModel.status != "STALE")
+    query = _proposal_scope_query(db, dataset_id, workflow_run_id)
     proposals = query.all()
     return [_serialize_proposal(p) for p in proposals]
 
@@ -2909,10 +2901,26 @@ def create_manual_rule(
 
 class BulkProposalReviewInput(BaseModel):
     dataset_id: str
+    workflow_run_id: str | None = None
     action: str  # approve | reject
     # Default keeps a bulk action from silently overturning decisions the
     # Steward already made one by one; pass false to re-decide everything.
     pending_only: bool = True
+
+
+def _proposal_scope_query(db: Session, dataset_id: str, workflow_run_id: str | None = None):
+    """Return proposals belonging to one explicit review queue.
+
+    Dataset-wide callers retain the legacy scope. Workflow callers must never
+    absorb historical or unowned rows from the same dataset.
+    """
+    query = db.query(RuleProposalModel).filter(RuleProposalModel.dataset_id == dataset_id)
+    if workflow_run_id:
+        query = query.filter(
+            RuleProposalModel.workflow_run_id == workflow_run_id,
+            RuleProposalModel.status != "STALE",
+        )
+    return query
 
 
 def _apply_proposal_approval(db: Session, prop: RuleProposalModel) -> None:
@@ -2977,7 +2985,7 @@ def bulk_review_proposals(
         raise HTTPException(status_code=404, detail="Dataset not found")
     require_dataset_access(db, session, body.dataset_id, manage=True)
 
-    query = db.query(RuleProposalModel).filter(RuleProposalModel.dataset_id == body.dataset_id)
+    query = _proposal_scope_query(db, body.dataset_id, body.workflow_run_id)
     if body.pending_only:
         query = query.filter(RuleProposalModel.status.in_(("PROPOSED", "EDITED")))
     targets = query.all()
@@ -2996,14 +3004,17 @@ def bulk_review_proposals(
         action_code="PROPOSAL_BULK_APPROVED" if body.action == "approve" else "PROPOSAL_BULK_REJECTED",
         entity_type="dataset",
         entity_id=body.dataset_id,
-        detail={"action": body.action, "count": len(targets), "pending_only": body.pending_only},
+        detail={
+            "action": body.action,
+            "count": len(targets),
+            "pending_only": body.pending_only,
+            "workflow_run_id": body.workflow_run_id,
+        },
     )
 
     return [
         _serialize_proposal(prop)
-        for prop in db.query(RuleProposalModel)
-        .filter(RuleProposalModel.dataset_id == body.dataset_id)
-        .all()
+        for prop in _proposal_scope_query(db, body.dataset_id, body.workflow_run_id).all()
     ]
 
 

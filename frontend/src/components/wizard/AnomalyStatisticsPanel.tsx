@@ -87,39 +87,39 @@ export function AnomalyStatisticsPanel({
 
   if (anomalies.length === 0) {
     return (
-      <section className="anomaly-stats">
-        <header className="anomaly-stats-head">
+      <section className="panel anomaly-stats">
+        <div className="panel-heading">
           <div>
-            <span className="eyebrow">{vi ? "THỐNG KÊ BẤT THƯỜNG" : "ANOMALY STATISTICS"}</span>
-            <h3>{vi ? "Không phát hiện bất thường" : "No anomalies detected"}</h3>
+            <span className="eyebrow">{vi ? "GRAPH 3 · THỐNG KÊ BẤT THƯỜNG" : "GRAPH 3 · ANOMALY STATISTICS"}</span>
+            <h2>{vi ? "Không phát hiện bất thường" : "No Anomalies Detected"}</h2>
+            <p className="muted">
+              {checkedRules > 0
+                ? vi
+                  ? `Cả ${checkedRules} luật đều nằm trong ngưỡng cho phép ở lượt chạy này.`
+                  : `All ${checkedRules} rules stayed within their thresholds on this run.`
+                : vi
+                  ? "Chạy bộ luật đã duyệt ở bước 4 để có dữ liệu phân tích."
+                  : "Run the approved rules in step 4 to produce something to analyse."}
+            </p>
           </div>
-        </header>
-        <p className="anomaly-empty">
-          {checkedRules > 0
-            ? vi
-              ? `Cả ${checkedRules} luật đều nằm trong ngưỡng cho phép ở lượt chạy này.`
-              : `All ${checkedRules} rules stayed within their thresholds on this run.`
-            : vi
-              ? "Chạy bộ luật đã duyệt ở bước 4 để có dữ liệu phân tích."
-              : "Run the approved rules in step 4 to produce something to analyse."}
-        </p>
+        </div>
       </section>
     );
   }
 
   return (
-    <section className="anomaly-stats">
-      <header className="anomaly-stats-head">
+    <section className="panel anomaly-stats">
+      <div className="panel-heading">
         <div>
-          <span className="eyebrow">{vi ? "THỐNG KÊ BẤT THƯỜNG" : "ANOMALY STATISTICS"}</span>
-          <h3>{vi ? "Graph 3 đã đo được gì" : "What Graph 3 measured"}</h3>
-          <p>
+          <span className="eyebrow">{vi ? "GRAPH 3 · THỐNG KÊ BẤT THƯỜNG" : "GRAPH 3 · ANOMALY STATISTICS"}</span>
+          <h2>{vi ? "Thống kê & Chỉ số đo lường từ Graph 3" : "Graph 3 Anomaly Metrics & Statistics"}</h2>
+          <p className="muted">
             {vi
               ? `${anomalies.length} tín hiệu lệch trên ${checkedRules} luật đã kiểm.`
               : `${anomalies.length} deviating signals across ${checkedRules} checked rules.`}
           </p>
         </div>
-      </header>
+      </div>
 
       <div className="anomaly-kpis">
         <article className="anomaly-kpi alert">
