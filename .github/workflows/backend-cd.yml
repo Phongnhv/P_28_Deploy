@@ -15,6 +15,9 @@ concurrency:
 
 jobs:
   build-deploy:
+    # Keep the grading repository safe: the CD runs only in the personal
+    # deployment repository where the GCP secrets and variables are configured.
+    if: github.repository == 'Phongnhv/P_28_Deploy'
     runs-on: ubuntu-latest
     env:
       PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
