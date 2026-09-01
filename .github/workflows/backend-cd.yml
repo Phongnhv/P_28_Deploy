@@ -68,14 +68,16 @@ jobs:
           gcloud run jobs update "${CLOUD_RUN_JOB}" \
             --project="${PROJECT_ID}" \
             --region="${REGION}" \
-            --image="${IMMUTABLE_IMAGE}"
+            --image="${IMMUTABLE_IMAGE}" \
+            --update-env-vars="ANOMALY_INVESTIGATION_MODE=legacy"
 
       - name: Deploy Cloud Run API
         run: |
           gcloud run services update "${CLOUD_RUN_SERVICE}" \
             --project="${PROJECT_ID}" \
             --region="${REGION}" \
-            --image="${IMMUTABLE_IMAGE}"
+            --image="${IMMUTABLE_IMAGE}" \
+            --update-env-vars="ANOMALY_INVESTIGATION_MODE=legacy"
 
       - name: Health check API
         run: |

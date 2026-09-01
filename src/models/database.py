@@ -147,7 +147,7 @@ class JobModel(Base):
     __tablename__ = "jobs"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    type: Mapped[str] = mapped_column(String(64), nullable=False)  # INGEST_PROFILE, PROPOSE_RULES, RUN_DQ
+    type: Mapped[str] = mapped_column(String(64), nullable=False)  # canonical, workflow, and legacy worker job types
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING", index=True)
     progress: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     # The deployed Supabase schema enforces NOT NULL.  Keep the ORM contract in

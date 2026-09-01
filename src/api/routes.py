@@ -108,8 +108,6 @@ from src.services.rule_proposer_workflow import (
     get_or_create_run,
     navigate_forward,
     queue_check_run,
-    run_analysis_report,
-    run_checks_and_prepare_analysis,
     run_workflow_stage_job,
     serialize_artifact,
     serialize_run,
@@ -2007,9 +2005,13 @@ def run_workflow_step(
         if step == "UNDERSTAND_DATA"
         else "PROPOSE_RULES"
         if step in {"PROPOSE_RULES", "PUBLISH_RULESET"}
-        else "RUN_DQ"
+        # These two stages can take longer than an HTTP request/container
+        # lifecycle. Keep their durable job type distinct from the legacy
+        # compatibility handlers so the worker can execute workflow-owned
+        # state with Cloud Run Jobs.
+        else "WORKFLOW_RUN_CHECKS"
         if step == "RUN_CHECKS"
-        else "ANALYSIS_GRAPH2_GRAPH3"
+        else "WORKFLOW_ANALYZE_REPORT"
         if step == "ANALYZE_REPORT"
         else "PROPOSE_RULES"
     )
@@ -2030,39 +2032,33 @@ def run_workflow_step(
     job = JobModel(
         id=str(uuid.uuid4()),
         type=workflow_job_type,
-        status="RUNNING",
-        progress=10.0,
+        status="PENDING",
+        progress=0.0,
         message=f"Running {step}",
         idempotency_key=idempotency_key or "",
-        linked_entity=run.dataset_id,
+        linked_entity=run.id,
         correlation_id=run.id,
         attempt_count=1,
     )
     db.add(job)
     try:
         if step == "RUN_CHECKS":
-            dq_run = queue_check_run(db, run, job)
+            queue_check_run(db, run, job)
+            # queue_check_run also serves the legacy /dq compatibility path and
+            # writes the old RUN_DQ envelope. Restore the workflow envelope
+            # before committing so the worker can reload this exact workflow
+            # and its child DQ run by job_id.
+            job.type = workflow_job_type
+            job.linked_entity = run.id
+            job.message = "Queued workflow quality checks"
             db.commit()
-            background_tasks.add_task(
-                run_checks_and_prepare_analysis,
-                run.id,
-                dq_run.id,
-                job.id,
-                session.id,
-                session.role,
-            )
+            dispatch_or_mark_failed(db, job)
             return CreateJobResponse(job_id=job.id, status="PENDING")
         if step == "ANALYZE_REPORT":
             if run.current_step != "ANALYZE_REPORT":
                 raise WorkflowError("Complete Graph 2 before starting Graph 3 analysis.")
             db.commit()
-            background_tasks.add_task(
-                run_analysis_report,
-                run.id,
-                job.id,
-                session.id,
-                session.role,
-            )
+            dispatch_or_mark_failed(db, job)
             return CreateJobResponse(job_id=job.id, status="PENDING")
         steps = json.loads(run.steps_json or "[]")
         current = next((item for item in steps if item.get("key") == step), None)

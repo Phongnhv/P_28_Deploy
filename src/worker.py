@@ -180,6 +180,8 @@ async def main():
         "GRAPH1_EXECUTION",
         "GRAPH1_CONTINUATION",
         "ANALYSIS_GRAPH2_GRAPH3",
+        "WORKFLOW_RUN_CHECKS",
+        "WORKFLOW_ANALYZE_REPORT",
     }
     if job_type not in canonical_job_types:
         init_db()

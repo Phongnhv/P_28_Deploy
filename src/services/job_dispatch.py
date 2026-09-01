@@ -19,7 +19,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.config import get_settings
-from src.models.database import AnalysisRunModel, DatasetVersionModel, Graph1RunModel, JobModel
+from src.models.database import (
+    AnalysisRunModel,
+    DatasetVersionModel,
+    DqRunModel,
+    Graph1RunModel,
+    JobModel,
+    WorkflowRunModel,
+)
 from src.services.gcp_run import dispatch_cloud_run_job
 from src.services.job_service import claim_job, get_job, renew_job_lease, update_job_status
 from src.services.rule_store import get_engine
@@ -31,6 +38,8 @@ SUPPORTED_JOB_TYPES = {
     "GRAPH1_EXECUTION",
     "GRAPH1_CONTINUATION",
     "ANALYSIS_GRAPH2_GRAPH3",
+    "WORKFLOW_RUN_CHECKS",
+    "WORKFLOW_ANALYZE_REPORT",
 }
 
 
@@ -118,11 +127,33 @@ def _run_persisted_job(job_id: str, job_type: str) -> bool:
             from src.services.analysis_workflow import execute_analysis_run
 
             asyncio.run(execute_analysis_run(str(job.linked_entity)))
+        elif job_type == "WORKFLOW_RUN_CHECKS":
+            from src.services.rule_proposer_workflow import run_checks_and_prepare_analysis
+
+            with Session(get_engine()) as db:
+                workflow = db.get(WorkflowRunModel, str(job.linked_entity))
+                dq_run = (
+                    db.query(DqRunModel)
+                    .filter_by(job_id=job.id, workflow_run_id=str(job.linked_entity))
+                    .order_by(DqRunModel.created_at.desc())
+                    .first()
+                )
+            if not workflow or not dq_run:
+                raise RuntimeError("Workflow quality-check job is missing its workflow or DQ run")
+            run_checks_and_prepare_analysis(workflow.id, dq_run.id, job.id, None, "WORKER")
+        elif job_type == "WORKFLOW_ANALYZE_REPORT":
+            from src.services.rule_proposer_workflow import run_analysis_report
+
+            if not job.linked_entity:
+                raise RuntimeError("Workflow analysis job is missing its workflow run")
+            run_analysis_report(str(job.linked_entity), job.id, None, "WORKER")
         else:
             raise ValueError(f"Unsupported canonical job type: {job_type}")
     except Exception as exc:
         logger.exception("Canonical job %s failed", job_id)
         update_job_status(job_id, "FAILED_RETRYABLE", str(exc)[:2000])
+        if job_type in {"WORKFLOW_RUN_CHECKS", "WORKFLOW_ANALYZE_REPORT"}:
+            _mark_workflow_stage_failed(job_id, job_type)
         stop_heartbeat.set()
         return False
     finally:
@@ -138,6 +169,15 @@ def _run_persisted_job(job_id: str, job_type: str) -> bool:
         elif job_type == "ANALYSIS_GRAPH2_GRAPH3":
             entity = db.get(AnalysisRunModel, job.linked_entity) if job else None
             failed = entity is None or entity.status == "FAILED"
+        elif job_type in {"WORKFLOW_RUN_CHECKS", "WORKFLOW_ANALYZE_REPORT"}:
+            workflow = db.get(WorkflowRunModel, job.linked_entity) if job else None
+            step_key = "RUN_CHECKS" if job_type == "WORKFLOW_RUN_CHECKS" else "ANALYZE_REPORT"
+            try:
+                steps = json.loads(workflow.steps_json or "[]") if workflow else []
+            except (TypeError, ValueError):
+                steps = []
+            step = next((item for item in steps if item.get("key") == step_key), None)
+            failed = workflow is None or workflow.status == "FAILED" or not step or step.get("status") == "FAILED"
         if job:
             job.status = "FAILED_RETRYABLE" if failed else "SUCCEEDED"
             job.progress = 100.0 if not failed else job.progress
@@ -147,6 +187,26 @@ def _run_persisted_job(job_id: str, job_type: str) -> bool:
             )
             db.commit()
     return not failed
+
+
+def _mark_workflow_stage_failed(job_id: str, job_type: str) -> None:
+    """Make worker failures retryable instead of leaving a workflow RUNNING."""
+    step_key = "RUN_CHECKS" if job_type == "WORKFLOW_RUN_CHECKS" else "ANALYZE_REPORT"
+    with Session(get_engine()) as db:
+        job = db.get(JobModel, job_id)
+        workflow = db.get(WorkflowRunModel, job.linked_entity) if job and job.linked_entity else None
+        if not workflow:
+            return
+        try:
+            steps = json.loads(workflow.steps_json or "[]")
+        except (TypeError, ValueError):
+            steps = []
+        step = next((item for item in steps if item.get("key") == step_key), None)
+        if step:
+            step["status"] = "FAILED"
+        workflow.steps_json = json.dumps(steps, ensure_ascii=False)
+        workflow.status = "ACTIVE"
+        db.commit()
 
 
 def _heartbeat(job_id: str, stop: threading.Event) -> None:
