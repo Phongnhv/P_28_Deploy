@@ -2015,11 +2015,15 @@ def run_workflow_step(
         if step == "ANALYZE_REPORT"
         else "PROPOSE_RULES"
     )
+    active_stage_types = {
+        "RUN_CHECKS": {"RUN_DQ", "WORKFLOW_RUN_CHECKS"},
+        "ANALYZE_REPORT": {"ANALYSIS_GRAPH2_GRAPH3", "WORKFLOW_ANALYZE_REPORT"},
+    }.get(step, {workflow_job_type})
     active_stage_job = (
         db.query(JobModel)
         .filter(
             JobModel.correlation_id == run.id,
-            JobModel.type == workflow_job_type,
+            JobModel.type.in_(active_stage_types),
             JobModel.status.in_(["PENDING", "RUNNING"]),
         )
         .first()
@@ -2030,7 +2034,7 @@ def run_workflow_step(
         # the stage forever: after a conservative grace period, make it
         # retryable and let the normal dispatch path create a fresh execution.
         stale_without_worker_lease = (
-            workflow_job_type in {"WORKFLOW_RUN_CHECKS", "WORKFLOW_ANALYZE_REPORT"}
+            step in {"RUN_CHECKS", "ANALYZE_REPORT"}
             and not active_stage_job.lease_expires_at
             and active_stage_job.updated_at < utc_now() - timedelta(minutes=10)
         )
