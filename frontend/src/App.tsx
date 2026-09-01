@@ -284,11 +284,17 @@ function LoginScreen({
   busy: boolean;
   error: string;
 }) {
+  const demoStewardUsername = "demo-steward";
+  const demoStewardPassword = "ridepulse-demo-2026";
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const submit = (event: FormEvent) => {
     event.preventDefault();
     onLogin(username, password);
+  };
+  const useDemoSteward = () => {
+    setUsername(demoStewardUsername);
+    setPassword(demoStewardPassword);
   };
   return (
     <main className="login-shell">
@@ -369,6 +375,15 @@ function LoginScreen({
             <br />
             <code>user/user</code> read-only · <code>steward/steward</code>{" "}
             review · <code>admin/admin</code> full access.
+            <br />
+            <code>demo-steward / ridepulse-demo-2026</code> limited public demo.
+            <button
+              type="button"
+              className="demo-credential-button"
+              onClick={useDemoSteward}
+            >
+              Use the limited public Demo Steward account
+            </button>
           </span>
         </div>
       </section>

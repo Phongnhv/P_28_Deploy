@@ -113,7 +113,8 @@ DEMO_ADMIN_PASSWORD
 ```
 
 Tài khoản công khai `demo-steward` chỉ được seed khi `ENABLE_PUBLIC_DEMO=true`
-ở môi trường không production và `DEMO_STEWARD_PASSWORD` được cấu hình rõ ràng.
+và `DEMO_STEWARD_PASSWORD` được cấu hình rõ ràng. Khi bật ở production, backend
+áp dụng quota mutation theo cửa sổ 24 giờ cho tài khoản này.
 
 Local có thể dùng username làm password cho database mới; production fail-fast nếu thiếu secret.
 

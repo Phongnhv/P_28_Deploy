@@ -191,12 +191,10 @@ def ensure_default_workspace(db: Session, *, created_by: str | None = None) -> W
 
 
 def ensure_demo_steward(db: Session) -> None:
-    """Seed the explicitly enabled non-production demo Steward."""
+    """Seed the explicitly enabled, quota-protected public demo Steward."""
     settings = get_settings()
     if not settings.enable_public_demo:
         return
-    if settings.app_env == "production":
-        raise RuntimeError("Public demo access is not permitted in production")
     password = (settings.demo_steward_password or "").strip()
     if not password:
         raise RuntimeError("DEMO_STEWARD_PASSWORD is required when ENABLE_PUBLIC_DEMO=true")
@@ -247,9 +245,9 @@ def ensure_demo_steward(db: Session) -> None:
 
 
 def reconcile_public_demo_security(db: Session) -> None:
-    """Deactivate legacy public demo identities whenever public demo is disabled."""
+    """Deactivate public demo identities whenever the explicit flag is disabled."""
     settings = get_settings()
-    if settings.enable_public_demo and settings.app_env != "production":
+    if settings.enable_public_demo:
         return
     accounts = db.query(UserAccountModel).filter(UserAccountModel.created_by == "system-seed-demo").all()
     usernames = [account.username for account in accounts]
@@ -262,8 +260,6 @@ def reconcile_public_demo_security(db: Session) -> None:
 
 def validate_security_settings() -> None:
     settings = get_settings()
-    if settings.app_env == "production" and settings.enable_public_demo:
-        raise RuntimeError("ENABLE_PUBLIC_DEMO must be false in production")
     if settings.app_env == "production" and not settings.rate_limit_hash_key:
         raise RuntimeError("RATE_LIMIT_HASH_KEY is required in production")
     if settings.app_env == "production" and not settings.trusted_proxy_cidrs.strip():
