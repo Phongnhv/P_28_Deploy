@@ -169,7 +169,14 @@ def get_db():
 # ---------------------------------------------------------------------------
 # Auth Dependency
 # ---------------------------------------------------------------------------
-async def get_session(request: Request, db: Session = Depends(get_db)) -> SessionModel:
+def get_session(request: Request, db: Session = Depends(get_db)) -> SessionModel:
+    """Authenticate in FastAPI's worker thread, not on the event loop.
+
+    The checks below are synchronous SQLAlchemy work.  Keeping this dependency
+    async made concurrent requests perform pool checkout/query work on the
+    event loop; once the bounded Supabase pool was busy, even unrelated async
+    endpoints such as ``/health`` stopped making progress.
+    """
     session = get_current_session(request, db)
     verify_csrf(request, session)
     enforce_demo_quota(db, request, session)

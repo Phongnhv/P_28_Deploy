@@ -328,17 +328,46 @@ def build_execution_graph(observer: NodeObserver | None = None) -> StateGraph:
 
     graph = StateGraph(AgentState)
 
-    graph.add_node("test_generator", instrument("G2", "test_generator", DETERMINISTIC)(test_generator_node))
+    graph.add_node(
+        "test_generator",
+        _observed_node(
+            "GRAPH2", "test_generator",
+            instrument("G2", "test_generator", DETERMINISTIC)(test_generator_node),
+            observer,
+        ),
+    )
     graph.add_node(
         "validate_dbt_project",
-        instrument("G2", "validate_dbt_project", DETERMINISTIC)(validate_dbt_project_node),
+        _observed_node(
+            "GRAPH2", "validate_dbt_project",
+            instrument("G2", "validate_dbt_project", DETERMINISTIC)(validate_dbt_project_node),
+            observer,
+        ),
     )
     graph.add_node(
         "dbt_validation_failed",
-        instrument("G2", "dbt_validation_failed", DETERMINISTIC)(_fail_dbt_validation_node),
+        _observed_node(
+            "GRAPH2", "dbt_validation_failed",
+            instrument("G2", "dbt_validation_failed", DETERMINISTIC)(_fail_dbt_validation_node),
+            observer,
+        ),
     )
-    graph.add_node("test_runner", instrument("G2", "test_runner", DETERMINISTIC)(test_runner_node))
-    graph.add_node("persist_report", instrument("G2", "persist_report", DETERMINISTIC)(persist_report_node))
+    graph.add_node(
+        "test_runner",
+        _observed_node(
+            "GRAPH2", "test_runner",
+            instrument("G2", "test_runner", DETERMINISTIC)(test_runner_node),
+            observer,
+        ),
+    )
+    graph.add_node(
+        "persist_report",
+        _observed_node(
+            "GRAPH2", "persist_report",
+            instrument("G2", "persist_report", DETERMINISTIC)(persist_report_node),
+            observer,
+        ),
+    )
 
     graph.set_entry_point("test_generator")
 
@@ -391,10 +420,38 @@ def build_anomaly_graph(
 
     graph = StateGraph(AnomalyGraphState)
 
-    graph.add_node("anomaly_detector", instrument("G3", "anomaly_detector", DETERMINISTIC)(anomaly_detector_node))
-    graph.add_node("hypothesis_agent", instrument("G3", "hypothesis_agent", LLM)(hypothesis_agent))
-    graph.add_node("persist_analysis", instrument("G3", "persist_analysis", DETERMINISTIC)(persist_analysis_node))
-    graph.add_node("report_writer", instrument("G3", "report_writer", LLM)(report_writer_node))
+    graph.add_node(
+        "anomaly_detector",
+        _observed_node(
+            "GRAPH3", "anomaly_detector",
+            instrument("G3", "anomaly_detector", DETERMINISTIC)(anomaly_detector_node),
+            observer,
+        ),
+    )
+    graph.add_node(
+        "hypothesis_agent",
+        _observed_node(
+            "GRAPH3", "hypothesis_agent",
+            instrument("G3", "hypothesis_agent", LLM)(hypothesis_agent),
+            observer,
+        ),
+    )
+    graph.add_node(
+        "persist_analysis",
+        _observed_node(
+            "GRAPH3", "persist_analysis",
+            instrument("G3", "persist_analysis", DETERMINISTIC)(persist_analysis_node),
+            observer,
+        ),
+    )
+    graph.add_node(
+        "report_writer",
+        _observed_node(
+            "GRAPH3", "report_writer",
+            instrument("G3", "report_writer", LLM)(report_writer_node),
+            observer,
+        ),
+    )
 
     graph.set_entry_point("anomaly_detector")
     graph.add_edge("anomaly_detector", "hypothesis_agent")

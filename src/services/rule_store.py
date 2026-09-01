@@ -975,6 +975,14 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
                 rule_spec["max_value"] = params["max"]
             if "accepted_values" in params:
                 rule_spec["allowed_values"] = params["accepted_values"]
+            # Preserve every parameter needed to validate and execute the
+            # version-scoped rule.  Previously only the older RANGE and
+            # cross-field fields were copied, so a generated REGEX_FORMAT,
+            # FRESHNESS, ROW_COUNT, or NULL_RATE proposal lost its threshold
+            # before the steward review gate.
+            for key in ("regex", "max_age_hours", "max_null_pct", "min_row_count"):
+                if key in params:
+                    rule_spec[key] = params[key]
             if "target_column" in params:
                 rule_spec["target_column"] = params["target_column"]
                 rule_spec["operator"] = params.get("operator", "<=")

@@ -87,6 +87,68 @@ def test_build_graphs():
     assert anomaly_graph is not None
 
 
+@pytest.mark.asyncio
+async def test_execution_and_anomaly_graphs_emit_observer_events(monkeypatch):
+    events = []
+
+    async def observer(graph_name, node_key, output, error):
+        events.append((graph_name, node_key, output is None, error is None))
+
+    async def test_generator(_state):
+        return {"generated_tests": [{"rule_id": "rule-1"}]}
+
+    async def validate(_state):
+        return {"dbt_validation_valid": True}
+
+    async def test_runner(_state):
+        return {"test_results": [], "metadata": {"dbt_execution_mode": "test"}}
+
+    async def persist_report(_state):
+        return {"metadata": {"test_run_status": "DONE"}}
+
+    monkeypatch.setattr("src.agents.nodes.test_generator_node.test_generator_node", test_generator)
+    monkeypatch.setattr("src.agents.nodes.validate_dbt_project_node.validate_dbt_project_node", validate)
+    monkeypatch.setattr("src.agents.nodes.test_runner_node.test_runner_node", test_runner)
+    monkeypatch.setattr("src.agents.nodes.persist_report_node.persist_report_node", persist_report)
+
+    execution = build_execution_graph(observer=observer)
+    await execution.ainvoke({"test_run_id": "test-run", "approved_rules": []})
+
+    async def anomaly_detector(_state):
+        return {"anomaly_decision": {"decision": "NORMAL"}, "signal_observations": []}
+
+    async def hypothesis(_state):
+        return {"hypotheses": [], "hypothesis_status": "NOT_REQUIRED"}
+
+    async def persist_analysis(_state):
+        return {"anomaly_run_id": "anomaly-run"}
+
+    async def report_writer(_state):
+        return {"steward_report_markdown": "# Report", "report_source": "LLM"}
+
+    monkeypatch.setattr("src.agents.nodes.anomaly_detector_node.anomaly_detector_node", anomaly_detector)
+    monkeypatch.setattr("src.agents.nodes.anomaly_investigation_node.anomaly_investigation_node", hypothesis)
+    monkeypatch.setattr("src.agents.nodes.persist_analysis_node.persist_analysis_node", persist_analysis)
+    monkeypatch.setattr("src.agents.nodes.report_writer_node.report_writer_node", report_writer)
+
+    anomaly = build_anomaly_graph(investigation_mode="deepagent", observer=observer)
+    await anomaly.ainvoke({"anomaly_run_id": "anomaly-run", "execution_run_id": "test-run"})
+
+    starts = {(graph, node) for graph, node, is_start, _ in events if is_start}
+    completions = {(graph, node) for graph, node, is_start, _ in events if not is_start}
+    assert starts == {
+        ("GRAPH2", "test_generator"),
+        ("GRAPH2", "validate_dbt_project"),
+        ("GRAPH2", "test_runner"),
+        ("GRAPH2", "persist_report"),
+        ("GRAPH3", "anomaly_detector"),
+        ("GRAPH3", "hypothesis_agent"),
+        ("GRAPH3", "persist_analysis"),
+        ("GRAPH3", "report_writer"),
+    }
+    assert completions == starts
+
+
 def test_conditional_edges_routing():
     """The execution graph routes on dbt artifact validation state."""
     state_valid = {"dbt_validation_valid": True}

@@ -1527,6 +1527,7 @@ function App() {
   const [showAdmin, setShowAdmin] = useState<boolean>(false);
   const [showGraphs, setShowGraphs] = useState<boolean>(false);
   const [showDataExplorer, setShowDataExplorer] = useState<boolean>(false);
+  const [dataExplorerDatasetId, setDataExplorerDatasetId] = useState<string | null>(null);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(
     () => sessionStorage.getItem("ridepulse.dataset") ?? null,
@@ -1598,6 +1599,11 @@ function App() {
   // every App re-render caused by a selection or toast update.
   const loadDataDictionary = useCallback(
     (datasetId: string) => api.getDataDictionary(datasetId),
+    [],
+  );
+  const loadDataRows = useCallback(
+    (datasetId: string, limit: number) =>
+      api.queryDatasetRows(datasetId, { limit, offset: 0, quality_status: "ALL" }),
     [],
   );
 
@@ -2748,6 +2754,7 @@ function App() {
                   onSelectDataset={(id) => void selectDataset(id)}
                   onDeleteDataset={(id) => void deleteDataset(id)}
                   onOpenExplorer={(datasetId) => {
+                    setDataExplorerDatasetId(datasetId);
                     if (datasetId !== dataset?.id) void selectDataset(datasetId);
                     setShowDataExplorer(true);
                   }}
@@ -3250,17 +3257,22 @@ function App() {
           {stepOverlay === "audit" && <AuditPage logs={auditLogs} />}
         </DetailOverlay>
       )}
-      {showDataExplorer && dataset && (
+      {showDataExplorer && dataExplorerDatasetId && (() => {
+        const explorerDataset = datasets.find((item) => item.id === dataExplorerDatasetId);
+        if (!explorerDataset) return null;
+        return (
         <DataExplorerDialog
-          dataset={dataset}
+          dataset={explorerDataset}
           language={language}
-          loadRows={(datasetId, limit) =>
-            api.queryDatasetRows(datasetId, { limit, offset: 0, quality_status: "ALL" })
-          }
-          loadDictionary={(datasetId) => api.getDataDictionary(datasetId)}
-          onClose={() => setShowDataExplorer(false)}
+          loadRows={loadDataRows}
+          loadDictionary={loadDataDictionary}
+          onClose={() => {
+            setShowDataExplorer(false);
+            setDataExplorerDatasetId(null);
+          }}
         />
-      )}
+        );
+      })()}
       {editingProposal && (
         <EditDialog
           proposal={editingProposal}
