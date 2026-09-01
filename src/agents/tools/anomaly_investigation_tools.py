@@ -17,9 +17,11 @@ from src.models.database import (
     AnomalyRunModel,
     AnomalySignalModel,
     ColumnProfileModel,
+    DatasetVersionModel,
     DqResultModel,
     DqRunModel,
     ProfileModel,
+    ProfileRunSnapshotModel,
 )
 from src.services.rule_store import get_engine
 
@@ -223,29 +225,82 @@ def get_dataset_profile(dataset_id: str) -> dict[str, Any]:
                 .order_by(ProfileModel.generated_at.desc())
                 .first()
             )
-            if not profile:
+            if profile:
+                columns = db.query(ColumnProfileModel).filter_by(profile_dataset_id=dataset_id).all()
+                return {
+                    "dataset_id": dataset_id,
+                    "generated_at": _iso(profile.generated_at),
+                    "row_count": profile.row_count,
+                    "completeness_score": profile.completeness_score,
+                    "validity_score": profile.validity_score,
+                    "duplicate_rate": profile.duplicate_rate,
+                    "columns": [
+                        {
+                            "name": c.name,
+                            "data_type": c.data_type,
+                            "null_rate": c.null_rate,
+                            "distinct_count": c.distinct_count,
+                            "negative_rate": c.negative_rate,
+                            "quantiles": _json(c.quantiles_json, {}),
+                            "min": c.min_value,
+                            "max": c.max_value,
+                            "out_of_domain_rate": c.out_of_domain_rate,
+                        }
+                        for c in columns
+                    ],
+                }
+
+            # Canonical versioned imports persist immutable aggregate profiles in
+            # profile_runs, not in the legacy profiles/column_profiles pair.
+            # Graph 1A and the dashboard already use this source; the anomaly
+            # investigation tool must use it too or every versioned dataset is
+            # reported as PROFILE_NOT_FOUND in the final report.
+            latest_version = (
+                db.query(DatasetVersionModel)
+                .filter_by(dataset_id=dataset_id, status="READY")
+                .order_by(DatasetVersionModel.version_number.desc())
+                .first()
+            )
+            snapshot = (
+                db.query(ProfileRunSnapshotModel)
+                .filter_by(
+                    dataset_id=dataset_id,
+                    dataset_version_id=latest_version.id,
+                    status="COMPLETED",
+                )
+                .order_by(ProfileRunSnapshotModel.completed_at.desc())
+                .first()
+                if latest_version
+                else None
+            )
+            if not snapshot:
                 return {"error": "PROFILE_NOT_FOUND", "dataset_id": dataset_id}
-            columns = db.query(ColumnProfileModel).filter_by(profile_dataset_id=dataset_id).all()
+
+            metrics_payload = _json(snapshot.metrics_json, {})
+            metrics = metrics_payload if isinstance(metrics_payload, dict) else {}
+            schema_payload = _json(snapshot.schema_json, [])
+            raw_columns = metrics.get("columns") or (schema_payload if isinstance(schema_payload, list) else [])
             return {
                 "dataset_id": dataset_id,
-                "generated_at": _iso(profile.generated_at),
-                "row_count": profile.row_count,
-                "completeness_score": profile.completeness_score,
-                "validity_score": profile.validity_score,
-                "duplicate_rate": profile.duplicate_rate,
+                "generated_at": _iso(snapshot.completed_at or snapshot.created_at),
+                "row_count": snapshot.row_count,
+                "completeness_score": snapshot.completeness_score,
+                "validity_score": snapshot.validity_score,
+                "duplicate_rate": snapshot.duplicate_rate,
                 "columns": [
                     {
-                        "name": c.name,
-                        "data_type": c.data_type,
-                        "null_rate": c.null_rate,
-                        "distinct_count": c.distinct_count,
-                        "negative_rate": c.negative_rate,
-                        "quantiles": _json(c.quantiles_json, {}),
-                        "min": c.min_value,
-                        "max": c.max_value,
-                        "out_of_domain_rate": c.out_of_domain_rate,
+                        "name": str(c.get("name")),
+                        "data_type": c.get("logical_type") or c.get("physical_type") or "string",
+                        "null_rate": float(c.get("null_rate") or 0.0),
+                        "distinct_count": int(c.get("distinct_count") or 0),
+                        "negative_rate": c.get("negative_rate"),
+                        "quantiles": c.get("quantiles") or {},
+                        "min": c.get("min_value"),
+                        "max": c.get("max_value"),
+                        "out_of_domain_rate": c.get("out_of_domain_rate"),
                     }
-                    for c in columns
+                    for c in raw_columns
+                    if isinstance(c, dict) and c.get("name")
                 ],
             }
     except Exception as exc:

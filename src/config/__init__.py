@@ -80,8 +80,12 @@ class Settings(BaseSettings):
     )
     supabase_database_url: str | None = os.getenv("SUPABASE_DATABASE_URL")
     dq_execution_backend: Literal["auto", "local", "supabase"] = os.getenv("DQ_EXECUTION_BACKEND") or "auto"
-    database_pool_size: int = Field(default=5, ge=1, le=20)
-    database_max_overflow: int = Field(default=5, ge=0, le=20)
+    # Supabase session-mode projects expose a small project-wide connection
+    # budget. Keep the default conservative so one local process or Cloud Run
+    # revision cannot reserve most of it; operators can raise these explicitly
+    # when their database plan supports it.
+    database_pool_size: int = Field(default=2, ge=1, le=20)
+    database_max_overflow: int = Field(default=0, ge=0, le=20)
     database_pool_timeout_seconds: int = Field(default=30, ge=1, le=120)
 
     # Output

@@ -562,6 +562,12 @@ def _agent_semantic_payload(db: Session, dataset_id: str, *, workflow_run_id: st
         )
 
     try:
+        # ``_semantic_payload`` above performs synchronous reads on the caller's
+        # session. Commit before entering the async/LLM graph so the read-only
+        # transaction returns its connection to the bounded Supabase pool while
+        # the model is thinking. Otherwise graph telemetry and browser polling
+        # can exhaust a pool of two connections.
+        db.commit()
         result = asyncio.run(_invoke())
     except Exception:
         # A timeout or transport failure is the same outcome as a node error:

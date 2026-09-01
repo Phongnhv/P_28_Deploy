@@ -70,3 +70,13 @@ def test_postgres_migrations_cast_legacy_dq_result_ids_to_text():
     assert statement in startup
     assert "ALTER TABLE public.dq_results" in release
     assert "ALTER COLUMN id TYPE VARCHAR(36) USING id::text" in release
+
+
+def test_ruleset_workflow_lineage_migration_matches_the_durable_model():
+    migration = Path("scripts/migrations/015_ruleset_workflow_lineage.sql").read_text(encoding="utf-8")
+
+    assert "ruleset_versions" in migration
+    assert "workflow_run_id VARCHAR(64)" in migration
+    assert "stale BOOLEAN NOT NULL DEFAULT FALSE" in migration
+    assert "proposal_run_id TYPE VARCHAR(512)" in migration
+    assert "ADD COLUMN IF NOT EXISTS" in migration

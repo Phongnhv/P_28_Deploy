@@ -462,7 +462,7 @@ export const mockApi: ApiClient = {
   async createManualRule(id, input: ManualRuleInput) {
     if (id !== datasetId) throw new Error("Dataset not found.");
     const activeWorkflow = [...workflowRuns].reverse().find((item) => item.dataset_id === id && item.current_step === "REVIEW_RULES");
-    const proposal: RuleProposal = { id: `manual-${Date.now()}`, dataset_id: datasetId, workflow_run_id: activeWorkflow?.id, ...input, status: "PROPOSED", source: "MANUAL", evidence_refs: [], evidence_summary: "Manually authored by the Data Steward; no agent evidence attached.", confidence: 1, model_name: "manual", created_at: now(), updated_at: now() };
+    const proposal: RuleProposal = { id: `manual-${Date.now()}`, dataset_id: datasetId, ...input, workflow_run_id: input.workflow_run_id ?? activeWorkflow?.id, status: "PROPOSED", source: "MANUAL", evidence_refs: [], evidence_summary: "Manually authored by the Data Steward; no agent evidence attached.", confidence: 1, model_name: "manual", created_at: now(), updated_at: now() };
     proposals = [...proposals, proposal];
     addAudit("MANUAL_RULE_CREATED", "rule_proposal", proposal.id, `Created manual rule “${proposal.title}”.`);
     return proposal;
@@ -471,9 +471,10 @@ export const mockApi: ApiClient = {
     await wait(220);
     const existing = proposals.find((proposal) => proposal.id === id);
     if (!existing) throw new Error("Proposal not found.");
+    if (input.workflow_run_id && input.workflow_run_id !== existing.workflow_run_id) throw new Error("The proposal does not belong to this workflow.");
     clearRuleChangeDownstreamSessions();
     const status: RuleProposal["status"] = input.action === "approve" ? "APPROVED" : input.action === "reject" ? "REJECTED" : "EDITED";
-    const updated = { ...existing, ...input, status, rule: input.rule ?? existing.rule, updated_at: now() };
+    const updated = { ...existing, ...input, workflow_run_id: existing.workflow_run_id, status, rule: input.rule ?? existing.rule, updated_at: now() };
     delete (updated as Partial<ReviewInput>).action;
     proposals = proposals.map((proposal) => proposal.id === id ? updated : proposal);
     if (status === "APPROVED" && !configurations.some((item) => item.rule_id === id)) configurations = [...configurations, { rule_id: id, execution_status: "ACTIVE", schedule_frequency: "MANUAL", timezone: "UTC", updated_at: now() }];

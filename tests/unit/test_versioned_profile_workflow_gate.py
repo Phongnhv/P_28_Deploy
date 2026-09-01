@@ -13,6 +13,8 @@ from datetime import timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+import src.services.rule_store as rule_store
+from src.agents.tools.anomaly_investigation_tools import get_dataset_profile
 from src.models.database import (
     Base,
     DatasetModel,
@@ -134,6 +136,24 @@ def test_graph_1b_builds_evidence_from_the_same_versioned_profile():
     assert evidence.columns[0].is_unique_full_table is True
     assert "profile.column.rating.null_rate" in evidence.evidence_keys
     assert "sample_value" not in evidence.model_dump_json()
+
+
+def test_anomaly_profile_tool_reads_the_canonical_versioned_snapshot():
+    db = seeded_session()
+    original_engine = rule_store._engine
+    rule_store._engine = db.get_bind()
+    try:
+        profile = get_dataset_profile.invoke({"dataset_id": DATASET_ID})
+    finally:
+        rule_store._engine = original_engine
+
+    assert profile["dataset_id"] == DATASET_ID
+    assert profile["row_count"] == 250
+    assert [column["name"] for column in profile["columns"]] == [
+        "id",
+        "release_date",
+        "rating",
+    ]
 
 
 def test_a_dataset_with_neither_profile_is_still_reported_as_unprofiled():

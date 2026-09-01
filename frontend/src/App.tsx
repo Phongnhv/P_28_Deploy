@@ -467,6 +467,35 @@ function workflowPhaseIndex(step: WorkflowStepKey) {
 }
 
 /**
+ * Re-open the wizard at the durable workflow stage after a browser refresh.
+ * wizardStep is local presentation state, while the workflow cursor is the
+ * source of truth; without this mapping a completed Graph 3 run appeared to
+ * send the user back to an empty step 1 screen.
+ */
+function wizardStepForWorkflow(workflow: WorkflowRun | null) {
+  if (!workflow) return 1;
+  switch (workflow.current_step) {
+    case "UPLOAD_PROFILE":
+      return 1;
+    case "UNDERSTAND_DATA":
+      return 2;
+    case "PROPOSE_RULES":
+    case "REVIEW_RULES":
+      return 3;
+    case "PUBLISH_RULESET":
+    case "RUN_CHECKS":
+      return 4;
+    case "ANALYZE_REPORT":
+    case "PROPOSE_CODE":
+    case "REVIEW_EXECUTE":
+    case "ANALYZE_IMPROVE":
+      return 5;
+    default:
+      return 1;
+  }
+}
+
+/**
  * The unscoped proposal endpoint is still used by the old direct proposer
  * screen. Once a durable workflow exists, its review queue must contain only
  * proposals created by that workflow; otherwise legacy rows with a null
@@ -681,7 +710,6 @@ function RuleProposerPanel({
   configurations,
   canOperate,
   busy,
-  bulkReviewBusy,
   understandingArtifact,
   contractConfirmed,
   onConfirmContract,
@@ -690,7 +718,6 @@ function RuleProposerPanel({
   onRejectRule,
   onEditRule,
   onDeleteRule,
-  onBulkReview,
   onCreateManualRule,
   onSaveConfiguration,
   language,
@@ -703,7 +730,6 @@ function RuleProposerPanel({
   configurations: RuleConfiguration[];
   canOperate: boolean;
   busy: boolean;
-  bulkReviewBusy: boolean;
   understandingArtifact?: AgentArtifact;
   contractConfirmed: boolean;
   onConfirmContract: () => void;
@@ -712,7 +738,6 @@ function RuleProposerPanel({
   onRejectRule: (id: string) => void;
   onEditRule: (proposal: RuleProposal) => void;
   onDeleteRule: (id: string) => void;
-  onBulkReview: (decision: "approve" | "reject") => void;
   onCreateManualRule: () => void;
   onSaveConfiguration: (id: string, input: RuleConfigurationInput) => void;
   language: "en" | "vi";
@@ -830,22 +855,6 @@ function RuleProposerPanel({
                   <h3 style={{ margin: 0 }}>
                     {language === "vi" ? `Đề xuất luật kiểm tra (${datasetProposals.length})` : `Rule Proposals (${datasetProposals.length})`}
                   </h3>
-                </div>
-                <div style={{ display: "flex", gap: "8px" }}>
-                  <button
-                    className="button ghost danger"
-                    disabled={!canOperate || bulkReviewBusy}
-                    onClick={() => onBulkReview("reject")}
-                  >
-                    {language === "vi" ? "Từ chối tất cả" : "Reject all"}
-                  </button>
-                  <button
-                    className="button primary"
-                    disabled={!canOperate || bulkReviewBusy}
-                    onClick={() => onBulkReview("approve")}
-                  >
-                    {language === "vi" ? "Duyệt tất cả" : "Approve all"}
-                  </button>
                 </div>
               </div>
 
@@ -1952,6 +1961,7 @@ function App() {
   const [loginError, setLoginError] = useState("");
   const [view, setView] = useState<View>("overview");
   const [wizardStep, setWizardStep] = useState<number>(1);
+  const workspaceHydrated = useRef(false);
   const [showAdmin, setShowAdmin] = useState<boolean>(false);
   const [showGraphs, setShowGraphs] = useState<boolean>(false);
   const [showDataExplorer, setShowDataExplorer] = useState<boolean>(false);
@@ -1985,7 +1995,6 @@ function App() {
   // the screen opens on the contract the rules will be derived from rather than
   // on forty rows of output.
   const [ruleQueueOpen, setRuleQueueOpen] = useState(false);
-  const [bulkReviewBusy, setBulkReviewBusy] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   // Counted directly rather than derived from the list length: the list is
   // capped at 50, so once it is full the length stops growing and a derived
@@ -2104,6 +2113,10 @@ function App() {
             ? await workflowApi.listWorkflowArtifacts(latestWorkflow.id)
             : [],
         );
+        if (!workspaceHydrated.current) {
+          setWizardStep(wizardStepForWorkflow(latestWorkflow));
+          workspaceHydrated.current = true;
+        }
         if (latestRun?.status === "SUCCEEDED") {
           const [latestResults, latestAnomalies] = await Promise.all([
             api.getDqResults(latestRun.id),
@@ -2119,9 +2132,16 @@ function App() {
         setActiveRun(null);
         setDqResults([]);
         setDqAnomalies([]);
+        if (!workspaceHydrated.current) {
+          setWizardStep(1);
+          workspaceHydrated.current = true;
+        }
       }
     } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
+      if (
+        err instanceof ApiError &&
+        (err.status === 401 || err.code === "CSRF_INVALID")
+      ) {
         clearApiSession();
         sessionStorage.removeItem("ridepulse.auth");
         sessionStorage.removeItem("ridepulse.role");
@@ -2278,6 +2298,7 @@ function App() {
     selectionGeneration.current += 1;
     sessionStorage.setItem("ridepulse.dataset", datasetId);
     setSelectedDatasetId(datasetId);
+    setWizardStep(1);
     setProfile(datasetProfiles[datasetId] ?? null);
     setProposals([]);
     setRuleConfigurations([]);
@@ -2427,6 +2448,7 @@ function App() {
       const imported = await api.importDataset(file);
       sessionStorage.setItem("ridepulse.dataset", imported.dataset.id);
       setSelectedDatasetId(imported.dataset.id);
+      setWizardStep(1);
       setDatasets((current) => [imported.dataset, ...current]);
       setView("datasets");
       if (imported.idempotent_replay) {
@@ -2487,7 +2509,7 @@ function App() {
     const workflowId = workflow?.id;
     setError("");
     try {
-      await api.reviewProposal(id, { action });
+      await api.reviewProposal(id, { action, workflow_run_id: workflowId });
       setProposals(
         proposalsForWorkflow(
           await api.listProposals(datasetId, workflowId),
@@ -2604,6 +2626,7 @@ function App() {
     try {
       await api.reviewProposal(editingProposal.id, {
         action: "edit",
+        workflow_run_id: workflowId,
         ...input,
       });
       setProposals(
@@ -2625,7 +2648,10 @@ function App() {
     const datasetId = dataset.id;
     const workflowId = workflow?.id;
     try {
-      await api.createManualRule(datasetId, input);
+      await api.createManualRule(datasetId, {
+        ...input,
+        workflow_run_id: workflowId,
+      });
       setProposals(
         proposalsForWorkflow(
           await api.listProposals(datasetId, workflowId),
@@ -2651,9 +2677,21 @@ function App() {
       );
       return;
     }
-    if (workflow.current_step === "RUN_CHECKS") {
+    let currentStep = workflow.current_step;
+    if (currentStep === "REVIEW_RULES") {
+      const confirmed = await confirmCurrentRuleset();
+      if (!confirmed) return;
+      currentStep = "PUBLISH_RULESET";
+    }
+    if (currentStep === "PUBLISH_RULESET") {
+      // Publishing is a durable workflow stage. Complete it before queuing
+      // checks so the DQ run can only consume this workflow's immutable set.
+      await startWorkflowStep("PUBLISH_RULESET");
+      currentStep = "RUN_CHECKS";
+    }
+    if (currentStep === "RUN_CHECKS") {
       await startWorkflowStep("RUN_CHECKS");
-    } else if (workflow.current_step === "ANALYZE_REPORT") {
+    } else if (currentStep === "ANALYZE_REPORT") {
       setToast(
         language === "vi"
           ? "Graph 2 đã hoàn tất. Sang bước 5 để chạy Graph 3 analysis."
@@ -2666,6 +2704,24 @@ function App() {
           : "Publish the workflow ruleset before starting Graph 2.",
       );
     }
+  }
+
+  async function confirmCurrentRuleset(): Promise<boolean> {
+    if (!workflow) return false;
+    const artifact = workflowArtifactForStep(
+      workflow,
+      workflowArtifacts,
+      "PROPOSE_RULES",
+    );
+    if (!artifact || artifact.type !== "RULE_SET") {
+      setError(
+        language === "vi"
+          ? "Không tìm thấy bộ luật hiện tại để xác nhận. Hãy sinh lại luật trong Bước 3."
+          : "The current rule set is unavailable. Regenerate the rules in step 3.",
+      );
+      return false;
+    }
+    return reviewWorkflowArtifact(artifact.id, { action: "approve" });
   }
 
   async function refreshWorkflow(workflowId: string) {
@@ -2801,48 +2857,6 @@ function App() {
     }
   }
 
-  async function bulkReviewProposals(action: "approve" | "reject") {
-    if (!dataset || !canOperate || bulkReviewBusy) return;
-    const pending = proposals.filter((item) => item.dataset_id === dataset.id && ["PROPOSED", "EDITED"].includes(item.status));
-    if (pending.length === 0) {
-      setToast(
-        language === "vi"
-          ? "Không còn đề xuất nào đang chờ quyết định."
-          : "No proposals are awaiting a decision.",
-      );
-      return;
-    }
-    // Deciding dozens of rules at once is hard to undo, so it is confirmed.
-    const question =
-      language === "vi"
-        ? `${action === "approve" ? "Duyệt" : "Từ chối"} toàn bộ ${pending.length} đề xuất đang chờ?`
-        : `${action === "approve" ? "Approve" : "Reject"} all ${pending.length} pending proposals?`;
-    if (!window.confirm(question)) return;
-
-    setError("");
-    setBulkReviewBusy(true);
-    try {
-      const updated = await api.bulkReviewProposals({
-        dataset_id: dataset.id,
-        workflow_run_id: workflow?.id,
-        action,
-        pending_only: true,
-      });
-      setProposals(updated);
-      setRuleConfigurations(await api.listRuleConfigurations(dataset.id));
-      setAuditLogs(await api.listAuditLogs());
-      setToast(
-        language === "vi"
-          ? `Đã ${action === "approve" ? "duyệt" : "từ chối"} ${pending.length} đề xuất.`
-          : `${action === "approve" ? "Approved" : "Rejected"} ${pending.length} proposals.`,
-      );
-    } catch (err) {
-      setError(getErrorMessage(err, "Unable to apply the bulk decision."));
-    } finally {
-      setBulkReviewBusy(false);
-    }
-  }
-
   async function advanceWorkflowStep() {
     if (!workflow || !canOperate || activeJob || workflowActionBusy) return;
     try {
@@ -2874,9 +2888,10 @@ function App() {
   async function reviewWorkflowArtifact(
     id: string,
     input: ArtifactReviewInput,
-  ) {
-    if (!canOperate || workflowActionBusy || activeJob) return;
+  ): Promise<boolean> {
+    if (!canOperate || workflowActionBusy || activeJob) return false;
     setError("");
+    setWorkflowActionBusy(true);
     try {
       const updated = await workflowApi.reviewArtifact(id, input);
       setWorkflowArtifacts((current) =>
@@ -2891,9 +2906,23 @@ function App() {
             : "Revision requested from the agent.",
       );
       setError("");
+      return true;
     } catch (err) {
       setError(getErrorMessage(err, "Unable to review workflow artifact."));
+      return false;
+    } finally {
+      setWorkflowActionBusy(false);
     }
+  }
+
+  async function handleWizardNext() {
+    if (wizardStep === 3 && workflow?.current_step === "REVIEW_RULES") {
+      // The footer is the single continue action for the review screen. Keep
+      // the durable workflow cursor in sync before showing Graph 2.
+      const confirmed = await confirmCurrentRuleset();
+      if (!confirmed) return;
+    }
+    setWizardStep((prev) => Math.min(6, prev + 1));
   }
 
   async function decideWorkflowLoop(input: LoopDecisionInput) {
@@ -3314,7 +3343,6 @@ function App() {
                       configurations={ruleConfigurations}
                       canOperate={canOperate}
                       busy={workflowActionBusy || Boolean(activeJob)}
-                      bulkReviewBusy={bulkReviewBusy}
                       understandingArtifact={understandingArtifact}
                       contractConfirmed={contractConfirmed}
                       onRequestProposals={() => {
@@ -3328,7 +3356,6 @@ function App() {
                       onRejectRule={(id) => void reviewProposal(id, "reject")}
                       onEditRule={setEditingProposal}
                       onDeleteRule={(id) => void deleteProposal(id)}
-                      onBulkReview={(decision) => void bulkReviewProposals(decision)}
                       onCreateManualRule={() => setManualRuleOpen(true)}
                       onSaveConfiguration={(id, input) => void saveRuleConfiguration(id, input)}
                       language={language}
@@ -3372,7 +3399,7 @@ function App() {
                       approvedRules={approvedRules}
                       workflowArtifacts={workflowArtifacts}
                       canOperate={canOperate}
-                      busy={Boolean(activeJob)}
+                      busy={workflowActionBusy || Boolean(activeJob)}
                       onRun={() => void runApprovedRules()}
                       language={language}
                     />
@@ -3537,7 +3564,16 @@ function App() {
                     wizardStep === 6 ||
                     (!dataset && wizardStep === 1) ||
                     (wizardStep === 1 && !profile) ||
-                    (wizardStep === 2 && !contractConfirmed)
+                    (wizardStep === 2 && !contractConfirmed) ||
+                    (wizardStep === 3 &&
+                      workflow?.current_step === "REVIEW_RULES" &&
+                      (proposals.length === 0 ||
+                        proposals.some((proposal) =>
+                          ["PROPOSED", "EDITED"].includes(proposal.status),
+                        ) ||
+                        !proposals.some((proposal) => proposal.status === "APPROVED"))) ||
+                    workflowActionBusy ||
+                    Boolean(activeJob)
                   }
                   title={
                     !dataset && wizardStep === 1
@@ -3548,9 +3584,7 @@ function App() {
                           ? (language === "vi" ? "Vui lòng bấm 'Xác nhận hợp đồng' trước khi tiếp tục" : "Please confirm the semantic contract before continuing")
                           : ""
                   }
-                  onClick={() => {
-                    setWizardStep((prev) => Math.min(6, prev + 1));
-                  }}
+                  onClick={() => void handleWizardNext()}
                 >
                   {t("wizard.next")}
                 </button>

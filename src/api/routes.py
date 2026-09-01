@@ -317,6 +317,7 @@ class ManualRuleInput(BaseModel):
     description: str
     severity: str
     rule: RuleSpecSchema
+    workflow_run_id: str | None = None
 
 
 class ReviewInput(BaseModel):
@@ -325,6 +326,7 @@ class ReviewInput(BaseModel):
     description: str | None = None
     severity: str | None = None
     rule: RuleSpecSchema | None = None
+    workflow_run_id: str | None = None
 
 
 class WorkflowRewindInput(BaseModel):
@@ -2830,10 +2832,22 @@ def create_manual_rule(
         raise HTTPException(status_code=404, detail="Dataset not found")
     require_dataset_access(db, session, id, manage=True)
 
+    if body.workflow_run_id:
+        workflow = db.get(WorkflowRunModel, body.workflow_run_id)
+        if not workflow or workflow.dataset_id != id:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "WORKFLOW_SCOPE",
+                    "message": "The workflow does not belong to this dataset.",
+                },
+            )
+
     prop_id = f"manual-{str(uuid.uuid4())[:8]}"
     prop = RuleProposalModel(
         id=prop_id,
         dataset_id=id,
+        workflow_run_id=body.workflow_run_id,
         title=body.title,
         description=body.description,
         severity=body.severity.upper(),
@@ -2872,31 +2886,10 @@ def create_manual_rule(
         action_code="PROPOSAL_CREATED",
         entity_type="rule_proposal",
         entity_id=prop_id,
-        detail={"manual": True},
+        detail={"manual": True, "workflow_run_id": body.workflow_run_id},
     )
 
-    return RuleProposalSchema(
-        id=prop.id,
-        dataset_id=prop.dataset_id,
-        title=prop.title,
-        description=prop.description,
-        severity=prop.severity,
-        status=prop.status,
-        rule=body.rule,
-        evidence_refs=["manual"],
-        evidence_summary=prop.evidence_summary,
-        confidence=prop.confidence,
-        model_name=prop.model_name,
-        rule_name=prop.rule_name,
-        business_rationale=prop.business_rationale,
-        proposal_basis=prop.proposal_basis,
-        evidence=json.loads(prop.evidence or "{}"),
-        parameter_provenance=json.loads(prop.parameter_provenance or "[]"),
-        assumptions=json.loads(prop.assumptions or "[]"),
-        confidence_breakdown=json.loads(prop.confidence_breakdown or "{}"),
-        created_at=prop.created_at.isoformat(),
-        updated_at=prop.updated_at.isoformat(),
-    )
+    return _serialize_proposal(prop)
 
 
 class BulkProposalReviewInput(BaseModel):
@@ -3033,6 +3026,21 @@ def review_proposal(
         raise HTTPException(status_code=404, detail="Rule proposal not found")
     require_dataset_access(db, session, prop.dataset_id, manage=True)
 
+    if body.workflow_run_id:
+        workflow = db.get(WorkflowRunModel, body.workflow_run_id)
+        if (
+            not workflow
+            or workflow.dataset_id != prop.dataset_id
+            or prop.workflow_run_id != body.workflow_run_id
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "WORKFLOW_SCOPE",
+                    "message": "The proposal does not belong to this workflow.",
+                },
+            )
+
     action = body.action
 
     if action == "approve":
@@ -3074,7 +3082,7 @@ def review_proposal(
             action_code="PROPOSAL_APPROVED",
             entity_type="rule_proposal",
             entity_id=prop.id,
-            detail={"action": "approve"},
+            detail={"action": "approve", "workflow_run_id": body.workflow_run_id},
         )
 
     elif action == "reject":
@@ -3092,7 +3100,7 @@ def review_proposal(
             action_code="PROPOSAL_REJECTED",
             entity_type="rule_proposal",
             entity_id=prop.id,
-            detail={"action": "reject"},
+            detail={"action": "reject", "workflow_run_id": body.workflow_run_id},
         )
 
     elif action == "edit":
@@ -3144,7 +3152,7 @@ def review_proposal(
             action_code="PROPOSAL_EDITED",
             entity_type="rule_proposal",
             entity_id=prop.id,
-            detail={"action": "edit"},
+            detail={"action": "edit", "workflow_run_id": body.workflow_run_id},
         )
 
     else:
@@ -3153,28 +3161,7 @@ def review_proposal(
     prop.updated_at = utc_now()
     db.commit()
 
-    return RuleProposalSchema(
-        id=prop.id,
-        dataset_id=prop.dataset_id,
-        title=prop.title,
-        description=prop.description,
-        severity=prop.severity,
-        status=prop.status,
-        rule=RuleSpecSchema(**json.loads(prop.rule_spec)),
-        evidence_refs=json.loads(prop.evidence_refs),
-        evidence_summary=prop.evidence_summary,
-        confidence=prop.confidence,
-        model_name=prop.model_name,
-        rule_name=prop.rule_name,
-        business_rationale=prop.business_rationale,
-        proposal_basis=prop.proposal_basis,
-        evidence=json.loads(prop.evidence or "{}"),
-        parameter_provenance=json.loads(prop.parameter_provenance or "[]"),
-        assumptions=json.loads(prop.assumptions or "[]"),
-        confidence_breakdown=json.loads(prop.confidence_breakdown or "{}"),
-        created_at=prop.created_at.isoformat(),
-        updated_at=prop.updated_at.isoformat(),
-    )
+    return _serialize_proposal(prop)
 
 
 @router.delete("/rule-proposals/{id}", status_code=204)
@@ -4322,6 +4309,10 @@ async def publish_ruleset_endpoint(
     proposal_run = require_proposal_run_access(db, session, proposal_run_id, manage=True)
     if body.dataset_id != proposal_run["dataset_id"]:
         raise HTTPException(status_code=422, detail="dataset_id does not match the proposal run")
+    # Publishing opens its own worker session. Release the request/auth
+    # session first so a small Supabase pool cannot be exhausted by the
+    # worker plus this request.
+    db.close()
     ruleset_ver_id = await asyncio.to_thread(
         publish_approved_rules,
         proposal_run_id=proposal_run_id,
@@ -4330,16 +4321,18 @@ async def publish_ruleset_endpoint(
     if not ruleset_ver_id:
         raise HTTPException(status_code=400, detail="No approved rules found or failed to publish ruleset.")
 
-    with Session(get_engine()) as session:
-        ruleset = session.query(RulesetVersionModel).filter(RulesetVersionModel.id == ruleset_ver_id).first()
-        rules_list = json.loads(ruleset.normalized_rules) if ruleset else []
-        return PublishRulesetResponse(
-            ruleset_version_id=ruleset_ver_id,
-            ruleset_hash=ruleset.ruleset_hash if ruleset else "",
-            dataset_id=body.dataset_id,
-            status="PUBLISHED",
-            rule_count=len(rules_list),
-        )
+    # ``db`` is already held by the auth dependency. Opening a second session
+    # here can deadlock a small Supabase pool while the publish worker is
+    # finishing. Reuse the request session for the short read-back instead.
+    ruleset = db.query(RulesetVersionModel).filter(RulesetVersionModel.id == ruleset_ver_id).first()
+    rules_list = json.loads(ruleset.normalized_rules) if ruleset else []
+    return PublishRulesetResponse(
+        ruleset_version_id=ruleset_ver_id,
+        ruleset_hash=ruleset.ruleset_hash if ruleset else "",
+        dataset_id=body.dataset_id,
+        status="PUBLISHED",
+        rule_count=len(rules_list),
+    )
 
 
 @dq_router.post(
@@ -4362,6 +4355,9 @@ async def trigger_execution_run_endpoint(
     existing_run = db.get(DqRunModel, body.execution_run_id)
     if existing_run and existing_run.dataset_id != body.dataset_id:
         raise HTTPException(status_code=409, detail="execution_run_id is already bound to another dataset")
+    # The compatibility graph owns its database sessions for the duration of
+    # the run; the request session is no longer needed after validation.
+    db.close()
     res = await run_execution_graph(
         dataset_id=body.dataset_id,
         test_run_id=body.execution_run_id,
@@ -4391,36 +4387,38 @@ async def get_execution_run_results_endpoint(
     db: Session = Depends(get_db),
 ) -> CombinedRunStatusResponse:
     """Fetches combined execution status, anomaly status, and hypothesis status."""
-    with Session(get_engine()) as session:
-        dq_run = session.query(DqRunModel).filter(DqRunModel.id == id).first()
-        if not dq_run:
-            raise HTTPException(status_code=404, detail=f"Execution run {id} not found")
-        require_compat_dataset_access(db, auth, dq_run.dataset_id)
+    # The auth dependency already owns ``db`` for this request. Reusing it is
+    # important when the deployment deliberately runs with a two-connection
+    # Supabase pool; a nested session here could wait on itself indefinitely.
+    dq_run = db.query(DqRunModel).filter(DqRunModel.id == id).first()
+    if not dq_run:
+        raise HTTPException(status_code=404, detail=f"Execution run {id} not found")
+    require_compat_dataset_access(db, auth, dq_run.dataset_id)
 
-        anomaly_run = session.query(AnomalyRunModel).filter(AnomalyRunModel.execution_run_id == id).first()
-        signals = (
-            session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anomaly_run.id).all()
-            if anomaly_run
-            else []
-        )
-        hypotheses = (
-            session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == anomaly_run.id).all()
-            if anomaly_run
-            else []
-        )
+    anomaly_run = db.query(AnomalyRunModel).filter(AnomalyRunModel.execution_run_id == id).first()
+    signals = (
+        db.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anomaly_run.id).all()
+        if anomaly_run
+        else []
+    )
+    hypotheses = (
+        db.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == anomaly_run.id).all()
+        if anomaly_run
+        else []
+    )
 
-        return CombinedRunStatusResponse(
-            execution_run_id=id,
-            dataset_id=dq_run.dataset_id,
-            execution_status=dq_run.status,
-            anomaly_status=anomaly_run.status if anomaly_run else "NOT_RUN",
-            hypothesis_status="SUCCEEDED" if hypotheses else ("FALLBACK_USED" if anomaly_run else "NOT_RUN"),
-            execution_details={"total_failed": dq_run.total_failed, "total_checked": dq_run.total_checked},
-            anomaly_decision=anomaly_run.decision if anomaly_run else None,
-            anomaly_score=anomaly_run.score if anomaly_run else None,
-            signals_count=len(signals),
-            hypotheses_count=len(hypotheses),
-        )
+    return CombinedRunStatusResponse(
+        execution_run_id=id,
+        dataset_id=dq_run.dataset_id,
+        execution_status=dq_run.status,
+        anomaly_status=anomaly_run.status if anomaly_run else "NOT_RUN",
+        hypothesis_status="SUCCEEDED" if hypotheses else ("FALLBACK_USED" if anomaly_run else "NOT_RUN"),
+        execution_details={"total_failed": dq_run.total_failed, "total_checked": dq_run.total_checked},
+        anomaly_decision=anomaly_run.decision if anomaly_run else None,
+        anomaly_score=anomaly_run.score if anomaly_run else None,
+        signals_count=len(signals),
+        hypotheses_count=len(hypotheses),
+    )
 
 
 @dq_router.get(
@@ -4434,28 +4432,27 @@ async def get_anomaly_signals_endpoint(
 ) -> list[AnomalySignalDTO]:
     """Fetches specialized signals for an anomaly run."""
     anomaly = require_anomaly_run_access(db, auth, id)
-    with Session(get_engine()) as session:
-        signals = session.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anomaly.id).all()
+    signals = db.query(AnomalySignalModel).filter(AnomalySignalModel.anomaly_run_id == anomaly.id).all()
 
-        result = []
-        for s in signals:
-            baseline_dict = json.loads(s.baseline) if s.baseline else None
-            refs = json.loads(s.evidence_refs) if s.evidence_refs else []
-            result.append(
-                AnomalySignalDTO(
-                    signal_id=s.id,
-                    family=s.family,
-                    target_type=s.target_type,
-                    target_id=s.target_id,
-                    score=s.score,
-                    reliability=s.reliability,
-                    observed_value=s.observed_value,
-                    baseline=baseline_dict,
-                    explanation_code=s.explanation_code,
-                    evidence_refs=refs,
-                )
+    result = []
+    for s in signals:
+        baseline_dict = json.loads(s.baseline) if s.baseline else None
+        refs = json.loads(s.evidence_refs) if s.evidence_refs else []
+        result.append(
+            AnomalySignalDTO(
+                signal_id=s.id,
+                family=s.family,
+                target_type=s.target_type,
+                target_id=s.target_id,
+                score=s.score,
+                reliability=s.reliability,
+                observed_value=s.observed_value,
+                baseline=baseline_dict,
+                explanation_code=s.explanation_code,
+                evidence_refs=refs,
             )
-        return result
+        )
+    return result
 
 
 @dq_router.get(
@@ -4469,27 +4466,26 @@ async def get_anomaly_hypotheses_endpoint(
 ) -> list[dict[str, Any]]:
     """Fetches detailed hypotheses for an anomaly run."""
     anomaly = require_anomaly_run_access(db, auth, id)
-    with Session(get_engine()) as session:
-        hyps = session.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == anomaly.id).all()
+    hyps = db.query(AnomalyHypothesisModel).filter(AnomalyHypothesisModel.anomaly_run_id == anomaly.id).all()
 
-        return [
-            {
-                "id": h.id,
-                "hypothesis_type": h.hypothesis_type,
-                "summary": h.summary,
-                "confidence": h.confidence,
-                "supporting_signal_ids": json.loads(h.supporting_signal_ids) if h.supporting_signal_ids else [],
-                "contradicting_signal_ids": json.loads(h.contradicting_signal_ids)
-                if h.contradicting_signal_ids
-                else [],
-                "evidence_refs": json.loads(h.evidence_refs) if h.evidence_refs else [],
-                "recommended_checks": json.loads(h.recommended_checks) if h.recommended_checks else [],
-                "missing_evidence": h.missing_evidence,
-                "limitations": h.limitations,
-                "fallback_used": h.fallback_used,
-            }
-            for h in hyps
-        ]
+    return [
+        {
+            "id": h.id,
+            "hypothesis_type": h.hypothesis_type,
+            "summary": h.summary,
+            "confidence": h.confidence,
+            "supporting_signal_ids": json.loads(h.supporting_signal_ids) if h.supporting_signal_ids else [],
+            "contradicting_signal_ids": json.loads(h.contradicting_signal_ids)
+            if h.contradicting_signal_ids
+            else [],
+            "evidence_refs": json.loads(h.evidence_refs) if h.evidence_refs else [],
+            "recommended_checks": json.loads(h.recommended_checks) if h.recommended_checks else [],
+            "missing_evidence": h.missing_evidence,
+            "limitations": h.limitations,
+            "fallback_used": h.fallback_used,
+        }
+        for h in hyps
+    ]
 
 
 @dq_router.post(
@@ -4503,16 +4499,15 @@ async def submit_anomaly_feedback_endpoint(
 ) -> dict[str, Any]:
     """Submits steward feedback for an anomaly run."""
     anom_run = require_anomaly_run_access(db, auth, id, manage=True)
-    with Session(get_engine()) as session:
-        feedback_id = f"fb-{uuid.uuid4().hex[:12]}"
-        fb = AnomalyFeedbackModel(
-            id=feedback_id,
-            anomaly_run_id=anom_run.id,
-            username=auth.username,
-            feedback_label=body.feedback_label,
-            comment=body.comment,
-            created_at=utc_now(),
-        )
-        session.add(fb)
-        session.commit()
-        return {"status": "SUCCESS", "feedback_id": feedback_id, "anomaly_run_id": anom_run.id}
+    feedback_id = f"fb-{uuid.uuid4().hex[:12]}"
+    fb = AnomalyFeedbackModel(
+        id=feedback_id,
+        anomaly_run_id=anom_run.id,
+        username=auth.username,
+        feedback_label=body.feedback_label,
+        comment=body.comment,
+        created_at=utc_now(),
+    )
+    db.add(fb)
+    db.commit()
+    return {"status": "SUCCESS", "feedback_id": feedback_id, "anomaly_run_id": anom_run.id}

@@ -649,6 +649,10 @@ def generate_rule_proposals_via_graph_1b(
     if len(_build_dashboard_rule_candidates(evidence)) < 2:
         raise AgentWorkflowError("The aggregate profile has fewer than two evidence-backed dashboard candidates.")
 
+    # Evidence loading starts a synchronous SQLAlchemy transaction. Release it
+    # before the async graph waits on the LLM; telemetry and UI polling need the
+    # same small, project-wide Supabase connection budget.
+    db.commit()
     raw_rules = _invoke_rule_proposal_graph(evidence, semantic_contract, workflow_run_id=workflow_run_id)
     proposals = _normalise_graph_rules(raw_rules, evidence)
     if not proposals:

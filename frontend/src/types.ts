@@ -384,6 +384,7 @@ export interface AuditLog {
 
 export interface ReviewInput {
   action: "approve" | "reject" | "edit";
+  workflow_run_id?: string;
   title?: string;
   description?: string;
   severity?: RuleProposal["severity"];
@@ -391,6 +392,7 @@ export interface ReviewInput {
 }
 
 export interface ManualRuleInput {
+  workflow_run_id?: string;
   title: string;
   description: string;
   severity: RuleProposal["severity"];
