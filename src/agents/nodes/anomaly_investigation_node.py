@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -123,9 +124,17 @@ async def anomaly_investigation_node(state: AnomalyGraphState) -> dict:
         # Tool events are dispatched by the caller's callback manager, not the
         # model's, so the handlers are attached here as well. Otherwise the trace
         # shows every model call and no tool the agent actually used.
-        result = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": prompt}]},
-            config={"callbacks": telemetry_callbacks()},
+        # DeepAgent may perform several provider/tool turns and provider retry
+        # policies can otherwise outlive the workflow's own deadline. Keep the
+        # anomaly stage bounded so it can fall back to the deterministic,
+        # citation-safe hypothesis path and still produce a report.
+        agent_timeout_seconds = min(max(settings.llm_request_timeout_seconds, 5) * 2, 60)
+        result = await asyncio.wait_for(
+            agent.ainvoke(
+                {"messages": [{"role": "user", "content": prompt}]},
+                config={"callbacks": telemetry_callbacks()},
+            ),
+            timeout=agent_timeout_seconds,
         )
         content = _message_content(result)
         if isinstance(content, AnomalyInvestigationResponse):
