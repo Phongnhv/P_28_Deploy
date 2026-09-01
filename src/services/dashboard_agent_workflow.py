@@ -37,6 +37,11 @@ SUPPORTED_RULE_TYPES = {
 }
 SAFE_OPERATORS = {"<", "<=", ">", ">=", "==", "!="}
 
+# Graph 1B has two LLM nodes. Keep its upper bound finite so a provider/network
+# stall becomes a recorded workflow failure instead of an indefinitely RUNNING
+# browser job on a Cloud Run instance.
+RULE_PROPOSAL_GRAPH_TIMEOUT_SECONDS = 240
+
 logger = logging.getLogger(__name__)
 
 RULE_POLICY_PATH = Path(__file__).resolve().parents[1] / "resources" / "rule_policies.json"
@@ -725,7 +730,9 @@ def _invoke_rule_proposal_graph(
             raise AgentWorkflowError("Graph 1B could not produce a valid structured response.")
         return result.get("proposed_rules", [])
 
-    return _run_coroutine_safely(invoke())
+    return _run_coroutine_safely(
+        asyncio.wait_for(invoke(), timeout=RULE_PROPOSAL_GRAPH_TIMEOUT_SECONDS)
+    )
 
 
 def _invoke_dashboard_proposal_graph(
