@@ -7,7 +7,9 @@ import os
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
+
+from langchain_core.language_models.chat_models import SimpleChatModel
+from langchain_core.messages import AIMessage
 
 _LOCK = threading.Lock()
 
@@ -161,10 +163,6 @@ class _Structured:
     def invoke(self, messages):
         import asyncio
         return asyncio.run(self.ainvoke(messages))
-
-
-from langchain_core.messages import AIMessage
-from langchain_core.language_models.chat_models import SimpleChatModel
 
 
 class DeterministicEvalLLM(SimpleChatModel):
