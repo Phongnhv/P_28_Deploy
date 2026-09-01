@@ -427,7 +427,10 @@ def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
         ]
     else:
         try:
-            from src.services.rule_proposer_workflow import _versioned_profile_snapshot_row, _snapshot_from_versioned_profile
+            from src.services.rule_proposer_workflow import (
+                _snapshot_from_versioned_profile,
+                _versioned_profile_snapshot_row,
+            )
             versioned_row = _versioned_profile_snapshot_row(db, dataset_id)
             if versioned_row:
                 snap = _snapshot_from_versioned_profile(versioned_row)
