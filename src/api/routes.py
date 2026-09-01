@@ -2003,6 +2003,8 @@ def run_workflow_step(
     workflow_job_type = (
         "UNDERSTAND_DATA"
         if step == "UNDERSTAND_DATA"
+        else "WORKFLOW_PROPOSE_RULES"
+        if step == "PROPOSE_RULES"
         else "PROPOSE_RULES"
         if step in {"PROPOSE_RULES", "PUBLISH_RULESET"}
         # These two stages can take longer than an HTTP request/container
@@ -2082,6 +2084,10 @@ def run_workflow_step(
         if step == "ANALYZE_REPORT":
             if run.current_step != "ANALYZE_REPORT":
                 raise WorkflowError("Complete Graph 2 before starting Graph 3 analysis.")
+            db.commit()
+            dispatch_or_mark_failed(db, job)
+            return CreateJobResponse(job_id=job.id, status="PENDING")
+        if step == "PROPOSE_RULES":
             db.commit()
             dispatch_or_mark_failed(db, job)
             return CreateJobResponse(job_id=job.id, status="PENDING")

@@ -180,6 +180,7 @@ async def main():
         "GRAPH1_EXECUTION",
         "GRAPH1_CONTINUATION",
         "ANALYSIS_GRAPH2_GRAPH3",
+        "WORKFLOW_PROPOSE_RULES",
         "WORKFLOW_RUN_CHECKS",
         "WORKFLOW_ANALYZE_REPORT",
     }
