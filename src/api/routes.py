@@ -95,6 +95,7 @@ from src.services.data_dictionary_store import (
 from src.services.demo_quota import enforce_demo_quota
 from src.services.job_dispatch import create_persisted_job, dispatch_or_mark_failed, job_checksum
 from src.services.job_runner import (
+    DEMO_TAXI_DATASET_ID,
     _supabase_source_url,
     add_audit_event,
     run_dq_checks,
@@ -2531,6 +2532,15 @@ def query_dataset_rows(
             detail={
                 "code": "VERSIONED_SOURCE_REQUIRED",
                 "message": "This dataset has no queryable versioned source artifact.",
+            },
+        )
+
+    if id != DEMO_TAXI_DATASET_ID:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "VERSIONED_SOURCE_REQUIRED",
+                "message": "Only the explicitly configured legacy demo dataset may use the taxi compatibility source.",
             },
         )
 

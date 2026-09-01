@@ -1628,6 +1628,8 @@ function App() {
           ]);
         const nextProfile = nextProfiles[nextDataset.id] ?? null;
         setProfile(nextProfile);
+        setProposals(nextProposals);
+        setRuleConfigurations(nextConfigurations);
         setQualityTrends(nextTrends);
         setActiveRun(latestRun);
         setWorkflow(latestWorkflow);

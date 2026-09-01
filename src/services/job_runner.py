@@ -589,7 +589,7 @@ def run_ingest_profile(
                     detail={"job_id": job_id, "row_count": profile_payload["row_count"], "source": "uploaded-file"},
                 )
                 return
-            if _supabase_source_url():
+            if dataset_id == DEMO_TAXI_DATASET_ID and _supabase_source_url():
                 job.progress = 35.0
                 job.message = "Profiling canonical Supabase rows..."
                 db.commit()
@@ -1280,7 +1280,7 @@ def run_dq_checks(
         try:
             dataset_id = dq_run.dataset_id
             versioned_path, versioned_temporary = _materialize_versioned_dataset_path(db, dataset_id)
-            if versioned_path is None:
+            if versioned_path is None and dataset_id == DEMO_TAXI_DATASET_ID:
                 source_url = _supabase_source_url()
                 if source_url:
                     source_engine = create_supabase_engine(source_url)
