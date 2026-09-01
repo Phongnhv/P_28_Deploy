@@ -129,14 +129,19 @@ async function requestWithTransientRetry<T>(
   retries = 2,
   delayMs = 400,
 ): Promise<T> {
+  const transientStatuses = new Set([408, 425, 429, 500, 502, 503, 504]);
   let attempt = 0;
   while (true) {
     try {
       return await request<T>(path, options);
     } catch (error) {
-      // Retry transient network dropouts / TCP connection drops when starting or warming up.
-      // HTTP error statuses (4xx, 5xx) are deliberate and not retried.
-      if (!(error instanceof TypeError) || attempt >= retries) {
+      // Cloud Run can briefly return 5xx while an instance is warming up or
+      // being replaced. Treat those responses like a dropped connection so a
+      // job poll does not fail on the first transient platform blip.
+      const retryable =
+        error instanceof TypeError ||
+        (error instanceof ApiError && transientStatuses.has(error.status));
+      if (!retryable || attempt >= retries) {
         if (error instanceof TypeError) {
           throw new ApiError(
             503,

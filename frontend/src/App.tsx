@@ -2393,17 +2393,28 @@ function App() {
     onComplete: () => Promise<void>,
     jobApi: typeof api = api,
   ) {
-    let current = await jobApi.getJob(acceptedJob.job_id);
-    setActiveJob(current);
-    for (
-      let attempt = 0;
-      attempt < 600 &&
-      !["SUCCEEDED", "FAILED", "FAILED_RETRYABLE"].includes(current.status);
-      attempt += 1
-    ) {
-      await sleep(1000);
+    let current: Job;
+    try {
       current = await jobApi.getJob(acceptedJob.job_id);
       setActiveJob(current);
+      for (
+        let attempt = 0;
+        attempt < 600 &&
+        !["SUCCEEDED", "FAILED", "FAILED_RETRYABLE"].includes(current.status);
+        attempt += 1
+      ) {
+        await sleep(1000);
+        current = await jobApi.getJob(acceptedJob.job_id);
+        setActiveJob(current);
+      }
+    } catch (error) {
+      // A polling outage does not cancel the already-accepted job. Clear the
+      // in-flight UI marker and let the retry action resume polling the same
+      // job instead of leaving every workflow button stuck indefinitely.
+      setActiveJob(null);
+      setActiveJobStartedAt(undefined);
+      setRetryAction(() => () => void pollJob(acceptedJob, onComplete, jobApi));
+      throw error;
     }
     const finalStatus = current.status as Job["status"];
     // The job is over either way, so the in-flight marker has to be cleared on
