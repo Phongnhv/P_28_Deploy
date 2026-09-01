@@ -193,16 +193,20 @@ export interface RuleProposal {
   dataset_id: string;
   workflow_run_id?: string;
   title: string;
+  title_vi?: string;
   description: string;
+  description_vi?: string;
   severity: "LOW" | "MEDIUM" | "HIGH";
   status: ProposalStatus;
   rule: RuleSpec;
   evidence_refs: string[];
   evidence_summary: string;
+  evidence_summary_vi?: string;
   confidence: number;
   model_name: string;
   rule_name?: string;
   business_rationale?: string;
+  business_rationale_vi?: string;
   proposal_basis?: ProposalBasis;
   evidence?: Record<string, unknown>;
   parameter_provenance?: ParameterProvenance[];
@@ -301,6 +305,7 @@ export interface DatasetRowsResponse {
 /** Decide every proposal of a dataset in one transaction. */
 export interface BulkProposalReviewInput {
   dataset_id: string;
+  workflow_run_id?: string;
   action: "approve" | "reject";
   /** Leave true to keep decisions the Steward already made one by one. */
   pending_only?: boolean;

@@ -663,6 +663,11 @@ def _migrate_local_workflow_columns(engine) -> None:
                 "ALTER TABLE rule_versions ALTER COLUMN rule_proposal_id TYPE VARCHAR(512)",
                 "ALTER TABLE rule_configurations ALTER COLUMN rule_id TYPE VARCHAR(512)",
                 "ALTER TABLE ruleset_versions ALTER COLUMN proposal_run_id TYPE VARCHAR(512)",
+                # Early local PostgreSQL schemas created this primary key as
+                # INTEGER, while the ORM has always persisted UUID text. Cast
+                # existing numeric history to text before Graph 2 writes its
+                # next result; PostgreSQL requires an explicit USING clause.
+                "ALTER TABLE dq_results ALTER COLUMN id TYPE VARCHAR(36) USING id::text",
                 "ALTER TABLE dq_results ALTER COLUMN rule_id TYPE VARCHAR(512)",
                 # The first Supabase schema used different physical names from
                 # the dashboard ORM.  ``create_all`` never reconciles existing

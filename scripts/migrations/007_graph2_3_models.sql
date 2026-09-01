@@ -26,6 +26,7 @@ ALTER TABLE public.dq_runs
     ADD COLUMN IF NOT EXISTS metrics_status VARCHAR(32);
 
 ALTER TABLE public.dq_results
+    ALTER COLUMN id TYPE VARCHAR(36) USING id::text,
     ADD COLUMN IF NOT EXISTS violation_rate FLOAT,
     ADD COLUMN IF NOT EXISTS duration_ms FLOAT,
     ADD COLUMN IF NOT EXISTS dbt_status VARCHAR(32),
