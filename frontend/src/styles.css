@@ -98,6 +98,24 @@ code,
   color: var(--accent);
   font-style: normal;
 }
+.brand-home-button {
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.brand-home-button:hover .brand-mark {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgb(37 99 235 / 18%);
+}
+.brand-home-button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  outline-offset: 4px;
+  border-radius: 12px;
+}
 .brand-mark {
   display: grid;
   place-items: center;

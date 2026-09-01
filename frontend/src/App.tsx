@@ -2377,6 +2377,17 @@ function App() {
     setAuthenticated(false);
   }
 
+  function goHome() {
+    setView("overview");
+    setWizardStep(1);
+    setShowAdmin(false);
+    setShowGraphs(false);
+    setStepOverlay(null);
+    setShowDataExplorer(false);
+    setDataExplorerDatasetId(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   async function pollJob(
     acceptedJob: CreateJobResponse,
     onComplete: () => Promise<void>,
@@ -2971,12 +2982,18 @@ function App() {
     <div className="app-shell wizard-shell">
       <main className="main-content full-width">
         <header className="topbar">
-          <div className="brand-lockup">
+          <button
+            type="button"
+            className="brand-lockup brand-home-button"
+            onClick={goHome}
+            aria-label={language === "vi" ? "Về trang chủ" : "Go to home"}
+            title={language === "vi" ? "Về trang chủ" : "Go to home"}
+          >
             <span className="brand-mark">RP</span>
             <span>
               RidePulse <em>DQ</em>
             </span>
-          </div>
+          </button>
           <div className="topbar-actions">
             <span className="role-badge">{role}</span>
             <LanguageToggle />
