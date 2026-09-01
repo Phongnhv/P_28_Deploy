@@ -1993,11 +1993,22 @@ def run_workflow_step(
     collision = verify_idempotency(db, idempotency_key)
     if collision:
         return CreateJobResponse(job_id=collision, status="SUCCEEDED")
+    workflow_job_type = (
+        "UNDERSTAND_DATA"
+        if step == "UNDERSTAND_DATA"
+        else "PROPOSE_RULES"
+        if step in {"PROPOSE_RULES", "PUBLISH_RULESET"}
+        else "RUN_DQ"
+        if step == "RUN_CHECKS"
+        else "ANALYSIS_GRAPH2_GRAPH3"
+        if step == "ANALYZE_REPORT"
+        else "PROPOSE_RULES"
+    )
     active_stage_job = (
         db.query(JobModel)
         .filter(
             JobModel.correlation_id == run.id,
-            JobModel.type == ("UNDERSTAND_DATA" if step == "UNDERSTAND_DATA" else "PROPOSE_RULES"),
+            JobModel.type == workflow_job_type,
             JobModel.status.in_(["PENDING", "RUNNING"]),
         )
         .first()
@@ -2009,11 +2020,7 @@ def run_workflow_step(
         )
     job = JobModel(
         id=str(uuid.uuid4()),
-        type="UNDERSTAND_DATA"
-        if step == "UNDERSTAND_DATA"
-        else "RUN_DQ"
-        if step in {"RUN_CHECKS", "ANALYZE_REPORT"}
-        else "PROPOSE_RULES",
+        type=workflow_job_type,
         status="RUNNING",
         progress=10.0,
         message=f"Running {step}",

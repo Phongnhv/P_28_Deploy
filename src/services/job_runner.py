@@ -1249,6 +1249,7 @@ def run_dq_checks(
     *,
     trigger_anomaly: bool = True,
     finalize_job: bool = True,
+    workflow_run_id: str | None = None,
 ):
     """
     Dashboard execution adapter.
@@ -1338,7 +1339,11 @@ def run_dq_checks(
             # Report the stages this executor really performs, so the Graph 2
             # panel reflects the run instead of showing five dbt nodes that were
             # never part of this path.
-            start_graph_run(dataset_id=dataset_id, dq_run_id=run_id)
+            start_graph_run(
+                workflow_run_id=workflow_run_id,
+                dataset_id=dataset_id,
+                dq_run_id=run_id,
+            )
             with record_stage(
                 "G2_DIRECT", "compile_rules", "DETERMINISTIC", {"rules": len(rule_versions)}
             ) as compile_summary:

@@ -13,7 +13,7 @@
  * Màu sắc lấy qua `var(--…)` khai báo trong `styles.css`; mã hex viết thẳng sẽ
  * không đổi theo chế độ tối.
  */
-import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, isMockMode, workflowApi } from "./api";
 import { ApiError, clearApiSession } from "./api/client";
 import ThemeControl from "./ThemeControl";
@@ -463,6 +463,18 @@ const jobGraphKey: Partial<Record<JobType, GraphKey>> = {
 
 function workflowPhaseIndex(step: WorkflowStepKey) {
   return workflowPhases.findIndex((phase) => phase.steps.includes(step));
+}
+
+/**
+ * The unscoped proposal endpoint is still used by the old direct proposer
+ * screen. Once a durable workflow exists, its review queue must contain only
+ * proposals created by that workflow; otherwise legacy rows with a null
+ * workflow_run_id appear as if Understand had already generated them.
+ */
+function proposalsForWorkflow(proposals: RuleProposal[], workflowRunId?: string) {
+  return workflowRunId
+    ? proposals.filter((proposal) => proposal.workflow_run_id === workflowRunId)
+    : proposals;
 }
 
 /**
@@ -1249,6 +1261,7 @@ function WorkflowPage({
   const visibleWorkflowSteps = workflow.steps;
   const currentPhaseIndex = Math.max(0, workflowPhaseIndex(workflow.current_step));
   const publishPhase = workflowPhases.find((p) => p.steps.includes("PUBLISH_RULESET")) ?? workflowPhases[workflowPhases.length - 1];
+  const executionPhaseIndex = workflowPhases.findIndex((p) => p.steps.includes("PUBLISH_RULESET"));
   const executionSteps = (publishPhase?.steps ?? [])
     .map((key) => workflow.steps.find((step) => step.key === key))
     .filter((step): step is WorkflowStep => Boolean(step));
@@ -1376,7 +1389,7 @@ function WorkflowPage({
             />
           )}
           {graphPanel}
-          {currentPhaseIndex === 3 ? (
+          {currentPhaseIndex === executionPhaseIndex ? (
             <div className="execution-mini-steps" aria-label="Publish and monitor mini-steps">
               {executionSteps.map((step) => {
                 const artifact = workflowArtifactForStep(workflow, artifacts, step.key);
@@ -1518,6 +1531,10 @@ function App() {
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(
     () => sessionStorage.getItem("ridepulse.dataset") ?? null,
   );
+  // Incremented synchronously whenever the steward changes the input. Long
+  // running jobs use it to avoid writing results for an older selection into
+  // the newly selected dataset's panels.
+  const selectionGeneration = useRef(0);
   const [profile, setProfile] = useState<DatasetProfile | null>(null);
   const [datasetProfiles, setDatasetProfiles] = useState<
     Record<string, DatasetProfile>
@@ -1576,8 +1593,18 @@ function App() {
   const workflowNodeRuns = useMemo(() => (workflow ? nodeRuns.filter((run) => run.workflow_run_id === workflow.id) : []), [nodeRuns, workflow]);
   const [graphLoading, setGraphLoading] = useState(false);
 
+  // Keep this callback stable. Step1DataPreparation uses it as an effect
+  // dependency; an inline prop here would refetch the same dictionary on
+  // every App re-render caused by a selection or toast update.
+  const loadDataDictionary = useCallback(
+    (datasetId: string) => api.getDataDictionary(datasetId),
+    [],
+  );
+
   const dataset = useMemo(
-    () => datasets.find((item) => item.id === selectedDatasetId) ?? datasets[0],
+    () => selectedDatasetId
+      ? datasets.find((item) => item.id === selectedDatasetId)
+      : datasets[0],
     [datasets, selectedDatasetId],
   );
   const approvedRules = useMemo(
@@ -1618,14 +1645,19 @@ function App() {
       if (nextDataset)
         sessionStorage.setItem("ridepulse.dataset", nextDataset.id);
       if (nextDataset?.status === "PROFILE_READY") {
-        const [nextProposals, nextConfigurations, latestRun, nextTrends, latestWorkflow] =
+        const [nextConfigurations, latestRun, nextTrends, latestWorkflow] =
           await Promise.all([
-            api.listProposals(nextDataset.id),
             api.listRuleConfigurations(nextDataset.id),
             api.getLatestDqRun(nextDataset.id),
             api.getQualityTrends(nextDataset.id),
             workflowApi.getLatestWorkflow(nextDataset.id),
           ]);
+        const nextProposals = latestWorkflow
+          ? proposalsForWorkflow(
+              await api.listProposals(nextDataset.id, latestWorkflow.id),
+              latestWorkflow.id,
+            )
+          : [];
         const nextProfile = nextProfiles[nextDataset.id] ?? null;
         setProfile(nextProfile);
         setProposals(nextProposals);
@@ -1705,7 +1737,11 @@ function App() {
 
   const activeJobNodeProgress = useMemo(() => {
     if (!activeJob) return undefined;
-    const graphKey = jobGraphKey[activeJob.type];
+    const configuredGraphKey = jobGraphKey[activeJob.type];
+    const graphKey =
+      activeJob.type === "RUN_DQ" && nodeRuns.some((run) => run.graph_key === "G2_DIRECT")
+        ? "G2_DIRECT"
+        : configuredGraphKey;
     if (!graphKey) return undefined;
     const relevant = nodeRuns.filter((run) => run.graph_key === graphKey);
     if (relevant.length === 0) return undefined;
@@ -1738,6 +1774,13 @@ function App() {
       startedAt: activeJobStartedAt ?? nodeStartedAt,
     };
   }, [activeJob, activeJobStartedAt, nodeRuns, graphCatalog, language]);
+  const graph3Step = workflow?.steps.find((step) => step.key === "ANALYZE_REPORT");
+  const graph3CanRun = Boolean(
+    workflow &&
+    workflow.current_step === "ANALYZE_REPORT" &&
+    graph3Step &&
+    ["READY", "FAILED", "COMPLETED"].includes(graph3Step.status),
+  );
   const loadStewardReport = useCallback((runId: string) => api.getStewardReport(runId), []);
 
   // Topology never changes at runtime, so fetch it once per session.
@@ -1758,9 +1801,12 @@ function App() {
   }, [authenticated, graphCatalog]);
 
   useEffect(() => {
-    if (!authenticated || !selectedDatasetId) return;
+    if (!authenticated || !selectedDatasetId || !workflow) {
+      setNodeRuns([]);
+      return;
+    }
     void refreshNodeRuns();
-  }, [authenticated, selectedDatasetId, refreshNodeRuns]);
+  }, [authenticated, selectedDatasetId, workflow, refreshNodeRuns]);
 
   // While a node is mid-flight the graph view is the one place a user watches
   // for progress, so poll until nothing is running any more.
@@ -1788,15 +1834,27 @@ function App() {
     }
   }, [canAdmin, dataset]);
 
-  async function selectDataset(datasetId: string) {
+  function selectDataset(datasetId: string) {
+    const chosen = datasets.find((item) => item.id === datasetId);
+    if (!chosen || datasetId === selectedDatasetId) return;
+
+    // Selection is intentionally local. Running refreshWorkspace here caused
+    // every click to fan out into all profiles, audit logs, rule history and
+    // workflow queries; rapid clicks then raced and briefly showed stale data.
+    selectionGeneration.current += 1;
     sessionStorage.setItem("ridepulse.dataset", datasetId);
     setSelectedDatasetId(datasetId);
+    setProfile(datasetProfiles[datasetId] ?? null);
+    setProposals([]);
+    setRuleConfigurations([]);
+    setActiveRun(null);
+    setDqResults([]);
+    setDqAnomalies([]);
+    setQualityTrends([]);
+    setNodeRuns([]);
     setWorkflow(null);
     setWorkflowArtifacts([]);
-    await refreshWorkspace();
-    // Selecting only selects. Confirm it so the absence of any analysis running
-    // reads as "done, your move" rather than as the click not registering.
-    const chosen = datasets.find((item) => item.id === datasetId);
+    setRuleQueueOpen(false);
     setToast(
       language === "vi"
         ? `Đã chọn "${chosen?.name ?? datasetId}". Chọn Profile dataset để tiếp tục.`
@@ -1906,19 +1964,21 @@ function App() {
 
   async function startAnalysis() {
     if (!dataset) return;
+    const datasetId = dataset.id;
+    const generationAtStart = selectionGeneration.current;
     setError("");
     setRetryAction(null);
     try {
-      const job = await api.startIngestion(dataset.id, crypto.randomUUID());
+      const job = await api.startIngestion(datasetId, crypto.randomUUID());
       await pollJob(job, async () => {
         setDatasets(await api.listDatasets());
-        const nextProfile = await api.getProfile(dataset.id);
-        setProfile(nextProfile);
+        const nextProfile = await api.getProfile(datasetId);
         if (nextProfile)
           setDatasetProfiles((current) => ({
             ...current,
-            [dataset.id]: nextProfile,
+            [datasetId]: nextProfile,
           }));
+        if (selectionGeneration.current === generationAtStart) setProfile(nextProfile);
       });
     } catch (err) {
       setError(getErrorMessage(err, language === "vi" ? "Không thể phân tích hồ sơ dữ liệu." : "Unable to start analysis.", language));
@@ -1988,11 +2048,19 @@ function App() {
   }
 
   async function reviewProposal(id: string, action: "approve" | "reject") {
+    if (!dataset) return;
+    const datasetId = dataset.id;
+    const workflowId = workflow?.id;
     setError("");
     try {
       await api.reviewProposal(id, { action });
-      setProposals(await api.listProposals(dataset.id, workflow?.id));
-      setRuleConfigurations(await api.listRuleConfigurations(dataset.id));
+      setProposals(
+        proposalsForWorkflow(
+          await api.listProposals(datasetId, workflowId),
+          workflowId,
+        ),
+      );
+      setRuleConfigurations(await api.listRuleConfigurations(datasetId));
       setAuditLogs(await api.listAuditLogs());
       setToast(
         action === "approve"
@@ -2007,11 +2075,18 @@ function App() {
 
   async function deleteProposal(id: string) {
     if (!dataset) return;
+    const datasetId = dataset.id;
+    const workflowId = workflow?.id;
     setError("");
     try {
       await api.deleteProposal(id);
-      setProposals(await api.listProposals(dataset.id, workflow?.id));
-      setRuleConfigurations(await api.listRuleConfigurations(dataset.id));
+      setProposals(
+        proposalsForWorkflow(
+          await api.listProposals(datasetId, workflowId),
+          workflowId,
+        ),
+      );
+      setRuleConfigurations(await api.listRuleConfigurations(datasetId));
       setAuditLogs(await api.listAuditLogs());
       setToast("Proposal removed. Audit history was retained.");
       setError("");
@@ -2087,12 +2162,20 @@ function App() {
     rule: RuleSpec;
   }) {
     if (!editingProposal) return;
+    if (!dataset) return;
+    const datasetId = dataset.id;
+    const workflowId = workflow?.id;
     try {
       await api.reviewProposal(editingProposal.id, {
         action: "edit",
         ...input,
       });
-      setProposals(await api.listProposals(dataset.id, workflow?.id));
+      setProposals(
+        proposalsForWorkflow(
+          await api.listProposals(datasetId, workflowId),
+          workflowId,
+        ),
+      );
       setAuditLogs(await api.listAuditLogs());
       setEditingProposal(null);
       setToast("Proposal edited and marked ready for approval.");
@@ -2103,9 +2186,16 @@ function App() {
 
   async function createManualRule(input: ManualRuleInput) {
     if (!dataset) return;
+    const datasetId = dataset.id;
+    const workflowId = workflow?.id;
     try {
-      await api.createManualRule(dataset.id, input);
-      setProposals(await api.listProposals(dataset.id, workflow?.id));
+      await api.createManualRule(datasetId, input);
+      setProposals(
+        proposalsForWorkflow(
+          await api.listProposals(datasetId, workflowId),
+          workflowId,
+        ),
+      );
       setAuditLogs(await api.listAuditLogs());
       setManualRuleOpen(false);
       setToast("Manual rule created and queued for approval.");
@@ -2115,57 +2205,30 @@ function App() {
   }
 
   async function runApprovedRules() {
-    try {
-      // Pausing a rule means "do not execute this one". The endpoint refuses the
-      // whole request if any named rule is paused, so sending them all made one
-      // paused rule fail the entire run instead of being skipped.
-      const pausedIds = new Set(
-        ruleConfigurations
-          .filter((configuration) => configuration.execution_status === "PAUSED")
-          .map((configuration) => configuration.rule_id),
+    // The wizard always uses the durable workflow. Calling the old
+    // dataset-wide runner here would reintroduce unscoped/legacy approvals.
+    if (!workflow) {
+      setError(
+        language === "vi"
+          ? "Hãy bắt đầu workflow và publish bộ luật trước khi chạy Graph 2."
+          : "Start the workflow and publish its ruleset before running Graph 2.",
       );
-      const runnable = approvedRules.filter(
-        (rule) => !pausedIds.has(rule.id) && !pausedIds.has(rule.id.replace(/^rv_/, "")),
+      return;
+    }
+    if (workflow.current_step === "RUN_CHECKS") {
+      await startWorkflowStep("RUN_CHECKS");
+    } else if (workflow.current_step === "ANALYZE_REPORT") {
+      setToast(
+        language === "vi"
+          ? "Graph 2 đã hoàn tất. Sang bước 5 để chạy Graph 3 analysis."
+          : "Graph 2 is complete. Go to step 5 to start Graph 3 analysis.",
       );
-      const skipped = approvedRules.length - runnable.length;
-      if (runnable.length === 0) {
-        setError(
-          language === "vi"
-            ? "Mọi luật đã duyệt đang tạm dừng. Bật lại ít nhất một luật ở Execution settings trước khi chạy."
-            : "Every approved rule is paused. Resume at least one in Execution settings before running.",
-        );
-        return;
-      }
-      if (skipped > 0) {
-        setToast(
-          language === "vi"
-            ? `Bỏ qua ${skipped} luật đang tạm dừng.`
-            : `Skipped ${skipped} paused rule${skipped === 1 ? "" : "s"}.`,
-        );
-      }
-      const queuedRun = await api.startDqRun(
-        runnable.map((rule) => rule.id),
-        crypto.randomUUID(),
+    } else {
+      setError(
+        language === "vi"
+          ? "Hãy publish bộ luật ở workflow trước khi chạy Graph 2."
+          : "Publish the workflow ruleset before starting Graph 2.",
       );
-      setActiveRun(await api.getDqRun(queuedRun.run_id));
-      await pollJob(
-        { job_id: queuedRun.job_id, status: queuedRun.status },
-        async () => {
-          const completed = await api.getDqRun(queuedRun.run_id);
-          setActiveRun(completed);
-          const [nextResults, nextAnomalies] = await Promise.all([
-            api.getDqResults(queuedRun.run_id),
-            api.getDqAnomalies(queuedRun.run_id),
-          ]);
-          setDqResults(nextResults);
-          setDqAnomalies(nextAnomalies);
-          if (dataset) setQualityTrends(await api.getQualityTrends(dataset.id));
-          setAuditLogs(await api.listAuditLogs());
-          setView("runs");
-        },
-      );
-    } catch (err) {
-      setError(getErrorMessage(err, "Unable to start DQ run."));
     }
   }
 
@@ -2217,7 +2280,12 @@ function App() {
         setWorkflowArtifacts(
           await workflowApi.listWorkflowArtifacts(currentWorkflow.id),
         );
-        setProposals(await api.listProposals(dataset.id, currentWorkflow.id));
+        setProposals(
+          proposalsForWorkflow(
+            await api.listProposals(dataset.id, currentWorkflow.id),
+            currentWorkflow.id,
+          ),
+        );
       }
       const queuedJob = await workflowApi.runWorkflowStep(
         currentWorkflow.id,
@@ -2230,8 +2298,24 @@ function App() {
           await refreshNodeRuns();
           setProfile(await api.getProfile(dataset.id));
           setProposals(
-            await api.listProposals(dataset.id, currentWorkflow!.id),
+            proposalsForWorkflow(
+              await api.listProposals(dataset.id, currentWorkflow!.id),
+              currentWorkflow!.id,
+            ),
           );
+          if (step === "RUN_CHECKS" || step === "ANALYZE_REPORT") {
+            const latestRun = await api.getLatestDqRun(dataset.id);
+            setActiveRun(latestRun);
+            if (latestRun) {
+              const [nextResults, nextAnomalies] = await Promise.all([
+                api.getDqResults(latestRun.id),
+                api.getDqAnomalies(latestRun.id),
+              ]);
+              setDqResults(nextResults);
+              setDqAnomalies(nextAnomalies);
+              setQualityTrends(await api.getQualityTrends(dataset.id));
+            }
+          }
           setAuditLogs(await api.listAuditLogs());
         },
         workflowApi,
@@ -2599,8 +2683,9 @@ function App() {
                       ? (language === "vi" ? "Đang nạp và phân tích hồ sơ dữ liệu…" : "Building dataset profile")
                       : activeJob.type === "PROPOSE_RULES"
                         ? (language === "vi" ? "Đang sinh đề xuất quy tắc…" : "Generating rule proposals")
-                        : activeJob.type === "RUN_DQ" &&
-                          /ANALYZE_REPORT|analysis report/i.test(activeJob.message)
+                        : (activeJob.type === "ANALYSIS_GRAPH2_GRAPH3" ||
+                          (activeJob.type === "RUN_DQ" &&
+                            /ANALYZE_REPORT|analysis report/i.test(activeJob.message)))
                           ? (language === "vi" ? "Đang phân tích và tạo báo cáo…" : "Analyzing results and building report")
                           : (language === "vi" ? "Đang chạy kiểm thử quy tắc…" : "Running approved checks")
                   }
@@ -2667,7 +2752,7 @@ function App() {
                     setShowDataExplorer(true);
                   }}
                   onProfileDataset={() => void startAnalysis()}
-                  loadDictionary={(datasetId) => api.getDataDictionary(datasetId)}
+                  loadDictionary={loadDataDictionary}
                   uploadDictionary={(datasetId, file) => api.uploadDataDictionary(datasetId, file)}
                   deleteDictionary={(datasetId) => api.deleteDataDictionary(datasetId)}
                   profilePanel={
@@ -2790,11 +2875,9 @@ function App() {
                       />
                     }
                   />
-                  {/* Hàng đợi duyệt trước đây chỉ hiện khi workflow đi đúng tới
-                      chặng REVIEW_RULES. Dataset có thể đã có sẵn đề xuất từ lần
-                      chạy trước mà workflow lại chưa khởi tạo — khi đó người dùng
-                      mở bước 3 và thấy màn hình trống, dù luật vẫn nằm trong DB.
-                      Có đề xuất thì hiện, không phụ thuộc trạng thái workflow. */}
+                  {/* Only the active workflow's proposals belong in this queue.
+                      Legacy/unscoped rows remain available to the old direct
+                      proposer path, but must not look like Graph 1B output. */}
                   {/* Generating rules is its own decision, so it gets its own
                       control. The queue below stays closed until it is asked
                       for: opening step 3 straight onto forty rows buried the
@@ -2879,22 +2962,6 @@ function App() {
                               ? `${proposals.length} đề xuất cho ${dataset?.name ?? "bộ dữ liệu này"}`
                               : `${proposals.length} proposals for ${dataset?.name ?? "this dataset"}`}
                           </p>
-                        </div>
-                        <div className="rule-gate-actions">
-                          <button
-                            className="button ghost danger"
-                            disabled={!canOperate || bulkReviewBusy}
-                            onClick={() => void bulkReviewProposals("reject")}
-                          >
-                            {language === "vi" ? "Từ chối tất cả" : "Reject all"}
-                          </button>
-                          <button
-                            className="button primary"
-                            disabled={!canOperate || bulkReviewBusy}
-                            onClick={() => void bulkReviewProposals("approve")}
-                          >
-                            {language === "vi" ? "Duyệt tất cả" : "Approve all"}
-                          </button>
                         </div>
                       </header>
                       <ReviewSummaryPanel proposals={proposals} />
@@ -3008,7 +3075,12 @@ function App() {
                       </>
                     }
                   />
-                  {dataset && <ActiveRulesPanel datasetId={dataset.id} />}
+                  {dataset && (
+                    <ActiveRulesPanel
+                      datasetId={dataset.id}
+                      refreshKey={workflowArtifacts.length}
+                    />
+                  )}
                   {/* The audit history used to be pasted onto the bottom of this
                       step, pushing the results it was meant to annotate off the
                       screen. It now lives behind the topbar log button, which
@@ -3025,9 +3097,29 @@ function App() {
                       <h1>{t("wizard.step5Title")}</h1>
                       <p>{t("wizard.step5Desc")}</p>
                     </div>
-                    <button className="button secondary" onClick={() => setWizardStep(1)}>
-                      {t("wizard.startNewRun")}
-                    </button>
+                    <div className="run-header-actions">
+                      <button
+                        className="button primary"
+                        disabled={!graph3CanRun || Boolean(activeJob) || workflowActionBusy || !canOperate}
+                        title={
+                          !graph3CanRun
+                            ? language === "vi"
+                              ? "Hoàn tất Graph 2 trước khi chạy Graph 3."
+                              : "Complete Graph 2 before starting Graph 3."
+                            : undefined
+                        }
+                        onClick={() => void startWorkflowStep("ANALYZE_REPORT")}
+                      >
+                        {activeJob
+                          ? language === "vi" ? "Đang chạy Graph 3…" : "Running Graph 3…"
+                          : graph3Step?.status === "COMPLETED"
+                            ? language === "vi" ? "Chạy lại Graph 3 analysis →" : "Run Graph 3 analysis again →"
+                            : language === "vi" ? "Chạy Graph 3 analysis →" : "Run Graph 3 analysis →"}
+                      </button>
+                      <button className="button secondary" onClick={() => setWizardStep(1)}>
+                        {t("wizard.startNewRun")}
+                      </button>
+                    </div>
                   </div>
                   <GraphStagePanel
                     catalog={graphCatalog}
@@ -3037,11 +3129,11 @@ function App() {
                     loadNodeDetail={loadNodeDetail}
                     emptyNote={
                       language === "vi"
-                        ? "Các node này chạy trong luồng phân tích Graph 2 + Graph 3. Số liệu bên dưới đến từ bộ phát hiện bất thường chạy kèm nút \"Chạy luật đã duyệt\" ở bước 4, nên các node ở đây chưa được kích hoạt."
-                        : "These nodes run in the Graph 2 + Graph 3 analysis workflow. The figures below come from the anomaly detection that runs alongside \"Run approved rules\" in step 4, so nothing here has been invoked yet."
+                        ? "Graph 3 chỉ bắt đầu khi bạn bấm nút chạy ở trên sau khi Graph 2 hoàn tất. Các node bên dưới phản ánh đúng trạng thái phân tích hiện tại."
+                        : "Graph 3 starts when you use the button above after Graph 2 completes. The nodes below reflect the current analysis state."
                     }
                   />
-                  {activeRun ? (
+                  {activeRun && workflowArtifacts.some((artifact) => artifact.type === "ANOMALY_REPORT") ? (
                     <>
                       <div style={{ marginTop: "24px" }}>
                         <StewardReportPanel
@@ -3072,10 +3164,9 @@ function App() {
                         </div>
                       </div>
                       <p className="investigation-note">
-                        Chạy bộ luật đã duyệt ở bước 4 để agent phân tích kết quả.
-                        Sau khi chạy, khu vực này hiện các giả thuyết nguyên nhân
-                        gốc kèm bằng chứng ủng hộ, bằng chứng phản bác và những
-                        kiểm tra được khuyến nghị.
+                        Graph 2 đã có kết quả. Bấm “Chạy Graph 3 analysis” ở phía
+                        trên để agent phân tích bất thường và tạo báo cáo nguyên
+                        nhân gốc.
                       </p>
                     </section>
                   )}
@@ -4161,7 +4252,7 @@ function RuleConfigurationControl({
  * bước 3 mà không có chỗ nào xác nhận luật nào đã thực sự được xuất bản và đang
  * chạy. Đề xuất và luật đang hoạt động là hai thứ khác nhau.
  */
-function ActiveRulesPanel({ datasetId }: { datasetId: string }) {
+function ActiveRulesPanel({ datasetId, refreshKey = 0 }: { datasetId: string; refreshKey?: number }) {
   const [rules, setRules] = useState<ActiveRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -4189,7 +4280,7 @@ function ActiveRulesPanel({ datasetId }: { datasetId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [datasetId]);
+  }, [datasetId, refreshKey]);
 
   const active = rules.filter((rule) => rule.status === "ACTIVE");
 

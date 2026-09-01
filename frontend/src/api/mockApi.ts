@@ -14,6 +14,7 @@ import type {
   QualityTrendPoint,
   DqRun,
   DqRunCreateResponse,
+  ActiveRule,
   Job,
   ManualRuleInput,
   ReviewInput,
@@ -160,6 +161,7 @@ let jobs: Job[] = [];
 let runs: DqRun[] = [];
 let results = new Map<string, DqResult[]>();
 let anomalies = new Map<string, DqAnomaly[]>();
+let activeRules: ActiveRule[] = [];
 let auditLogs: AuditLog[] = [];
 let configurations: RuleConfiguration[] = [];
 let currentUsername = "";
@@ -217,7 +219,9 @@ async function finishJob(jobId: string, type: Job["type"]) {
     ? ["Validating manifest…", "Loading immutable raw rows…", "Running dbt build…", "Persisting aggregate profile…"]
     : type === "PROPOSE_RULES"
       ? ["Preparing allow-listed evidence…", "Calling local proposal adapter…", "Validating typed proposals…", "Persisting proposals…"]
-      : ["Claiming approved rule set…", "Compiling read-only checks…", "Executing bounded queries…", "Persisting results…"];
+      : type === "ANALYSIS_GRAPH2_GRAPH3"
+        ? ["Loading Graph 2 evidence…", "Detecting anomalies…", "Investigating root causes…", "Writing steward report…"]
+        : ["Claiming approved rule set…", "Compiling read-only checks…", "Executing bounded queries…", "Persisting results…"];
 
   for (let index = 0; index < progressMessages.length; index += 1) {
     await wait(420);
@@ -315,6 +319,20 @@ function completeWorkflowStep(workflowId: string, step: WorkflowStepKey) {
       rules: proposals.map((proposal) => ({ id: proposal.id, title: proposal.title, evidence: proposal.evidence_refs, confidence: proposal.confidence })),
     }, "DRAFT");
   } else if (step === "PUBLISH_RULESET") {
+    activeRules = proposals
+      .filter((proposal) => proposal.workflow_run_id === workflowId && proposal.status === "APPROVED")
+      .map((proposal) => ({
+        rule_id: proposal.id,
+        dataset_id: proposal.dataset_id,
+        table_name: proposal.dataset_id,
+        column: "column" in proposal.rule ? proposal.rule.column : null,
+        rule_type: proposal.rule.type,
+        parameters: { ...proposal.rule },
+        severity: proposal.severity,
+        dimension: "VALIDITY",
+        rule_description: proposal.description,
+        status: "ACTIVE",
+      }));
     generatedArtifact = createArtifact(workflow, "PUBLISHED_RULESET", "DATA_RULE_AGENT", {
       ruleset_id: `ruleset-${Date.now()}`,
       ruleset_hash: "mock-published-ruleset",
@@ -322,18 +340,38 @@ function completeWorkflowStep(workflowId: string, step: WorkflowStepKey) {
     }, "APPROVED");
   } else if (step === "RUN_CHECKS") {
     const approved = proposals.filter((proposal) => proposal.status === "APPROVED");
+    const runId = `run-${Date.now()}`;
+    const totalChecked = approved.length * mockRows.length;
+    const totalFailed = approved.reduce((count, proposal) => count + (proposal.rule.type === "numeric_range" ? 7 : 0), 0);
+    runs = [
+      ...runs,
+      {
+        id: runId,
+        job_id: `job-${runId}`,
+        dataset_id: datasetId,
+        rule_ids: approved.map((proposal) => proposal.id),
+        status: "SUCCEEDED",
+        total_checked: totalChecked,
+        total_failed: totalFailed,
+        created_at: now(),
+        completed_at: now(),
+      },
+    ];
     generatedArtifact = createArtifact(workflow, "DQ_RUN", "DATA_RULE_AGENT", {
-      run_id: `run-${Date.now()}`,
-      total_checked: approved.length * mockRows.length,
-      total_failed: approved.reduce((count, proposal) => count + (proposal.rule.type === "numeric_range" ? 7 : 0), 0),
+      run_id: runId,
+      total_checked: totalChecked,
+      total_failed: totalFailed,
       results: approved.map((proposal) => ({ rule_id: proposal.id, title: proposal.title, status: "PASS", failed_count: 0 })),
     });
     advanceWorkflow(workflow, step);
-    createArtifact(workflow, "ANOMALY_REPORT", "DATA_RULE_AGENT", {
+    workflowRuns = workflowRuns.map((item) => item.id === workflowId ? workflow : item);
+    return;
+  } else if (step === "ANALYZE_REPORT") {
+    generatedArtifact = createArtifact(workflow, "ANOMALY_REPORT", "DATA_RULE_AGENT", {
       decision: "WATCH", confidence: 0.74,
       hypotheses: [{ summary: "The mock run found a bounded set of profile-consistent violations." }],
     }, "APPROVED");
-    advanceWorkflow(workflow, "ANALYZE_REPORT", false);
+    advanceWorkflow(workflow, step);
     workflowRuns = workflowRuns.map((item) => item.id === workflowId ? workflow : item);
     return;
   } else if (step === "PROPOSE_CODE") {
@@ -408,13 +446,17 @@ export const mockApi: ApiClient = {
     void finishJob(job.id, job.type).then(() => addAudit("PROPOSALS_CREATED", "dataset", datasetId, "Generated typed proposals from aggregate evidence."));
     return { job_id: job.id, status: "PENDING" } satisfies CreateJobResponse;
   },
-  async listProposals(id, _workflowRunId?) {
+  async listProposals(id, workflowRunId?) {
     await wait(200);
-    return id === datasetId ? proposals : [];
+    const available = id === datasetId ? proposals : [];
+    return workflowRunId
+      ? available.filter((proposal) => proposal.workflow_run_id === workflowRunId)
+      : available;
   },
   async createManualRule(id, input: ManualRuleInput) {
     if (id !== datasetId) throw new Error("Dataset not found.");
-    const proposal: RuleProposal = { id: `manual-${Date.now()}`, dataset_id: datasetId, ...input, status: "PROPOSED", source: "MANUAL", evidence_refs: [], evidence_summary: "Manually authored by the Data Steward; no agent evidence attached.", confidence: 1, model_name: "manual", created_at: now(), updated_at: now() };
+    const activeWorkflow = [...workflowRuns].reverse().find((item) => item.dataset_id === id && item.current_step === "REVIEW_RULES");
+    const proposal: RuleProposal = { id: `manual-${Date.now()}`, dataset_id: datasetId, workflow_run_id: activeWorkflow?.id, ...input, status: "PROPOSED", source: "MANUAL", evidence_refs: [], evidence_summary: "Manually authored by the Data Steward; no agent evidence attached.", confidence: 1, model_name: "manual", created_at: now(), updated_at: now() };
     proposals = [...proposals, proposal];
     addAudit("MANUAL_RULE_CREATED", "rule_proposal", proposal.id, `Created manual rule “${proposal.title}”.`);
     return proposal;
@@ -502,7 +544,7 @@ export const mockApi: ApiClient = {
   // trạng thái "chưa có", thay vì bịa ra giả thuyết trông như thật.
   async getActiveRules() {
     await wait(80);
-    return [];
+    return structuredClone(activeRules.filter((rule) => rule.dataset_id === datasetId));
   },
   async getAnomalySignals() {
     await wait(80);
@@ -644,10 +686,26 @@ export const mockApi: ApiClient = {
     if (!workflow) throw new Error("Workflow run not found.");
     if (workflow.current_step !== step) throw new Error(`Step ${step} is not ready. Complete ${workflow.current_step} first.`);
     const current = workflow.steps.find((item) => item.key === step);
-    if (!current || !["READY", "FAILED"].includes(current.status)) throw new Error("This workflow step is waiting for review.");
+    if (!current || !["READY", "FAILED", ...(step === "ANALYZE_REPORT" ? ["COMPLETED"] : [])].includes(current.status)) throw new Error("This workflow step is waiting for review.");
     clearTemporaryDownstreamSessions(workflow, step);
+    if (step === "PROPOSE_RULES") {
+      // The fixture starts with a deterministic proposal set. Attach that set
+      // to the durable mock workflow so the real-client scoping rule is also
+      // exercised when the local adapter is enabled.
+      proposals = proposals.map((proposal) => ({ ...proposal, workflow_run_id: id }));
+    }
     workflow.steps = workflow.steps.map((item) => item.key === step ? { ...item, status: "RUNNING", started_at: now() } : item);
-    const job = makeJob(step === "UPLOAD_PROFILE" ? "INGEST_PROFILE" : step === "PROPOSE_RULES" ? "PROPOSE_RULES" : "RUN_DQ");
+    const job = makeJob(
+      step === "UPLOAD_PROFILE"
+        ? "INGEST_PROFILE"
+        : step === "UNDERSTAND_DATA"
+          ? "UNDERSTAND_DATA"
+          : step === "PROPOSE_RULES"
+            ? "PROPOSE_RULES"
+            : step === "ANALYZE_REPORT"
+              ? "ANALYSIS_GRAPH2_GRAPH3"
+              : "RUN_DQ",
+    );
     void finishJob(job.id, job.type).then(() => completeWorkflowStep(id, step));
     return { job_id: job.id, status: "PENDING" } satisfies CreateJobResponse;
   },

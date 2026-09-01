@@ -608,6 +608,47 @@ def _publish_ruleset(db: Session, run: WorkflowRunModel) -> None:
         {"rule_version_id": item.id, "proposal_id": item.rule_proposal_id, "rule_spec": json.loads(item.rule_spec)}
         for item in versions
     ]
+    # The durable workflow has its own dataset-scoped source of truth. Keep it
+    # separate from the legacy proposal publisher, which reads unscoped rows
+    # and was the reason the UI could show NYC Taxi history for another run.
+    from src.services.rule_store import ActiveRuleModel
+
+    current_proposal_ids = {rule.id for rule in rules}
+    versions_by_proposal = {item.rule_proposal_id: item for item in versions}
+    for proposal in rules:
+        version = versions_by_proposal[proposal.id]
+        spec = json.loads(version.rule_spec)
+        parameters = {
+            key: value
+            for key, value in spec.items()
+            if key not in {"type", "column", "column_name", "table", "table_name", "dimension"}
+        }
+        active_rule = db.get(ActiveRuleModel, proposal.id)
+        if active_rule is None:
+            active_rule = ActiveRuleModel(rule_id=proposal.id)
+            db.add(active_rule)
+        active_rule.dataset_id = run.dataset_id
+        active_rule.table_name = str(spec.get("table_name") or spec.get("table") or run.dataset_id)
+        active_rule.column_name = spec.get("column") or spec.get("column_name")
+        active_rule.rule_type = str(proposal.rule_type or spec.get("type") or "UNKNOWN")
+        active_rule.parameters = json.dumps(parameters, ensure_ascii=False, sort_keys=True)
+        active_rule.severity = proposal.severity
+        active_rule.dimension = str(spec.get("dimension") or "VALIDITY").upper()
+        active_rule.rule_description = proposal.description
+        active_rule.status = "ACTIVE"
+        active_rule.updated_at = utc_now()
+
+    # Publishing a new workflow revision replaces the active set for that
+    # dataset. Legacy rows are retained for audit/history but cannot remain
+    # executable after this workflow publishes its immutable ruleset.
+    for active_rule in (
+        db.query(ActiveRuleModel)
+        .filter(ActiveRuleModel.dataset_id == run.dataset_id, ActiveRuleModel.status == "ACTIVE")
+        .all()
+    ):
+        if active_rule.rule_id not in current_proposal_ids:
+            active_rule.status = "INACTIVE"
+            active_rule.updated_at = utc_now()
     ruleset = RulesetVersionModel(
         id=f"ruleset-{uuid.uuid4().hex[:20]}",
         dataset_id=run.dataset_id,
@@ -834,7 +875,15 @@ def run_checks_and_prepare_analysis(
     """Run Graph 2 and create its visible result before Graph 3 is requested."""
     from src.services.job_runner import run_dq_checks
 
-    run_dq_checks(job_id, dq_run_id, session_id, actor_role, trigger_anomaly=False, finalize_job=False)
+    run_dq_checks(
+        job_id,
+        dq_run_id,
+        session_id,
+        actor_role,
+        trigger_anomaly=False,
+        finalize_job=False,
+        workflow_run_id=workflow_run_id,
+    )
     with Session(get_engine()) as db:
         dq_run, run = db.get(DqRunModel, dq_run_id), db.get(WorkflowRunModel, workflow_run_id)
         if not dq_run or not run:

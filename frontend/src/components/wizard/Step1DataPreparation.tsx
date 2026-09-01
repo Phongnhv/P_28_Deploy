@@ -352,11 +352,9 @@ export function Step1DataPreparation({
             disabled={!dataset || profiling}
             aria-expanded={showProfile}
             onClick={() => {
-              setShowProfile((prev) => {
-                const next = !prev;
-                if (next && !profileReady) onProfileDataset();
-                return next;
-              });
+              const openingProfile = !showProfile;
+              setShowProfile(openingProfile);
+              if (openingProfile && !profileReady) onProfileDataset();
             }}
           >
             {profiling

@@ -789,7 +789,15 @@ async def run_anomaly_graph(
     anomaly_run_id = f"anom-{uuid.uuid4().hex[:12]}"
 
     anomaly_graph = build_anomaly_graph(investigation_mode=active_mode)
-    start_graph_run(dataset_id=dataset_id, dq_run_id=execution_run_id, anomaly_run_id=anomaly_run_id)
+    # ``stream_id`` is the durable workflow id for dashboard runs. Reuse it
+    # for telemetry correlation so Graph 3 nodes are visible in that workflow
+    # instead of becoming an unrelated dataset-level history entry.
+    start_graph_run(
+        workflow_run_id=stream_id,
+        dataset_id=dataset_id,
+        dq_run_id=execution_run_id,
+        anomaly_run_id=anomaly_run_id,
+    )
     initial_state = {
         "anomaly_run_id": anomaly_run_id,
         "execution_run_id": execution_run_id,

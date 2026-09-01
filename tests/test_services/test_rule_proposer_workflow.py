@@ -29,7 +29,7 @@ from src.services.rule_proposer_workflow import (
     run_checks_and_analyze,
     run_checks_and_prepare_analysis,
 )
-from src.services.rule_store import get_engine
+from src.services.rule_store import ActiveRuleModel, get_engine
 
 DATASET_ID = "dataset-nyc-yellow-taxi-50k"
 
@@ -244,6 +244,12 @@ def test_publish_creates_immutable_ruleset_and_queues_only_approved_versions(mon
         complete_rule_review(db, run)
         execute_step(db, run, "PUBLISH_RULESET")
         ruleset = db.query(RulesetVersionModel).filter_by(workflow_run_id=run.id, stale=False).one()
+        active_rule = db.get(ActiveRuleModel, rule.id)
+        assert active_rule is not None
+        assert active_rule.dataset_id == DATASET_ID
+        assert active_rule.status == "ACTIVE"
+        assert active_rule.table_name == DATASET_ID
+        assert active_rule.column_name == "trip_distance"
         job = JobModel(
             id="workflow-dq-job",
             type="RUN_DQ",

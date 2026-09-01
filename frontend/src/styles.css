@@ -4438,6 +4438,9 @@ button.step-nav-button:disabled {
 .wizard-step-badge {
   width: 32px;
   height: 32px;
+  min-width: 32px;
+  flex: 0 0 32px;
+  box-sizing: border-box;
   border-radius: 50%;
   display: flex;
   align-items: center;
