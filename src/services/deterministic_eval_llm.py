@@ -163,13 +163,28 @@ class _Structured:
         return asyncio.run(self.ainvoke(messages))
 
 
-class DeterministicEvalLLM:
+from langchain_core.messages import AIMessage
+from langchain_core.language_models.chat_models import SimpleChatModel
+
+
+class DeterministicEvalLLM(SimpleChatModel):
+    @property
+    def _llm_type(self) -> str:
+        return "deterministic-eval"
+
+    def _call(self, messages, stop=None, run_manager=None, **kwargs) -> str:
+        _trace("text")
+        return "Deterministic EvalGate served-path report."
+
     def with_structured_output(self, schema, include_raw: bool = False):
         return _Structured(schema, include_raw)
 
-    async def ainvoke(self, messages):
-        _trace("text")
-        return SimpleNamespace(content="Deterministic EvalGate served-path report.")
+    def bind_tools(self, tools, **kwargs):
+        return self
 
-    def invoke(self, messages):
-        return SimpleNamespace(content="Deterministic EvalGate served-path report.")
+    async def ainvoke(self, messages, config=None, **kwargs):
+        _trace("text")
+        return AIMessage(content="Deterministic EvalGate served-path report.")
+
+    def invoke(self, messages, config=None, **kwargs):
+        return AIMessage(content="Deterministic EvalGate served-path report.")
