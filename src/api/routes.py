@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -2025,10 +2025,31 @@ def run_workflow_step(
         .first()
     )
     if active_stage_job:
-        raise HTTPException(
-            status_code=409,
-            detail={"code": "CONFLICT", "message": "This workflow stage already has an active execution"},
+        # A pre-worker revision could leave a background task RUNNING without
+        # ever creating a worker lease. Do not let that historical record brick
+        # the stage forever: after a conservative grace period, make it
+        # retryable and let the normal dispatch path create a fresh execution.
+        stale_without_worker_lease = (
+            workflow_job_type in {"WORKFLOW_RUN_CHECKS", "WORKFLOW_ANALYZE_REPORT"}
+            and not active_stage_job.lease_expires_at
+            and active_stage_job.updated_at < utc_now() - timedelta(minutes=10)
         )
+        if stale_without_worker_lease:
+            active_stage_job.status = "FAILED_RETRYABLE"
+            active_stage_job.error = "Previous workflow execution did not report back; retrying is safe."
+            active_stage_job.message = "Previous workflow execution expired"
+            steps = json.loads(run.steps_json or "[]")
+            current = next((item for item in steps if item.get("key") == step), None)
+            if current and current.get("status") == "RUNNING":
+                current["status"] = "FAILED"
+                run.status = "ACTIVE"
+                run.steps_json = json.dumps(steps, ensure_ascii=False)
+            db.commit()
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "CONFLICT", "message": "This workflow stage already has an active execution"},
+            )
     job = JobModel(
         id=str(uuid.uuid4()),
         type=workflow_job_type,
