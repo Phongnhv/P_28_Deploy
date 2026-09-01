@@ -980,7 +980,11 @@ def run_analysis_report(workflow_run_id: str, job_id: str, session_id: str | Non
                     stream_id=workflow_run_id,
                     initialize_schema=False,
                 ),
-                timeout=90,
+                # Report generation may require one or more bounded LLM/tool
+                # turns on a cold Cloud Run revision. Keep the request
+                # detached from the HTTP lifecycle, but allow the full Graph 3
+                # report writer to finish before recording a fallback report.
+                timeout=300,
             )
         )
         analysis_error = None
