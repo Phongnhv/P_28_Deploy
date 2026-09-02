@@ -12,12 +12,13 @@ from src.models.database import (
     DatasetModel,
     DatasetVersionModel,
     ProfileRunSnapshotModel,
+    RuleProposalModel,
     UserAccountModel,
     WorkspaceMembershipModel,
     WorkspaceModel,
 )
 from src.services.dashboard_agent_workflow import get_dataset_rule_policy
-from src.services.rule_store import get_engine
+from src.services.rule_store import get_engine, save_proposed_rules
 from src.services.versioned_dataset import (
     DatasetContractError,
     canonical_schema_manifest,
@@ -25,6 +26,7 @@ from src.services.versioned_dataset import (
     safe_source_object_key,
     schema_contract_hash,
     schema_hash,
+    validate_rule_spec,
 )
 
 
@@ -100,6 +102,57 @@ def test_freshness_parse_failure_is_execution_error_not_data_failure():
     assert result["status"] == "ERROR"
     assert result["failed_count"] == 0
     assert aggregate_graph2_status([result]) == "FAILED"
+
+
+def test_versioned_regex_rule_is_validated_and_executed_with_safe_guardrails():
+    frame = pd.DataFrame({"email": ["alice@example.com", "not-an-email", None]})
+    spec = {
+        "rule_id": "email-format",
+        "type": "REGEX_FORMAT",
+        "column": "email",
+        "regex": r"^[^@]+@[^@]+\.[^@]+$",
+    }
+    normalized = validate_rule_spec(spec, ["email"])
+    assert normalized["rule_type"] == "REGEX_FORMAT"
+    result = execute_rules_frame(frame, [spec])[0]
+    assert result["status"] == "FAIL"
+    assert result["failed_count"] == 1
+
+
+def test_saved_versioned_rule_spec_preserves_execution_parameters(test_db):
+    rules = [
+        {
+            "rule_id": "email-regex",
+            "rule_type": "REGEX_FORMAT",
+            "column": "email",
+            "parameters": {"regex": r"^[^@]+@[^@]+$"},
+        },
+        {
+            "rule_id": "freshness",
+            "rule_type": "FRESHNESS",
+            "column": "updated_at",
+            "parameters": {"max_age_hours": 12},
+        },
+        {
+            "rule_id": "row-count",
+            "rule_type": "ROW_COUNT",
+            "column": None,
+            "parameters": {"min_row_count": 10},
+        },
+    ]
+    assert save_proposed_rules("versioned-param-run", "versioned-dataset", rules) == 3
+
+    with Session(test_db) as db:
+        proposals = {
+            row.id: json.loads(row.rule_spec)
+            for row in db.query(RuleProposalModel).filter(
+                RuleProposalModel.id.in_([rule["rule_id"] for rule in rules])
+            )
+        }
+
+    assert proposals["email-regex"]["regex"] == r"^[^@]+@[^@]+$"
+    assert proposals["freshness"]["max_age_hours"] == 12
+    assert proposals["row-count"]["min_row_count"] == 10
 
 
 @pytest.mark.parametrize(

@@ -55,7 +55,7 @@ SPECS = (
     EvaluatorSpec("live_sdih_detection_v1", "1.0.0", "ai_quality", "evalgate.gates.gate1_ai_quality.live_agent_e2e", LIVE, cost_class="paid", required_artifacts=("live-agent",), critical=True),
     EvaluatorSpec("promptfoo_injection_v1", "1.0.0", "ai_security", "evalgate.gates.gate2_security.prompt_injection_probe", LIVE, cost_class="paid", required_dependencies=("promptfoo",), required_artifacts=("promptfoo-result",), critical=True),
     EvaluatorSpec("geval_domain_v1", "1.0.0", "ai_quality", "evalgate.gates.gate1_ai_quality.live_agent_e2e", LIVE, attribute="evaluate_geval", cost_class="paid", required_dependencies=("deepeval",), required_artifacts=("geval-result",), critical=True),
-    EvaluatorSpec("trace_coverage_v1", "1.0.0", "observability", "evalgate.gates.gate3_observability.trace_coverage", LIVE, required_artifacts=("traces",), critical=True),
+    EvaluatorSpec("trace_coverage_v1", "1.0.0", "observability", "evalgate.gates.gate3_observability.trace_coverage", CI_PLUS, required_artifacts=("traces",), critical=True),
     EvaluatorSpec("k6_load_v1", "1.0.0", "reliability", "evalgate.gates.gate5_reliability.load_slo", RELEASE_ONLY, cost_class="live-target", required_dependencies=("k6",), required_artifacts=("k6-result",), critical=True),
     EvaluatorSpec("steward_behavior_v1", "1.0.0", "business", "evalgate.gates.gate7_business.steward_outcome", LIVE),
 )

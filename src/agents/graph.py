@@ -328,17 +328,46 @@ def build_execution_graph(observer: NodeObserver | None = None) -> StateGraph:
 
     graph = StateGraph(AgentState)
 
-    graph.add_node("test_generator", instrument("G2", "test_generator", DETERMINISTIC)(test_generator_node))
+    graph.add_node(
+        "test_generator",
+        _observed_node(
+            "GRAPH2", "test_generator",
+            instrument("G2", "test_generator", DETERMINISTIC)(test_generator_node),
+            observer,
+        ),
+    )
     graph.add_node(
         "validate_dbt_project",
-        instrument("G2", "validate_dbt_project", DETERMINISTIC)(validate_dbt_project_node),
+        _observed_node(
+            "GRAPH2", "validate_dbt_project",
+            instrument("G2", "validate_dbt_project", DETERMINISTIC)(validate_dbt_project_node),
+            observer,
+        ),
     )
     graph.add_node(
         "dbt_validation_failed",
-        instrument("G2", "dbt_validation_failed", DETERMINISTIC)(_fail_dbt_validation_node),
+        _observed_node(
+            "GRAPH2", "dbt_validation_failed",
+            instrument("G2", "dbt_validation_failed", DETERMINISTIC)(_fail_dbt_validation_node),
+            observer,
+        ),
     )
-    graph.add_node("test_runner", instrument("G2", "test_runner", DETERMINISTIC)(test_runner_node))
-    graph.add_node("persist_report", instrument("G2", "persist_report", DETERMINISTIC)(persist_report_node))
+    graph.add_node(
+        "test_runner",
+        _observed_node(
+            "GRAPH2", "test_runner",
+            instrument("G2", "test_runner", DETERMINISTIC)(test_runner_node),
+            observer,
+        ),
+    )
+    graph.add_node(
+        "persist_report",
+        _observed_node(
+            "GRAPH2", "persist_report",
+            instrument("G2", "persist_report", DETERMINISTIC)(persist_report_node),
+            observer,
+        ),
+    )
 
     graph.set_entry_point("test_generator")
 
@@ -391,10 +420,38 @@ def build_anomaly_graph(
 
     graph = StateGraph(AnomalyGraphState)
 
-    graph.add_node("anomaly_detector", instrument("G3", "anomaly_detector", DETERMINISTIC)(anomaly_detector_node))
-    graph.add_node("hypothesis_agent", instrument("G3", "hypothesis_agent", LLM)(hypothesis_agent))
-    graph.add_node("persist_analysis", instrument("G3", "persist_analysis", DETERMINISTIC)(persist_analysis_node))
-    graph.add_node("report_writer", instrument("G3", "report_writer", LLM)(report_writer_node))
+    graph.add_node(
+        "anomaly_detector",
+        _observed_node(
+            "GRAPH3", "anomaly_detector",
+            instrument("G3", "anomaly_detector", DETERMINISTIC)(anomaly_detector_node),
+            observer,
+        ),
+    )
+    graph.add_node(
+        "hypothesis_agent",
+        _observed_node(
+            "GRAPH3", "hypothesis_agent",
+            instrument("G3", "hypothesis_agent", LLM)(hypothesis_agent),
+            observer,
+        ),
+    )
+    graph.add_node(
+        "persist_analysis",
+        _observed_node(
+            "GRAPH3", "persist_analysis",
+            instrument("G3", "persist_analysis", DETERMINISTIC)(persist_analysis_node),
+            observer,
+        ),
+    )
+    graph.add_node(
+        "report_writer",
+        _observed_node(
+            "GRAPH3", "report_writer",
+            instrument("G3", "report_writer", LLM)(report_writer_node),
+            observer,
+        ),
+    )
 
     graph.set_entry_point("anomaly_detector")
     graph.add_edge("anomaly_detector", "hypothesis_agent")
@@ -742,6 +799,7 @@ async def run_anomaly_graph(
     dataset_id: str = DEFAULT_CLI_DATASET_ID,
     investigation_mode: Literal["deepagent", "legacy"] | None = None,
     stream_id: str | None = None,
+    initialize_schema: bool = True,
 ) -> dict:
     """Chạy toàn bộ pipeline Run 3 (Anomaly Analysis & Hypothesis).
 
@@ -749,6 +807,9 @@ async def run_anomaly_graph(
         execution_run_id: ID của lần chạy test (DqRun). Nếu None, tự động lấy run mới nhất từ CSDL.
         dataset_id: ID của dataset cần phân tích bất thường.
         investigation_mode: "deepagent" hoặc "legacy". Nếu None, lấy từ config.
+        initialize_schema: Khởi tạo schema khi chạy độc lập (CLI/compatibility).
+            Workflow API chạy trên schema đã được migrate sẵn và tắt bước này để
+            tránh DDL cạnh tranh với request/job đang dùng Supabase.
     """
     import uuid
 
@@ -758,7 +819,8 @@ async def run_anomaly_graph(
     from src.models.database import DqRunModel
     from src.services.rule_store import get_engine, init_db
 
-    init_db()
+    if initialize_schema:
+        init_db()
     settings = get_settings()
     active_mode = investigation_mode or settings.anomaly_investigation_mode
 
@@ -784,7 +846,15 @@ async def run_anomaly_graph(
     anomaly_run_id = f"anom-{uuid.uuid4().hex[:12]}"
 
     anomaly_graph = build_anomaly_graph(investigation_mode=active_mode)
-    start_graph_run(dataset_id=dataset_id, dq_run_id=execution_run_id, anomaly_run_id=anomaly_run_id)
+    # ``stream_id`` is the durable workflow id for dashboard runs. Reuse it
+    # for telemetry correlation so Graph 3 nodes are visible in that workflow
+    # instead of becoming an unrelated dataset-level history entry.
+    start_graph_run(
+        workflow_run_id=stream_id,
+        dataset_id=dataset_id,
+        dq_run_id=execution_run_id,
+        anomaly_run_id=anomaly_run_id,
+    )
     initial_state = {
         "anomaly_run_id": anomaly_run_id,
         "execution_run_id": execution_run_id,

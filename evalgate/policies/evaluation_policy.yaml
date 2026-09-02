@@ -15,10 +15,11 @@ non_suppressible:
   - HG-D2
 score:
   weights:
-    ai_quality: 0.36
-    ai_security: 0.29
-    input_data: 0.20
+    ai_quality: 0.35
+    ai_security: 0.25
+    input_data: 0.15
     governance: 0.15
+    observability: 0.10
   decision_bands:
     pass: 85.0
     warning: 70.0

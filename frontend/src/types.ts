@@ -384,6 +384,7 @@ export interface AuditLog {
 
 export interface ReviewInput {
   action: "approve" | "reject" | "edit";
+  workflow_run_id?: string;
   title?: string;
   description?: string;
   severity?: RuleProposal["severity"];
@@ -391,6 +392,7 @@ export interface ReviewInput {
 }
 
 export interface ManualRuleInput {
+  workflow_run_id?: string;
   title: string;
   description: string;
   severity: RuleProposal["severity"];
@@ -709,6 +711,7 @@ export interface ApiClient {
   grantDatasetAccess(datasetId: string, username: string, accessLevel: DatasetAccessLevel): Promise<DatasetAccess>;
   revokeDatasetAccess(datasetId: string, username: string): Promise<void>;
   createWorkflow(datasetId: string, fresh?: boolean): Promise<WorkflowRun>;
+  getLatestWorkflow(datasetId: string): Promise<WorkflowRun | null>;
   getWorkflow(workflowRunId: string): Promise<WorkflowRun>;
   runWorkflowStep(workflowRunId: string, step: WorkflowStepKey): Promise<CreateJobResponse>;
   advanceWorkflowStep(workflowRunId: string): Promise<WorkflowRun>;

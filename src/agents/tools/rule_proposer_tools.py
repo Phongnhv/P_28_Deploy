@@ -29,6 +29,106 @@ from src.services.rule_store import ActiveRuleModel, get_engine
 
 logger = logging.getLogger(__name__)
 
+# The compatibility table contains the fixed NYC Taxi schema. It is never a
+# source adapter for arbitrary datasets, even when an old row happened to be
+# left behind under the same dataset id.
+LEGACY_DEMO_DATASET_ID = "dataset-nyc-yellow-taxi-50k"
+
+
+def _load_versioned_frame(dataset_id: str):
+    """Load a verified canonical source frame without touching ``source_rows``.
+
+    Returns ``(is_versioned, frame)`` so callers can distinguish a non-versioned
+    legacy dataset from a broken versioned import. The database session is
+    closed before the source file is decoded; agent tool calls must not hold a
+    Supabase connection while pandas reads an artifact.
+    """
+    if not dataset_id:
+        return False, None
+
+    from src.services.job_runner import _materialize_versioned_dataset_path
+
+    engine = get_engine()
+    with Session(engine) as db:
+        dataset = db.get(DatasetModel, dataset_id)
+        if not dataset or dataset.manifest_version != "versioned-v1":
+            return False, None
+        path, temporary = _materialize_versioned_dataset_path(db, dataset_id)
+
+    if path is None:
+        raise ValueError("The versioned dataset has no executable source artifact")
+
+    try:
+        import pandas as pd
+
+        frame = pd.read_parquet(path) if path.suffix.lower() == ".parquet" else pd.read_csv(path)
+        return True, frame
+    finally:
+        if temporary:
+            path.unlink(missing_ok=True)
+
+
+def _versioned_profile_column(dataset_id: str, column_name: str):
+    """Return aggregate profile evidence for one canonical versioned column."""
+    if not dataset_id:
+        return False, None
+    from src.models.database import DatasetVersionModel, ProfileRunSnapshotModel
+
+    with Session(get_engine()) as db:
+        dataset = db.get(DatasetModel, dataset_id)
+        if not dataset or dataset.manifest_version != "versioned-v1":
+            return False, None
+        version = (
+            db.query(DatasetVersionModel)
+            .filter_by(dataset_id=dataset_id, status="READY")
+            .order_by(DatasetVersionModel.version_number.desc())
+            .first()
+        )
+        snapshot = (
+            db.query(ProfileRunSnapshotModel)
+            .filter_by(
+                dataset_id=dataset_id,
+                dataset_version_id=version.id,
+                status="COMPLETED",
+            )
+            .order_by(ProfileRunSnapshotModel.completed_at.desc())
+            .first()
+            if version
+            else None
+        )
+        if not snapshot:
+            return True, None
+        try:
+            metrics = json.loads(snapshot.metrics_json or "{}")
+        except (TypeError, ValueError):
+            metrics = {}
+        try:
+            schema = json.loads(snapshot.schema_json or "[]")
+        except (TypeError, ValueError):
+            schema = []
+        columns = metrics.get("columns") if isinstance(metrics, dict) else None
+        if not isinstance(columns, list):
+            columns = schema if isinstance(schema, list) else []
+        column = next(
+            (item for item in columns if isinstance(item, dict) and item.get("name") == column_name),
+            None,
+        )
+        return True, column
+
+
+def _versioned_scalar(value: Any) -> Any:
+    """Convert pandas/numpy scalars to values safe for a tool response."""
+    try:
+        if value is None:
+            return None
+        if hasattr(value, "item"):
+            value = value.item()
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        return None if value != value else value
+    except Exception:
+        return str(value)
+
 
 def _sanitize_identifier(name: str | None, default: str = "") -> str:
     """Ensure identifier contains only safe alphanumeric and underscore characters."""
@@ -162,15 +262,49 @@ def dry_run_rule_candidate(
     norm_rule_type = rule_type.strip().upper()
 
     try:
+        is_versioned, frame = _load_versioned_frame(dataset_id)
+        if is_versioned:
+            if frame is None:
+                raise ValueError("The versioned dataset has no readable source artifact")
+            from src.services.versioned_dataset import execute_rule_frame
+
+            result = execute_rule_frame(
+                frame.head(sample_limit).copy(),
+                {"rule_type": norm_rule_type, "column": column_name, "parameters": params},
+            )
+            failed_count = int(result.get("failed_count") or 0)
+            total_checked = int(result.get("checked_count") or 0)
+            violation_rate = round((failed_count / total_checked) * 100, 3) if total_checked else 0.0
+            return {
+                "rule_type": norm_rule_type,
+                "table_name": table_name,
+                "column": column_name,
+                "parameters": params,
+                "total_checked": total_checked,
+                "passed_count": max(0, total_checked - failed_count),
+                "failed_count": failed_count,
+                "violation_rate_pct": violation_rate,
+                "sample_violations": [
+                    {"row_id": row_id} for row_id in (result.get("sample_failures") or [])
+                ],
+                "assessment": (
+                    "EXECUTION_ERROR"
+                    if result.get("status") == "ERROR"
+                    else "PASS" if failed_count == 0 else "VIOLATED"
+                ),
+                "error": result.get("error"),
+                "execution_engine": "versioned-source-adapter-v1",
+            }
+
         engine = get_engine()
         with engine.connect() as conn:
             # Check if source_rows table exists and has rows for this dataset
-            use_source_rows = False
+            use_source_rows = dataset_id == LEGACY_DEMO_DATASET_ID
             try:
-                check_q = text("SELECT COUNT(*) FROM source_rows" + (" WHERE dataset_id = :ds_id" if dataset_id else ""))
-                cnt = conn.execute(check_q, {"ds_id": dataset_id} if dataset_id else {}).scalar() or 0
-                if cnt > 0:
-                    use_source_rows = True
+                if use_source_rows:
+                    check_q = text("SELECT COUNT(*) FROM source_rows WHERE dataset_id = :ds_id")
+                    cnt = conn.execute(check_q, {"ds_id": dataset_id}).scalar() or 0
+                    use_source_rows = cnt > 0
             except Exception:
                 use_source_rows = False
 
@@ -420,14 +554,40 @@ def inspect_data_samples(
             return {"error": "Invalid filter_condition: Unsafe SQL keyword or symbol detected."}
 
     try:
+        is_versioned, frame = _load_versioned_frame(dataset_id)
+        if is_versioned:
+            if frame is None:
+                return {"table_name": table_name, "row_count_returned": 0, "rows": [], "error": "VERSIONED_SOURCE_UNAVAILABLE"}
+            if filter_condition.strip():
+                return {
+                    "table_name": table_name,
+                    "row_count_returned": 0,
+                    "rows": [],
+                    "error": "Versioned source samples do not accept SQL filter expressions.",
+                }
+            requested = columns or [str(column) for column in frame.columns[:10]]
+            safe_columns = [_sanitize_identifier(column) for column in requested]
+            missing = [column for column in safe_columns if column not in frame.columns]
+            if missing:
+                return {"table_name": table_name, "row_count_returned": 0, "rows": [], "error": "Unknown source column."}
+            rows = []
+            for record in frame.loc[:, safe_columns].head(limit).to_dict(orient="records"):
+                rows.append({key: _versioned_scalar(value) for key, value in record.items()})
+            return {
+                "table_name": table_name,
+                "row_count_returned": len(rows),
+                "rows": rows,
+                "execution_engine": "versioned-source-adapter-v1",
+            }
+
         engine = get_engine()
         with engine.connect() as conn:
-            use_source_rows = False
+            use_source_rows = dataset_id == LEGACY_DEMO_DATASET_ID
             try:
-                check_q = text("SELECT COUNT(*) FROM source_rows" + (" WHERE dataset_id = :ds_id" if dataset_id else ""))
-                cnt = conn.execute(check_q, {"ds_id": dataset_id} if dataset_id else {}).scalar() or 0
-                if cnt > 0:
-                    use_source_rows = True
+                if use_source_rows:
+                    check_q = text("SELECT COUNT(*) FROM source_rows WHERE dataset_id = :ds_id")
+                    cnt = conn.execute(check_q, {"ds_id": dataset_id}).scalar() or 0
+                    use_source_rows = cnt > 0
             except Exception:
                 use_source_rows = False
 
@@ -482,6 +642,25 @@ def get_column_deep_stats(
     """
     col_name = column_name.strip()
     try:
+        is_versioned, column = _versioned_profile_column(dataset_id, col_name)
+        if is_versioned:
+            if column is None:
+                return {"table_name": table_name, "column_name": col_name, "error": "COLUMN_NOT_FOUND"}
+            return {
+                "table_name": table_name,
+                "column_name": col_name,
+                "data_type": column.get("logical_type") or column.get("physical_type") or "string",
+                "null_rate_pct": round(float(column.get("null_rate") or 0.0) * 100, 2),
+                "distinct_count": int(column.get("distinct_count") or 0),
+                "full_distinct_count": int(column.get("full_distinct_count") or column.get("distinct_count") or 0),
+                "is_unique_full_table": column.get("is_unique_full_table"),
+                "min_value": column.get("min_value") if column.get("min_value") is not None else column.get("min"),
+                "max_value": column.get("max_value") if column.get("max_value") is not None else column.get("max"),
+                "negative_rate_pct": round(float(column.get("negative_rate") or 0.0) * 100, 2),
+                "quantiles": column.get("quantiles") or {},
+                "execution_engine": "versioned-profile-snapshot",
+            }
+
         with Session(get_engine()) as db:
             # Look for existing persisted ColumnProfile
             query = db.query(ColumnProfileModel).filter(ColumnProfileModel.name == col_name)
@@ -518,6 +697,8 @@ def get_column_deep_stats(
         engine = get_engine()
         with engine.connect() as conn:
             col_safe = _sanitize_identifier(col_name)
+            if dataset_id != LEGACY_DEMO_DATASET_ID:
+                return {"table_name": table_name, "column_name": col_name, "error": "COLUMN_NOT_FOUND"}
             target = "source_rows"
             where_ds = "WHERE dataset_id = :dataset_id" if dataset_id else ""
 

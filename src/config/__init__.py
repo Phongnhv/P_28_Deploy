@@ -3,7 +3,7 @@ from functools import lru_cache
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     rule_proposer_mode: Literal["deepagent", "legacy"] = os.getenv("RULE_PROPOSER_MODE") or "deepagent"
     rule_proposer_max_tool_calls: int = 6
     rule_proposer_thread_tool_call_limit: int = Field(default=15, ge=1, le=200)
+    # The one-shot proposer is a compatibility fallback for older dashboard
+    # runs. Keep it available in local/test environments, but do not silently
+    # switch production traffic away from the canonical agent path.
     rule_proposer_allow_legacy_fallback: bool = True
     debug_dump_table_digests: bool = False
     anomaly_investigation_mode: Literal["deepagent", "legacy"] = os.getenv("ANOMALY_INVESTIGATION_MODE") or "deepagent"
@@ -77,8 +80,12 @@ class Settings(BaseSettings):
     )
     supabase_database_url: str | None = os.getenv("SUPABASE_DATABASE_URL")
     dq_execution_backend: Literal["auto", "local", "supabase"] = os.getenv("DQ_EXECUTION_BACKEND") or "auto"
-    database_pool_size: int = Field(default=5, ge=1, le=20)
-    database_max_overflow: int = Field(default=5, ge=0, le=20)
+    # Supabase session-mode projects expose a small project-wide connection
+    # budget. Keep the default conservative so one local process or Cloud Run
+    # revision cannot reserve most of it; operators can raise these explicitly
+    # when their database plan supports it.
+    database_pool_size: int = Field(default=2, ge=1, le=20)
+    database_max_overflow: int = Field(default=0, ge=0, le=20)
     database_pool_timeout_seconds: int = Field(default=30, ge=1, le=120)
 
     # Output
@@ -102,6 +109,16 @@ class Settings(BaseSettings):
     object_storage_max_attempts: int = Field(default=3, ge=1, le=10)
     object_storage_connect_timeout_seconds: int = Field(default=3, ge=1, le=30)
     object_storage_read_timeout_seconds: int = Field(default=10, ge=1, le=120)
+
+    @model_validator(mode="after")
+    def disable_legacy_fallback_by_default_in_production(self):
+        """Require an explicit opt-in before production uses compatibility code."""
+        if (
+            self.app_env == "production"
+            and "rule_proposer_allow_legacy_fallback" not in self.model_fields_set
+        ):
+            self.rule_proposer_allow_legacy_fallback = False
+        return self
 
 
 @lru_cache

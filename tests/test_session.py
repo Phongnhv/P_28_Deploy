@@ -1,8 +1,15 @@
+import inspect
+
 import pytest
 from fastapi import status
 from httpx import ASGITransport, AsyncClient
 
+from src.api.routes import get_session
 from src.main import app
+
+
+def test_authenticated_dependency_keeps_sync_database_work_off_event_loop():
+    assert not inspect.iscoroutinefunction(get_session)
 
 
 @pytest.mark.asyncio

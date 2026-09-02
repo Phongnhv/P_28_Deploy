@@ -386,7 +386,10 @@ def init_db() -> None:
         _migrate_local_workflow_columns(engine)
     logger.info("Database đã được khởi tạo tại: %s", get_settings().database_url)
 
-    # Seed default demo dataset if not present
+    # Seed the old NYC Taxi fixture only when the compatibility fixture is
+    # enabled. Production must not create or expose a sample dataset merely by
+    # starting the API; arbitrary production datasets arrive through the
+    # versioned workspace import flow.
     try:
         with Session(engine) as session:
             ensure_default_users(session)
@@ -395,40 +398,41 @@ def init_db() -> None:
             # owner, and the versioned import route needs an ACTIVE membership.
             ensure_demo_steward(session)
             ensure_default_workspace(session)
-            demo_dataset = session.get(DatasetModel, "dataset-nyc-yellow-taxi-50k")
-            if not demo_dataset:
-                demo_dataset = DatasetModel(
-                    id="dataset-nyc-yellow-taxi-50k",
-                    name="NYC Yellow Taxi 50k Sample",
-                    description="Sample trip data for DQ profiling",
-                    status="REGISTERED",
-                    row_count=50000,
-                    source_label="semantic",
-                    manifest_version="1.0.0",
-                    checksum="dummy",
-                )
-                session.add(demo_dataset)
-                session.commit()
-                logger.info("Seeded default demo dataset 'dataset-nyc-yellow-taxi-50k'")
-            for username, access_level in (("user", "READ"), ("steward", "MANAGE")):
-                existing_access = (
-                    session.query(DatasetAccessModel)
-                    .filter(
-                        DatasetAccessModel.dataset_id == demo_dataset.id,
-                        DatasetAccessModel.username == username,
+            if should_seed_legacy_demo_dataset(settings.app_env):
+                demo_dataset = session.get(DatasetModel, "dataset-nyc-yellow-taxi-50k")
+                if not demo_dataset:
+                    demo_dataset = DatasetModel(
+                        id="dataset-nyc-yellow-taxi-50k",
+                        name="NYC Yellow Taxi 50k Sample",
+                        description="Sample trip data for DQ profiling",
+                        status="REGISTERED",
+                        row_count=50000,
+                        source_label="semantic",
+                        manifest_version="1.0.0",
+                        checksum="dummy",
                     )
-                    .first()
-                )
-                if not existing_access:
-                    session.add(
-                        DatasetAccessModel(
-                            id=f"access-{demo_dataset.id}-{username}",
-                            dataset_id=demo_dataset.id,
-                            username=username,
-                            access_level=access_level,
-                            granted_by="system-seed",
+                    session.add(demo_dataset)
+                    session.commit()
+                    logger.info("Seeded default demo dataset 'dataset-nyc-yellow-taxi-50k'")
+                for username, access_level in (("user", "READ"), ("steward", "MANAGE")):
+                    existing_access = (
+                        session.query(DatasetAccessModel)
+                        .filter(
+                            DatasetAccessModel.dataset_id == demo_dataset.id,
+                            DatasetAccessModel.username == username,
                         )
+                        .first()
                     )
+                    if not existing_access:
+                        session.add(
+                            DatasetAccessModel(
+                                id=f"access-{demo_dataset.id}-{username}",
+                                dataset_id=demo_dataset.id,
+                                username=username,
+                                access_level=access_level,
+                                granted_by="system-seed",
+                            )
+                        )
             session.commit()
     except Exception as e:
         logger.warning("Failed to seed default dataset: %s", e)
@@ -976,6 +980,14 @@ def save_proposed_rules(run_id: str, dataset_id: str, rules: list[dict]) -> int:
                 rule_spec["max_value"] = params["max"]
             if "accepted_values" in params:
                 rule_spec["allowed_values"] = params["accepted_values"]
+            # Preserve every parameter needed to validate and execute the
+            # version-scoped rule.  Previously only the older RANGE and
+            # cross-field fields were copied, so a generated REGEX_FORMAT,
+            # FRESHNESS, ROW_COUNT, or NULL_RATE proposal lost its threshold
+            # before the steward review gate.
+            for key in ("regex", "max_age_hours", "max_null_pct", "min_row_count"):
+                if key in params:
+                    rule_spec[key] = params[key]
             if "target_column" in params:
                 rule_spec["target_column"] = params["target_column"]
                 rule_spec["operator"] = params.get("operator", "<=")

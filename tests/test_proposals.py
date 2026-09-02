@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy.orm import Session
 
-from src.models.database import ColumnProfileModel, DatasetModel, ProfileModel, RuleVersionModel
+from src.models.database import ColumnProfileModel, DatasetModel, ProfileModel, RuleVersionModel, WorkflowRunModel
 from src.services.job_runner import run_propose_rules
 from src.services.rule_store import get_engine
 
@@ -151,3 +151,71 @@ async def test_manual_rule_creation(client):
     assert data["rule"]["type"] == "numeric_range"
     assert data["rule"]["min_value"] == 0.1
     assert data["rule"]["max_value"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_manual_rule_and_review_are_scoped_to_the_workflow(client):
+    login_res = await client.post("/api/v1/session", json={"username": "steward", "password": "steward"})
+    assert login_res.status_code == 200
+    headers = {"X-CSRF-Token": login_res.json()["csrf_token"]}
+    dataset_id = "dataset-nyc-yellow-taxi-50k"
+
+    with Session(get_engine()) as session:
+        session.add(
+            WorkflowRunModel(
+                id="workflow-manual-scope",
+                dataset_id=dataset_id,
+                current_step="REVIEW_RULES",
+                status="ACTIVE",
+                steps_json="[]",
+                revision=1,
+            )
+        )
+        session.add(
+            WorkflowRunModel(
+                id="workflow-other-scope",
+                dataset_id=dataset_id,
+                current_step="REVIEW_RULES",
+                status="ACTIVE",
+                steps_json="[]",
+                revision=1,
+            )
+        )
+        session.commit()
+
+    created = await client.post(
+        f"/api/v1/datasets/{dataset_id}/rule-proposals/manual",
+        headers=headers,
+        json={
+            "workflow_run_id": "workflow-manual-scope",
+            "title": "Scoped manual rule",
+            "description": "A rule owned by the current workflow.",
+            "severity": "MEDIUM",
+            "rule": {"type": "numeric_range", "column": "trip_distance", "min_value": 0},
+        },
+    )
+    assert created.status_code == 200
+    proposal = created.json()
+    assert proposal["workflow_run_id"] == "workflow-manual-scope"
+
+    scoped = await client.get(
+        f"/api/v1/rule-proposals?dataset_id={dataset_id}&workflow_run_id=workflow-manual-scope"
+    )
+    assert scoped.status_code == 200
+    assert [item["id"] for item in scoped.json()] == [proposal["id"]]
+
+    mismatched = await client.patch(
+        f"/api/v1/rule-proposals/{proposal['id']}",
+        headers=headers,
+        json={"workflow_run_id": "workflow-other-scope", "action": "approve"},
+    )
+    assert mismatched.status_code == 409
+    assert mismatched.json()["code"] == "WORKFLOW_SCOPE"
+
+    approved = await client.patch(
+        f"/api/v1/rule-proposals/{proposal['id']}",
+        headers=headers,
+        json={"workflow_run_id": "workflow-manual-scope", "action": "approve"},
+    )
+    assert approved.status_code == 200
+    assert approved.json()["workflow_run_id"] == "workflow-manual-scope"

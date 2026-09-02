@@ -399,7 +399,7 @@ def review_rules(db: Session, run: Graph1RunModel, decisions: list[dict[str, Any
             try:
                 validate_rule_spec(json.loads(proposal.rule_spec or "{}"), allowed_columns)
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
-                raise ValueError(f"Rule {rule_id} references a column outside the selected version schema.") from exc
+                raise ValueError(f"Rule {rule_id} is invalid for the selected version schema: {exc}") from exc
         action = str(item.get("action", "")).lower()
         if action not in {"approve", "reject", "edit"}:
             raise ValueError("Rule decision must be approve, reject, or edit.")
@@ -440,7 +440,7 @@ def review_rules(db: Session, run: Graph1RunModel, decisions: list[dict[str, Any
                 try:
                     validate_rule_spec(canonical_spec, allowed_columns)
                 except (TypeError, ValueError, json.JSONDecodeError) as exc:
-                    raise ValueError("Edited rule references a column outside the selected version schema.") from exc
+                    raise ValueError(f"Edited rule is invalid for the selected version schema: {exc}") from exc
             proposal.rule_type = str(rule["type"])
             proposal.title = str(rule.get("rule_name") or proposal.title)
             proposal.rule_name = str(rule.get("rule_name") or proposal.rule_name)

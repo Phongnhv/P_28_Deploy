@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from src.config import get_settings
+from src.services.safe_regex import regex_budget, safe_search, validate_regex
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 SUPPORTED_FORMATS = {".csv", ".parquet"}
@@ -438,7 +439,8 @@ def validate_rule_spec(rule: dict[str, Any], allowed_columns: Iterable[str]) -> 
     allowed = set(str(column) for column in allowed_columns)
     rule_type = str(rule.get("rule_type") or rule.get("type") or "").upper()
     aliases = {"NOT_NULL": "NOT_NULL", "UNIQUE": "UNIQUE", "NUMERIC_RANGE": "NUMERIC_RANGE",
-               "RANGE": "NUMERIC_RANGE", "ACCEPTED_VALUES": "ACCEPTED_VALUES", "ROW_COUNT": "ROW_COUNT",
+               "RANGE": "NUMERIC_RANGE", "ACCEPTED_VALUES": "ACCEPTED_VALUES", "REGEX_FORMAT": "REGEX_FORMAT",
+               "ROW_COUNT": "ROW_COUNT",
                "FRESHNESS": "FRESHNESS", "CROSS_FIELD_COMPARISON": "CROSS_FIELD_COMPARISON",
                "DUPLICATE_FINGERPRINT": "DUPLICATE_FINGERPRINT", "NULL_RATE": "NULL_RATE"}
     if rule_type not in aliases:
@@ -468,6 +470,11 @@ def validate_rule_spec(rule: dict[str, Any], allowed_columns: Iterable[str]) -> 
         values = rule.get("allowed_values") or parameters.get("allowed_values")
         if not isinstance(values, list) or not values:
             raise DatasetContractError("Accepted values requires a non-empty list")
+    if canonical == "REGEX_FORMAT":
+        pattern = rule.get("regex") or parameters.get("regex")
+        if not isinstance(pattern, str) or not pattern:
+            raise DatasetContractError("Regex format requires a non-empty regex pattern")
+        validate_regex(pattern)
     if canonical == "NUMERIC_RANGE" and parameters.get("min_value", parameters.get("min")) is None and parameters.get("max_value", parameters.get("max")) is None:
         raise DatasetContractError("Numeric range requires a minimum or maximum")
     if canonical == "CROSS_FIELD_COMPARISON" and (parameters.get("operator") not in {"<", "<=", ">", ">=", "==", "=", "!=", "<>"}):
@@ -592,6 +599,13 @@ def execute_rule_frame(frame: Any, rule: dict[str, Any], *, failure_limit: int =
     elif rule_type == "ACCEPTED_VALUES":
         values = normalized.get("allowed_values") or params.get("allowed_values") or params.get("accepted_values")
         failed_mask = frame[column].notna() & ~frame[column].astype(str).isin([str(value) for value in values])
+    elif rule_type == "REGEX_FORMAT":
+        pattern = normalized.get("regex") or params.get("regex")
+        # Keep the whole rule inside one bounded budget. A per-value timeout
+        # alone would still allow a large source file to consume unbounded CPU.
+        with regex_budget():
+            matched = frame[column].map(lambda value: safe_search(pattern, value))
+        failed_mask = frame[column].notna() & ~matched
     elif rule_type == "ROW_COUNT":
         minimum = int(params.get("min_row_count", normalized.get("min_row_count", 0)))
         failed_mask = pd.Series([total_rows < minimum] + [False] * max(0, total_rows - 1), index=frame.index)

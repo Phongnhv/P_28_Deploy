@@ -368,6 +368,9 @@ export const realApiClient: ApiClient = {
       body: JSON.stringify({}),
     });
   },
+  getLatestWorkflow(datasetId: string) {
+    return request<WorkflowRun | null>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/workflows/latest`);
+  },
   getWorkflow(workflowRunId: string) {
     return request<WorkflowRun>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}`);
   },

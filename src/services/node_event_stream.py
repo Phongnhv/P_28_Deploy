@@ -147,15 +147,20 @@ async def run_graph_streamed(
 
     broker.publish(stream_id, event("run_start", stream_id=stream_id))
     final_state: dict[str, Any] = dict(initial_state)
+    step_start_time = time.perf_counter()
     try:
         # stream_mode="updates" yields {node_name: delta} per node; "values" yields the
         # full accumulated state so the caller receives an ainvoke-equivalent result.
         async for mode, chunk in graph.astream(initial_state, stream_mode=["updates", "values"]):
             if mode == "updates" and isinstance(chunk, dict):
+                now = time.perf_counter()
+                latency_ms = round((now - step_start_time) * 1000, 2)
+                step_start_time = now
                 for node_name, delta in chunk.items():
                     broker.publish(stream_id, event(
                         "node",
                         node=node_name,
+                        latency_ms=latency_ms,
                         preview=_safe_preview(delta),
                     ))
             elif mode == "values" and isinstance(chunk, dict):

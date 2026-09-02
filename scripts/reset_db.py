@@ -45,6 +45,7 @@ def main():
         "011_versioned_runtime_lineage.sql",
         "012_backfill_legacy_governance.sql",
         "013_analysis_run_history.sql",
+        "015_ruleset_workflow_lineage.sql",
     ]
     for m in migrations:
         run_cmd(f"docker compose exec -T db psql -U postgres -d ridepulse -f /scripts/migrations/{m}")

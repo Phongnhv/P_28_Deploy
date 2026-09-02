@@ -13,7 +13,7 @@ from src.models.database import (
     UserAccountModel,
     WorkspaceModel,
 )
-from src.services.job_runner import _versioned_dataset_execution_path, execute_uploaded_rule
+from src.services.job_runner import _materialize_versioned_dataset_path, execute_uploaded_rule
 from src.services.versioned_dataset import inspect_upload
 
 
@@ -49,7 +49,7 @@ def test_graph2_executes_a_versioned_dataset_from_its_governed_source(tmp_path):
         )
         db.commit()
 
-        execution_path, temporary = _versioned_dataset_execution_path(db, "vehicles")
+        execution_path, temporary = _materialize_versioned_dataset_path(db, "vehicles")
         checked, failed_ids, failed = execute_uploaded_rule(
             execution_path,
             "numeric_range",
@@ -70,3 +70,13 @@ def test_postgres_migrations_cast_legacy_dq_result_ids_to_text():
     assert statement in startup
     assert "ALTER TABLE public.dq_results" in release
     assert "ALTER COLUMN id TYPE VARCHAR(36) USING id::text" in release
+
+
+def test_ruleset_workflow_lineage_migration_matches_the_durable_model():
+    migration = Path("scripts/migrations/015_ruleset_workflow_lineage.sql").read_text(encoding="utf-8")
+
+    assert "ruleset_versions" in migration
+    assert "workflow_run_id VARCHAR(64)" in migration
+    assert "stale BOOLEAN NOT NULL DEFAULT FALSE" in migration
+    assert "proposal_run_id TYPE VARCHAR(512)" in migration
+    assert "ADD COLUMN IF NOT EXISTS" in migration

@@ -139,9 +139,10 @@ async def test_worker_entrypoint_runs_canonical_job_without_nested_event_loop(mo
             return FakeQuery()
 
     called = []
+    init_calls = []
     monkeypatch.setenv("RUN_JOB_ID", "job-entrypoint")
     monkeypatch.setenv("RUN_JOB_TYPE", "GRAPH1_EXECUTION")
-    monkeypatch.setattr(worker, "init_db", lambda: None)
+    monkeypatch.setattr(worker, "init_db", lambda: init_calls.append(True))
     monkeypatch.setattr(worker, "get_engine", lambda: object())
     monkeypatch.setattr(worker, "Session", lambda engine: FakeSession())
     monkeypatch.setattr(
@@ -153,3 +154,4 @@ async def test_worker_entrypoint_runs_canonical_job_without_nested_event_loop(mo
     await worker.main()
 
     assert called == [("job-entrypoint", "GRAPH1_EXECUTION")]
+    assert init_calls == []

@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, event, text
 
 import src.services.rule_store as rule_store_module
 from src.agents.graph import build_execution_graph
+from src.agents.nodes import test_runner_node as test_runner_module
 from src.agents.nodes.test_generator_node import generate_tests_for_table, validate_ruleset_contract
 from src.agents.nodes.validate_sql_node import validate_single_sql
 from src.services.rule_store import (
@@ -117,6 +118,48 @@ def test_uploaded_dataset_contract_uses_graph1_profile_instead_of_control_databa
 
     assert errors == []
     assert schema_hash
+
+
+def test_supabase_source_engine_is_disposed_after_execution(monkeypatch):
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class FakeEngine:
+        disposed = False
+
+        def connect(self):
+            return FakeConnection()
+
+        def dispose(self):
+            self.disposed = True
+
+    engine = FakeEngine()
+    monkeypatch.setattr(test_runner_module, "create_supabase_engine", lambda _url: engine)
+
+    assert test_runner_module._execute_supabase_rules([], "dataset-1", "postgresql://redacted") == []
+    assert engine.disposed is True
+
+
+def test_supabase_source_engine_is_disposed_when_connection_fails(monkeypatch):
+    class FakeEngine:
+        disposed = False
+
+        def connect(self):
+            raise RuntimeError("connection failed")
+
+        def dispose(self):
+            self.disposed = True
+
+    engine = FakeEngine()
+    monkeypatch.setattr(test_runner_module, "create_supabase_engine", lambda _url: engine)
+
+    with pytest.raises(RuntimeError, match="connection failed"):
+        test_runner_module._execute_supabase_rules([], "dataset-1", "postgresql://redacted")
+    assert engine.disposed is True
 
 
 @pytest.mark.asyncio
