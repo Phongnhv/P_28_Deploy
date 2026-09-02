@@ -843,6 +843,75 @@ async def test_propose_for_table_deepagent_binds_vietnamese_draft_fields():
 
 
 @pytest.mark.asyncio
+async def test_dashboard_deepagent_uses_server_evidence_without_source_tools():
+    from src.agents.nodes.rule_proposer_node import (
+        CandidateTableRuleDraft,
+        _propose_for_table_deepagent,
+    )
+
+    draft = CandidateTableRuleDraft.model_validate(
+        {
+            "table": "trips",
+            "rules": [
+                {
+                    "candidate_id": "cand-dashboard",
+                    "column": "fare_amount",
+                    "rule_type": "RANGE",
+                    "parameters": {"min": 0, "max": 500},
+                    "rule_name": "Cước phí hợp lệ",
+                    "business_rationale": "Giúp phát hiện giao dịch bất thường.",
+                    "proposal_basis": "DATA_PROFILE",
+                    "confidence": {
+                        "overall": 0.9,
+                        "evidence_strength": 0.9,
+                        "business_support": 0.9,
+                        "sample_representativeness": 0.9,
+                        "explanation": "Hồ sơ đầy đủ.",
+                    },
+                    "severity": "HIGH",
+                    "dimension": "VALIDITY",
+                    "rule_description": "Cước phí phải nằm trong khoảng từ 0 đến 500.",
+                    "ai_reasoning": "Dải giá trị được xác nhận trong hồ sơ tổng hợp.",
+                }
+            ],
+        }
+    )
+    mock_agent = AsyncMock()
+    mock_agent.ainvoke.return_value = {"structured_response": draft}
+    captured: dict = {}
+
+    def capture_agent(**kwargs):
+        captured.update(kwargs)
+        return mock_agent
+
+    with patch("deepagents.create_deep_agent", side_effect=capture_agent):
+        result = await _propose_for_table_deepagent(
+            table_name="trips",
+            table_digest={
+                "table": "trips",
+                "dashboard_candidate_mode": True,
+                "columns": [{"name": "fare_amount", "type": "FLOAT"}],
+            },
+            model=MagicMock(),
+            candidates=[
+                {
+                    "candidate_id": "cand-dashboard",
+                    "column": "fare_amount",
+                    "rule_type": "RANGE",
+                    "parameters": {"min": 0, "max": 500},
+                    "evidence_items": [{"id": "profile:fare_amount:range"}],
+                }
+            ],
+        )
+
+    assert result.rules[0].rule_name == "Cước phí hợp lệ"
+    assert captured["tools"] == []
+    assert "allow-listed" in captured["system_prompt"]
+    prompt = mock_agent.ainvoke.call_args.args[0]["messages"][0]["content"]
+    assert "Allowed candidate checklist" in prompt
+
+
+@pytest.mark.asyncio
 async def test_propose_for_table_deepagent_fallback_to_structured_llm():
     from src.agents.nodes.rule_proposer_node import (
         CandidateProposedRule,

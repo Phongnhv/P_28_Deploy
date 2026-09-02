@@ -694,6 +694,25 @@ async def _propose_for_table_deepagent(
     )
     from src.agents.tools.rule_proposer_tools import RULE_PROPOSER_TOOLS
     settings = get_settings()
+    dashboard_mode = bool(table_digest.get("dashboard_candidate_mode"))
+
+    if candidates is not None:
+        coverage_requirements = json.dumps(candidates, ensure_ascii=False)
+    else:
+        coverage_requirements = json.dumps(
+            _build_coverage_requirements(table_digest),
+            ensure_ascii=False,
+        )
+
+    dashboard_messages = (
+        dashboard_rule_proposer_prompt.format_messages(
+            table_name=table_name,
+            table_digest=json.dumps(table_digest, ensure_ascii=False),
+            coverage_requirements=coverage_requirements,
+        )
+        if dashboard_mode
+        else None
+    )
 
     model_name = getattr(settings, f"{settings.llm_provider}_model_name", "rule-proposer")
     model_key = f"{settings.llm_provider}:{model_name}"
@@ -708,9 +727,13 @@ async def _propose_for_table_deepagent(
     except Exception:
         pass
 
-    system_prompt = RULE_PROPOSER_AGENT_SYSTEM_PROMPT
+    system_prompt = (
+        str(dashboard_messages[0].content)
+        if dashboard_messages is not None
+        else RULE_PROPOSER_AGENT_SYSTEM_PROMPT
+    )
     if specialized_system_prompt:
-        system_prompt = f"{specialized_system_prompt}\n\n{RULE_PROPOSER_AGENT_SYSTEM_PROMPT}"
+        system_prompt = f"{specialized_system_prompt}\n\n{system_prompt}"
 
     middlewares = []
     if TodoListMiddleware is not None and ToolCallLimitMiddleware is not None:
@@ -729,11 +752,23 @@ async def _propose_for_table_deepagent(
             ),
         ]
 
+    # Dashboard workflows already carry an allow-listed candidate checklist
+    # with aggregate profile evidence.  Giving the ReAct agent database tools
+    # here only makes it repeat source inspection (and can spend the full
+    # provider timeout on a redundant `source_rows` call).  Keep the same
+    # DeepAgent/structured-output boundary, but make this constrained path
+    # answer from the server-owned evidence it was given.  Non-dashboard
+    # workflows retain the full investigative tool set.
+    if dashboard_mode:
+        agent_tools = []
+    else:
+        agent_tools = RULE_PROPOSER_TOOLS
+
     skill_path = str(Path(__file__).resolve().parents[1] / "skills"/ "rule_proposer")
 
     agent = create_deep_agent(
         model=model,
-        tools=RULE_PROPOSER_TOOLS,
+        tools=agent_tools,
         system_prompt=system_prompt,
         # Parse the model-owned narrative fields with the same permissive draft
         # contract as the one-shot path.  CandidateTableRuleProposal also
@@ -746,29 +781,26 @@ async def _propose_for_table_deepagent(
         skills=[skill_path],
     )
 
-    if candidates is not None:
-        coverage_requirements = json.dumps(candidates, ensure_ascii=False)
-    else:
-        coverage_requirements = json.dumps(
-            _build_coverage_requirements(table_digest),
-            ensure_ascii=False,
-        )
-
     dict_content = (
         json.dumps(data_dictionary, ensure_ascii=False, indent=2)
         if isinstance(data_dictionary, dict)
         else (str(data_dictionary) if data_dictionary else "None")
     )
 
-    prompt = RULE_PROPOSER_AGENT_USER_PROMPT.format(
-        table_name=table_name,
-        dataset_id=dataset_id,
-        business_context=business_context or "Không có ngữ cảnh nghiệp vụ bổ sung.",
-        coverage_requirements=coverage_requirements,
-        table_digest=json.dumps(table_digest, ensure_ascii=False),
-        semantic_contract=json.dumps(semantic_contract or {}, ensure_ascii=False),
-        data_dictionary=dict_content,
-    )
+    if dashboard_mode:
+        # Avoid including the generic ReAct instructions that explicitly ask
+        # for source tools in a no-tool dashboard invocation.
+        prompt = str(dashboard_messages[1].content)
+    else:
+        prompt = RULE_PROPOSER_AGENT_USER_PROMPT.format(
+            table_name=table_name,
+            dataset_id=dataset_id,
+            business_context=business_context or "Không có ngữ cảnh nghiệp vụ bổ sung.",
+            coverage_requirements=coverage_requirements,
+            table_digest=json.dumps(table_digest, ensure_ascii=False),
+            semantic_contract=json.dumps(semantic_contract or {}, ensure_ascii=False),
+            data_dictionary=dict_content,
+        )
 
     # Tool events are dispatched by the caller's callback manager, not the
     # model's, so the handlers are attached here as well. Otherwise the trace
