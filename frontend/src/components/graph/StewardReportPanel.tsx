@@ -6,10 +6,9 @@ import remarkGfm from "remark-gfm";
 /**
  * Reader for the Markdown report produced by Graph 3's `report_writer` node.
  *
- * That node has always written a report to `output/steward_reports/`, but no
- * endpoint served it, so the last artifact of the whole pipeline never reached
- * anybody. Loading is on demand: most runs never produce one, and a 404 here is
- * an ordinary outcome rather than an error worth shouting about.
+ * Graph 3 stores the generated Markdown in the workflow's ANOMALY_REPORT
+ * artifact. Loading is on demand so the report body is fetched only when the
+ * steward opens it.
  */
 export function StewardReportPanel({
   runId,
