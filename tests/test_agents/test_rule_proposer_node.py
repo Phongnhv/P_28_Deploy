@@ -760,6 +760,89 @@ async def test_propose_for_table_deepagent_success():
 
 
 @pytest.mark.asyncio
+async def test_propose_for_table_deepagent_binds_vietnamese_draft_fields():
+    from src.agents.nodes.rule_proposer_node import (
+        CandidateTableRuleDraft,
+        _propose_for_table,
+    )
+
+    draft = CandidateTableRuleDraft.model_validate(
+        {
+            "table": "trips",
+            "rules": [
+                {
+                    "candidate_id": "cand-vi",
+                    "column": "fare_amount",
+                    "rule_type": "RANGE",
+                    "parameters": {"min": 0, "max": 500},
+                    "rule_name": "Cước phí hợp lệ",
+                    "business_rationale": "Giúp phát hiện giao dịch có số tiền bất thường.",
+                    "proposal_basis": "DATA_PROFILE",
+                    "selected_evidence_refs": ["profile:fare_amount:range"],
+                    "parameter_provenance": [
+                        {
+                            "parameter_name": "min",
+                            "source_type": "DATA_PROFILE",
+                            "source_ref": "profile:fare_amount:range",
+                            "derivation_method": "profile range",
+                        },
+                        {
+                            "parameter_name": "max",
+                            "source_type": "DATA_PROFILE",
+                            "source_ref": "profile:fare_amount:range",
+                            "derivation_method": "profile range",
+                        },
+                    ],
+                    "assumptions": ["Đơn vị là USD."],
+                    "confidence": {
+                        "overall": 0.9,
+                        "evidence_strength": 0.9,
+                        "business_support": 0.9,
+                        "sample_representativeness": 0.9,
+                        "explanation": "Hồ sơ đầy đủ.",
+                    },
+                    "severity": "HIGH",
+                    "dimension": "VALIDITY",
+                    "rule_description": "Cước phí phải nằm trong khoảng từ 0 đến 500.",
+                    "ai_reasoning": "Hồ sơ ghi nhận dải cước phí hợp lệ từ 0 đến 500.",
+                }
+            ],
+        }
+    )
+    mock_agent = AsyncMock()
+    mock_agent.ainvoke.return_value = {"structured_response": draft}
+
+    with patch("deepagents.create_deep_agent", return_value=mock_agent):
+        res = await _propose_for_table(
+            table_name="trips",
+            table_digest={"table": "trips", "columns": [{"name": "fare_amount", "type": "FLOAT"}]},
+            structured_llm=MagicMock(),
+            semaphore=asyncio.Semaphore(1),
+            max_retries=0,
+            candidates=[
+                {
+                    "candidate_id": "cand-vi",
+                    "column": "fare_amount",
+                    "rule_type": "RANGE",
+                    "parameters": {"min": 0, "max": 500},
+                    "evidence_items": [{"id": "profile:fare_amount:range"}],
+                }
+            ],
+            mode="deepagent",
+            raw_llm=MagicMock(),
+        )
+
+    rule = res.rules[0]
+    assert rule.rule_name == "Cước phí hợp lệ"
+    assert rule.rule_description == "Cước phí phải nằm trong khoảng từ 0 đến 500."
+    assert rule.ai_reasoning == "Hồ sơ ghi nhận dải cước phí hợp lệ từ 0 đến 500."
+    assert rule.assumptions[0] == "Đơn vị là USD."
+    assert len(rule.assumptions) == 1
+    assert rule.parameter_provenance[0].parameter_name == "min"
+    assert rule.parameter_provenance[1].parameter_name == "max"
+
+
+@pytest.mark.asyncio
 async def test_propose_for_table_deepagent_fallback_to_structured_llm():
     from src.agents.nodes.rule_proposer_node import (
         CandidateProposedRule,

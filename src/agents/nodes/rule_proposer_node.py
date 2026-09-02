@@ -591,16 +591,19 @@ def _bind_proposal_to_candidates(
         if not evidence_refs:
             raise ValueError(f"Candidate {candidate_id!r} has no evidence reference")
 
-        # These fields are owned by the server-side candidate. Clearing provenance
-        # lets ProposedRule's bounded compatibility adapter recreate one exact entry
-        # per active candidate parameter from the deterministic evidence refs.
+        # These execution fields are owned by the server-side candidate. Keep a
+        # valid model-supplied provenance list when it covers the bound
+        # parameters; ProposedRule's compatibility adapter will still recreate
+        # one exact entry from deterministic evidence refs when the model omits
+        # or mangles it.
+        supplied_provenance = payload.get("parameter_provenance")
         payload.update({
             "candidate_id": candidate_id,
             "column": candidate.get("column"),
             "rule_type": candidate.get("rule_type"),
             "parameters": candidate.get("parameters") or {},
             "selected_evidence_refs": evidence_refs,
-            "parameter_provenance": [],
+            "parameter_provenance": supplied_provenance if isinstance(supplied_provenance, list) else [],
         })
         bound_rules.append(CandidateProposedRule.model_validate(payload))
         used_candidate_ids.add(candidate_id)
@@ -732,7 +735,13 @@ async def _propose_for_table_deepagent(
         model=model,
         tools=RULE_PROPOSER_TOOLS,
         system_prompt=system_prompt,
-        response_format=CandidateTableRuleProposal,
+        # Parse the model-owned narrative fields with the same permissive draft
+        # contract as the one-shot path.  CandidateTableRuleProposal also
+        # carries server-owned execution fields, and asking DeepAgent to emit
+        # that strict bound shape made otherwise complete Vietnamese narratives
+        # fail structured parsing before the candidate binder could restore the
+        # authoritative values.
+        response_format=CandidateTableRuleDraft,
         middleware=middlewares,
         skills=[skill_path],
     )
@@ -772,13 +781,17 @@ async def _propose_for_table_deepagent(
 
     if isinstance(content, CandidateTableRuleProposal):
         return content
+    if isinstance(content, CandidateTableRuleDraft):
+        return _bind_proposal_to_candidates(table_name, content, candidates or [])
     elif isinstance(content, dict):
-        return CandidateTableRuleProposal.model_validate(content)
+        draft = CandidateTableRuleDraft.model_validate(content)
+        return _bind_proposal_to_candidates(table_name, draft, candidates or [])
     elif isinstance(content, str):
         try:
-            return CandidateTableRuleProposal.model_validate_json(content)
+            draft = CandidateTableRuleDraft.model_validate_json(content)
         except Exception:
-            return CandidateTableRuleProposal.model_validate(json.loads(content))
+            draft = CandidateTableRuleDraft.model_validate(json.loads(content))
+        return _bind_proposal_to_candidates(table_name, draft, candidates or [])
     else:
         raise ValueError("DeepAgent returned an unrecognized structured response")
 
