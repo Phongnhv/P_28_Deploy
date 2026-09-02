@@ -92,13 +92,21 @@ def evaluate(*, write_evidence: bool = True) -> EvalResult:
 
     breakdown = [
         DatasetBreakdown(
+            # Binary probe outcomes, not dataset scores: a dataset resolving to None is
+            # a supported state that the metric already treats as success, so P25 was
+            # scoring this evaluator 0.00 while every metric it published read 100.0.
+            kind="case",
             dataset_id=dataset_id,
             status=(
                 EvalStatus.FAIL
                 if outcome in {"RAISES", "IMPORT_ERROR"}
                 else EvalStatus.PASS
             ),
-            score=100.0 if outcome == "RESOLVED" else 0.0,
+            # Success is "the resolver answered", matching policy_resolution_success_rate
+            # above. Scoring NONE as 0.0 contradicted this row's own PASS status and its
+            # own reason string, and penalised the product for the exact behaviour it is
+            # supposed to have: a dataset a user uploads never has a hand-written entry.
+            score=0.0 if outcome in {"RAISES", "IMPORT_ERROR"} else 100.0,
             reason=f"{outcome}: {detail}",
         )
         for dataset_id, (outcome, detail) in outcomes.items()

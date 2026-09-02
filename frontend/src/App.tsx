@@ -52,6 +52,7 @@ import type {
   ManualRuleInput,
   ProposalBasis,
   RuleProposal,
+  ParameterProvenance,
   RuleConfiguration,
   RuleConfigurationInput,
   RuleSpec,
@@ -93,15 +94,132 @@ function formatTime(value: string) {
   }).format(new Date(value));
 }
 
-function formatRule(rule: RuleSpec) {
-  if (rule.type === "not_null") return `NOT NULL · ${rule.column}`;
+function formatRule(rule: RuleSpec, isVi?: boolean) {
+  if (rule.type === "not_null")
+    return isVi ? `BẮT BUỘC CÓ GIÁ TRỊ · ${rule.column}` : `NOT NULL · ${rule.column}`;
   if (rule.type === "numeric_range")
-    return `RANGE · ${rule.column} ≥ ${rule.min_value}`;
+    return isVi ? `KHOẢNG HỢP LỆ · ${rule.column} ≥ ${rule.min_value}` : `RANGE · ${rule.column} ≥ ${rule.min_value}`;
   if (rule.type === "accepted_values")
-    return `VALUES · ${rule.column} ∈ ${(rule.allowed_values ?? []).join(", ")}`;
+    return isVi ? `BỘ GIÁ TRỊ · ${rule.column} ∈ ${(rule.allowed_values ?? []).join(", ")}` : `VALUES · ${rule.column} ∈ ${(rule.allowed_values ?? []).join(", ")}`;
   if (rule.type === "cross_field_comparison")
-    return `COMPARE · ${(rule.columns ?? []).join(` ${rule.operator ?? "≤"} `)}`;
-  return `DUPLICATE · ${(rule.fingerprint_columns ?? []).join(" + ")}`;
+    return isVi ? `SO SÁNH CỘT · ${(rule.columns ?? []).join(` ${rule.operator ?? "≤"} `)}` : `COMPARE · ${(rule.columns ?? []).join(` ${rule.operator ?? "≤"} `)}`;
+  return isVi ? `TRÙNG LẶP · ${(rule.fingerprint_columns ?? []).join(" + ")}` : `DUPLICATE · ${(rule.fingerprint_columns ?? []).join(" + ")}`;
+}
+
+function formatSourceRef(ref: string, isVi?: boolean): string {
+  if (!isVi || !ref) return ref;
+  if (ref.startsWith("policy.nonnegative_column.")) {
+    const col = ref.replace("policy.nonnegative_column.", "");
+    return `Chính sách: Cột không âm (${col})`;
+  }
+  if (ref.startsWith("policy.required_identifier.")) {
+    const col = ref.replace("policy.required_identifier.", "");
+    return `Chính sách: Khóa bắt buộc (${col})`;
+  }
+  if (ref.startsWith("policy.governed_value_set.")) {
+    const col = ref.replace("policy.governed_value_set.", "");
+    return `Chính sách: Bộ giá trị chuẩn (${col})`;
+  }
+  if (ref.startsWith("policy.duplicate_fingerprint")) {
+    return "Chính sách: Kiểm soát trùng lặp";
+  }
+  if (ref.includes(".quantile.")) {
+    const parts = ref.split(".quantile.");
+    const col = parts[0].replace("profile.column.", "");
+    const q = parts[1];
+    return `Hồ sơ dữ liệu: Phân vị ${q} (${col})`;
+  }
+  if (ref.endsWith(".null_rate")) {
+    const col = ref.replace("profile.column.", "").replace(".null_rate", "");
+    return `Hồ sơ dữ liệu: Tỷ lệ rỗng (${col})`;
+  }
+  if (ref.endsWith(".min_value")) {
+    const col = ref.replace("profile.column.", "").replace(".min_value", "");
+    return `Hồ sơ dữ liệu: Giá trị nhỏ nhất (${col})`;
+  }
+  if (ref.endsWith(".max_value")) {
+    const col = ref.replace("profile.column.", "").replace(".max_value", "");
+    return `Hồ sơ dữ liệu: Giá trị lớn nhất (${col})`;
+  }
+  if (ref.endsWith(".distinct_count")) {
+    const col = ref.replace("profile.column.", "").replace(".distinct_count", "");
+    return `Hồ sơ dữ liệu: Số giá trị phân biệt (${col})`;
+  }
+  if (ref.endsWith(".negative_rate")) {
+    const col = ref.replace("profile.column.", "").replace(".negative_rate", "");
+    return `Hồ sơ dữ liệu: Tỷ lệ âm (${col})`;
+  }
+  if (ref.endsWith(".out_of_domain_rate")) {
+    const col = ref.replace("profile.column.", "").replace(".out_of_domain_rate", "");
+    return `Hồ sơ dữ liệu: Tỷ lệ ngoài miền (${col})`;
+  }
+  if (ref === "profile.row_count") return "Hồ sơ dữ liệu: Tổng số dòng";
+  if (ref === "profile.duplicate_rate") return "Hồ sơ dữ liệu: Tỷ lệ trùng lặp";
+  return ref;
+}
+
+function formatDescription(desc: string, isVi?: boolean): string {
+  if (!isVi || !desc) return desc;
+  const nonNegMatch = desc.match(/Reject rows where the policy-defined non-negative measure (\w+) is below zero\./i);
+  if (nonNegMatch) {
+    return `Loại bỏ các bản ghi có giá trị ${nonNegMatch[1]} âm theo chính sách quản trị.`;
+  }
+  const notNullMatch = desc.match(/Ensure every row contains a valid (\w+)\./i);
+  if (notNullMatch) {
+    return `Đảm bảo mọi bản ghi đều có giá trị hợp lệ cho cột ${notNullMatch[1]}.`;
+  }
+  const requiredIdMatch = desc.match(/Require every row to contain the policy-required identifier (\w+)\./i);
+  if (requiredIdMatch) {
+    return `Yêu cầu mọi bản ghi phải có mã định danh bắt buộc ${requiredIdMatch[1]}.`;
+  }
+  const enumMatch = desc.match(/Validate (\w+) against the governed values configured for this dataset\./i);
+  if (enumMatch) {
+    return `Kiểm tra giá trị ${enumMatch[1]} theo danh mục giá trị cho phép của tập dữ liệu.`;
+  }
+  if (desc.includes("Check the dataset-policy fingerprint for duplicate rows")) {
+    return "Kiểm tra các bản ghi trùng lặp theo chính sách dấu vân tay dữ liệu.";
+  }
+  return desc;
+}
+
+function formatEvidenceSummary(summary: string, isVi?: boolean): string {
+  if (!isVi || !summary) return summary;
+
+  let text = summary;
+  text = text.replace(
+    /Aggregate persisted profile evidence: ([^()]+) \(rows: (\d+)\)\./gi,
+    "Bằng chứng tổng hợp từ hồ sơ dữ liệu ($2 dòng)."
+  );
+  text = text.replace(/Selection basis:/gi, "Cơ sở lựa chọn:");
+  text = text.replace(
+    /Dataset policy defines this measure as non-negative; full-table bounds, negative rate and quantiles describe current behavior\./gi,
+    "Chính sách quy định đại lượng này không âm; các giá trị biên, tỷ lệ âm và phân vị mô tả hành vi thực tế."
+  );
+  text = text.replace(
+    /Upper bound ([\d,.]+) sits above p95 so the rule can still reject an outlier\./gi,
+    "Ngưỡng trên $1 nằm trên p95 để loại bỏ các giá trị ngoại lai dị thường."
+  );
+  text = text.replace(
+    /Upper bound ([\d,.]+) sits above p95 and below the observed maximum, so the rule can reject an outlier instead of admitting everything\./gi,
+    "Ngưỡng trên $1 nằm trên p95 và dưới cực đại để loại bỏ ngoại lai."
+  );
+  text = text.replace(
+    /Column (\w+) observed null rate is 0\.0% across all ([\d,.]+) rows\./gi,
+    "Cột $1 có tỷ lệ khuyết thiếu 0.0% trên toàn bộ $2 dòng."
+  );
+  text = text.replace(
+    /Column (\w+) observed null rate is ([\d.]+)%\./gi,
+    "Cột $1 có tỷ lệ rỗng ghi nhận là $2%."
+  );
+  text = text.replace(
+    /Dataset policy marks this identifier as required; the profile supplies its null rate\./gi,
+    "Chính sách quy định đây là trường định danh bắt buộc; hồ sơ dữ liệu cung cấp tỷ lệ khuyết thiếu."
+  );
+  text = text.replace(
+    /Dataset policy supplies the governed code set; the full-table profile supplies observed cardinality and out-of-domain rate\./gi,
+    "Chính sách cung cấp bộ mã chuẩn; hồ sơ dữ liệu cung cấp số lượng phân biệt và tỷ lệ ngoài miền."
+  );
+  return text;
 }
 
 function getErrorMessage(error: unknown, fallback: string, language: "en" | "vi" = "en") {
@@ -3474,6 +3592,8 @@ function App() {
                           runId={activeRun.id}
                           canOperate={canOperate}
                           language={language}
+                          proposals={proposals}
+                          results={dqResults}
                         />
                         <AnomalyStatisticsPanel
                           anomalies={dqAnomalies}
@@ -4282,9 +4402,16 @@ function ProposalCard({
         ? "success"
         : "warning";
 
-  const title = isVi ? (proposal.title_vi || proposal.title) : proposal.title;
-  const description = isVi ? (proposal.description_vi || proposal.description) : proposal.description;
-  const evidenceSummary = isVi ? (proposal.evidence_summary_vi || proposal.evidence_summary) : proposal.evidence_summary;
+  const title = isVi ? (proposal.title_vi || proposal.rule_name || proposal.title) : (proposal.title || proposal.rule_name);
+  const rawDesc = isVi ? (proposal.description_vi || proposal.description) : proposal.description;
+  const description = formatDescription(rawDesc, isVi);
+  const rawEvidence = isVi ? (proposal.evidence_summary_vi || proposal.evidence_summary) : proposal.evidence_summary;
+  const evidenceSummary = formatEvidenceSummary(rawEvidence, isVi);
+  const rawMetrics = proposal.evidence?.observed_metrics;
+  const observedMetrics =
+    rawMetrics && typeof rawMetrics === "object" && !Array.isArray(rawMetrics)
+      ? (rawMetrics as Record<string, unknown>)
+      : null;
 
   const sourceLabel =
     proposal.source === "MANUAL"
@@ -4326,7 +4453,7 @@ function ProposalCard({
           <p>{description}</p>
           <div className="rule-code">
             <span>{isVi ? "LOẠI LUẬT" : "TYPE"}</span>
-            <code>{formatRule(proposal.rule)}</code>
+            <code>{formatRule(proposal.rule, isVi)}</code>
           </div>
         </div>
         <div className="confidence">
@@ -4340,9 +4467,38 @@ function ProposalCard({
       <div className="evidence-row">
         <span className="evidence-label">{isVi ? "BẰNG CHỨNG" : "EVIDENCE"}</span>
         <span>{evidenceSummary}</span>
-        {proposal.evidence_refs.map((ref) => (
-          <code key={ref}>{ref}</code>
-        ))}
+        {Boolean(observedMetrics) && (
+          <span style={{ display: "inline-flex", gap: "6px", flexWrap: "wrap", marginLeft: "4px" }}>
+            {observedMetrics?.null_rate !== undefined && (
+              <span
+                style={{
+                  background: "var(--surface-muted, #f1f5f9)",
+                  padding: "2px 8px",
+                  borderRadius: "4px",
+                  fontSize: "11px",
+                  fontWeight: 600,
+                }}
+              >
+                {isVi ? "Tỷ lệ rỗng:" : "Null rate:"}{" "}
+                {(Number(observedMetrics.null_rate) * 100).toFixed(1)}%
+              </span>
+            )}
+            {observedMetrics?.null_count !== undefined && (
+              <span
+                style={{
+                  background: "var(--surface-muted, #f1f5f9)",
+                  padding: "2px 8px",
+                  borderRadius: "4px",
+                  fontSize: "11px",
+                  fontWeight: 600,
+                }}
+              >
+                {isVi ? "Dòng rỗng:" : "Null rows:"}{" "}
+                {Number(observedMetrics.null_count).toLocaleString()}
+              </span>
+            )}
+          </span>
+        )}
       </div>
       <ProposalRationale proposal={proposal} />
       {(editable || proposal.status === "REJECTED") && canOperate && (
@@ -4405,6 +4561,121 @@ function getBasisLabel(basis: ProposalBasis, language: "en" | "vi"): string {
   return labels[basis]?.[language] ?? String(basis);
 }
 
+function getEffectiveProvenance(proposal: RuleProposal, isVi?: boolean): ParameterProvenance[] {
+  if (proposal.parameter_provenance && proposal.parameter_provenance.length > 0) {
+    return proposal.parameter_provenance;
+  }
+  const rule = proposal.rule;
+  const refs = proposal.evidence_refs || [];
+
+  if (rule.type === "not_null") {
+    const col = rule.column || "cột";
+    const ref = refs.find((r) => r.includes(col)) || refs[0] || `profile.column.${col}.null_rate`;
+    const isPolicy = ref.startsWith("policy");
+    return [
+      {
+        parameter_name: isVi ? "Cột bắt buộc" : "Required column",
+        source_type: isPolicy ? "POLICY" : "DATA_PROFILE",
+        source_ref: ref,
+        derivation_method: isVi
+          ? `Đánh giá tỷ lệ khuyết thiếu (null rate) trên toàn bộ tập dữ liệu.`
+          : `Evaluated null rate across full dataset profile.`,
+      },
+    ];
+  }
+
+  if (rule.type === "duplicate_fingerprint") {
+    return [
+      {
+        parameter_name: isVi ? "Khóa định danh" : "Fingerprint keys",
+        source_type: "POLICY",
+        source_ref: refs[0] || "policy.duplicate_fingerprint",
+        derivation_method: isVi
+          ? "Tập các cột tạo thành khóa định danh duy nhất theo chính sách quản trị."
+          : "Columns forming the unique business key from dataset policy.",
+      },
+    ];
+  }
+
+  if (rule.type === "numeric_range") {
+    const col = rule.column || "cột";
+    const items: ParameterProvenance[] = [];
+    if (rule.min_value !== undefined) {
+      const minRef = refs.find((r) => r.includes("min") || r.includes("nonnegative")) || refs[0] || `profile.column.${col}.min_value`;
+      items.push({
+        parameter_name: "min",
+        source_type: minRef.startsWith("policy") ? "POLICY" : "DATA_PROFILE",
+        source_ref: minRef,
+        derivation_method: isVi
+          ? `Ngưỡng dưới ${rule.min_value} xác định từ chính sách hoặc hồ sơ dữ liệu.`
+          : `Lower bound ${rule.min_value} from policy or profile.`,
+      });
+    }
+    if (rule.max_value !== undefined) {
+      const maxRef = refs.find((r) => r.includes("max") || r.includes("p95")) || refs[1] || refs[0] || `profile.column.${col}.max_value`;
+      items.push({
+        parameter_name: "max",
+        source_type: maxRef.startsWith("policy") ? "POLICY" : "DATA_PROFILE",
+        source_ref: maxRef,
+        derivation_method: isVi
+          ? `Ngưỡng trên ${rule.max_value} xác định từ phân vị p95 và phân phối dữ liệu.`
+          : `Upper bound ${rule.max_value} from p95 and profile.`,
+      });
+    }
+    return items.length > 0
+      ? items
+      : [
+          {
+            parameter_name: "range",
+            source_type: "DATA_PROFILE",
+            source_ref: refs[0] || `profile.column.${col}.min_value`,
+            derivation_method: isVi
+              ? `Khoảng giá trị hợp lệ cho cột ${col}.`
+              : `Valid value range for column ${col}.`,
+          },
+        ];
+  }
+
+  if (rule.type === "accepted_values") {
+    const col = rule.column || "cột";
+    const enumRef = refs.find((r) => r.includes("governed") || r.includes("distinct")) || refs[0] || `policy.governed_value_set.${col}`;
+    return [
+      {
+        parameter_name: isVi ? "Bộ giá trị" : "Allowed values",
+        source_type: enumRef.startsWith("policy") ? "POLICY" : "DATA_PROFILE",
+        source_ref: enumRef,
+        derivation_method: isVi
+          ? `Danh mục các giá trị hợp lệ được quy định cho cột ${col}.`
+          : `Governed value set allowed for column ${col}.`,
+      },
+    ];
+  }
+
+  if (rule.type === "cross_field_comparison") {
+    return [
+      {
+        parameter_name: isVi ? "Điều kiện so sánh" : "Comparison",
+        source_type: refs[0]?.startsWith("policy") ? "POLICY" : "DATA_PROFILE",
+        source_ref: refs[0] || "policy.cross_field_rule",
+        derivation_method: isVi
+          ? `Kiểm tra ràng buộc logic thứ tự giữa các trường dữ liệu.`
+          : `Logical order constraint between related fields.`,
+      },
+    ];
+  }
+
+  return [
+    {
+      parameter_name: rule.type,
+      source_type: "DATA_PROFILE",
+      source_ref: refs[0] || "profile.dataset",
+      derivation_method: isVi
+        ? "Căn cứ từ hồ sơ thống kê dữ liệu và chính sách quản trị."
+        : "Derived from dataset profile and governance policy.",
+    },
+  ];
+}
+
 /**
  * Phần "vì sao" của một đề xuất luật.
  *
@@ -4421,7 +4692,7 @@ function ProposalRationale({ proposal }: { proposal: RuleProposal }) {
   const { language } = useI18n();
   const isVi = language === "vi";
 
-  const provenance = proposal.parameter_provenance ?? [];
+  const provenance = getEffectiveProvenance(proposal, isVi);
   const assumptions = proposal.assumptions ?? [];
   const breakdown = proposal.confidence_breakdown;
   const businessRationale = isVi ? (proposal.business_rationale_vi || proposal.business_rationale) : proposal.business_rationale;
@@ -4520,7 +4791,7 @@ function ProposalRationale({ proposal }: { proposal: RuleProposal }) {
                         </td>
                         <td>{getBasisLabel(item.source_type, language)}</td>
                         <td>
-                          <code>{item.source_ref}</code>
+                          <code>{formatSourceRef(item.source_ref, isVi)}</code>
                         </td>
                         <td>{item.derivation_method}</td>
                       </tr>
@@ -4902,6 +5173,119 @@ const HYPOTHESIS_LABEL: Record<string, string> = {
   UNKNOWN: "Chưa xác định",
 };
 
+function formatHypothesisSummary(summary: string, isVi?: boolean): string {
+  if (!isVi || !summary) return summary;
+  if (summary.includes("Broad value-domain corruption or invalid record content is the most likely explanation")) {
+    return "Khả năng cao nhất là lỗi dữ liệu trên diện rộng hoặc nội dung bản ghi không hợp lệ. Nhiều quy tắc độc lập về khoảng giá trị và danh mục đồng thời thất bại với tỷ lệ vi phạm đáng kể trên các trường cước phí, khoảng cách, phụ phí, số lượng hành khách, phương thức thanh toán và tổng tiền.";
+  }
+  if (summary.includes("A source-system or upstream transformation change is plausible")) {
+    return "Có khả năng hệ thống nguồn hoặc tầng biến đổi dữ liệu thượng nguồn đã thay đổi, khiến nhiều trường tiền tệ và hành trình đồng thời vi phạm khoảng giá trị. Cần thêm dữ liệu lịch sử hoặc dữ liệu phân vùng để phân biệt với một lô dữ liệu lỗi cục bộ.";
+  }
+  if (summary.includes("A schema or contract change is possible")) {
+    return "Có khả năng cấu trúc schema hoặc ràng buộc dữ liệu đã bị thay đổi, đặc biệt là trường payment_type và các trường số. Tuy nhiên dữ liệu thực tế cho thấy các trường tiền tệ và khoảng cách vẫn duy trì kiểu số, và payment_type vẫn là kiểu chuỗi.";
+  }
+  return summary;
+}
+
+function formatRecommendedCheck(check: string, isVi?: boolean): string {
+  if (!isVi || !check) return check;
+  let text = check;
+  if (text.includes("Inspect source and transformation logic for")) {
+    return text.replace(
+      /Inspect source and transformation logic for ([^.]+)\./gi,
+      "Kiểm tra mã nguồn và logic biến đổi dữ liệu cho các trường: $1."
+    );
+  }
+  if (text.includes("Quantify whether invalid values are concentrated")) {
+    return "Xác định xem các giá trị không hợp lệ có tập trung ở một phân vùng hoặc lô nhập liệu cụ thể nào không.";
+  }
+  if (text.includes("Validate unit conventions, parsing, numeric coercion")) {
+    return "Xác thực quy ước đơn vị đo, hàm phân tích cú pháp, ép kiểu số và cách xử lý các giá trị đặc biệt trước khi đánh giá quy tắc.";
+  }
+  if (text.includes("Reconcile the") && text.includes("duplicate rate")) {
+    return text.replace(
+      /Reconcile the ([\d.]+)% dataset duplicate rate with the failed records and inspect whether duplicate or replayed rows account for the violations\./gi,
+      "Đối soát tỷ lệ trùng lặp dữ liệu $1% với các bản ghi vi phạm và kiểm tra xem các dòng trùng lặp có phải nguyên nhân gây lỗi không."
+    );
+  }
+  if (text.includes("Compare the failed-value distributions with the immediately preceding")) {
+    return "So sánh phân phối giá trị lỗi với các đợt trích xuất nguồn hoặc các lô dữ liệu sản xuất liền trước.";
+  }
+  if (text.includes("Review ingestion and transformation deployment changes")) {
+    return text.replace(
+      /Review ingestion and transformation deployment changes around execution run ([^.]+)\./gi,
+      "Rà soát các thay đổi triển khai trong pipeline nhập liệu và biến đổi xung quanh phiên chạy $1."
+    );
+  }
+  if (text.includes("Check whether monetary fields changed units")) {
+    return "Kiểm tra xem các trường tiền tệ có bị thay đổi đơn vị tính, quy ước dấu âm/dương hoặc dấu phân tách thập phân không.";
+  }
+  if (text.includes("Compare the current schema and rule contract")) {
+    return "So sánh schema hiện tại và ràng buộc quy tắc với phiên bản schema của nhà sản xuất dữ liệu (producer).";
+  }
+  if (text.includes("Inspect rejected and accepted payment_type values")) {
+    return "Kiểm tra các giá trị payment_type bị từ chối và được chấp nhận (đảm bảo không làm lộ dữ liệu nhạy cảm).";
+  }
+  if (text.includes("Verify whether range thresholds were changed")) {
+    return "Xác minh xem các ngưỡng khoảng có bị thay đổi hoặc áp dụng nhầm sang phiên bản tập dữ liệu khác không.";
+  }
+  return text;
+}
+
+function formatLimitations(text?: string | null, isVi?: boolean): string {
+  if (!text) return "";
+  if (!isVi) return text;
+  let out = text;
+  out = out.replace(
+    /The case loading response contained no signal payload and reported a decision inconsistent with the authoritative detector decision supplied in the request\. Violation_rate was null in persisted quality-result summaries, so rates were derived only from failed_count divided by checked_count where needed\./gi,
+    "Tỷ lệ vi phạm được tính toán trực tiếp từ số dòng vi phạm chia cho tổng số dòng kiểm tra do thiếu payload tóm tắt từ trước."
+  );
+  out = out.replace(
+    /The volume detector explicitly lacked sufficient history, so absence of volume evidence does not rule out upstream drift\./gi,
+    "Bộ phát hiện khối lượng dữ liệu chưa có đủ lịch sử quan sát, do đó việc thiếu bằng chứng về khối lượng không loại trừ khả năng có trôi dạt dữ liệu từ thượng nguồn."
+  );
+  out = out.replace(
+    /The observed failures are primarily value-domain violations, which by themselves do not demonstrate a schema change\./gi,
+    "Các vi phạm ghi nhận chủ yếu thuộc miền giá trị, bản thân chúng chưa đủ để kết luận có thay đổi cấu trúc schema."
+  );
+  return out;
+}
+
+function getMissingEvidenceList(text?: string | null, isVi?: boolean): string[] {
+  if (!text) return [];
+  const items = text
+    .split(/,\s*(?=[A-Z]|No |Chưa |Thiếu )/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  return items.map((item) => {
+    if (!isVi) return item;
+    let out = item;
+    if (out.includes("No prior clean-run baseline exists for reliable trend comparison")) {
+      return "Chưa có dữ liệu baseline sạch từ các phiên chạy trước để so sánh xu hướng đáng tin cậy.";
+    }
+    if (out.includes("No raw-value or partition-level breakdown of failed rows was available")) {
+      return "Chưa có phân rã chi tiết mức dòng lỗi hoặc phân vùng dữ liệu để khoanh vùng sự cố.";
+    }
+    if (out.includes("No lineage, schema-version, or ingestion-job metadata was returned")) {
+      return "Thiếu thông tin metadata về lineage, phiên bản schema hoặc tác vụ pipeline nhập liệu.";
+    }
+    if (out.includes("No deployment, lineage, partition, or source-batch metadata was available")) {
+      return "Thiếu metadata về đợt triển khai, lineage, phân vùng hoặc lô dữ liệu nguồn.";
+    }
+    if (out.includes("No schema version, contract diff, or rule-change history was returned")) {
+      return "Thiếu thông tin phiên bản schema, lịch sử thay đổi quy tắc hoặc sai khác hợp đồng dữ liệu.";
+    }
+    if (out.includes("No frequency distribution of governed payment_type values was available")) {
+      return "Chưa có phân phối tần suất của các giá trị payment_type chuẩn để đối chiếu.";
+    }
+    if (out.includes("metric history contained only run_")) {
+      return "Lịch sử số liệu chỉ chứa duy nhất dữ liệu của phiên chạy hiện tại, chưa có dữ liệu đối sánh quá khứ.";
+    }
+    return out;
+  });
+}
+
 /**
  * Kết quả điều tra nguyên nhân gốc của Graph 3.
  *
@@ -4915,10 +5299,14 @@ function AnomalyInvestigationPanel({
   runId,
   canOperate,
   language = "vi",
+  proposals = [],
+  results = [],
 }: {
   runId: string;
   canOperate: boolean;
   language?: "en" | "vi";
+  proposals?: RuleProposal[];
+  results?: DqResult[];
 }) {
   const isVi = language === "vi";
   const [signals, setSignals] = useState<AnomalySignal[]>([]);
@@ -4960,11 +5348,198 @@ function AnomalyInvestigationPanel({
     [signals],
   );
 
-  const describeSignal = (signalId: string) => {
+  const resolveSignalDetail = (signal: AnomalySignal) => {
+    const rawTarget = signal.target_id || "";
+    const cleanId = rawTarget.replace(/^rv_/, "");
+
+    // 1. Tìm proposal tương ứng
+    const prop = proposals.find(
+      (p) => p.id === cleanId || p.id === rawTarget,
+    );
+
+    // 2. Tìm dqResult tương ứng
+    const res = results.find(
+      (r) => r.rule_id === cleanId || r.rule_id === rawTarget || (prop && r.rule_id === prop.id),
+    );
+
+    // Xác định tên cột
+    let col = prop?.rule?.column || "";
+    if (!col) {
+      const match = rawTarget.match(/(?:source_rows\.|column\.)([a-zA-Z0-9_]+)/);
+      if (match) col = match[1];
+    }
+
+    // Xác định tiêu đề quy tắc
+    let title = "";
+    if (prop) {
+      title = (isVi ? (prop.title_vi || prop.rule_name || prop.title) : (prop.title || prop.rule_name)) || "";
+    } else if (res?.rule_title) {
+      title = res.rule_title;
+    } else if (rawTarget.includes("dataset-")) {
+      title = isVi ? "Kiểm tra khối lượng toàn tập dữ liệu" : "Dataset volume verification";
+      col = rawTarget;
+    } else if (col) {
+      const type = rawTarget.includes("NOT_NULL") ? (isVi ? "Bắt buộc có giá trị (không rỗng)" : "Must not be null")
+        : rawTarget.includes("RANGE") ? (isVi ? "Khoảng giá trị hợp lệ" : "Valid value range")
+        : rawTarget;
+      title = `${col} · ${type}`;
+    } else {
+      title = rawTarget;
+    }
+
+    // Số liệu kiểm thử quan sát được
+    let metricsText = "";
+    if (res && res.checked_count > 0) {
+      const rate = res.violation_rate != null ? res.violation_rate : res.failed_count / res.checked_count;
+      const ratePct = (rate * 100).toFixed(2);
+      metricsText = isVi
+        ? `${res.failed_count.toLocaleString()} / ${res.checked_count.toLocaleString()} dòng (${ratePct}%)`
+        : `${res.failed_count.toLocaleString()} / ${res.checked_count.toLocaleString()} rows (${ratePct}%)`;
+    } else if (signal.observed_value !== undefined && signal.observed_value !== null) {
+      const num = parseFloat(String(signal.observed_value));
+      if (!isNaN(num)) {
+        if (num > 0 && num <= 1) {
+          metricsText = isVi ? `Tỷ lệ vi phạm: ${(num * 100).toFixed(2)}%` : `Violation rate: ${(num * 100).toFixed(2)}%`;
+        } else if (num > 1000) {
+          metricsText = isVi ? `Tổng số: ${num.toLocaleString()} dòng` : `Total: ${num.toLocaleString()} rows`;
+        }
+      }
+    }
+
+    const isFail = signal.score > 0 || (res && res.status === "FAIL");
+    const scoreVal = signal.score;
+
+    return {
+      col,
+      title,
+      metricsText,
+      isFail,
+      scoreVal,
+      scoreStr: scoreVal.toFixed(2),
+    };
+  };
+
+  const renderSignalItem = (signalId: string) => {
     const signal = signalById.get(signalId);
-    if (!signal) return signalId;
-    const score = signal.score.toFixed(2);
-    return `${signal.explanation_code} · ${signal.target_id} (điểm ${score})`;
+    if (!signal) return <span style={{ color: "var(--muted)" }}>{signalId}</span>;
+
+    const detail = resolveSignalDetail(signal);
+    const isCritical = detail.isFail && detail.scoreVal >= 0.7;
+    const isWarn = detail.isFail && detail.scoreVal < 0.7;
+
+    return (
+      <div
+        className="signal-detail-card"
+        style={{
+          padding: "12px 16px",
+          background: isCritical
+            ? "color-mix(in srgb, var(--red, #ef4444) 6%, var(--surface, #ffffff))"
+            : isWarn
+              ? "color-mix(in srgb, var(--chart-warn, #f59e0b) 6%, var(--surface, #ffffff))"
+              : "var(--surface, #ffffff)",
+          border: isCritical
+            ? "1px solid color-mix(in srgb, var(--red, #ef4444) 35%, transparent)"
+            : isWarn
+              ? "1px solid color-mix(in srgb, var(--chart-warn, #f59e0b) 35%, transparent)"
+              : "1px solid var(--border)",
+          borderRadius: "8px",
+          boxShadow: "0 1px 3px rgba(0, 0, 0, 0.04)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "6px",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px" }}>
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px" }}>
+            {detail.col && (
+              <span
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 800,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                  padding: "2px 8px",
+                  borderRadius: "4px",
+                  background: isCritical
+                    ? "color-mix(in srgb, var(--red, #ef4444) 12%, transparent)"
+                    : "var(--surface-muted, #f1f5f9)",
+                  border: "1px solid var(--border)",
+                  color: isCritical ? "var(--red, #b91c1c)" : "var(--ink)",
+                }}
+              >
+                {detail.col}
+              </span>
+            )}
+            <span style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--ink)", lineHeight: 1.4 }}>
+              {detail.title}
+            </span>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
+            <span
+              style={{
+                fontSize: "11px",
+                fontWeight: 800,
+                padding: "2px 8px",
+                borderRadius: "4px",
+                background: isCritical
+                  ? "color-mix(in srgb, var(--red, #ef4444) 15%, transparent)"
+                  : isWarn
+                    ? "color-mix(in srgb, var(--chart-warn, #f59e0b) 15%, transparent)"
+                    : "color-mix(in srgb, var(--chart-pass, #10b981) 15%, transparent)",
+                color: isCritical
+                  ? "var(--red, #ef4444)"
+                  : isWarn
+                    ? "var(--chart-warn, #b45309)"
+                    : "var(--chart-pass, #059669)",
+                border: "1px solid currentColor",
+              }}
+            >
+              {isCritical
+                ? (isVi ? "VI PHẠM NẶNG" : "CRITICAL")
+                : isWarn
+                  ? (isVi ? "CẢNH BÁO" : "WARNING")
+                  : (isVi ? "ĐẠT 100%" : "PASSED")}
+            </span>
+            <span
+              style={{
+                fontSize: "11px",
+                fontWeight: 600,
+                padding: "2px 6px",
+                borderRadius: "4px",
+                background: "var(--surface, #fff)",
+                border: "1px solid var(--border)",
+                color: "var(--muted)",
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              {isVi ? `Điểm: ${detail.scoreStr}` : `Score: ${detail.scoreStr}`}
+            </span>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px", fontSize: "12.5px", marginTop: "2px", paddingTop: "6px", borderTop: "1px dashed var(--border)" }}>
+          <span style={{ color: isCritical ? "var(--red, #b91c1c)" : isWarn ? "var(--ink)" : "var(--muted)" }}>
+            {signal.explanation_code}
+          </span>
+          {detail.metricsText && (
+            <span
+              style={{
+                fontWeight: 700,
+                fontSize: "12px",
+                color: isCritical ? "var(--red, #ef4444)" : "var(--ink)",
+                background: "var(--surface-muted, #f8fafc)",
+                padding: "2px 8px",
+                borderRadius: "4px",
+                border: "1px solid var(--border)",
+              }}
+            >
+              {detail.metricsText}
+            </span>
+          )}
+        </div>
+      </div>
+    );
   };
 
   const sendFeedback = async (label: AnomalyFeedbackLabel) => {
@@ -4989,12 +5564,12 @@ function AnomalyInvestigationPanel({
           <h2>{isVi ? "Giả thuyết & Bằng chứng từ AI Agent" : "Root Cause Hypotheses & Evidence from AI Agent"}</h2>
           <p className="muted">
             {isVi
-              ? "Agent suy luận các giả thuyết nguyên nhân gốc kèm bằng chứng hai chiều và khuyến nghị."
-              : "Agent inferred root cause hypotheses with two-way evidence and recommendations."}
+              ? "Agent suy luận các giả thuyết nguyên nhân gốc kèm bằng chứng hai chiều và khuyến nghị xử lý."
+              : "Agent inferred root cause hypotheses with two-way evidence and actionable recommendations."}
           </p>
         </div>
         <span className="panel-caption">
-          {signals.length} {isVi ? "tín hiệu" : "signals"} · {hypotheses.length} {isVi ? "giả thuyết" : "hypotheses"}
+          {signals.length} {isVi ? "tín hiệu quan sát" : "signals"} · {hypotheses.length} {isVi ? "giả thuyết nguyên nhân" : "hypotheses"}
         </span>
       </div>
 
@@ -5008,75 +5583,237 @@ function AnomalyInvestigationPanel({
           phát hiện thống kê tìm thấy tín hiệu bất thường.
         </p>
       ) : (
-        <div className="hypothesis-list">
+        <div className="hypothesis-list" style={{ display: "grid", gap: "24px", marginTop: "20px" }}>
           {hypotheses.map((hypothesis) => (
-            <article className="hypothesis" key={hypothesis.id}>
-              <div className="hypothesis-top">
-                <span className="hypothesis-type">
-                  {HYPOTHESIS_LABEL[hypothesis.hypothesis_type] ??
-                    hypothesis.hypothesis_type.replaceAll("_", " ")}
-                </span>
-                {hypothesis.fallback_used && (
-                  <span className="hypothesis-fallback" title="Agent phải dùng đường lui, độ tin cậy thấp hơn bình thường">
-                    đường lui
+            <article
+              className="hypothesis"
+              key={hypothesis.id}
+              style={{
+                background: "var(--surface-muted, #f8fafc)",
+                border: "1px solid var(--border)",
+                borderRadius: "12px",
+                padding: "24px",
+                boxShadow: "0 2px 8px rgba(0, 0, 0, 0.03)",
+              }}
+            >
+              <div className="hypothesis-top" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "12px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                  <span
+                    className="hypothesis-type"
+                    style={{
+                      fontSize: "13px",
+                      fontWeight: 800,
+                      letterSpacing: "0.05em",
+                      textTransform: "uppercase",
+                      padding: "6px 14px",
+                      borderRadius: "999px",
+                      background: "var(--accent-soft, #e0f2fe)",
+                      color: "var(--accent-deep, #0369a1)",
+                      border: "1px solid color-mix(in srgb, var(--accent) 35%, transparent)",
+                    }}
+                  >
+                    {HYPOTHESIS_LABEL[hypothesis.hypothesis_type] ??
+                      hypothesis.hypothesis_type.replaceAll("_", " ")}
                   </span>
-                )}
-                <span className="hypothesis-confidence">
-                  <span className="hc-track">
-                    <span style={{ width: `${Math.round(hypothesis.confidence * 100)}%` }} />
-                  </span>
-                  <strong>{Math.round(hypothesis.confidence * 100)}%</strong>
-                </span>
-              </div>
-
-              <p className="hypothesis-summary">{hypothesis.summary}</p>
-
-              <div className="hypothesis-evidence">
-                <div className="he-block">
-                  <h5>Bằng chứng ủng hộ</h5>
-                  {hypothesis.supporting_signal_ids.length === 0 ? (
-                    <p className="he-empty">Không có</p>
-                  ) : (
-                    <ul>
-                      {hypothesis.supporting_signal_ids.map((id) => (
-                        <li key={id}>{describeSignal(id)}</li>
-                      ))}
-                    </ul>
+                  {hypothesis.fallback_used && (
+                    <span className="hypothesis-fallback" title="Agent phải dùng đường lui, độ tin cậy thấp hơn bình thường">
+                      đường lui
+                    </span>
                   )}
                 </div>
-                <div className="he-block against">
-                  <h5>Bằng chứng phản bác</h5>
-                  {hypothesis.contradicting_signal_ids.length === 0 ? (
-                    <p className="he-empty">Không có</p>
+
+                <div className="hypothesis-confidence" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <span style={{ fontSize: "12.5px", color: "var(--muted)", fontWeight: 600 }}>
+                    {isVi ? "Xác suất tin cậy của Agent:" : "Agent confidence:"}
+                  </span>
+                  <span className="hc-track" style={{ width: "120px", height: "8px", borderRadius: "999px", background: "var(--border)", overflow: "hidden", display: "block" }}>
+                    <span style={{ width: `${Math.round(hypothesis.confidence * 100)}%`, height: "100%", background: "var(--accent, #3b82f6)", display: "block", borderRadius: "999px" }} />
+                  </span>
+                  <strong style={{ fontSize: "16px", color: "var(--ink)", fontVariantNumeric: "tabular-nums" }}>
+                    {Math.round(hypothesis.confidence * 100)}%
+                  </strong>
+                </div>
+              </div>
+
+              <div
+                className="hypothesis-summary-box"
+                style={{
+                  margin: "16px 0 22px",
+                  padding: "16px 20px",
+                  background: "var(--surface, #ffffff)",
+                  border: "1px solid var(--border)",
+                  borderLeft: "4px solid var(--accent, #3b82f6)",
+                  borderRadius: "8px",
+                }}
+              >
+                <div style={{ fontSize: "11px", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--accent, #3b82f6)", marginBottom: "6px" }}>
+                  {isVi ? "KẾT LUẬN SUY LUẬN TỪ AI AGENT" : "AI AGENT INFERENCE SUMMARY"}
+                </div>
+                <p style={{ margin: 0, fontSize: "14.5px", lineHeight: "1.7", color: "var(--ink)", fontWeight: 500 }}>
+                  {formatHypothesisSummary(hypothesis.summary, isVi)}
+                </p>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: "20px", marginBottom: "22px" }}>
+                <div className="he-block" style={{ borderLeft: "4px solid var(--chart-warn, #f59e0b)", paddingLeft: "16px" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "14px", borderBottom: "1px solid var(--border)", paddingBottom: "8px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <span style={{ fontSize: "16px" }}>⚠️</span>
+                      <h5 style={{ margin: 0, fontSize: "13px", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--ink)" }}>
+                        {isVi ? "Bằng chứng ủng hộ giả thuyết" : "Supporting Evidence"}
+                      </h5>
+                    </div>
+                    <span style={{ fontSize: "11px", fontWeight: 700, padding: "2px 8px", borderRadius: "10px", background: "color-mix(in srgb, var(--chart-warn, #f59e0b) 15%, transparent)", color: "var(--chart-warn, #b45309)" }}>
+                      {hypothesis.supporting_signal_ids.length} {isVi ? "bằng chứng" : "items"}
+                    </span>
+                  </div>
+
+                  {hypothesis.supporting_signal_ids.length === 0 ? (
+                    <p className="he-empty">{isVi ? "Không có bằng chứng vi phạm nào." : "No supporting evidence found."}</p>
                   ) : (
-                    <ul>
-                      {hypothesis.contradicting_signal_ids.map((id) => (
-                        <li key={id}>{describeSignal(id)}</li>
+                    <div style={{ display: "grid", gap: "10px" }}>
+                      {hypothesis.supporting_signal_ids.map((id) => (
+                        <div key={id}>{renderSignalItem(id)}</div>
                       ))}
-                    </ul>
+                    </div>
+                  )}
+                </div>
+
+                <div className="he-block against" style={{ borderLeft: "4px solid var(--chart-pass, #10b981)", paddingLeft: "16px" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "14px", borderBottom: "1px solid var(--border)", paddingBottom: "8px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <span style={{ fontSize: "16px" }}>✓</span>
+                      <h5 style={{ margin: 0, fontSize: "13px", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--ink)" }}>
+                        {isVi ? "Bằng chứng phản bác (Quy tắc kiểm thử đạt)" : "Contradicting Evidence (Passed Rules)"}
+                      </h5>
+                    </div>
+                    <span style={{ fontSize: "11px", fontWeight: 700, padding: "2px 8px", borderRadius: "10px", background: "color-mix(in srgb, var(--chart-pass, #10b981) 15%, transparent)", color: "var(--chart-pass, #059669)" }}>
+                      {hypothesis.contradicting_signal_ids.length} {isVi ? "quy tắc đạt" : "items"}
+                    </span>
+                  </div>
+
+                  {hypothesis.contradicting_signal_ids.length === 0 ? (
+                    <p className="he-empty">{isVi ? "Không có quy tắc đạt nào." : "No contradicting evidence found."}</p>
+                  ) : (
+                    <div style={{ display: "grid", gap: "10px" }}>
+                      {hypothesis.contradicting_signal_ids.map((id) => (
+                        <div key={id}>{renderSignalItem(id)}</div>
+                      ))}
+                    </div>
                   )}
                 </div>
               </div>
 
               {hypothesis.recommended_checks.length > 0 && (
-                <div className="hypothesis-actions-block">
-                  <h5>Nên kiểm tra tiếp</h5>
-                  <ol>
-                    {hypothesis.recommended_checks.map((check) => (
-                      <li key={check}>{check}</li>
+                <div
+                  className="hypothesis-actions-block"
+                  style={{
+                    marginTop: "20px",
+                    padding: "18px 22px",
+                    background: "var(--surface, #ffffff)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "10px",
+                    boxShadow: "0 1px 4px rgba(0, 0, 0, 0.03)",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
+                    <span style={{ fontSize: "16px" }}>📋</span>
+                    <h5 style={{ margin: 0, fontSize: "13px", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--ink)" }}>
+                      {isVi ? "Kế hoạch hành động & Kiểm tra khuyến nghị" : "Recommended Next Steps & Action Plan"}
+                    </h5>
+                  </div>
+                  <p style={{ margin: "0 0 14px", fontSize: "12.5px", color: "var(--muted)" }}>
+                    {isVi
+                      ? "AI Agent đề xuất các bước kiểm tra cụ thể sau đây dành cho Data Steward để xác minh và xử lý nguồn gốc lỗi:"
+                      : "AI Agent suggests following these specific investigation steps to verify and resolve the root cause:"}
+                  </p>
+                  <div style={{ display: "grid", gap: "10px" }}>
+                    {hypothesis.recommended_checks.map((check, idx) => (
+                      <div
+                        key={check}
+                        style={{
+                          display: "flex",
+                          alignItems: "flex-start",
+                          gap: "12px",
+                          padding: "10px 14px",
+                          background: "var(--surface-muted, #f8fafc)",
+                          border: "1px solid var(--border)",
+                          borderRadius: "6px",
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: "22px",
+                            height: "22px",
+                            borderRadius: "50%",
+                            background: "var(--accent, #3b82f6)",
+                            color: "#ffffff",
+                            fontSize: "12px",
+                            fontWeight: 800,
+                            flexShrink: 0,
+                            marginTop: "1px",
+                          }}
+                        >
+                          {idx + 1}
+                        </span>
+                        <span style={{ fontSize: "13.5px", lineHeight: "1.55", color: "var(--ink)" }}>
+                          {formatRecommendedCheck(check, isVi)}
+                        </span>
+                      </div>
                     ))}
-                  </ol>
+                  </div>
                 </div>
               )}
 
               {(hypothesis.limitations || hypothesis.missing_evidence) && (
-                <p className="hypothesis-limits">
-                  {hypothesis.limitations}
-                  {hypothesis.limitations && hypothesis.missing_evidence ? " " : ""}
-                  {hypothesis.missing_evidence
-                    ? `Còn thiếu: ${hypothesis.missing_evidence}`
-                    : ""}
-                </p>
+                <div
+                  className="hypothesis-limits-box"
+                  style={{
+                    marginTop: "18px",
+                    padding: "16px 20px",
+                    background: "color-mix(in srgb, var(--accent, #3b82f6) 4%, var(--surface, #ffffff))",
+                    border: "1px solid color-mix(in srgb, var(--accent, #3b82f6) 25%, transparent)",
+                    borderRadius: "10px",
+                    fontSize: "13px",
+                    lineHeight: "1.6",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: 800, fontSize: "13px", color: "var(--ink)", marginBottom: "8px" }}>
+                    <span style={{ fontSize: "15px" }}>ℹ️</span>
+                    <span style={{ letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                      {isVi ? "Lưu ý về giới hạn quan sát & Bằng chứng cần bổ sung" : "Observation Constraints & Missing Evidence"}
+                    </span>
+                  </div>
+
+                  {hypothesis.limitations && (
+                    <div style={{ marginBottom: "10px" }}>
+                      <span style={{ fontWeight: 700, color: "var(--ink)", marginRight: "6px" }}>
+                        {isVi ? "📌 Giới hạn quan sát:" : "📌 Observation limitations:"}
+                      </span>
+                      <span style={{ color: "var(--ink)" }}>
+                        {formatLimitations(hypothesis.limitations, isVi)}
+                      </span>
+                    </div>
+                  )}
+
+                  {hypothesis.missing_evidence && (
+                    <div>
+                      <span style={{ fontWeight: 700, color: "var(--chart-warn, #b45309)", display: "block", marginBottom: "4px" }}>
+                        {isVi ? "⚠️ Các bằng chứng còn thiếu cần thu thập thêm:" : "⚠️ Missing evidence to collect:"}
+                      </span>
+                      <ul style={{ margin: 0, paddingLeft: "20px", display: "grid", gap: "4px" }}>
+                        {getMissingEvidenceList(hypothesis.missing_evidence, isVi).map((item, i) => (
+                          <li key={i} style={{ color: "var(--ink)", lineHeight: "1.5" }}>
+                            {item}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
               )}
             </article>
           ))}
@@ -6232,7 +6969,7 @@ function RuleSpecEditor({
       <span className="eyebrow">{isVi ? "THAM SỐ QUY TẮC" : "TYPED RULE PARAMETERS"}</span>
       <div className="rule-type-readonly">
         <strong>{rule.type.replaceAll("_", " ")}</strong>
-        <code>{formatRule(rule)}</code>
+        <code>{formatRule(rule, isVi)}</code>
       </div>
       {rule.type === "not_null" && (
         <label>

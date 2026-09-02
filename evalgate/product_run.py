@@ -122,6 +122,8 @@ class ServedApi:
     def __init__(self, client: TestClient) -> None:
         self.client, self.csrf = client, ""
         self.transcript: list[dict[str, Any]] = []
+        self.node_events: list[dict[str, Any]] = []
+        self._event_keys: set[tuple[str, str, str]] = set()
 
     def request(self, method: str, path: str, *, expected: tuple[int, ...] = (200,), **kwargs):
         headers = dict(kwargs.pop("headers", {}))
@@ -150,10 +152,33 @@ class ServedApi:
             raise RuntimeError("login did not establish a Steward session")
         self.csrf = body["csrf_token"]
 
+    def drain_node_events(self) -> None:
+        """Copy whatever the node broker currently holds into this run's collection.
+
+        ``run_graph_streamed`` calls ``broker.reset(stream_id)`` before it starts, and the
+        anomaly graph streams under the same workflow id the earlier stages published
+        under. Harvesting once at the end therefore returned only what survived that
+        reset: four nodes of one graph, while ten had actually reported. The trace then
+        told the observability gate that instrumentation was complete.
+
+        Draining after every stage keeps the earlier events. Deduplication is by
+        (timestamp, node, event) so a stage drained twice contributes once.
+        """
+        from src.services.node_event_stream import broker
+
+        with broker._lock:
+            snapshot = [event for buffered in broker._buffer.values() for event in buffered]
+        for event in snapshot:
+            key = (str(event.get("timestamp")), str(event.get("node")), str(event.get("event")))
+            if key not in self._event_keys:
+                self._event_keys.add(key)
+                self.node_events.append(event)
+
     def wait_job(self, job_id: str) -> dict[str, Any]:
         for _ in range(120):
             body = self.request("GET", f"{API}/jobs/{job_id}").json()
             if body["status"] == "SUCCEEDED":
+                self.drain_node_events()
                 return body
             if body["status"] == "FAILED":
                 raise RuntimeError(f"product job failed: {body}")
@@ -273,9 +298,10 @@ def _served_run(bundle: Path, run_id: str, frame: pd.DataFrame) -> tuple[str, Bu
             final_artifacts = api.request("GET", f"{API}/workflows/{workflow_id}/artifacts").json()
             anomaly_artifact = next(item for item in final_artifacts if item["type"] == "ANOMALY_REPORT" and not item["temporary"])
             ruleset_artifact = next(item for item in final_artifacts if item["type"] == "PUBLISHED_RULESET" and not item["temporary"])
-            from src.services.node_event_stream import broker
-            with broker._lock:
-                node_events = list(broker._buffer.get(workflow_id, ()))
+            api.drain_node_events()
+            node_events = sorted(
+                api.node_events, key=lambda item: str(item.get("timestamp") or "")
+            )
 
         trace_path = bundle / "traces" / "llm-invocations.jsonl"
         invocations = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines() if line]
@@ -283,7 +309,13 @@ def _served_run(bundle: Path, run_id: str, frame: pd.DataFrame) -> tuple[str, Bu
         # candidate fields back afterwards. Either name proves the same thing: a
         # structured model call produced the rules, rather than a deterministic
         # fallback producing them without one.
-        proposal_schemas = {"TableRuleProposal", "CandidateTableRuleDraft"}
+        # CandidateTableRuleProposal is the deep-agent tool-calling path; the other two
+        # are the one-shot structured path and an older caller. All three prove the same
+        # thing -- a structured model call produced the rules -- and omitting the first
+        # made this guard reject the very path it was added to prove.
+        proposal_schemas = {
+            "TableRuleProposal", "CandidateTableRuleDraft", "CandidateTableRuleProposal",
+        }
         if not any(item.get("schema") in proposal_schemas for item in invocations):
             raise RuntimeError("no structured LLM invocation proves the LangGraph proposal path")
         if final_workflow.get("current_step") != "ANALYZE_REPORT":
@@ -331,7 +363,9 @@ def _served_run(bundle: Path, run_id: str, frame: pd.DataFrame) -> tuple[str, Bu
                         producer="LangGraph node broker", media_type="application/x-ndjson")
         writer.json("upload-probe", "upload-probe", "api/upload-probe.json", {
             "run_id": run_id, "dataset_id": dataset_id, "executed_cases": 2,
-            "accepted_malicious": int(invalid.status_code < 400) + int(empty.status_code < 400),
+            # Name matches the metric upload_probe_v1 publishes, so the producer and
+            # the reader cannot drift apart again without a test failing.
+            "malicious_upload_accepted_count": int(invalid.status_code < 400) + int(empty.status_code < 400),
             "cases": [{"name": "unsupported-extension", "status": invalid.status_code},
                       {"name": "empty-upload", "status": empty.status_code}],
         })

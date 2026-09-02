@@ -781,8 +781,8 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
                     business_rationale=proposal.business_rationale,
                     proposal_basis=proposal.proposal_basis,
                     evidence=json.dumps(proposal.evidence),
-                    parameter_provenance="[]",
-                    assumptions="[]",
+                    parameter_provenance=json.dumps(getattr(proposal, "parameter_provenance", []) or []),
+                    assumptions=json.dumps(getattr(proposal, "assumptions", []) or []),
                     confidence_breakdown=json.dumps(proposal.confidence_breakdown),
                     model_name=proposal.model_name,
                 )

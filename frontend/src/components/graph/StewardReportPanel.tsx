@@ -76,15 +76,28 @@ export function StewardReportPanel({
 
       {report && (
         <div className="steward-report-body">
-          <div className="steward-report-meta">
-            <code>{report.filename}</code>
-            <span>{new Date(report.generated_at).toLocaleString()}</span>
+          <div className="steward-report-meta" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: "var(--surface-muted, #f8fafc)", borderRadius: "8px", border: "1px solid var(--border)", marginBottom: "16px" }}>
+            <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--ink)" }}>
+              {`Report - ${new Date(report.generated_at).toLocaleDateString(vi ? "vi-VN" : "en-US")}`}
+            </span>
+            <span style={{ fontSize: "12px", color: "var(--muted)" }}>
+              {new Date(report.generated_at).toLocaleTimeString(vi ? "vi-VN" : "en-US")}
+            </span>
           </div>
           {/* react-markdown and remark-gfm were already dependencies but nothing
               used them: the report was dumped into a <pre>, so a Steward read
               raw pipes and hashes instead of the tables the writer produced. */}
           <div className="steward-report-content">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{report.content}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {(() => {
+                let c = report.content || "";
+                const idx = c.indexOf("# Báo Cáo");
+                if (idx > 0) {
+                  c = c.slice(idx);
+                }
+                return c.trim();
+              })()}
+            </ReactMarkdown>
           </div>
         </div>
       )}

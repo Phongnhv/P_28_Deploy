@@ -32,7 +32,28 @@ def evaluate(*, write_evidence: bool = True, context: EvalRunContext | None = No
             gate="ai_security", evaluator="upload_probe_v1",
             status=EvalStatus.NOT_EXECUTED, metadata={"reason": str(exc)},
         )
-    accepted = int(payload.get("malicious_upload_accepted_count", 0))
+    # The producer and this reader disagreed on the key name for three weeks, and
+    # `.get(..., 0)` turned that into a hard gate that reported zero however many
+    # malicious uploads the product had accepted. Both names are read, and a payload
+    # carrying neither is refused rather than scored as clean: "the bundle did not say"
+    # and "nothing was accepted" are different claims and only the second is a pass.
+    for key in ("malicious_upload_accepted_count", "accepted_malicious"):
+        if key in payload:
+            accepted = int(payload[key])
+            break
+    else:
+        return EvalResult(
+            gate="ai_security",
+            evaluator="upload_probe_v1",
+            status=EvalStatus.NOT_MEASURED,
+            metadata={
+                "reason": (
+                    "upload-probe artifact carries no accepted-count field; expected "
+                    "malicious_upload_accepted_count"
+                ),
+                "keys_present": sorted(payload) if isinstance(payload, dict) else None,
+            },
+        )
     findings = [] if accepted == 0 else [Finding(
         id="HG-S4", severity=Severity.CRITICAL,
         title="Malicious upload cases were accepted",

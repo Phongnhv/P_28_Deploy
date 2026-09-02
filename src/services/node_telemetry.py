@@ -313,6 +313,21 @@ def record_stage(graph_key: str, node_name: str, node_kind: str, inputs: Any = N
     _record_end(row_id, started=started, status="SUCCEEDED", result=result or None, context=context)
 
 
+def _publish_node(node_name: str, started, **extra) -> None:
+    """Mirror one node run onto the live event broker.
+
+    Imported lazily and wrapped: observability must never be the reason a product node
+    fails. A broker that is unavailable costs a trace event, not a run.
+    """
+    try:
+        from src.services.node_event_stream import publish_node_event
+
+        latency_ms = round((utc_now() - started).total_seconds() * 1000, 2)
+        publish_node_event(node_name, latency_ms=latency_ms, **extra)
+    except Exception:  # noqa: BLE001
+        return
+
+
 def instrument(
     graph_key: str,
     node_name: str,
@@ -322,6 +337,11 @@ def instrument(
 
     The wrapper keeps the node's signature and return value intact, so builders
     only change at the ``add_node`` call site.  Sync and async nodes both work.
+
+    It also publishes the node to the live event broker. Persisting a row and
+    streaming an event are different audiences -- one is queried later, one is watched
+    now -- but they answer to the same fact, and wiring only the first is what left
+    fifteen of nineteen graph nodes invisible to the trace.
     """
 
     def decorator(node: Callable[..., Any]) -> Callable[..., Any]:
@@ -356,6 +376,8 @@ def instrument(
                     error=f"{type(exc).__name__}: {exc}"[:2000],
                     context=context,
                 )
+                _publish_node(node_name, started, status="FAILED",
+                              error_type=type(exc).__name__)
                 raise
             # A node that returns an ``error`` key has failed without raising --
             # the graphs route on that convention rather than on exceptions.
@@ -368,6 +390,7 @@ def instrument(
                 error=str(result.get("error"))[:2000] if failed else None,
                 context=context,
             )
+            _publish_node(node_name, started, status="FAILED" if failed else "SUCCEEDED")
             return result
 
         return wrapper

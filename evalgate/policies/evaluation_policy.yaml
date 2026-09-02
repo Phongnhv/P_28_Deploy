@@ -4,7 +4,7 @@ corpus_version: "1.0"
 normalizer_version: "1.0"
 hard_gates:
   source: hard_gates.yaml
-  version: "7.0"
+  version: "8.0"
 minimum_measured_weight: 0.60
 non_suppressible:
   - HG-S2
@@ -30,6 +30,6 @@ runtime:
   critical_node_error_rate_max: 0.0
 mandatory_hard_gates:
   local: []
-  ci: [HG-A1, HG-A2, HG-A7, HG-S1, HG-S2, HG-S3, HG-S4, HG-S6, HG-S7, HG-D1, HG-D2, HG-G1, HG-G2, HG-G5, HG-A3, HG-A8, HG-A9, HG-A6, HG-A5, HG-S8, HG-G4, HG-R1]
-  nightly: [HG-A1, HG-A2, HG-A7, HG-S1, HG-S2, HG-S3, HG-S4, HG-S5, HG-S6, HG-S7, HG-D1, HG-D2, HG-G1, HG-G2, HG-G5, HG-A3, HG-A8, HG-A9, HG-A6, HG-A5, HG-S8, HG-G4, HG-R1]
-  pre_release: [HG-A1, HG-A2, HG-A7, HG-S1, HG-S2, HG-S3, HG-S4, HG-S5, HG-S6, HG-S7, HG-D1, HG-D2, HG-G1, HG-G2, HG-G5, HG-A3, HG-A8, HG-A9, HG-A6, HG-A5, HG-S8, HG-G4, HG-R1]
+  ci: [HG-O1, HG-A1, HG-A2, HG-A7, HG-S1, HG-S2, HG-S3, HG-S4, HG-S6, HG-S7, HG-D1, HG-D2, HG-G1, HG-G2, HG-G5, HG-A3, HG-A8, HG-A9, HG-A6, HG-A5, HG-S8, HG-G4, HG-R1]
+  nightly: [HG-O1, HG-A1, HG-A2, HG-A7, HG-S1, HG-S2, HG-S3, HG-S4, HG-S5, HG-S6, HG-S7, HG-D1, HG-D2, HG-G1, HG-G2, HG-G5, HG-A3, HG-A8, HG-A9, HG-A6, HG-A5, HG-S8, HG-G4, HG-R1]
+  pre_release: [HG-O1, HG-A1, HG-A2, HG-A7, HG-S1, HG-S2, HG-S3, HG-S4, HG-S5, HG-S6, HG-S7, HG-D1, HG-D2, HG-G1, HG-G2, HG-G5, HG-A3, HG-A8, HG-A9, HG-A6, HG-A5, HG-S8, HG-G4, HG-R1]

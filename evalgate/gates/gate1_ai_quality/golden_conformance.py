@@ -319,6 +319,8 @@ def evaluate(*, write_evidence: bool = True, context: EvalRunContext | None = No
     breakdown = [
         DatasetBreakdown(
             dataset_id=o.id,
+            # Each row is one golden case, not one dataset. See DatasetBreakdown.kind.
+            kind="case",
             status=(
                 EvalStatus.NOT_MEASURED if not o.measurable
                 else EvalStatus.PASS if o.passed

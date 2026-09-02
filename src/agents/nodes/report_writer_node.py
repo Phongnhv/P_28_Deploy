@@ -216,17 +216,25 @@ def _build_data_context(
 
 
 def _strip_code_fences(text: Any) -> str:
-    """Loại bỏ code fences (```markdown ... ```) nếu LLM bọc output."""
+    """Loại bỏ code fences (```markdown ... ```) nếu LLM bọc output, lọc bỏ các khối reasoning."""
     if isinstance(text, list):
-        text = "".join(
-            part.get("text", str(part))
-            if isinstance(part, dict)
-            else getattr(part, "text", str(part))
-            if hasattr(part, "text")
-            else str(part)
-            for part in text
-        )
+        parts: list[str] = []
+        for part in text:
+            if isinstance(part, dict):
+                # Bỏ qua các khối metadata/reasoning nội bộ của LLM (ví dụ encrypted_content của OpenAI reasoning)
+                if part.get("type") in ("reasoning", "thought", "metadata") or "encrypted_content" in part:
+                    continue
+                if "text" in part and part["text"]:
+                    parts.append(str(part["text"]))
+            elif hasattr(part, "text"):
+                if getattr(part, "type", "") not in ("reasoning", "thought") and part.text:
+                    parts.append(str(part.text))
+            elif isinstance(part, str):
+                parts.append(part)
+        text = "".join(parts)
     text_str = str(text or "").strip()
+    # Loại bỏ các chuỗi metadata reasoning dạng text nếu bị lọt vào
+    text_str = re.sub(r"^\[?\{'id':\s*'[^']+',.*?'encrypted_content':\s*'[^']+'\s*\}?\]?\s*", "", text_str, flags=re.DOTALL)
     # Match ```markdown, ```md, or ``` at start
     pattern = r"^```(?:markdown|md)?\s*\n(.*?)\n```\s*$"
     match = re.match(pattern, text_str, re.DOTALL | re.IGNORECASE)

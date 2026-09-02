@@ -102,3 +102,45 @@ async def test_broker_reset_clears_buffer():
     b.reset("s1")
     _sub2, _q2, backlog2 = b.subscribe("s1")
     assert backlog2 == []
+
+
+def test_an_instrumented_node_publishes_itself_to_the_broker():
+    """Every instrumented node must reach the trace, not just the streamed graph.
+
+    run_graph_streamed wraps one call site. Fifteen of the nineteen nodes declared
+    across the six graphs run outside it, and while they were unobserved the
+    observability gate still read trace_coverage = 1.0 -- that ratio divides by the
+    events that were written, so instrumenting almost nothing scored perfectly.
+    """
+    import asyncio
+
+    from src.services.node_event_stream import broker
+    from src.services.node_telemetry import instrument, start_graph_run
+
+    start_graph_run(workflow_run_id="wf-instrumented-node", dataset_id="ds-1")
+
+    async def node(state):
+        return {"ok": True}
+
+    asyncio.run(instrument("G1A", "probe_node", "DETERMINISTIC")(node)({}))
+
+    with broker._lock:
+        events = list(broker._buffer.get("wf-instrumented-node", ()))
+    published = [e for e in events if e.get("node") == "probe_node"]
+    assert published, "an instrumented node left no trace event"
+    event = published[0]
+    for field in ("trace_id", "workflow_run_id", "dataset_id", "event", "timestamp"):
+        assert event.get(field), f"trace event is missing {field}"
+
+
+def test_a_node_outside_a_correlated_run_publishes_nothing():
+    """An event nobody can key to a run is worse than no event."""
+
+    from src.services.node_event_stream import broker, publish_node_event
+    from src.services.node_telemetry import start_graph_run
+
+    start_graph_run(workflow_run_id=None, dataset_id=None)
+    before = sum(len(v) for v in broker._buffer.values())
+    publish_node_event("orphan_node")
+    after = sum(len(v) for v in broker._buffer.values())
+    assert before == after

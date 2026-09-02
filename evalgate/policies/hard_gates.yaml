@@ -21,10 +21,17 @@
 # It also un-defers HG-A2: the precondition recorded for it was a live agent
 # invocation, and the run artefacts now carry the validator rejection counts.
 #
+# v8 adds HG-O1. Gate 3 published trace_coverage = 1.0 while the run had emitted six
+# events covering four nodes of one graph, because that ratio divides by the events
+# that were written rather than by the nodes that ran. Same shape as HG-A9: a gate
+# that guards the mechanism its own headline number depends on. The 0.5 floor catches
+# collapse, not ordinary variation -- a graph that legitimately runs no node emits
+# nothing and is not counted against the denominator.
+#
 # v7 adds HG-A8, which closes an evasion in HG-A3: a check that inspects a rule is
 # silent when no rule was produced, so omitting the rule scored better than
 # proposing a broken one. See the comment above HG-A8.
-version: "7.0"
+version: "8.0"
 hard_gates:
   - id: HG-A1
     gate: ai_quality
@@ -146,6 +153,11 @@ hard_gates:
     title: "A CRITICAL golden case regressed"
     metric: golden_critical_failures
     rule: "value >= 1"
+  - id: HG-O1
+    gate: observability
+    title: "Most graph nodes emit no trace event at all"
+    metric: instrumented_node_coverage
+    rule: "value < 0.5"
   - id: HG-S8
     gate: ai_security
     title: "Internal execution detail exposed as a public API field"

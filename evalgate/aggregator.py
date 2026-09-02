@@ -153,13 +153,19 @@ def collapse_result_scores(result: EvalResult) -> float | None:
     """
     if not result.per_dataset_breakdown:
         return result.score
-    scored = [
-        d.score
-        for d in result.per_dataset_breakdown
+    usable = [
+        d for d in result.per_dataset_breakdown
         if d.status not in EXCLUDED_FROM_AGGREGATE and d.score is not None
     ]
-    if not scored:
+    if not usable:
         return None
+    scored = [d.score for d in usable]
+    # A breakdown of pass/fail cases is a pass rate, not a distribution of dataset
+    # scores. P25 over binary values collapses to 0 as soon as a quarter of them fail,
+    # which threw away golden_conformance's 60.0 and policy_resolution's 100.0. See
+    # DatasetBreakdown.kind.
+    if all(d.kind == "case" for d in usable):
+        return 100.0 * sum(1 for s in scored if s >= 100.0) / len(scored)
     return norm.percentile(scored, 0.25)
 
 

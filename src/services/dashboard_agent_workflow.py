@@ -15,7 +15,7 @@ import logging
 import math
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -44,6 +44,27 @@ RULE_POLICY_PATH = Path(__file__).resolve().parents[1] / "resources" / "rule_pol
 
 class AgentWorkflowError(ValueError):
     """An expected, redacted failure returned by the product workflow."""
+
+
+@dataclass(frozen=True)
+class DashboardProposal:
+    id: str
+    title: str
+    description: str
+    severity: str
+    rule_type: str
+    rule_spec: dict[str, Any]
+    evidence_refs: list[str]
+    evidence_summary: str
+    confidence: float
+    model_name: str
+    rule_name: str
+    business_rationale: str
+    proposal_basis: str
+    evidence: dict[str, Any]
+    confidence_breakdown: dict[str, Any]
+    parameter_provenance: list[dict[str, Any]] = field(default_factory=list)
+    assumptions: list[str] = field(default_factory=list)
 
 
 class CrossFieldRulePolicy(BaseModel):
@@ -326,24 +347,6 @@ class ProposalEvidence(BaseModel):
             }
         }
 
-
-@dataclass(frozen=True)
-class DashboardProposal:
-    id: str
-    title: str
-    description: str
-    severity: str
-    rule_type: str
-    rule_spec: dict[str, Any]
-    evidence_refs: list[str]
-    evidence_summary: str
-    confidence: float
-    model_name: str
-    rule_name: str
-    business_rationale: str
-    proposal_basis: str
-    evidence: dict[str, Any]
-    confidence_breakdown: dict[str, Any]
 
 
 def _parse_json_dict(raw: str | None) -> dict[str, float]:
@@ -894,6 +897,24 @@ def _normalise_graph_rules(raw_rules: list[dict[str, Any]], evidence: ProposalEv
     return [proposal for proposal, _candidate in accepted]
 
 
+def _build_observed_metrics(candidate: DashboardRuleCandidate, evidence: ProposalEvidence) -> dict[str, Any]:
+    col_map = {c.name: c for c in evidence.columns}
+    col = col_map.get(candidate.column)
+    metrics: dict[str, Any] = {"sample_row_count": evidence.row_count}
+    if col:
+        metrics.update({
+            "null_rate": round(col.null_rate, 4),
+            "null_count": int(round(col.null_rate * evidence.row_count)),
+            "distinct_count": col.distinct_count,
+            "data_type": col.data_type,
+        })
+        if col.min_value is not None:
+            metrics["min_value"] = col.min_value
+        if col.max_value is not None:
+            metrics["max_value"] = col.max_value
+    return metrics
+
+
 def _normalise_graph_rule(
     raw: dict[str, Any], evidence: ProposalEvidence, candidate: DashboardRuleCandidate
 ) -> DashboardProposal | None:
@@ -915,7 +936,14 @@ def _normalise_graph_rule(
     selected_refs = raw.get("selected_evidence_refs") or candidate.evidence_refs
     if not set(selected_refs).issubset(candidate.evidence_refs):
         return None
-    capped_confidence = min(confidence, candidate.confidence_ceiling)
+
+    col_map = {c.name: c for c in evidence.columns}
+    col = col_map.get(candidate.column)
+    dynamic_ceiling = candidate.confidence_ceiling
+    if col and candidate.dashboard_rule_type == "not_null" and col.null_rate == 0.0:
+        dynamic_ceiling = max(candidate.confidence_ceiling, 0.98)
+
+    capped_confidence = min(confidence, dynamic_ceiling)
     normalized_breakdown = dict(
         confidence_payload
         or {
@@ -927,6 +955,9 @@ def _normalise_graph_rule(
         }
     )
     normalized_breakdown["overall"] = capped_confidence
+    raw_rule_name = str(raw.get("rule_name") or "").strip()
+    rule_name_val = raw_rule_name if raw_rule_name else candidate.title
+
     return DashboardProposal(
         id=f"proposal-{uuid.uuid4().hex}",
         title=candidate.title,
@@ -940,17 +971,19 @@ def _normalise_graph_rule(
         ),
         confidence=capped_confidence,
         model_name=model_name,
-        rule_name=str(raw.get("rule_name") or candidate.title),
+        rule_name=rule_name_val,
         business_rationale=str(raw.get("business_rationale") or candidate.description),
         proposal_basis=str(raw.get("proposal_basis") or "MIXED"),
         evidence={
             "sample_row_count": evidence.row_count,
             "sample_rate": 1.0,
             "sampling_caveat": None,
-            "observed_metrics": {},
+            "observed_metrics": _build_observed_metrics(candidate, evidence),
             "source_refs": candidate.evidence_refs,
         },
         confidence_breakdown=normalized_breakdown,
+        parameter_provenance=raw.get("parameter_provenance") or [],
+        assumptions=raw.get("assumptions") or [],
     )
 
 
@@ -1130,17 +1163,30 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
         if col.name in ("source_row_id", "id"):
             continue
         if col.name not in existing_column_rules:
-            candidates.append(
-                DashboardRuleCandidate(
-                    id=f"not-null:{col.name}", rule_type="NOT_NULL", column=col.name, parameters={},
-                    dashboard_rule_type="not_null", rule_spec={"type": "not_null", "column": col.name},
-                    evidence_refs=[f"profile.column.{col.name}.null_rate"],
-                    selection_reason=f"Column {col.name} observed null rate is {col.null_rate*100:.1f}%.",
-                    priority=90, title=f"{col.name} must not be null",
-                    description=f"Ensure every row contains a valid {col.name}.",
-                    severity="HIGH", confidence_ceiling=0.9,
+            if col.null_rate == 0.0:
+                candidates.append(
+                    DashboardRuleCandidate(
+                        id=f"not-null:{col.name}", rule_type="NOT_NULL", column=col.name, parameters={},
+                        dashboard_rule_type="not_null", rule_spec={"type": "not_null", "column": col.name},
+                        evidence_refs=[f"profile.column.{col.name}.null_rate"],
+                        selection_reason=f"Column {col.name} observed null rate is 0.0% across all {evidence.row_count:,} rows.",
+                        priority=90, title=f"{col.name} must not be null",
+                        description=f"Ensure every row contains a valid {col.name}.",
+                        severity="HIGH", confidence_ceiling=0.95,
+                    )
                 )
-            )
+            elif col.null_rate <= 0.01:
+                candidates.append(
+                    DashboardRuleCandidate(
+                        id=f"not-null:{col.name}", rule_type="NOT_NULL", column=col.name, parameters={},
+                        dashboard_rule_type="not_null", rule_spec={"type": "not_null", "column": col.name},
+                        evidence_refs=[f"profile.column.{col.name}.null_rate"],
+                        selection_reason=f"Column {col.name} observed null rate is {col.null_rate*100:.1f}%.",
+                        priority=70, title=f"{col.name} must not be null",
+                        description=f"Ensure every row contains a valid {col.name}.",
+                        severity="MEDIUM", confidence_ceiling=0.75,
+                    )
+                )
             if col.data_type in ("numeric", "float", "integer", "real") and col.min_value is not None:
                 min_val = 0.0 if col.min_value >= 0 else float(col.min_value)
                 upper = _upper_bound(col)
@@ -1257,7 +1303,7 @@ def _fallback_core_fields(
             "sample_row_count": evidence.row_count,
             "sample_rate": 1.0,
             "sampling_caveat": None,
-            "observed_metrics": {},
+            "observed_metrics": _build_observed_metrics(candidate, evidence),
             "source_refs": candidate.evidence_refs,
         },
         "confidence_breakdown": {
@@ -1267,6 +1313,8 @@ def _fallback_core_fields(
             "sample_representativeness": 1.0,
             "explanation": "Deterministic policy candidate fallback",
         },
+        "parameter_provenance": [],
+        "assumptions": [],
     }
 
 
@@ -1398,6 +1446,8 @@ def _mock_proposals(evidence: ProposalEvidence) -> list[DashboardProposal]:
                     "sample_representativeness": 1.0,
                     "explanation": "Policy-backed duplicate candidate",
                 },
+                parameter_provenance=[],
+                assumptions=[],
             )
         )
     if not result:

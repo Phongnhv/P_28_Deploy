@@ -8,7 +8,7 @@ fails loudly instead of silently contributing a wrong number to the final score.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -108,11 +108,28 @@ class Finding(BaseModel):
 
 
 class DatasetBreakdown(BaseModel):
-    """Per-dataset result. Mandatory whenever an evaluator runs over a corpus."""
+    """Per-dataset result. Mandatory whenever an evaluator runs over a corpus.
+
+    ``kind`` decides how the aggregator collapses the list, and getting it wrong
+    silently discards an evaluator's score. ``dataset`` rows are collapsed with P25,
+    which is right when each row is an independent dataset: it pulls the summary
+    toward the bad tail so six healthy datasets cannot hide the seventh.
+
+    That is the wrong operator for a list of pass/fail *cases*. Every row is 100 or 0,
+    so P25 returns 0 the moment more than a quarter of them fail -- golden_conformance
+    published a case pass rate of 0.60 and contributed 0.00 to its gate, and
+    policy_resolution reported PASS with every metric at 100.0 and also contributed
+    0.00. Neither number reached the score it was measured for.
+
+    ``case`` rows are therefore collapsed as a pass rate, which is what a pass rate
+    already is.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     dataset_id: str
+    #: ``dataset`` -> collapse with P25. ``case`` -> collapse as a pass rate.
+    kind: Literal["dataset", "case"] = "dataset"
     status: EvalStatus
     score: float | None = None
     reason: str | None = None
