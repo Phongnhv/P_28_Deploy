@@ -3573,10 +3573,10 @@ function App() {
                     }
                   />
                   <div className="datasets-page" style={{ marginTop: "24px" }}>
-                    {activeRun && workflowArtifacts.some((artifact) => artifact.type === "ANOMALY_REPORT") ? (
+                    {activeRun && workflow && workflowArtifacts.some((artifact) => artifact.type === "ANOMALY_REPORT") ? (
                       <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
                         <StewardReportPanel
-                          runId={activeRun.id}
+                          runId={workflow.id}
                           language={language}
                           loadReport={loadStewardReport}
                         />
