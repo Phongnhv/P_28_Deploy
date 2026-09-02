@@ -93,7 +93,12 @@ from src.services.data_dictionary_store import (
     serialize_data_dictionary,
 )
 from src.services.demo_quota import enforce_demo_quota
-from src.services.job_dispatch import create_persisted_job, dispatch_or_mark_failed, job_checksum
+from src.services.job_dispatch import (
+    create_persisted_job,
+    dispatch_or_mark_failed,
+    dispatch_persisted_job,
+    job_checksum,
+)
 from src.services.job_runner import (
     DEMO_TAXI_DATASET_ID,
     _supabase_source_url,
@@ -2080,17 +2085,17 @@ def run_workflow_step(
             job.linked_entity = run.id
             job.message = "Queued workflow quality checks"
             db.commit()
-            dispatch_or_mark_failed(db, job)
+            background_tasks.add_task(dispatch_persisted_job, job.id)
             return CreateJobResponse(job_id=job.id, status="PENDING")
         if step == "ANALYZE_REPORT":
             if run.current_step != "ANALYZE_REPORT":
                 raise WorkflowError("Complete Graph 2 before starting Graph 3 analysis.")
             db.commit()
-            dispatch_or_mark_failed(db, job)
+            background_tasks.add_task(dispatch_persisted_job, job.id)
             return CreateJobResponse(job_id=job.id, status="PENDING")
         if step == "PROPOSE_RULES":
             db.commit()
-            dispatch_or_mark_failed(db, job)
+            background_tasks.add_task(dispatch_persisted_job, job.id)
             return CreateJobResponse(job_id=job.id, status="PENDING")
         steps = json.loads(run.steps_json or "[]")
         current = next((item for item in steps if item.get("key") == step), None)

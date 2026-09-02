@@ -263,3 +263,18 @@ def dispatch_or_mark_failed(db: Session, job: JobModel) -> bool:
         current.message = "Worker dispatch failed"
         db.commit()
     return False
+
+
+def dispatch_persisted_job(job_id: str) -> bool:
+    """Dispatch a committed job without holding the API request open.
+
+    Cloud Run's Jobs API can take a while to acknowledge a new execution while
+    a worker revision is warming up.  The API must still return the durable
+    ``PENDING`` envelope immediately so clients can poll the job instead of
+    waiting on the control-plane call itself.
+    """
+    with Session(get_engine()) as db:
+        job = db.get(JobModel, job_id)
+        if not job or job.status not in {"PENDING", "RUNNING"}:
+            return False
+        return dispatch_or_mark_failed(db, job)
