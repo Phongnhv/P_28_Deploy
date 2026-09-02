@@ -907,6 +907,7 @@ async def test_dashboard_deepagent_uses_server_evidence_without_source_tools():
     assert result.rules[0].rule_name == "Cước phí hợp lệ"
     assert captured["tools"] == []
     assert "allow-listed" in captured["system_prompt"]
+    assert "tiếng Việt" in captured["system_prompt"]
     prompt = mock_agent.ainvoke.call_args.args[0]["messages"][0]["content"]
     assert "Allowed candidate checklist" in prompt
 
