@@ -92,6 +92,17 @@ def _proposal() -> DashboardProposal:
         proposal_basis="POLICY",
         evidence={"source_refs": ["profile.trip_distance.negative_rate"]},
         confidence_breakdown={"overall": 0.9},
+        rule_description="Trip distance must be non-negative.",
+        ai_reasoning="Aggregate negative-rate evidence supports this rule.",
+        assumptions=["The source unit is miles."],
+        parameter_provenance=[
+            {
+                "parameter_name": "min_value",
+                "source_type": "DATA_PROFILE",
+                "source_ref": "profile.trip_distance.negative_rate",
+                "derivation_method": "server_policy",
+            }
+        ],
     )
 
 
@@ -127,13 +138,16 @@ def test_back_navigation_preserves_artifacts_until_a_stage_is_rerun(monkeypatch)
         "src.services.rule_proposer_workflow.generate_rule_proposals_via_graph_1b",
         lambda *_args, **_kwargs: [_proposal()],
     )
-    monkeypatch.setattr("src.services.rule_proposer_workflow.generate_dashboard_proposals", lambda *_: [_proposal()])
+    monkeypatch.setattr("src.services.rule_proposer_workflow.generate_dashboard_policy_fallback_proposals", lambda *_: [_proposal()])
     with Session(get_engine()) as db:
         dataset = db.get(DatasetModel, DATASET_ID)
         run = get_or_create_run(db, dataset)
         execute_step(db, run, "UNDERSTAND_DATA")
         _confirm_current_contract(db, run)
         execute_step(db, run, "PROPOSE_RULES")
+        stored_rule = db.query(RuleProposalModel).filter_by(workflow_run_id=run.id).one()
+        assert json.loads(stored_rule.assumptions) == ["The source unit is miles."]
+        assert json.loads(stored_rule.parameter_provenance)[0]["parameter_name"] == "min_value"
         rule_artifact = (
             db.query(WorkflowArtifactModel).filter_by(workflow_run_id=run.id, artifact_type="RULE_SET").one()
         )
@@ -194,7 +208,7 @@ def test_deleted_pending_rule_is_retained_as_stale_and_does_not_block_review(mon
         "src.services.rule_proposer_workflow.generate_rule_proposals_via_graph_1b",
         lambda *_args, **_kwargs: [_proposal()],
     )
-    monkeypatch.setattr("src.services.rule_proposer_workflow.generate_dashboard_proposals", lambda *_: [_proposal()])
+    monkeypatch.setattr("src.services.rule_proposer_workflow.generate_dashboard_policy_fallback_proposals", lambda *_: [_proposal()])
     with Session(get_engine()) as db:
         dataset = db.get(DatasetModel, DATASET_ID)
         run = get_or_create_run(db, dataset)
@@ -222,7 +236,7 @@ def test_publish_creates_immutable_ruleset_and_queues_only_approved_versions(mon
         "src.services.rule_proposer_workflow.generate_rule_proposals_via_graph_1b",
         lambda *_args, **_kwargs: [_proposal()],
     )
-    monkeypatch.setattr("src.services.rule_proposer_workflow.generate_dashboard_proposals", lambda *_: [_proposal()])
+    monkeypatch.setattr("src.services.rule_proposer_workflow.generate_dashboard_policy_fallback_proposals", lambda *_: [_proposal()])
     with Session(get_engine()) as db:
         dataset = db.get(DatasetModel, DATASET_ID)
         run = get_or_create_run(db, dataset)
@@ -275,7 +289,7 @@ def test_mock_execution_and_analysis_complete_the_same_workflow(monkeypatch):
         "src.services.rule_proposer_workflow.generate_rule_proposals_via_graph_1b",
         lambda *_args, **_kwargs: [_proposal()],
     )
-    monkeypatch.setattr("src.services.rule_proposer_workflow.generate_dashboard_proposals", lambda *_: [_proposal()])
+    monkeypatch.setattr("src.services.rule_proposer_workflow.generate_dashboard_policy_fallback_proposals", lambda *_: [_proposal()])
     with Session(get_engine()) as db:
         dataset = db.get(DatasetModel, DATASET_ID)
         run = get_or_create_run(db, dataset)
@@ -329,10 +343,14 @@ def test_graph_2_result_is_visible_before_graph_3_is_started(monkeypatch):
         "src.services.rule_proposer_workflow.generate_rule_proposals_via_graph_1b",
         lambda *_args, **_kwargs: [_proposal()],
     )
-    monkeypatch.setattr("src.services.rule_proposer_workflow.generate_dashboard_proposals", lambda *_: [_proposal()])
+    monkeypatch.setattr("src.services.rule_proposer_workflow.generate_dashboard_policy_fallback_proposals", lambda *_: [_proposal()])
 
     async def no_op_analysis(**_kwargs):
-        return {}
+        return {
+            "steward_report_markdown": "# Báo cáo Graph 3\n\nNội dung do report_writer sinh ra.",
+            "report_source": "LLM",
+            "steward_report_path": "output/steward_reports/test.md",
+        }
 
     monkeypatch.setattr("src.agents.graph.run_anomaly_graph", no_op_analysis)
     with Session(get_engine()) as db:
@@ -384,4 +402,7 @@ def test_graph_2_result_is_visible_before_graph_3_is_started(monkeypatch):
     with Session(get_engine()) as db:
         run = db.get(WorkflowRunModel, run_id)
         assert run.status == "COMPLETED"
-        assert db.query(WorkflowArtifactModel).filter_by(workflow_run_id=run_id, artifact_type="ANOMALY_REPORT").one()
+        artifact = db.query(WorkflowArtifactModel).filter_by(workflow_run_id=run_id, artifact_type="ANOMALY_REPORT").one()
+        payload = json.loads(artifact.payload_json)
+        assert payload["report_markdown"].startswith("# Báo cáo Graph 3")
+        assert payload["report_source"] == "LLM"

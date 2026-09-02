@@ -3,6 +3,7 @@ import type { GraphCatalog, GraphKey, GraphNodeSpec, NodeRun, NodeRunDetail } fr
 import { GraphFlow } from "./GraphFlow";
 import { NodeDetailDrawer } from "./NodeDetailDrawer";
 import { NodeTimeline } from "./NodeTimeline";
+import { latestGraphRuns } from "./graphRunUtils";
 
 /**
  * The embeddable form of the graph view, for a single wizard step.
@@ -53,7 +54,9 @@ export function GraphStagePanel({
 
   if (graphs.length === 0) return null;
 
-  const relevantRuns = runs.filter((run) => graphKeys.includes(run.graph_key));
+  const relevantRuns = graphKeys.flatMap((graphKey) =>
+    latestGraphRuns(runs.filter((run) => run.graph_key === graphKey)),
+  );
   const running = relevantRuns.some((run) => run.status === "RUNNING");
   const failed = relevantRuns.filter((run) => run.status === "FAILED").length;
 
@@ -83,7 +86,7 @@ export function GraphStagePanel({
             <p className="graph-stage-note">{emptyNote}</p>
           )}
           {graphs.map((graph) => {
-            const graphRuns = relevantRuns.filter((run) => run.graph_key === graph.key);
+            const graphRuns = latestGraphRuns(relevantRuns.filter((run) => run.graph_key === graph.key));
             return (
               <div className="graph-stage-graph" key={graph.key}>
                 <GraphFlow

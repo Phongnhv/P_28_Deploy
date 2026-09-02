@@ -4,6 +4,7 @@ import { GraphFlow } from "./GraphFlow";
 import { NodeDetailDrawer } from "./NodeDetailDrawer";
 import { NodeTimeline } from "./NodeTimeline";
 import { formatDuration } from "./NodeCard";
+import { latestGraphRuns, latestRunsByGraph } from "./graphRunUtils";
 
 /**
  * One page that shows every graph the platform runs.
@@ -60,9 +61,10 @@ export function GraphObservatoryPage({
   }, [runs, selected]);
 
   const totals = catalog?.totals;
-  const failedCount = runs.filter((run) => run.status === "FAILED").length;
-  const runningCount = runs.filter((run) => run.status === "RUNNING").length;
-  const totalMs = runs.reduce((sum, run) => sum + run.duration_ms, 0);
+  const latestRuns = latestRunsByGraph(runs);
+  const failedCount = latestRuns.filter((run) => run.status === "FAILED").length;
+  const runningCount = latestRuns.filter((run) => run.status === "RUNNING").length;
+  const totalMs = latestRuns.reduce((sum, run) => sum + run.duration_ms, 0);
 
   return (
     <div className="graph-observatory">
@@ -153,7 +155,7 @@ export function GraphObservatoryPage({
 
       <div className="graph-observatory-list">
         {visibleGraphs.map((graph) => {
-          const graphRuns = runsByGraph.get(graph.key) ?? [];
+          const graphRuns = latestGraphRuns(runsByGraph.get(graph.key) ?? []);
           return (
             <div className="graph-observatory-card" key={graph.key}>
               <GraphFlow

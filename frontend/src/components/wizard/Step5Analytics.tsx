@@ -1,6 +1,8 @@
 import React from "react";
 import { useI18n } from "../../i18n/context";
 import type { AnalysisResult, AnalysisRunStatus, DqResult, DqAnomaly, QualityTrendPoint } from "../../types";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   ResponsiveContainer,
   AreaChart,
@@ -376,7 +378,7 @@ export const Step5Analytics: React.FC<Step5AnalyticsProps> = ({
             <div style={{ padding: "12px 14px", borderRadius: "10px", background: "var(--surface-muted)", border: "1px solid var(--border)" }}><span className="muted">Anomaly Detection signals</span><strong style={{ display: "block", marginTop: "4px", fontSize: "20px" }}>{analysis.graph3.signals.length}</strong></div>
             <div style={{ padding: "12px 14px", borderRadius: "10px", background: "var(--surface-muted)", border: "1px solid var(--border)" }}><span className="muted">Report</span><strong style={{ display: "block", marginTop: "4px", fontSize: "14px" }}>{analysis.report.available ? (analysis.report.source || "AVAILABLE") : "PENDING"}</strong></div>
           </div>
-          {analysis.report.available && <details style={{ marginTop: "16px" }}><summary style={{ cursor: "pointer", fontWeight: 700 }}>{language === "vi" ? "Mở báo cáo Data Steward" : "Open Data Steward report"}</summary><pre style={{ maxHeight: "260px", overflow: "auto", whiteSpace: "pre-wrap", marginTop: "12px", padding: "14px", borderRadius: "10px", background: "var(--surface-muted)", color: "var(--ink-soft)", fontSize: "12px", lineHeight: 1.55 }}>{analysis.report.markdown}</pre></details>}
+          {analysis.report.available && <details style={{ marginTop: "16px" }}><summary style={{ cursor: "pointer", fontWeight: 700 }}>{language === "vi" ? "Mở báo cáo Data Steward" : "Open Data Steward report"}</summary><div className="steward-report-content" style={{ marginTop: "12px", padding: "14px", borderRadius: "10px", background: "var(--surface-muted)", color: "var(--ink-soft)", fontSize: "13px", lineHeight: 1.55 }}><ReactMarkdown remarkPlugins={[remarkGfm]}>{analysis.report.markdown}</ReactMarkdown></div></details>}
         </section>
       )}
 

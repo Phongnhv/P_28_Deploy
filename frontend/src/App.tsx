@@ -29,6 +29,7 @@ import { DatasetCatalogView } from "./components/wizard/DatasetCatalogView";
 import { GraphStagePanel } from "./components/graph/GraphStagePanel";
 import { GraphObservatoryPage } from "./components/graph/GraphObservatoryPage";
 import { StewardReportPanel } from "./components/graph/StewardReportPanel";
+import { latestGraphRuns, latestRunsByGraph } from "./components/graph/graphRunUtils";
 import { Step6ResultsSummary } from "./components/wizard/Step6ResultsSummary";
 import type {
   ActiveRule,
@@ -2206,20 +2207,16 @@ function App() {
 
   const activeJobNodeProgress = useMemo(() => {
     if (!activeJob) return undefined;
+    const latestNodeRuns = latestRunsByGraph(nodeRuns);
     const configuredGraphKey = jobGraphKey[activeJob.type];
     const graphKey =
-      activeJob.type === "RUN_DQ" && nodeRuns.some((run) => run.graph_key === "G2_DIRECT")
+      activeJob.type === "RUN_DQ" && latestNodeRuns.some((run) => run.graph_key === "G2_DIRECT")
         ? "G2_DIRECT"
         : configuredGraphKey;
     if (!graphKey) return undefined;
-    const relevant = nodeRuns.filter((run) => run.graph_key === graphKey);
+    const relevant = latestGraphRuns(latestNodeRuns.filter((run) => run.graph_key === graphKey));
     if (relevant.length === 0) return undefined;
-    // Older runs for the same dataset are still in the list; keep only the
-    // newest graph run or the count would include historical executions.
-    const newest = relevant.reduce((latest, run) =>
-      parseApiTimestamp(run.started_at) > parseApiTimestamp(latest.started_at) ? run : latest,
-    );
-    const current = relevant.filter((run) => run.graph_run_id === newest.graph_run_id);
+    const current = relevant;
     const total = graphCatalog?.graphs.find((graph) => graph.key === graphKey)?.nodes.length ?? current.length;
     const done = current.filter((run) => run.status === "SUCCEEDED" || run.status === "SKIPPED").length;
     const inFlight = current.find((run) => run.status === "RUNNING");
@@ -2250,7 +2247,26 @@ function App() {
     graph3Step &&
     ["READY", "FAILED", "COMPLETED"].includes(graph3Step.status),
   );
-  const loadStewardReport = useCallback((runId: string) => api.getStewardReport(runId), []);
+  const loadStewardReport = useCallback(async (runId: string) => {
+    // Workflow Graph 3 stores the generated Markdown in its durable
+    // ANOMALY_REPORT artifact. The old dq-runs endpoint reads a local file and
+    // is not reliable for versioned/Cloud Run executions.
+    const artifacts = await workflowApi.listWorkflowArtifacts(runId);
+    const reportArtifact = [...artifacts]
+      .reverse()
+      .find((artifact) => artifact.type === "ANOMALY_REPORT");
+    const payload = reportArtifact?.payload;
+    const markdown = payload && typeof payload === "object" && "report_markdown" in payload
+      ? String((payload as Record<string, unknown>).report_markdown || "")
+      : "";
+    if (!markdown.trim()) throw new Error("No generated steward report is available.");
+    return {
+      run_id: runId,
+      filename: `steward_report_${runId}.md`,
+      generated_at: reportArtifact?.created_at ?? new Date().toISOString(),
+      content: markdown,
+    };
+  }, []);
 
   // Topology never changes at runtime, so fetch it once per session.
   useEffect(() => {
@@ -2280,7 +2296,10 @@ function App() {
   // While a node is mid-flight the graph view is the one place a user watches
   // for progress, so poll until nothing is running any more.
   useEffect(() => {
-    const running = nodeRuns.some((run) => run.status === "RUNNING");
+    // Historical Graph 3 rows can remain RUNNING after a browser/worker
+    // interruption. Poll only the newest invocation for each graph; the API
+    // still exposes history for audit, but history must not keep the UI alive.
+    const running = latestRunsByGraph(nodeRuns).some((run) => run.status === "RUNNING");
     if (!running && !activeJob) return;
     const timer = window.setInterval(() => void refreshNodeRuns(), 4000);
     return () => window.clearInterval(timer);
@@ -2894,18 +2913,20 @@ function App() {
     }
   }
 
-  async function advanceWorkflowStep() {
-    if (!workflow || !canOperate || activeJob || workflowActionBusy) return;
+  async function advanceWorkflowStep(): Promise<boolean> {
+    if (!workflow || !canOperate || activeJob || workflowActionBusy) return false;
     try {
       const nextWorkflow = await workflowApi.advanceWorkflowStep(workflow.id);
       setWorkflow(nextWorkflow);
       setToast(
         `Moved to ${workflowStepLabels[nextWorkflow.current_step].label}.`,
       );
+      return true;
     } catch (err) {
       setError(
         getErrorMessage(err, "Unable to move to the next workflow step."),
       );
+      return false;
     }
   }
 
@@ -2953,6 +2974,17 @@ function App() {
   }
 
   async function handleWizardNext() {
+    if (
+      wizardStep === 2 &&
+      workflow?.current_step === "UNDERSTAND_DATA" &&
+      contractConfirmed
+    ) {
+      // The footer is also the transition out of Graph 1A. Keep the durable
+      // workflow cursor ahead of the presentation step so Graph 1B cannot be
+      // shown while its PROPOSE_RULES stage is still locked behind
+      // UNDERSTAND_DATA.
+      if (!(await advanceWorkflowStep())) return;
+    }
     if (wizardStep === 3 && workflow?.current_step === "REVIEW_RULES") {
       // The footer is the single continue action for the review screen. Keep
       // the durable workflow cursor in sync before showing Graph 2.
@@ -3175,7 +3207,7 @@ function App() {
                 Results are deterministic fixtures until the Gate 2 backend is
                 connected.
               </span>
-              <code>VITE_USE_MOCK_API=false</code>
+                <code>VITE_USE_MOCK_API=true</code>
             </div>
           )}
           {error && (
@@ -3512,11 +3544,6 @@ function App() {
                           runId={activeRun.id}
                           language={language}
                           loadReport={loadStewardReport}
-                        />
-                        <AnomalyInvestigationPanel
-                          runId={activeRun.id}
-                          canOperate={canOperate}
-                          language={language}
                         />
                         <AnomalyStatisticsPanel
                           anomalies={dqAnomalies}
@@ -4325,9 +4352,14 @@ function ProposalCard({
         ? "success"
         : "warning";
 
-  const title = isVi ? (proposal.title_vi || proposal.title) : proposal.title;
-  const description = isVi ? (proposal.description_vi || proposal.description) : proposal.description;
-  const evidenceSummary = isVi ? (proposal.evidence_summary_vi || proposal.evidence_summary) : proposal.evidence_summary;
+  // The API's canonical fields are already the Agent-backed values.  The
+  // *_vi properties were never part of the response, so preferring them made
+  // VI silently fall back to the English candidate text.
+  const title = isVi ? (proposal.rule_name || proposal.title) : proposal.title;
+  const description = proposal.description;
+  const evidenceSummary = proposal.evidence_summary;
+  const businessRationale = proposal.business_rationale;
+  const confidenceExplanation = proposal.confidence_breakdown?.explanation;
 
   const sourceLabel =
     proposal.source === "MANUAL"
@@ -4387,6 +4419,16 @@ function ProposalCard({
           <code key={ref}>{ref}</code>
         ))}
       </div>
+      {businessRationale && (
+        <p className="proposal-rationale-preview">
+          <strong>{isVi ? "Vì sao đề xuất:" : "Why this rule:"}</strong> {businessRationale}
+        </p>
+      )}
+      {confidenceExplanation && (
+        <p className="proposal-confidence-explanation">
+          <strong>{isVi ? "Giải thích độ tin cậy:" : "Confidence explanation:"}</strong> {confidenceExplanation}
+        </p>
+      )}
       <ProposalRationale proposal={proposal} />
       {(editable || proposal.status === "REJECTED") && canOperate && (
         <div className="proposal-actions">
@@ -4467,7 +4509,7 @@ function ProposalRationale({ proposal }: { proposal: RuleProposal }) {
   const provenance = proposal.parameter_provenance ?? [];
   const assumptions = proposal.assumptions ?? [];
   const breakdown = proposal.confidence_breakdown;
-  const businessRationale = isVi ? (proposal.business_rationale_vi || proposal.business_rationale) : proposal.business_rationale;
+  const businessRationale = proposal.business_rationale;
 
   const hasDetail =
     Boolean(businessRationale) ||
@@ -6519,8 +6561,8 @@ function EditDialog({
   const { language } = useI18n();
   const isVi = language === "vi";
 
-  const [title, setTitle] = useState(isVi ? (proposal.title_vi || proposal.title) : proposal.title);
-  const [description, setDescription] = useState(isVi ? (proposal.description_vi || proposal.description) : proposal.description);
+  const [title, setTitle] = useState(isVi ? (proposal.rule_name || proposal.title) : proposal.title);
+  const [description, setDescription] = useState(proposal.description);
   const [severity, setSeverity] = useState(proposal.severity);
   const [rule, setRule] = useState<RuleSpec>({
     ...proposal.rule,

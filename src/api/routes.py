@@ -383,6 +383,7 @@ class DqAnomalySchema(BaseModel):
     checked_count: int
     failed_count: int
     reason: str
+    columns: list[str] = []
 
 
 class DatasetRowSchema(BaseModel):
@@ -3766,7 +3767,9 @@ def list_graph_node_runs(
     db: Session = Depends(get_db),
 ):
     """Node executions, newest run first, filtered by whichever context is known."""
-    from src.services.node_telemetry import serialize_node_run
+    from src.services.node_telemetry import recover_stale_node_runs, serialize_node_run
+
+    recover_stale_node_runs(db, workflow_run_id=workflow_run_id, graph_key=graph_key)
 
     query = db.query(GraphNodeRunModel)
     if workflow_run_id:

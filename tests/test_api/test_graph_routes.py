@@ -7,6 +7,8 @@ from, and the telemetry it overlays on top.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from sqlalchemy.orm import Session
 
 from src.models.database import GraphNodeRunModel
@@ -16,6 +18,8 @@ from src.time_utils import utc_now
 
 def _seed_node_run(**overrides) -> str:
     row_id = overrides.get("id", "nr-test-1")
+    status = overrides.get("status", "SUCCEEDED")
+    started_at = overrides.get("started_at", utc_now())
     row = GraphNodeRunModel(
         id=row_id,
         graph_run_id=overrides.get("graph_run_id", "gr-test-1"),
@@ -23,9 +27,11 @@ def _seed_node_run(**overrides) -> str:
         node_name=overrides.get("node_name", "dataset_understanding"),
         node_kind=overrides.get("node_kind", "LLM"),
         sequence=overrides.get("sequence", 1),
-        status=overrides.get("status", "SUCCEEDED"),
-        started_at=utc_now(),
-        completed_at=utc_now(),
+        status=status,
+        started_at=started_at,
+        completed_at=overrides.get(
+            "completed_at", None if status == "RUNNING" else utc_now()
+        ),
         duration_ms=overrides.get("duration_ms", 4200),
         input_summary_json=overrides.get("input_summary_json", '{"dataset_id": "ds-1"}'),
         output_summary_json=overrides.get("output_summary_json", '{"columns": {"type": "list", "count": 18}}'),
@@ -119,6 +125,31 @@ class TestNodeRuns:
     async def test_detail_404_for_unknown_id(self, steward_client):
         response = await steward_client.get("/api/v1/graph/node-runs/does-not-exist")
         assert response.status_code == 404
+
+    async def test_reclaims_stale_running_rows_without_touching_latest_success(self, steward_client):
+        _seed_node_run(
+            id="nr-stale",
+            workflow_run_id="wf-recovery",
+            status="RUNNING",
+            started_at=utc_now() - timedelta(minutes=11),
+            completed_at=None,
+        )
+        _seed_node_run(
+            id="nr-latest",
+            workflow_run_id="wf-recovery",
+            graph_run_id="gr-latest",
+            status="SUCCEEDED",
+        )
+
+        response = await steward_client.get(
+            "/api/v1/graph/node-runs?workflow_run_id=wf-recovery"
+        )
+
+        assert response.status_code == 200
+        body = {row["id"]: row for row in response.json()}
+        assert body["nr-stale"]["status"] == "FAILED"
+        assert "expired" in body["nr-stale"]["error_message"]
+        assert body["nr-latest"]["status"] == "SUCCEEDED"
 
     async def test_requires_a_session(self, client):
         assert (await client.get("/api/v1/graph/node-runs")).status_code == 401

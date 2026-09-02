@@ -28,7 +28,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -49,6 +49,11 @@ MAX_KEYS = 40
 
 # How deep to descend before collapsing to a type name.
 MAX_DEPTH = 3
+
+# A node that has not reported completion after this period is no longer a
+# trustworthy live signal.  The workflow/job recovery path owns the actual
+# work retry; telemetry only closes the orphaned visual state.
+STALE_NODE_RUN_TIMEOUT_SECONDS = 10 * 60
 
 
 @dataclass
@@ -117,6 +122,41 @@ def bind_run_ids(
         context.anomaly_run_id = anomaly_run_id
     if dataset_id:
         context.dataset_id = dataset_id
+
+
+def recover_stale_node_runs(
+    db: Session,
+    *,
+    workflow_run_id: str | None = None,
+    graph_key: str | None = None,
+) -> int:
+    """Close orphaned RUNNING telemetry rows so old runs cannot pin the UI.
+
+    This is deliberately scoped to telemetry. It does not claim the underlying
+    job succeeded or retry it; the durable job status remains authoritative for
+    execution recovery.
+    """
+    cutoff = utc_now() - timedelta(seconds=STALE_NODE_RUN_TIMEOUT_SECONDS)
+    query = db.query(GraphNodeRunModel).filter(
+        GraphNodeRunModel.status == "RUNNING",
+        GraphNodeRunModel.started_at.isnot(None),
+        GraphNodeRunModel.started_at < cutoff,
+    )
+    if workflow_run_id:
+        query = query.filter(GraphNodeRunModel.workflow_run_id == workflow_run_id)
+    if graph_key:
+        query = query.filter(GraphNodeRunModel.graph_key == graph_key)
+    rows = query.all()
+    if not rows:
+        return 0
+    completed_at = utc_now()
+    for row in rows:
+        row.status = "FAILED"
+        row.completed_at = completed_at
+        row.duration_ms = max(int((completed_at - row.started_at).total_seconds() * 1000), 0)
+        row.error_message = "Telemetry row expired without a terminal node event."
+    db.commit()
+    return len(rows)
 
 
 def summarize(payload: Any, *, depth: int = 0) -> Any:

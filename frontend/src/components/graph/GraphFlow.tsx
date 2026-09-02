@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { GraphNodeSpec, GraphSpec, NodeRun } from "../../types";
 import { NodeCard, formatDuration } from "./NodeCard";
+import { latestGraphRuns } from "./graphRunUtils";
 
 /** Pick the run to show for a node: the most recent one wins. */
 function latestRunByNode(runs: NodeRun[]): Map<string, NodeRun> {
@@ -33,7 +34,7 @@ export function GraphFlow({
   onSelectNode: (node: GraphNodeSpec, run?: NodeRun) => void;
   compact?: boolean;
 }) {
-  const runByNode = useMemo(() => latestRunByNode(runs), [runs]);
+  const runByNode = useMemo(() => latestRunByNode(latestGraphRuns(runs)), [runs]);
 
   const executed = graph.nodes.filter((node) => runByNode.has(node.name));
   const totalMs = executed.reduce((sum, node) => sum + (runByNode.get(node.name)?.duration_ms ?? 0), 0);
