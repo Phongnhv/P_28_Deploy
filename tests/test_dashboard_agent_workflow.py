@@ -9,6 +9,7 @@ from src.services.dashboard_agent_workflow import (
     _build_dashboard_rule_candidates,
     _normalise_graph_rules,
     build_proposal_evidence,
+    generate_dashboard_policy_fallback_proposals,
     generate_dashboard_proposals,
 )
 from src.services.job_runner import run_propose_rules
@@ -246,6 +247,66 @@ def test_graph_normalizer_uses_canonical_text_spec_and_confidence_ceiling():
     }
     assert proposal.severity == "HIGH"
     assert proposal.confidence == 0.9
+
+
+def test_graph_normalizer_preserves_agent_narrative_and_trace_fields():
+    seed_completed_profile()
+    with Session(get_engine()) as session:
+        evidence = build_proposal_evidence(session, DATASET_ID)
+
+    proposals = _normalise_graph_rules(
+        [
+            {
+                "candidate_id": "nonnegative:trip_distance",
+                "rule_type": "RANGE",
+                "column": "trip_distance",
+                "parameters": {"min": 0.0, "max": 80.0},
+                "confidence_score": 0.85,
+                "severity": "HIGH",
+                "rule_name": "Khoảng cách chuyến đi hợp lệ",
+                "rule_description": "Khoảng cách chuyến đi không được âm.",
+                "ai_reasoning": "Hồ sơ dữ liệu ghi nhận giá trị âm ở cột khoảng cách.",
+                "business_rationale": "Giá trị âm làm sai lệch tổng quãng đường.",
+                "assumptions": ["Đơn vị đo là dặm."],
+                "parameter_provenance": [
+                    {
+                        "parameter_name": "min_value",
+                        "source_type": "DATA_PROFILE",
+                        "source_ref": "profile.column.trip_distance.min_value",
+                        "derivation_method": "server_policy",
+                    }
+                ],
+            }
+        ],
+        evidence,
+    )
+
+    assert len(proposals) == 1
+    proposal = proposals[0]
+    assert proposal.rule_name == "Khoảng cách chuyến đi hợp lệ"
+    assert proposal.description == "Khoảng cách chuyến đi không được âm."
+    assert proposal.evidence_summary == "Hồ sơ dữ liệu ghi nhận giá trị âm ở cột khoảng cách."
+    assert proposal.business_rationale == "Giá trị âm làm sai lệch tổng quãng đường."
+    assert proposal.assumptions == ["Đơn vị đo là dặm."]
+    assert proposal.parameter_provenance[0]["parameter_name"] == "min_value"
+
+
+def test_policy_fallback_does_not_invoke_a_second_proposer_graph(monkeypatch):
+    seed_completed_profile()
+    from src.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "agent_mode", "graph")
+    monkeypatch.setattr(
+        "src.services.dashboard_agent_workflow._invoke_dashboard_proposal_graph",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("fallback must not call an LLM graph")),
+    )
+
+    with Session(get_engine()) as session:
+        proposals = generate_dashboard_policy_fallback_proposals(session, DATASET_ID)
+
+    assert len(proposals) >= 2
+    assert all(proposal.model_name == "agent-policy-fallback-v1" for proposal in proposals)
 
 
 def test_graph_normalizer_rejects_mismatched_candidate_id():

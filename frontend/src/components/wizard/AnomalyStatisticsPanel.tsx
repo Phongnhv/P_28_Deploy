@@ -55,8 +55,8 @@ export function AnomalyStatisticsPanel({
 
     for (const anomaly of anomalies) {
       byType.set(anomaly.anomaly_type, (byType.get(anomaly.anomaly_type) ?? 0) + 1);
-      const column = columnOf(anomaly.rule_id);
-      if (column) byColumn.set(column, (byColumn.get(column) ?? 0) + 1);
+      const columns = anomaly.columns?.length ? anomaly.columns : [columnOf(anomaly.rule_id)].filter(Boolean) as string[];
+      for (const column of columns) byColumn.set(column, (byColumn.get(column) ?? 0) + 1);
       const ruleType = ruleTypeOf(anomaly.rule_id);
       if (ruleType) byRuleType.set(ruleType, (byRuleType.get(ruleType) ?? 0) + 1);
       peakRate = Math.max(peakRate, anomaly.current_rate);

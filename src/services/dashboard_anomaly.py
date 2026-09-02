@@ -5,12 +5,13 @@ Consolidated to use the canonical anomaly service via an adapter.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from src.models.database import DqResultModel
+from src.models.database import DqResultModel, RuleVersionModel
 from src.services.anomaly_service import detect_anomalies
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,35 @@ class DashboardAnomaly:
     checked_count: int
     failed_count: int
     reason: str
+    columns: list[str]
+
+
+def _columns_for_rule(db: Session, rule_id: str) -> list[str]:
+    """Resolve involved columns from the approved typed rule, not its opaque id."""
+    version = db.get(RuleVersionModel, rule_id)
+    if version is None and rule_id.startswith("rv_"):
+        version = db.get(RuleVersionModel, rule_id[3:])
+    if version is None:
+        parts = rule_id.replace("rv_", "", 1).split(".")
+        return [parts[1]] if len(parts) >= 3 and parts[1] else []
+    try:
+        spec = json.loads(version.rule_spec or "{}")
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(spec, dict):
+        return []
+    columns: list[str] = []
+    for key in ("column", "column_name", "left_column", "right_column", "target_column"):
+        value = spec.get(key)
+        if isinstance(value, str) and value and value not in columns:
+            columns.append(value)
+    for key in ("columns", "fingerprint_columns"):
+        value = spec.get(key)
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, str) and item and item not in columns:
+                    columns.append(item)
+    return columns
 
 
 def detect_dashboard_anomalies(
@@ -131,6 +161,7 @@ def detect_dashboard_anomalies(
                 checked_count=checked_count,
                 failed_count=failed_count,
                 reason=sig["explanation_code"],
+                columns=_columns_for_rule(db, rule_id),
             )
         )
 

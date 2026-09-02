@@ -35,7 +35,7 @@ from src.models.database import (
     WorkflowRunModel,
 )
 from src.services.dashboard_agent_workflow import (
-    generate_dashboard_proposals,
+    generate_dashboard_policy_fallback_proposals,
     generate_rule_proposals_via_graph_1b,
 )
 from src.services.node_telemetry import start_graph_run
@@ -737,18 +737,23 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
             raise WorkflowError("Confirm the current semantic contract before proposing rules.")
         if contract.get("source_profile_artifact_id") != profile_artifact.id or contract.get("source_dictionary_artifact_id") != dictionary_artifact.id:
             raise WorkflowError("The confirmed contract references stale understanding artifacts.")
-        # Graph 1B is the documented path (candidates ➔ prompt ➔ proposer).  The
-        # single-node shortcut stays as a fallback so a Graph 1B failure degrades
-        # to the previous behaviour instead of blocking the steward.
+        # Graph 1B is the documented path (candidates ➔ prompt ➔ proposer).  If
+        # it fails, use the server-owned deterministic policy candidates. Calling
+        # another proposer graph here would spend the provider budget twice and
+        # is the reason some deployed runs appeared to hang for many minutes.
+        proposal_generation_mode = "graph-1b"
+        proposal_fallback_reason: str | None = None
         try:
             proposals = generate_rule_proposals_via_graph_1b(
                 db, run.dataset_id, contract, workflow_run_id=run.id
             )
         except Exception as exc:
             logger.warning(
-                "Graph 1B failed for workflow %s, falling back to the single-node proposer: %s", run.id, exc
+                "Graph 1B failed for workflow %s, using deterministic policy fallback: %s", run.id, exc
             )
-            proposals = generate_dashboard_proposals(db, run.dataset_id, contract)
+            proposal_generation_mode = "deterministic-policy-fallback"
+            proposal_fallback_reason = f"{type(exc).__name__}: {str(exc)[:240]}"
+            proposals = generate_dashboard_policy_fallback_proposals(db, run.dataset_id)
         if not proposals:
             raise WorkflowError("No usable rule proposals were produced.")
         _mark_downstream_stale(db, run, step_key)
@@ -781,8 +786,8 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
                     business_rationale=proposal.business_rationale,
                     proposal_basis=proposal.proposal_basis,
                     evidence=json.dumps(proposal.evidence),
-                    parameter_provenance="[]",
-                    assumptions="[]",
+                    parameter_provenance=json.dumps(proposal.parameter_provenance, ensure_ascii=False),
+                    assumptions=json.dumps(proposal.assumptions, ensure_ascii=False),
                     confidence_breakdown=json.dumps(proposal.confidence_breakdown),
                     model_name=proposal.model_name,
                 )
@@ -793,7 +798,16 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
             run,
             step_key,
             "RULE_SET",
-            {"proposal_ids": proposal_ids, "proposal_count": len(proposal_ids), "source_semantic_contract_artifact_id": contract_artifact.id, "source_profile_artifact_id": profile_artifact.id, "source_dictionary_artifact_id": dictionary_artifact.id, "generated_at": utc_now().isoformat()},
+            {
+                "proposal_ids": proposal_ids,
+                "proposal_count": len(proposal_ids),
+                "proposal_generation_mode": proposal_generation_mode,
+                "proposal_fallback_reason": proposal_fallback_reason,
+                "source_semantic_contract_artifact_id": contract_artifact.id,
+                "source_profile_artifact_id": profile_artifact.id,
+                "source_dictionary_artifact_id": dictionary_artifact.id,
+                "generated_at": utc_now().isoformat(),
+            },
             status="DRAFT",
         )
         next_key = "REVIEW_RULES"
@@ -971,8 +985,9 @@ def run_analysis_report(workflow_run_id: str, job_id: str, session_id: str | Non
         _encode_steps(run, steps)
         db.commit()
 
+    analysis_state: dict[str, Any] = {}
     try:
-        asyncio.run(
+        analysis_state = asyncio.run(
             asyncio.wait_for(
                 run_anomaly_graph(
                     execution_run_id=dq_run_id,
@@ -1002,6 +1017,13 @@ def run_analysis_report(workflow_run_id: str, job_id: str, session_id: str | Non
             .first()
         )
         hypotheses = db.query(AnomalyHypothesisModel).filter_by(anomaly_run_id=anomaly.id).all() if anomaly else []
+        report_markdown = str(analysis_state.get("steward_report_markdown") or "")
+        report_source = str(analysis_state.get("report_source") or "") or None
+        report_path = str(
+            analysis_state.get("steward_report_path")
+            or (analysis_state.get("metadata") or {}).get("steward_report_path")
+            or ""
+        ) or None
         _add_artifact(
             db,
             run,
@@ -1014,6 +1036,13 @@ def run_analysis_report(workflow_run_id: str, job_id: str, session_id: str | Non
                 "score": anomaly.score if anomaly else 0.0,
                 "confidence": anomaly.confidence if anomaly else 0.0,
                 "error": analysis_error or (anomaly.error_message if anomaly else "Analysis was not persisted."),
+                # Graph 3's report_writer returns the generated Markdown in
+                # state. Preserve it in the durable workflow artifact so the
+                # deploy UI does not fall back to the structured hypothesis
+                # cards or a filesystem-only legacy endpoint.
+                "report_markdown": report_markdown,
+                "report_source": report_source,
+                "report_path": report_path,
                 "hypotheses": [
                     {
                         "summary": item.summary,

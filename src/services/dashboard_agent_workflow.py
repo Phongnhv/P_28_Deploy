@@ -13,9 +13,10 @@ import asyncio
 import json
 import logging
 import math
+import re
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -349,6 +350,13 @@ class DashboardProposal:
     proposal_basis: str
     evidence: dict[str, Any]
     confidence_breakdown: dict[str, Any]
+    # Keep the Agent's canonical narrative fields available between Graph 1B
+    # normalization and persistence.  The public API continues to use the
+    # existing title/description/evidence_summary fields to avoid a migration.
+    rule_description: str = ""
+    ai_reasoning: str = ""
+    assumptions: list[str] = field(default_factory=list)
+    parameter_provenance: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _parse_json_dict(raw: str | None) -> dict[str, float]:
@@ -593,12 +601,9 @@ def generate_dashboard_proposals(
 ) -> list[DashboardProposal]:
     """Return two to five validated proposals in the configured local agent mode.
 
-    The parameter and the whole tail of this function were lost in a merge: the
-    body still referenced ``semantic_contract`` as if it were an argument, so
-    every call raised NameError inside the try, was swallowed by the except, and
-    silently returned ``_mock_proposals``. The agent's own rules never reached a
-    caller, and the fallback in rule_proposer_workflow -- which passes the
-    contract as a third argument -- could not even be called.
+    This is the compatibility entrypoint used by the standalone dashboard job.
+    The wizard uses :func:`generate_rule_proposals_via_graph_1b` so its node
+    telemetry and three-node graph remain visible to the steward.
     """
     evidence = build_proposal_evidence(db, dataset_id)
     settings = get_settings()
@@ -629,6 +634,26 @@ def generate_dashboard_proposals(
     return _mock_proposals(evidence)
 
 
+def generate_dashboard_policy_fallback_proposals(
+    db: Session, dataset_id: str
+) -> list[DashboardProposal]:
+    """Build an evidence-backed deterministic fallback without another LLM call.
+
+    This is intentionally separate from ``generate_dashboard_proposals``.  If
+    the full wizard graph has already spent its provider budget and failed, the
+    workflow must not invoke a second proposer graph and double the latency.
+    The fallback only promotes the server-owned policy candidates, so it cannot
+    invent thresholds or fields.
+    """
+    evidence = build_proposal_evidence(db, dataset_id)
+    proposals = _complete_with_policy_candidates([], evidence)
+    if not proposals:
+        raise AgentWorkflowError(
+            "The completed profile does not contain enough policy-backed candidates for fallback proposals."
+        )
+    return proposals
+
+
 def generate_rule_proposals_via_graph_1b(
     db: Session,
     dataset_id: str,
@@ -638,14 +663,12 @@ def generate_rule_proposals_via_graph_1b(
 ) -> list[DashboardProposal]:
     """Return proposals produced by the full Graph 1B (three nodes).
 
-    ``generate_dashboard_proposals`` runs a single-node shortcut, so
-    ``rule_candidate_builder`` and ``prompt_customizer`` -- both documented parts
-    of Run 1 -- never executed from the wizard.  This entrypoint drives the real
-    graph while reusing the same validation, normalisation and policy-completion
-    pipeline, so the proposals it returns are indistinguishable in shape.
+    This entrypoint drives the documented three-node graph while reusing the same
+    validation, normalisation and policy-completion pipeline, so the proposals it
+    returns are indistinguishable in shape from the compatibility entrypoint.
 
     Raises ``AgentWorkflowError`` like its sibling; the caller decides whether to
-    fall back to the shortcut.
+    fall back to the deterministic policy path.
     """
     evidence = build_proposal_evidence(db, dataset_id)
     if get_settings().agent_mode == "mock":
@@ -868,6 +891,47 @@ def _normalise_graph_rules(raw_rules: list[dict[str, Any]], evidence: ProposalEv
     return [proposal for proposal, _candidate in accepted]
 
 
+def _normalise_text_list(value: Any) -> list[str]:
+    """Keep only bounded, user-readable string assumptions from Agent output."""
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def _normalise_parameter_provenance(value: Any) -> list[dict[str, Any]]:
+    """Preserve provenance entries without letting malformed values cross the API."""
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _normalise_text(value: Any, fallback: str) -> str:
+    """Use the Agent narrative when present, otherwise the allow-listed candidate."""
+    normalized = str(value or "").strip()
+    return normalized or fallback
+
+
+def _has_unsupported_range_number(text: str, candidate: DashboardRuleCandidate) -> bool:
+    """Reject a narrative that repeats a threshold discarded by server policy."""
+    if candidate.rule_type != "RANGE":
+        return False
+    canonical = [
+        number
+        for number in (
+            _finite_float(candidate.rule_spec.get("min_value")),
+            _finite_float(candidate.rule_spec.get("max_value")),
+        )
+        if number is not None
+    ]
+    if not canonical:
+        return False
+    for raw_number in re.findall(r"(?<![A-Za-z])[-+]?\d+(?:[.,]\d+)?", text):
+        number = _finite_float(raw_number.replace(",", "."))
+        if number is not None and not any(math.isclose(number, allowed, rel_tol=1e-9, abs_tol=1e-9) for allowed in canonical):
+            return True
+    return False
+
+
 def _normalise_graph_rule(
     raw: dict[str, Any], evidence: ProposalEvidence, candidate: DashboardRuleCandidate
 ) -> DashboardProposal | None:
@@ -878,10 +942,22 @@ def _normalise_graph_rule(
     severity = str(raw.get("severity", "MEDIUM")).upper()
     if severity not in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}:
         return None
-    description = str(raw.get("rule_description", "")).strip()
-    reasoning = str(raw.get("ai_reasoning", "")).strip()
+    raw_description = _normalise_text(raw.get("rule_description"), candidate.description)
+    description = (
+        candidate.description
+        if _has_unsupported_range_number(raw_description, candidate)
+        else raw_description
+    )
+    reasoning = _normalise_text(
+        raw.get("ai_reasoning"),
+        _safe_evidence_summary(evidence, candidate.evidence_refs),
+    )
     if not 1 <= len(description) <= 500 or not 1 <= len(reasoning) <= 1_000:
         return None
+    rule_name = _normalise_text(raw.get("rule_name"), candidate.title)
+    business_rationale = _normalise_text(raw.get("business_rationale"), description)
+    assumptions = _normalise_text_list(raw.get("assumptions"))
+    parameter_provenance = _normalise_parameter_provenance(raw.get("parameter_provenance"))
 
     model_name = f"langgraph-{get_settings().llm_provider}"
     if not set(candidate.evidence_refs).issubset(evidence.evidence_keys):
@@ -904,18 +980,19 @@ def _normalise_graph_rule(
     return DashboardProposal(
         id=f"proposal-{uuid.uuid4().hex}",
         title=candidate.title,
-        description=candidate.description,
+        # Keep the stable candidate title for the EN view, while the VI view
+        # uses rule_name below in the frontend.  The description and evidence
+        # fields are the Agent's canonical Vietnamese narratives.
+        description=description,
         severity=candidate.severity,
         rule_type=candidate.dashboard_rule_type,
         rule_spec=candidate.rule_spec,
         evidence_refs=candidate.evidence_refs,
-        evidence_summary=(
-            f"{_safe_evidence_summary(evidence, candidate.evidence_refs)} Selection basis: {candidate.selection_reason}"
-        ),
+        evidence_summary=reasoning,
         confidence=capped_confidence,
         model_name=model_name,
-        rule_name=str(raw.get("rule_name") or candidate.title),
-        business_rationale=str(raw.get("business_rationale") or candidate.description),
+        rule_name=rule_name,
+        business_rationale=business_rationale,
         proposal_basis=str(raw.get("proposal_basis") or "MIXED"),
         evidence={
             "sample_row_count": evidence.row_count,
@@ -925,6 +1002,10 @@ def _normalise_graph_rule(
             "source_refs": candidate.evidence_refs,
         },
         confidence_breakdown=normalized_breakdown,
+        rule_description=description,
+        ai_reasoning=reasoning,
+        assumptions=assumptions,
+        parameter_provenance=parameter_provenance,
     )
 
 
@@ -1223,6 +1304,7 @@ def _dimension_for_rule_type(rule_type: str) -> str:
 def _fallback_core_fields(
     candidate: DashboardRuleCandidate, evidence: ProposalEvidence, confidence: float
 ) -> dict[str, Any]:
+    reasoning = _safe_evidence_summary(evidence, candidate.evidence_refs)
     return {
         "rule_name": candidate.title,
         "business_rationale": candidate.description,
@@ -1241,6 +1323,10 @@ def _fallback_core_fields(
             "sample_representativeness": 1.0,
             "explanation": "Deterministic policy candidate fallback",
         },
+        "rule_description": candidate.description,
+        "ai_reasoning": reasoning,
+        "assumptions": [],
+        "parameter_provenance": [],
     }
 
 

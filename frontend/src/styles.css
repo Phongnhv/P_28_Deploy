@@ -1760,6 +1760,20 @@ nav {
 .evidence-label {
   margin-right: 3px;
 }
+.proposal-rationale-preview,
+.proposal-confidence-explanation {
+  margin: 0;
+  padding: 9px 12px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface-muted);
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.proposal-confidence-explanation {
+  margin-top: 8px;
+  border-left-color: var(--success, #10b981);
+}
 .proposal-actions {
   display: flex;
   justify-content: flex-end;

@@ -26,6 +26,7 @@ import type {
   WorkflowRun,
 } from "../../types";
 import { formatDuration } from "../graph/NodeCard";
+import { latestRunsByGraph } from "../graph/graphRunUtils";
 
 export interface Step6ResultsSummaryProps {
   dataset?: Dataset;
@@ -157,10 +158,12 @@ export const Step6ResultsSummary: React.FC<Step6ResultsSummaryProps> = ({
     };
   }, [qualityScore, isVi]);
 
-  // Total execution time across all node runs
+  // Sum only the newest invocation of each graph; retries/history must not
+  // inflate the pipeline duration shown to the steward.
   const totalPipelineTimeMs = useMemo(() => {
-    return workflowNodeRuns.reduce((sum, run) => sum + (run.duration_ms || 0), 0);
+    return latestRunsByGraph(workflowNodeRuns).reduce((sum, run) => sum + (run.duration_ms || 0), 0);
   }, [workflowNodeRuns]);
+  const latestWorkflowNodeCount = latestRunsByGraph(workflowNodeRuns).length;
 
   // -------------------------------------------------------------------------
   // Visual Chart Data
@@ -318,8 +321,8 @@ export const Step6ResultsSummary: React.FC<Step6ResultsSummaryProps> = ({
                   <strong>{formatDuration(totalPipelineTimeMs)}</strong>
                 </div>
                 <small className="muted">
-                  {workflowNodeRuns.length > 0
-                    ? isVi ? `${workflowNodeRuns.length} node agent đã chạy qua 4 graph` : `${workflowNodeRuns.length} agent nodes executed`
+                  {latestWorkflowNodeCount > 0
+                    ? isVi ? `${latestWorkflowNodeCount} node agent đã chạy qua 4 graph` : `${latestWorkflowNodeCount} agent nodes executed`
                     : isVi ? "Tổng thời gian pipeline" : "Total pipeline time"}
                 </small>
               </div>

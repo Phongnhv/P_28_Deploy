@@ -193,20 +193,16 @@ export interface RuleProposal {
   dataset_id: string;
   workflow_run_id?: string;
   title: string;
-  title_vi?: string;
   description: string;
-  description_vi?: string;
   severity: "LOW" | "MEDIUM" | "HIGH";
   status: ProposalStatus;
   rule: RuleSpec;
   evidence_refs: string[];
   evidence_summary: string;
-  evidence_summary_vi?: string;
   confidence: number;
   model_name: string;
   rule_name?: string;
   business_rationale?: string;
-  business_rationale_vi?: string;
   proposal_basis?: ProposalBasis;
   evidence?: Record<string, unknown>;
   parameter_provenance?: ParameterProvenance[];
@@ -277,6 +273,7 @@ export interface DqAnomaly {
   checked_count: number;
   failed_count: number;
   reason: string;
+  columns?: string[];
 }
 
 export interface DatasetRow {
