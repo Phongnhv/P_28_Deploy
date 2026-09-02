@@ -2422,6 +2422,37 @@ function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  async function startNewWorkflowRun() {
+    if (!dataset || !canOperate || activeJob || workflowActionBusy) return;
+    setError("");
+    setRetryAction(null);
+    setWorkflowActionBusy(true);
+    try {
+      // The Graph 3 "new run" action must create a new durable workflow, not
+      // merely reveal step 1 while the previous workflow remains selected.
+      const nextWorkflow = await workflowApi.createWorkflow(dataset.id, true);
+      setWorkflow(nextWorkflow);
+      setWorkflowArtifacts(await workflowApi.listWorkflowArtifacts(nextWorkflow.id));
+      setProposals([]);
+      setActiveRun(null);
+      setDqResults([]);
+      setDqAnomalies([]);
+      setQualityTrends([]);
+      setNodeRuns([]);
+      setWizardStep(1);
+      setAuditLogs(await api.listAuditLogs());
+      setToast(
+        language === "vi"
+          ? "Đã tạo lượt workflow mới. Hãy bắt đầu lại từ Bước 1."
+          : "A new workflow run is ready. Start again from step 1.",
+      );
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to create a new workflow run."));
+    } finally {
+      setWorkflowActionBusy(false);
+    }
+  }
+
   async function pollJob(
     acceptedJob: CreateJobResponse,
     onComplete: () => Promise<void>,
@@ -3520,7 +3551,11 @@ function App() {
                             ? language === "vi" ? "Chạy lại Graph 3 analysis →" : "Run Graph 3 analysis again →"
                             : language === "vi" ? "Chạy Graph 3 analysis →" : "Run Graph 3 analysis →"}
                       </button>
-                      <button className="button secondary" onClick={() => setWizardStep(1)}>
+                      <button
+                        className="button secondary"
+                        disabled={workflowActionBusy || Boolean(activeJob) || !canOperate}
+                        onClick={() => void startNewWorkflowRun()}
+                      >
                         {t("wizard.startNewRun")}
                       </button>
                     </div>

@@ -687,9 +687,11 @@ export const mockApi: ApiClient = {
     access = existing ? access.map((item) => item.id === existing.id ? grant : item) : [...access, grant]; addAudit("DATASET_ACCESS_GRANTED", "dataset_access", grant.id, `Updated access for '${account.username}'.`); return grant;
   },
   async revokeDatasetAccess(id: string, username: string) { ensureAdmin(); const grant = access.find((item) => item.dataset_id === id && item.username === username.toLowerCase()); if (!grant) throw new Error("Dataset access grant not found."); access = access.filter((item) => item.id !== grant.id); addAudit("DATASET_ACCESS_REVOKED", "dataset_access", grant.id, `Revoked access for '${username}'.`); },
-  async createWorkflow(id: string) {
+  async createWorkflow(id: string, fresh = false) {
     await wait(180);
-    const existing = workflowRuns.find((item) => item.dataset_id === id && item.steps.some((step) => !["COMPLETED", "STALE"].includes(step.status)));
+    const existing = fresh
+      ? undefined
+      : workflowRuns.find((item) => item.dataset_id === id && item.steps.some((step) => !["COMPLETED", "STALE"].includes(step.status)));
     if (existing) return structuredClone(existing);
     const workflow = makeWorkflow(`workflow-${Date.now()}`, id);
     // Dataset preparation is a deterministic system prerequisite. Complete it
