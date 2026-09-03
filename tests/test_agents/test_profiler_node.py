@@ -79,8 +79,8 @@ def test_profile_database_tool(temp_db_url):
 
 @pytest.mark.asyncio
 async def test_profiler_node_execution(temp_db_url):
-    """Kiểm thử Profiler Node quét toàn bộ bảng và cập nhật state."""
-    state = {"metadata": {"connection_string": temp_db_url, "sampling_rate": 1.0}}
+    """Explicit table selection profiles only the requested source."""
+    state = {"target_tables": ["dich_vu_xe_trips"], "metadata": {"connection_string": temp_db_url, "sampling_rate": 1.0}}
 
     result = await raw_profiler_node(state)
 

@@ -77,7 +77,7 @@ def get_excluded_execution_run_ids(db: Session) -> set[str]:
     return {r.execution_run_id for r in runs}
 
 
-def detect_anomalies(db: Session, execution_run_id: str, detector_config_version: str | None = None) -> dict[str, Any]:
+def detect_anomalies(db: Session, execution_run_id: str, detector_config_version: str | None = None, *, profile_run_id: str | None = None) -> dict[str, Any]:
     """Canonical function to calculate signals, aggregate decisions, and return anomaly outcomes."""
     settings = get_settings()
     if detector_config_version is None:
@@ -338,15 +338,23 @@ def detect_anomalies(db: Session, execution_run_id: str, detector_config_version
             errors.append({"detector": "ISOLATION_FOREST", "error": str(ml_exc)})
 
     # 4. Table/Dataset Level Detectors (Volume & Freshness)
-    profile = (
-        db.query(ProfileModel)
-        .filter(ProfileModel.dataset_id == current_run.dataset_id)
-        .order_by(ProfileModel.generated_at.desc())
-        .first()
-    )
+    from src.models.database import DatasetModel, ProfileRunSnapshotModel, WorkflowRunModel
+    from src.services.source_binding import resolve_source_binding, workflow_binding
+    dataset = db.get(DatasetModel, current_run.dataset_id)
+    versioned = dataset and dataset.manifest_version == "versioned-v1"
+    if versioned:
+        workflow_id = getattr(current_run, "workflow_run_id", None)
+        workflow = db.get(WorkflowRunModel, workflow_id) if workflow_id else None
+        binding = workflow_binding(db, workflow) if workflow else resolve_source_binding(
+            db, current_run.dataset_id,
+            profile_run_id=profile_run_id or getattr(current_run, "profile_run_id", None),
+        )
+        profile = db.get(ProfileRunSnapshotModel, binding["profile_run_id"])
+    else:
+        profile = db.get(ProfileModel, current_run.dataset_id)
     if profile:
         current_rows = profile.row_count
-        hist_profiles = (
+        hist_profiles = [] if versioned else (
             db.query(ProfileModel)
             .filter(ProfileModel.dataset_id == current_run.dataset_id, ProfileModel.generated_at < profile.generated_at)
             .order_by(ProfileModel.generated_at.desc())

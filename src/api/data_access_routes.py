@@ -164,7 +164,8 @@ def data_explorer(
             offset=offset,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail={"code": "INVALID_EXPLORER_QUERY", "message": str(exc)}) from exc
+        from src.services.versioned_dataset import SourceIntegrityError
+        raise HTTPException(status_code=422, detail={"code": exc.code if isinstance(exc, SourceIntegrityError) else "INVALID_EXPLORER_QUERY", "message": str(exc)}) from exc
     except (ResourceNotFoundError, AccessDeniedError) as exc:
         _translate_access_error(exc)
 

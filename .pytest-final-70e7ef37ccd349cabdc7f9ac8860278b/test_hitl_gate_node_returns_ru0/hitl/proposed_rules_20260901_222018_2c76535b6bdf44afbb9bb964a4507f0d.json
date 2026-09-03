@@ -1,0 +1,46 @@
+{
+  "run_id": "2c76535b6bdf44afbb9bb964a4507f0d",
+  "dataset_id": "ds1",
+  "generated_at": "2026-09-01T15:20:18.185468+00:00",
+  "rules_count": 2,
+  "proposed_rules": [
+    {
+      "rule_id": "t.col_a.NOT_NULL",
+      "run_id": "2c76535b6bdf44afbb9bb964a4507f0d",
+      "table_name": "yellow_tripdata",
+      "column": "vendor_id",
+      "rule_type": "NOT_NULL",
+      "parameters": {},
+      "confidence_score": 1.0,
+      "severity": "CRITICAL",
+      "dimension": "COMPLETENESS",
+      "rule_description": "Cột vendor_id không được để trống.",
+      "ai_reasoning": "Profiler xác nhận null_pct = 0.0 trên toàn bộ dữ liệu.",
+      "status": "PENDING",
+      "edited_parameters": null,
+      "reviewer": null,
+      "review_note": null,
+      "reviewed_at": null,
+      "created_at": "2026-09-01T15:20:18.165178+00:00"
+    },
+    {
+      "rule_id": "t.col_b.NOT_NULL",
+      "run_id": "2c76535b6bdf44afbb9bb964a4507f0d",
+      "table_name": "yellow_tripdata",
+      "column": "col_b",
+      "rule_type": "NOT_NULL",
+      "parameters": {},
+      "confidence_score": 1.0,
+      "severity": "CRITICAL",
+      "dimension": "COMPLETENESS",
+      "rule_description": "Cột col_b không được để trống.",
+      "ai_reasoning": "Profiler xác nhận null_pct = 0.0 trên toàn bộ dữ liệu.",
+      "status": "PENDING",
+      "edited_parameters": null,
+      "reviewer": null,
+      "review_note": null,
+      "reviewed_at": null,
+      "created_at": "2026-09-01T15:20:18.165178+00:00"
+    }
+  ]
+}

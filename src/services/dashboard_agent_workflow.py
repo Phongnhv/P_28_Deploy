@@ -274,7 +274,7 @@ class ProposalEvidence(BaseModel):
     manifest_version: str = Field(min_length=1, max_length=64)
     row_count: int = Field(ge=1)
     completeness_score: float = Field(ge=0.0, le=100.0)
-    validity_score: float = Field(ge=0.0, le=100.0)
+    validity_score: float | None = Field(ge=0.0, le=100.0)
     duplicate_rate: float = Field(ge=0.0, le=100.0)
     evidence_keys: list[str]
     columns: list[ProposalColumnEvidence] = Field(min_length=1, max_length=64)
@@ -319,8 +319,8 @@ class ProposalEvidence(BaseModel):
         candidates = _build_dashboard_rule_candidates(self)
 
         return {
-            "source_rows": {
-                "table": "source_rows",
+            self.dataset_id: {
+                "table": self.dataset_id,
                 "rows": self.row_count,
                 "sample": {"rate": 0.0, "n": 0},
                 "columns": digest_columns,
@@ -437,6 +437,26 @@ def _proposal_evidence_from_versioned_snapshot(
         if isinstance(item, dict)
     ]
     evidence_keys = list(snapshot.get("evidence_keys") or [])
+    # The versioned snapshot must expose the same reference catalogue as the
+    # legacy adapter; otherwise real range/identifier evidence is silently
+    # rejected by the unchanged candidate provenance validator.
+    for column in columns:
+        prefix = f"profile.column.{column.name}"
+        evidence_keys.extend([f"{prefix}.null_rate", f"{prefix}.distinct_count", f"{prefix}.data_type"])
+        for field_name in ("min_value", "max_value", "non_null_count", "negative_rate", "out_of_domain_rate"):
+            if getattr(column, field_name) is not None:
+                evidence_keys.append(f"{prefix}.{field_name}")
+        evidence_keys.extend(f"{prefix}.quantile.{name}" for name in column.quantiles)
+        if column.full_distinct_count is not None:
+            evidence_keys.extend(f"{prefix}.{name}" for name in ("full_distinct_count", "uniqueness_rate", "is_unique_full_table"))
+    policy = get_dataset_rule_policy(dataset.id, columns)
+    if policy:
+        evidence_keys.extend(f"policy.required_identifier.{name}" for name in policy.required_identifiers)
+        evidence_keys.extend(f"policy.nonnegative_column.{name}" for name in policy.nonnegative_columns)
+        evidence_keys.extend(f"policy.governed_value_set.{name}" for name in policy.governed_value_sets)
+        evidence_keys.extend(f"policy.cross_field.{r.left_column}.{r.operator}.{r.right_column}" for r in policy.cross_field_rules)
+        if policy.duplicate_fingerprint_columns:
+            evidence_keys.append("policy.duplicate_fingerprint")
     evidence_keys.extend(
         f"profile.cross_field.{metric.left_column}.{metric.operator}.{metric.right_column}.violation_rate"
         for metric in cross_field_metrics
@@ -446,7 +466,7 @@ def _proposal_evidence_from_versioned_snapshot(
         manifest_version=dataset.manifest_version,
         row_count=int(snapshot["row_count"]),
         completeness_score=float(snapshot["completeness_score"]),
-        validity_score=float(snapshot["validity_score"]),
+        validity_score=snapshot["validity_score"],
         duplicate_rate=float(snapshot["duplicate_rate"]),
         evidence_keys=list(dict.fromkeys(evidence_keys)),
         columns=columns,
@@ -454,11 +474,20 @@ def _proposal_evidence_from_versioned_snapshot(
     )
 
 
-def build_proposal_evidence(db: Session, dataset_id: str) -> ProposalEvidence:
+def build_proposal_evidence(db: Session, dataset_id: str, *, workflow_run_id: str | None = None) -> ProposalEvidence:
     """Build the only payload that may be passed to the proposal graph."""
     dataset = db.query(DatasetModel).filter(DatasetModel.id == dataset_id).first()
     if not dataset:
         raise AgentWorkflowError(f"Dataset {dataset_id} not found.")
+    if dataset.manifest_version == "versioned-v1":
+        from src.models.database import WorkflowRunModel
+        from src.services.rule_proposer_workflow import _profile_snapshot
+        from src.services.source_binding import workflow_binding
+        run = db.get(WorkflowRunModel, workflow_run_id) if workflow_run_id else None
+        if workflow_run_id and (not run or run.dataset_id != dataset_id):
+            raise AgentWorkflowError("Workflow dataset mismatch")
+        binding = workflow_binding(db, run) if run else None
+        return _proposal_evidence_from_versioned_snapshot(dataset, _profile_snapshot(db, dataset_id, binding=binding))
 
     profile = db.query(ProfileModel).filter(ProfileModel.dataset_id == dataset_id).first()
     columns = (
@@ -635,7 +664,7 @@ def generate_dashboard_proposals(
 
 
 def generate_dashboard_policy_fallback_proposals(
-    db: Session, dataset_id: str
+    db: Session, dataset_id: str, *, workflow_run_id: str | None = None
 ) -> list[DashboardProposal]:
     """Build an evidence-backed deterministic fallback without another LLM call.
 
@@ -645,7 +674,7 @@ def generate_dashboard_policy_fallback_proposals(
     The fallback only promotes the server-owned policy candidates, so it cannot
     invent thresholds or fields.
     """
-    evidence = build_proposal_evidence(db, dataset_id)
+    evidence = build_proposal_evidence(db, dataset_id, workflow_run_id=workflow_run_id)
     proposals = _complete_with_policy_candidates([], evidence)
     if not proposals:
         raise AgentWorkflowError(
@@ -670,7 +699,7 @@ def generate_rule_proposals_via_graph_1b(
     Raises ``AgentWorkflowError`` like its sibling; the caller decides whether to
     fall back to the deterministic policy path.
     """
-    evidence = build_proposal_evidence(db, dataset_id)
+    evidence = build_proposal_evidence(db, dataset_id, workflow_run_id=workflow_run_id)
     if get_settings().agent_mode == "mock":
         return _mock_proposals(evidence)
 
@@ -724,6 +753,7 @@ def _invoke_rule_proposal_graph(
     from src.services.node_telemetry import start_graph_run
 
     contract = _table_keyed_contract(semantic_contract, evidence.dataset_id)
+    binding = semantic_contract.get("source_binding") or {}
 
     async def invoke() -> list[dict[str, Any]]:
         start_graph_run(workflow_run_id=workflow_run_id, dataset_id=evidence.dataset_id)
@@ -736,6 +766,8 @@ def _invoke_rule_proposal_graph(
         result = await graph.ainvoke(
             {
                 "dataset_id": evidence.dataset_id,
+                "dataset_version_id": binding.get("dataset_version_id"),
+                "profile_run_id": binding.get("profile_run_id"),
                 "rule_run_id": f"graph1b-proposal-{uuid.uuid4().hex}",
                 "dataset_profile_digest": digest,
                 "semantic_contract": contract,
@@ -743,6 +775,7 @@ def _invoke_rule_proposal_graph(
                 "target_tables": [evidence.dataset_id],
                 "metadata": {
                     "workflow": "graph_1b",
+                    "source_binding": binding,
                     "evidence_source": "persisted_aggregate_profile",
                     "max_retries": 0,
                 },
@@ -801,7 +834,7 @@ def _invoke_dashboard_proposal_graph(
         semantic_contract = {
             "status": "confirmed",
             "tables": {
-                "source_rows": {
+                evidence.dataset_id: {
                     "table_purpose": "Validated dashboard dataset",
                     "columns": semantic_columns,
                     "relationships": relationships,

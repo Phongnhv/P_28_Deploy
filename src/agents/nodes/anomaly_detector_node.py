@@ -33,7 +33,8 @@ async def anomaly_detector_node(state: AnomalyGraphState) -> dict:
                 execution_run_id,
                 version,
             )
-            result = detect_anomalies(db, execution_run_id, detector_config_version=version)
+            result = detect_anomalies(db, execution_run_id, detector_config_version=version,
+                                     profile_run_id=state.get("profile_run_id"))
 
             decision_data = {
                 "decision": result["decision"],

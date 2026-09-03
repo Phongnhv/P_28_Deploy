@@ -65,10 +65,15 @@ async def raw_profiler_node(state: AgentState) -> dict:
     # the selected dataset instead of scanning DataPulse's metadata database.
     uploaded_profile = metadata.get("uploaded_dataset_profile")
     if isinstance(uploaded_profile, dict) and uploaded_profile:
+        binding = metadata.get("source_binding")
+        if binding and (binding.get("dataset_id") != state.get("dataset_id") or binding.get("dataset_version_id") != state.get("dataset_version_id", binding.get("dataset_version_id"))):
+            return {"error": "SOURCE_BINDING_INVALID: Uploaded profile binding mismatch"}
         return {
             "dataset_profile": uploaded_profile,
             "progress_state": "PROFILE_COMPLETE",
         }
+    if state.get("dataset_version_id") or metadata.get("source_binding"):
+        return {"error": "PROFILE_BINDING_REQUIRED: Versioned sources require an explicit verified profile"}
     connection_string = metadata.get("connection_string")
     sampling_rate = metadata.get("sampling_rate", 1.0)
     max_concurrent_tables = metadata.get("max_concurrent_tables", DEFAULT_MAX_CONCURRENT_TABLES)
@@ -137,12 +142,9 @@ async def raw_profiler_node(state: AgentState) -> dict:
             target_lower = {t.lower() for t in target_tables}
             tables = [t for t in available_tables if t.lower() in target_lower]
         else:
-            # Tương thích ngược: nếu có source_rows thì ưu tiên dùng source_rows làm default
-            source_rows_match = [t for t in available_tables if t.lower() == "source_rows"]
-            if source_rows_match:
-                tables = source_rows_match
-            else:
-                tables = available_tables
+            return {"error": "SOURCE_BINDING_REQUIRED: No explicit profile or target tables; refusing database-wide profiling"}
+        if any(t.lower() == "source_rows" for t in tables):
+            return {"error": "SOURCE_SCOPE_REQUIRED: Shared source_rows cannot be profiled without dataset/version isolation"}
     except Exception as e:
         logger.error(f"Lỗi khi kết nối database hoặc lấy danh sách bảng: {str(e)}", exc_info=True)
         return {"error": f"Lỗi khi kết nối database hoặc lấy danh sách bảng: {str(e)}"}

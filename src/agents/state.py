@@ -97,6 +97,7 @@ class AnomalyGraphState(TypedDict, total=False):
     execution_run_id: str
     dataset_id: str
     dataset_version_id: str
+    profile_run_id: str
     ruleset_version_id: str
     detector_config_version: str
     current_features: dict

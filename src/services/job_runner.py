@@ -79,22 +79,9 @@ DEMO_TAXI_DATASET_ID = "dataset-nyc-yellow-taxi-50k"
 
 def _completed_versioned_profile(db: Session, dataset_id: str):
     """The profile snapshot a versioned import already produced, if any."""
-    from src.models.database import DatasetVersionModel, ProfileRunSnapshotModel
+    from src.services.rule_proposer_workflow import _versioned_profile_snapshot_row
 
-    latest = (
-        db.query(DatasetVersionModel)
-        .filter_by(dataset_id=dataset_id, status="READY")
-        .order_by(DatasetVersionModel.version_number.desc())
-        .first()
-    )
-    if not latest:
-        return None
-    return (
-        db.query(ProfileRunSnapshotModel)
-        .filter_by(dataset_version_id=latest.id, status="COMPLETED")
-        .order_by(ProfileRunSnapshotModel.completed_at.desc())
-        .first()
-    )
+    return _versioned_profile_snapshot_row(db, dataset_id)
 
 
 def _uploaded_dataset_path(dataset_id: str) -> Path | None:
@@ -105,7 +92,7 @@ def _uploaded_dataset_path(dataset_id: str) -> Path | None:
     return None
 
 
-def _materialize_versioned_dataset_path(db: Session, dataset_id: str) -> tuple[Path | None, bool]:
+def _materialize_versioned_dataset_path(db: Session, dataset_id: str, *, dataset_version_id: str | None = None) -> tuple[Path | None, bool]:
     """Materialize and verify the latest immutable source artifact.
 
     Canonical imports are profiled from ``dataset_versions`` and are not copied
@@ -114,14 +101,12 @@ def _materialize_versioned_dataset_path(db: Session, dataset_id: str) -> tuple[P
     backend. Returns ``(path, temporary)``; only object-storage downloads are
     temporary and owned by the caller.
     """
-    version = (
-        db.query(DatasetVersionModel)
-        .filter_by(dataset_id=dataset_id, status="READY")
-        .order_by(DatasetVersionModel.version_number.desc())
-        .first()
-    )
-    if not version:
+    dataset = db.get(DatasetModel, dataset_id)
+    if not dataset_version_id and (not dataset or dataset.manifest_version != "versioned-v1") and not db.query(DatasetVersionModel).filter_by(dataset_id=dataset_id).first():
         return None, False
+    from src.services.source_binding import resolve_source_binding
+    binding = resolve_source_binding(db, dataset_id, dataset_version_id=dataset_version_id, require_profile=False)
+    version = db.get(DatasetVersionModel, binding["dataset_version_id"])
     try:
         metadata = json.loads(version.source_metadata_json or "{}")
     except (TypeError, ValueError) as exc:
@@ -129,6 +114,8 @@ def _materialize_versioned_dataset_path(db: Session, dataset_id: str) -> tuple[P
     artifact = (
         db.query(GovernedArtifactModel)
         .filter_by(
+            id=binding["source_ref"],
+            workspace_id=binding["workspace_id"],
             dataset_id=dataset_id,
             dataset_version_id=version.id,
             artifact_type="SOURCE_DATASET",
@@ -434,6 +421,7 @@ def _versioned_profile_run(
     *,
     session_id: str | None,
     actor_role: str,
+    profile_id: str | None = None,
 ) -> str:
     """Profile one verified immutable source artifact and never overwrite history."""
     version = db.get(DatasetVersionModel, dataset_version_id)
@@ -450,7 +438,7 @@ def _versioned_profile_run(
     ).first() if artifact_id else None
     if not artifact or artifact.checksum != version.checksum:
         raise ValueError("READY dataset version has no matching SOURCE_DATASET artifact")
-    profile_id = f"profile-{version.id}"
+    profile_id = profile_id or f"profile-{version.id}"
     existing = db.get(ProfileRunSnapshotModel, profile_id)
     if existing and existing.status == "COMPLETED":
         return profile_id
@@ -1289,7 +1277,21 @@ def run_dq_checks(
 
         try:
             dataset_id = dq_run.dataset_id
-            versioned_path, versioned_temporary = _materialize_versioned_dataset_path(db, dataset_id)
+            from src.models.database import WorkflowRunModel
+            from src.services.source_binding import resolve_source_binding, workflow_binding
+            workflow = db.get(WorkflowRunModel, dq_run.workflow_run_id) if dq_run.workflow_run_id else None
+            binding = workflow_binding(db, workflow) if workflow else None
+            dataset = db.get(DatasetModel, dataset_id)
+            if not binding and dataset and dataset.manifest_version == "versioned-v1":
+                binding = resolve_source_binding(db, dataset_id, dataset_version_id=dq_run.dataset_version_id, profile_run_id=dq_run.profile_run_id)
+            if binding:
+                if binding["dataset_id"] != dataset_id:
+                    raise ValueError("SOURCE_BINDING_INVALID: Execution belongs to another dataset")
+                dq_run.dataset_version_id = binding["dataset_version_id"]
+                dq_run.profile_run_id = binding["profile_run_id"]
+                dq_run.source_checksum = binding["checksum"]
+                dq_run.workspace_id = binding["workspace_id"]
+            versioned_path, versioned_temporary = _materialize_versioned_dataset_path(db, dataset_id, dataset_version_id=(binding or {}).get("dataset_version_id"))
             if versioned_path is None and dataset_id == DEMO_TAXI_DATASET_ID:
                 source_url = _supabase_source_url()
                 if source_url:
@@ -1354,13 +1356,13 @@ def run_dq_checks(
                 dq_run_id=run_id,
             )
             with record_stage(
-                "G2_DIRECT", "compile_rules", "DETERMINISTIC", {"rules": len(rule_versions)}
+                "G2_DIRECT", "compile_rules", "DETERMINISTIC", {"rules": len(rule_versions), "source_binding": binding}
             ) as compile_summary:
                 compile_summary["rules"] = len(rule_versions)
             with record_stage("G2_DIRECT", "validate_sql", "DETERMINISTIC") as validate_summary:
                 validate_summary["policy"] = "single SELECT, no comments or multi-statements"
             execute_stage = record_stage(
-                "G2_DIRECT", "execute_checks", "DETERMINISTIC", {"rules": len(rule_versions)}
+                "G2_DIRECT", "execute_checks", "DETERMINISTIC", {"rules": len(rule_versions), "source_binding": binding}
             )
             execute_summary = execute_stage.__enter__()
 

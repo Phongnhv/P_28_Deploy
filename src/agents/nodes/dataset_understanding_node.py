@@ -29,6 +29,18 @@ async def _understand_table(
             data_dictionary=data_dictionary or "None",
         )
         result: TableSemanticContract = await structured_llm.ainvoke(messages)
+        expected_columns = {col["name"] for col in table_digest.get("columns", [])}
+        returned_columns = [col.name for col in result.columns]
+        if set(returned_columns) != expected_columns or len(returned_columns) != len(expected_columns):
+            raise ValueError("Semantic columns must match the profiled dataset exactly")
+        for relationship in result.relationships:
+            if (
+                relationship.left_column not in expected_columns
+                or relationship.right_column not in expected_columns
+                or relationship.left_column == relationship.right_column
+                or relationship.operator not in {"<=", "<", "=", ">", ">=", "!="}
+            ):
+                raise ValueError("Semantic relationship must compare two distinct profiled columns")
         # Gán lại chính xác table_name
         result.table_name = table_name
         return result
@@ -156,7 +168,8 @@ async def dataset_understanding_node(state: AgentState) -> dict:
         for table_name, table_digest in per_table.items():
             tables_contract[table_name] = _heuristic_contract_for_table(table_name, table_digest, domain_hint)
 
-    contract_payload = {"dataset_id": state.get("dataset_id", "unknown"), "tables": tables_contract, "status": "draft"}
+    contract_payload = {"dataset_id": state.get("dataset_id", "unknown"), "tables": tables_contract, "status": "draft",
+                        "heuristic_fallback_used": bool(errors), "errors": errors}
 
 
     logger.info(f"Hoàn thành dataset_understanding_node cho dataset: {state.get('dataset_id')}")

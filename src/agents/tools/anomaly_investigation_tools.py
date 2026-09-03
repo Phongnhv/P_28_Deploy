@@ -46,45 +46,6 @@ def get_anomaly_case(anomaly_run_id: str) -> dict[str, Any]:
         with Session(get_engine()) as db:
             anomaly = db.get(AnomalyRunModel, anomaly_run_id)
             if not anomaly:
-                # Look up by execution run id or latest dq run
-                dq_run = db.get(DqRunModel, anomaly_run_id)
-                if not dq_run:
-                    # Look up any recent dq run if anomaly_run_id contains prefix or hex
-                    cleaned_id = anomaly_run_id.replace("anom-", "")
-                    dq_run = (
-                        db.query(DqRunModel)
-                        .filter((DqRunModel.id == cleaned_id) | (DqRunModel.id.like(f"%{cleaned_id}%")))
-                        .first()
-                    )
-                if not dq_run:
-                    dq_run = db.query(DqRunModel).order_by(DqRunModel.created_at.desc()).first()
-
-                if dq_run:
-                    results = db.query(DqResultModel).filter_by(run_id=dq_run.id).all()
-                    failed = [r for r in results if r.status in {"FAIL", "FAILED", "ERROR"}]
-                    return {
-                        "anomaly_run_id": anomaly_run_id,
-                        "execution_run_id": dq_run.id,
-                        "dataset_id": dq_run.dataset_id,
-                        "decision": "CRITICAL" if failed else "NORMAL",
-                        "score": 1.0 if failed else 0.0,
-                        "confidence": 0.95 if failed else 0.90,
-                        "severity": "HIGH" if failed else "LOW",
-                        "status": "SUCCEEDED",
-                        "signals": [],
-                        "failed_rules": [
-                            {
-                                "result_id": r.id,
-                                "rule_id": r.rule_id,
-                                "rule_title": r.rule_title,
-                                "status": r.status,
-                                "checked_count": r.checked_count,
-                                "failed_count": r.failed_count,
-                                "violation_rate": r.violation_rate,
-                            }
-                            for r in failed
-                        ],
-                    }
                 return {"error": "ANOMALY_RUN_NOT_FOUND", "anomaly_run_id": anomaly_run_id}
             try:
                 execution_dataset_id = (
@@ -215,10 +176,26 @@ def get_related_quality_results(execution_run_id: str, target_id: str = "") -> d
 
 
 @tool
-def get_dataset_profile(dataset_id: str) -> dict[str, Any]:
+def get_dataset_profile(dataset_id: str, workflow_run_id: str | None = None, profile_run_id: str | None = None) -> dict[str, Any]:
     """Return the latest bounded dataset and column profile, excluding raw sample values."""
     try:
         with Session(get_engine()) as db:
+            from src.models.database import DatasetModel, WorkflowRunModel
+            from src.services.rule_proposer_workflow import _profile_snapshot
+            from src.services.source_binding import dataset_source_version, workflow_binding
+            dataset = db.get(DatasetModel, dataset_id)
+            if workflow_run_id or (dataset and dataset.manifest_version == "versioned-v1"):
+                run = db.get(WorkflowRunModel, workflow_run_id) if workflow_run_id else None
+                if workflow_run_id and (not run or run.dataset_id != dataset_id):
+                    return {"error": "SOURCE_BINDING_INVALID"}
+                binding = workflow_binding(db, run) if run else {
+                    "dataset_id": dataset_id,
+                    "dataset_version_id": dataset_source_version(db, dataset_id).id,
+                    "profile_run_id": profile_run_id,
+                }
+                result = _profile_snapshot(db, dataset_id, binding=binding)
+                result["columns"] = [{k: v for k, v in c.items() if k != "sample_value"} for c in result["columns"]]
+                return result
             profile = (
                 db.query(ProfileModel)
                 .filter_by(dataset_id=dataset_id)
@@ -347,6 +324,46 @@ ANOMALY_INVESTIGATION_TOOLS = [
     get_dataset_profile,
     query_readonly_evidence,
 ]
+
+
+def scoped_investigation_tools(state: dict[str, Any]) -> list:
+    """Keep the tool inventory, but bind resource IDs server-side per run."""
+    from langchain_core.tools import StructuredTool
+
+    workflow_id = state.get("metadata", {}).get("workflow_run_id")
+    if not state.get("dataset_id"):
+        return ANOMALY_INVESTIGATION_TOOLS
+
+    def bind(original):
+        def invoke(**kwargs):
+            for key in ("dataset_id", "execution_run_id", "anomaly_run_id"):
+                if key in kwargs and kwargs[key] != state.get(key):
+                    return {"error": "SOURCE_BINDING_INVALID", "field": key}
+            if original.name == "get_anomaly_case" and state.get("anomaly_decision"):
+                # Investigation precedes persist_analysis. Use this graph's
+                # detector output, never the latest execution or an invented decision.
+                failed = query_readonly_evidence.invoke({
+                    "execution_run_id": state["execution_run_id"],
+                    "operation": "failed_rules",
+                    "limit": 100,
+                })
+                return {
+                    "anomaly_run_id": state["anomaly_run_id"],
+                    "execution_run_id": state["execution_run_id"],
+                    "dataset_id": state["dataset_id"],
+                    **state["anomaly_decision"],
+                    "status": "INVESTIGATING",
+                    "signals": state.get("signal_observations", []),
+                    "failed_rules": failed.get("rows", []),
+                    "evidence_error": failed.get("error"),
+                }
+            if original.name == "get_dataset_profile":
+                kwargs["workflow_run_id"] = workflow_id
+                kwargs["profile_run_id"] = state.get("profile_run_id") or (state.get("metadata", {}).get("source_binding") or {}).get("profile_run_id")
+            return original.invoke(kwargs)
+        return StructuredTool.from_function(func=invoke, name=original.name, description=original.description, args_schema=original.args_schema)
+
+    return [bind(original) for original in ANOMALY_INVESTIGATION_TOOLS]
 
 
 if __name__ == "__main__":

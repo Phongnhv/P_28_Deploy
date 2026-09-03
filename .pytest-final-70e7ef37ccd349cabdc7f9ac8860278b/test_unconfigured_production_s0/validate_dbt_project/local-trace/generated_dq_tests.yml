@@ -1,0 +1,7 @@
+version: 2
+models:
+  - name: trips
+    columns:
+      - name: trip_id
+        tests:
+          - not_null

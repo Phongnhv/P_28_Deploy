@@ -1,0 +1,5 @@
+{
+  "valid": false,
+  "return_code": 2,
+  "error": "undefined macro dbt_utils.expression_is_true"
+}

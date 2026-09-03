@@ -54,7 +54,7 @@ def _load_execution_data(execution_run_id: str) -> tuple[dict | None, list[dict]
     try:
         from sqlalchemy.orm import Session
 
-        from src.models.database import DqResultModel, DqRunModel
+        from src.models.database import DqResultModel, DqRunModel, ProfileRunSnapshotModel
         from src.services.rule_store import get_engine
 
         engine = get_engine()
@@ -74,6 +74,9 @@ def _load_execution_data(execution_run_id: str) -> tuple[dict | None, list[dict]
                 "error_message": run.error_message,
                 "rule_ids": _safe_json(run.rule_ids),
             }
+            profile = session.get(ProfileRunSnapshotModel, run.profile_run_id) if run.profile_run_id else None
+            if profile and profile.dataset_id == run.dataset_id and profile.dataset_version_id == run.dataset_version_id:
+                run_dict["dataset_row_count"] = profile.row_count
 
             results = session.query(DqResultModel).filter_by(run_id=execution_run_id).all()
             results_list = [

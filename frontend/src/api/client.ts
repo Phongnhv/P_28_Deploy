@@ -234,8 +234,11 @@ export const realApiClient: ApiClient = {
   getJob(jobId) {
     return requestWithTransientRetry<Job>(`/api/v1/jobs/${jobId}`);
   },
-  getProfile(datasetId) {
-    return requestWithTransientRetry<DatasetProfile | null>(`/api/v1/datasets/${datasetId}/profile`);
+  getProfile(datasetId: string, datasetVersionId?: string, profileRunId?: string) {
+    const query = new URLSearchParams();
+    if (datasetVersionId) query.set("dataset_version_id", datasetVersionId);
+    if (profileRunId) query.set("profile_run_id", profileRunId);
+    return requestWithTransientRetry<DatasetProfile | null>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/profile?${query}`);
   },
   async startRuleProposals(datasetId, idempotencyKey) {
     return requestWithTransientRetry<CreateJobResponse>(`/api/v1/datasets/${datasetId}/rule-proposals`, {
@@ -312,8 +315,9 @@ export const realApiClient: ApiClient = {
       { method: "POST", body: JSON.stringify(input) },
     );
   },
-  getLatestDqRun(datasetId) {
-    return requestWithTransientRetry<DqRun | null>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/dq-runs/latest`);
+  getLatestDqRun(datasetId, workflowRunId) {
+    const scope = workflowRunId ? `?workflow_run_id=${encodeURIComponent(workflowRunId)}` : "";
+    return requestWithTransientRetry<DqRun | null>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/dq-runs/latest${scope}`);
   },
   getQualityTrends(datasetId) {
     return requestWithTransientRetry<QualityTrendPoint[]>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/quality-trends`);
@@ -366,10 +370,13 @@ export const realApiClient: ApiClient = {
   revokeDatasetAccess(datasetId: string, username: string) {
     return request<void>(`/api/v1/admin/datasets/${encodeURIComponent(datasetId)}/access/${encodeURIComponent(username)}`, { method: "DELETE" });
   },
-  createWorkflow(datasetId: string, fresh = false) {
-    const query = fresh ? "?fresh=true" : "";
-    return request<WorkflowRun>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/workflows${query}`, {
+  createWorkflow(datasetId: string, fresh = false, datasetVersionId?: string, freshProfile = false, requestKey?: string) {
+    const query = new URLSearchParams({ fresh: String(fresh) });
+    if (datasetVersionId) query.set("dataset_version_id", datasetVersionId);
+    if (freshProfile) query.set("fresh_profile", "true");
+    return requestWithTransientRetry<WorkflowRun>(`/api/v1/datasets/${encodeURIComponent(datasetId)}/workflows?${query}`, {
       method: "POST",
+      headers: { "Idempotency-Key": requestKey || crypto.randomUUID() },
       body: JSON.stringify({}),
     });
   },
@@ -380,9 +387,12 @@ export const realApiClient: ApiClient = {
     return request<WorkflowRun>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}`);
   },
 
-  runWorkflowStep(workflowRunId: string, step: WorkflowStepKey) {
+  runWorkflowStep(workflowRunId: string, step: WorkflowStepKey, datasetId?: string, datasetVersionId?: string) {
     const idempotencyKey = crypto.randomUUID();
-    return requestWithTransientRetry<CreateJobResponse>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}/steps/${step}`, {
+    const query = new URLSearchParams();
+    if (datasetId) query.set("dataset_id", datasetId);
+    if (datasetVersionId) query.set("dataset_version_id", datasetVersionId);
+    return requestWithTransientRetry<CreateJobResponse>(`/api/v1/workflows/${encodeURIComponent(workflowRunId)}/steps/${step}?${query}`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
     });

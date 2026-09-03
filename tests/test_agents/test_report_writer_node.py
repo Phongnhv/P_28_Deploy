@@ -165,6 +165,16 @@ def test_strip_code_fences_plain_text():
     assert _strip_code_fences(text) == text
 
 
+def test_report_excludes_reasoning_and_tool_blocks():
+    blocks = [
+        {"type": "reasoning", "encrypted_content": "opaque-provider-payload", "text": "not report text"},
+        {"type": "text", "text": "# Report\n"},
+        {"type": "tool_use", "input": {"ignored": True}},
+        {"type": "output_text", "text": "12 rows; 36 row checks."},
+    ]
+    assert _strip_code_fences(blocks) == "# Report\n12 rows; 36 row checks."
+
+
 def test_strip_code_fences_empty_fences():
     raw = "```\n# Báo Cáo Data Steward\n```"
     result = _strip_code_fences(raw)

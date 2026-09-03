@@ -155,7 +155,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
         elif exc.status_code == 404:
             code = "NOT_FOUND"
         elif exc.status_code == 422:
-            code = "CSRF_INVALID"
+            code = "VALIDATION_ERROR"
     return JSONResponse(
         status_code=exc.status_code, content={"code": code, "message": message, "request_id": request_id}
     )

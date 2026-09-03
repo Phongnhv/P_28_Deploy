@@ -26,6 +26,24 @@ def rule_candidate_builder_node(state: AgentState) -> dict:
         table_digest = per_table_digest.get(table_name, {})
         available_columns = {col.get("name") for col in table_digest.get("columns", []) if col.get("name")}
 
+        # The dashboard already compiled its executable candidate set from the
+        # pinned profile. Preserve these IDs and parameters through this node:
+        # regenerated semantic candidates cannot pass the dashboard's exact
+        # candidate/provenance matcher at the other end of Graph 1B.
+        if table_digest.get("dashboard_candidate_mode"):
+            semantic_columns = table_contract.get("columns", [])
+            optional_columns = {
+                col["name"] for col in semantic_columns
+                if isinstance(col, dict) and col.get("nullable_expected") is True and col.get("name")
+            } if isinstance(semantic_columns, list) else set()
+            for candidate in table_digest.get("dashboard_rule_candidates", []):
+                if not isinstance(candidate, dict) or candidate.get("column") not in available_columns:
+                    continue
+                if candidate.get("rule_type") == "NOT_NULL" and candidate.get("column") in optional_columns:
+                    continue
+                candidates.append({**candidate, "table": table_name})
+            continue
+
         # 1. NOT_NULL & UNIQUE & RANGE & ACCEPTED_VALUES từ columns contract
         raw_columns = table_contract.get("columns", [])
         if isinstance(raw_columns, dict):

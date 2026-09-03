@@ -137,7 +137,7 @@ export interface DatasetProfile {
   dataset_id: string;
   row_count: number;
   completeness_score: number;
-  validity_score: number;
+  validity_score: number | null;
   duplicate_rate: number;
   columns: ColumnProfile[];
   evidence_keys: string[];
@@ -422,6 +422,7 @@ export interface AgentArtifact {
 }
 
 export interface WorkflowRun {
+  source_binding?: { dataset_id: string; dataset_version_id: string; profile_run_id: string | null; source_kind: string; checksum: string } | null;
   id: string;
   dataset_id: string;
   current_step: WorkflowStepKey;
@@ -675,7 +676,7 @@ export interface ApiClient {
   deleteDataset(id: string): Promise<void>;
   startIngestion(datasetId: string, idempotencyKey: string): Promise<CreateJobResponse>;
   getJob(jobId: string): Promise<Job>;
-  getProfile(datasetId: string): Promise<DatasetProfile | null>;
+  getProfile(datasetId: string, datasetVersionId?: string, profileRunId?: string): Promise<DatasetProfile | null>;
   startRuleProposals(datasetId: string, idempotencyKey: string): Promise<CreateJobResponse>;
   listProposals(datasetId: string, workflowRunId?: string): Promise<RuleProposal[]>;
   createManualRule(datasetId: string, input: ManualRuleInput): Promise<RuleProposal>;
@@ -694,7 +695,7 @@ export interface ApiClient {
   getAnomalySignals(runId: string): Promise<AnomalySignal[]>;
   getAnomalyHypotheses(runId: string): Promise<AnomalyHypothesis[]>;
   submitAnomalyFeedback(runId: string, input: AnomalyFeedbackInput): Promise<void>;
-  getLatestDqRun(datasetId: string): Promise<DqRun | null>;
+  getLatestDqRun(datasetId: string, workflowRunId?: string): Promise<DqRun | null>;
   getQualityTrends(datasetId: string): Promise<QualityTrendPoint[]>;
   queryDatasetRows(datasetId: string, query: DatasetRowQuery): Promise<DatasetRowsResponse>;
   getDataDictionary(datasetId: string): Promise<DataDictionary | null>;
@@ -707,10 +708,10 @@ export interface ApiClient {
   listDatasetAccess(datasetId: string): Promise<DatasetAccess[]>;
   grantDatasetAccess(datasetId: string, username: string, accessLevel: DatasetAccessLevel): Promise<DatasetAccess>;
   revokeDatasetAccess(datasetId: string, username: string): Promise<void>;
-  createWorkflow(datasetId: string, fresh?: boolean): Promise<WorkflowRun>;
+  createWorkflow(datasetId: string, fresh?: boolean, datasetVersionId?: string, freshProfile?: boolean, requestKey?: string): Promise<WorkflowRun>;
   getLatestWorkflow(datasetId: string): Promise<WorkflowRun | null>;
   getWorkflow(workflowRunId: string): Promise<WorkflowRun>;
-  runWorkflowStep(workflowRunId: string, step: WorkflowStepKey): Promise<CreateJobResponse>;
+  runWorkflowStep(workflowRunId: string, step: WorkflowStepKey, datasetId?: string, datasetVersionId?: string): Promise<CreateJobResponse>;
   advanceWorkflowStep(workflowRunId: string): Promise<WorkflowRun>;
   listWorkflowArtifacts(workflowRunId: string): Promise<AgentArtifact[]>;
   reviewArtifact(artifactId: string, input: ArtifactReviewInput): Promise<AgentArtifact>;

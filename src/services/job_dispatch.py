@@ -34,6 +34,7 @@ from src.services.rule_store import get_engine
 logger = logging.getLogger(__name__)
 
 SUPPORTED_JOB_TYPES = {
+    "WORKFLOW_PROFILE",
     "INGEST_PROFILE",
     "GRAPH1_EXECUTION",
     "GRAPH1_CONTINUATION",
@@ -115,11 +116,9 @@ def _run_persisted_job(job_id: str, job_type: str) -> bool:
 
             with Session(get_engine()) as db:
                 version = db.get(DatasetVersionModel, job.linked_entity)
-                if version:
-                    target_dataset_id = version.dataset_id
-                    run_ingest_profile(job.id, target_dataset_id, actor_role="WORKER", dataset_version_id=version.id)
-                else:
-                    run_ingest_profile(job.id, str(job.linked_entity), actor_role="WORKER")
+                target_dataset_id = version.dataset_id if version else str(job.linked_entity)
+                version_id = version.id if version else None
+            run_ingest_profile(job.id, target_dataset_id, actor_role="WORKER", dataset_version_id=version_id)
         elif job_type in {"GRAPH1_EXECUTION", "GRAPH1_CONTINUATION"}:
             from src.services.graph1_workflow import execute_graph1_run
 
@@ -128,10 +127,10 @@ def _run_persisted_job(job_id: str, job_type: str) -> bool:
             from src.services.analysis_workflow import execute_analysis_run
 
             asyncio.run(execute_analysis_run(str(job.linked_entity)))
-        elif job_type == "WORKFLOW_PROPOSE_RULES":
+        elif job_type in {"WORKFLOW_PROPOSE_RULES", "WORKFLOW_PROFILE"}:
             from src.services.rule_proposer_workflow import run_workflow_stage_job
 
-            run_workflow_stage_job(str(job.linked_entity), "PROPOSE_RULES", job.id)
+            run_workflow_stage_job(str(job.linked_entity), "UPLOAD_PROFILE" if job_type == "WORKFLOW_PROFILE" else "PROPOSE_RULES", job.id)
         elif job_type == "WORKFLOW_RUN_CHECKS":
             from src.services.rule_proposer_workflow import run_checks_and_prepare_analysis
 
@@ -157,7 +156,7 @@ def _run_persisted_job(job_id: str, job_type: str) -> bool:
     except Exception as exc:
         logger.exception("Canonical job %s failed", job_id)
         update_job_status(job_id, "FAILED_RETRYABLE", str(exc)[:2000])
-        if job_type in {"WORKFLOW_PROPOSE_RULES", "WORKFLOW_RUN_CHECKS", "WORKFLOW_ANALYZE_REPORT"}:
+        if job_type in {"WORKFLOW_PROFILE", "WORKFLOW_PROPOSE_RULES", "WORKFLOW_RUN_CHECKS", "WORKFLOW_ANALYZE_REPORT"}:
             _mark_workflow_stage_failed(job_id, job_type)
         stop_heartbeat.set()
         return False
@@ -174,9 +173,10 @@ def _run_persisted_job(job_id: str, job_type: str) -> bool:
         elif job_type == "ANALYSIS_GRAPH2_GRAPH3":
             entity = db.get(AnalysisRunModel, job.linked_entity) if job else None
             failed = entity is None or entity.status == "FAILED"
-        elif job_type in {"WORKFLOW_PROPOSE_RULES", "WORKFLOW_RUN_CHECKS", "WORKFLOW_ANALYZE_REPORT"}:
+        elif job_type in {"WORKFLOW_PROFILE", "WORKFLOW_PROPOSE_RULES", "WORKFLOW_RUN_CHECKS", "WORKFLOW_ANALYZE_REPORT"}:
             workflow = db.get(WorkflowRunModel, job.linked_entity) if job else None
             step_key = {
+                "WORKFLOW_PROFILE": "UPLOAD_PROFILE",
                 "WORKFLOW_PROPOSE_RULES": "PROPOSE_RULES",
                 "WORKFLOW_RUN_CHECKS": "RUN_CHECKS",
                 "WORKFLOW_ANALYZE_REPORT": "ANALYZE_REPORT",
@@ -191,9 +191,7 @@ def _run_persisted_job(job_id: str, job_type: str) -> bool:
             job.status = "FAILED_RETRYABLE" if failed else "SUCCEEDED"
             job.progress = 100.0 if not failed else job.progress
             job.message = "Worker execution failed" if failed else "Worker execution completed"
-            job.error = getattr(entity, "error", None) if failed and entity is not None else (
-                "Linked workflow entity was not found" if failed else None
-            )
+            job.error = (job.error or getattr(entity, "error", None) or "Linked workflow execution failed") if failed else None
             db.commit()
     return not failed
 
@@ -201,6 +199,7 @@ def _run_persisted_job(job_id: str, job_type: str) -> bool:
 def _mark_workflow_stage_failed(job_id: str, job_type: str) -> None:
     """Make worker failures retryable instead of leaving a workflow RUNNING."""
     step_key = {
+        "WORKFLOW_PROFILE": "UPLOAD_PROFILE",
         "WORKFLOW_PROPOSE_RULES": "PROPOSE_RULES",
         "WORKFLOW_RUN_CHECKS": "RUN_CHECKS",
         "WORKFLOW_ANALYZE_REPORT": "ANALYZE_REPORT",
@@ -254,9 +253,13 @@ def dispatch_job(job_id: str, job_type: str) -> bool:
 
 def dispatch_or_mark_failed(db: Session, job: JobModel) -> bool:
     """Dispatch after commit and make transport failure observable."""
-    if dispatch_job(job.id, job.type):
+    job_id, job_type = job.id, job.type
+    # Reading a committed ORM object starts another transaction. Return its
+    # connection before inline workers open their own sessions.
+    db.commit()
+    if dispatch_job(job_id, job_type):
         return True
-    current = db.get(JobModel, job.id)
+    current = db.get(JobModel, job_id)
     if current:
         current.status = "FAILED_RETRYABLE"
         current.error = "Worker dispatch failed; job is eligible for retry."

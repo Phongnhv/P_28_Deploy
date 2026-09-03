@@ -561,6 +561,7 @@ def get_data_explorer(
                 workspace_id=ctx.workspace_id, dataset_id=dataset_id,
                 dataset_version_id=dataset_version_id, artifact_type="SOURCE_DATASET",
             )
+            .filter(GovernedArtifactModel.id == version_metadata["source_artifact_id"] if version_metadata.get("source_artifact_id") else True)
             .first()
         )
         if not artifact or artifact.checksum != version.checksum:
@@ -573,6 +574,7 @@ def get_data_explorer(
             "format": version_metadata.get("format") or "csv",
             "filename": version_metadata.get("filename") or "dataset.csv",
             "storage_locator": artifact.storage_locator,
+            "version_id": version_metadata.get("version_id"),
         }
         path = materialize_source_artifact(source_ref)
         temporary = source_ref["storage_locator"].startswith("object://")

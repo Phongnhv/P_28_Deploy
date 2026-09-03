@@ -72,18 +72,14 @@ def _versioned_profile_column(dataset_id: str, column_name: str):
     """Return aggregate profile evidence for one canonical versioned column."""
     if not dataset_id:
         return False, None
-    from src.models.database import DatasetVersionModel, ProfileRunSnapshotModel
+    from src.models.database import ProfileRunSnapshotModel
 
     with Session(get_engine()) as db:
         dataset = db.get(DatasetModel, dataset_id)
         if not dataset or dataset.manifest_version != "versioned-v1":
             return False, None
-        version = (
-            db.query(DatasetVersionModel)
-            .filter_by(dataset_id=dataset_id, status="READY")
-            .order_by(DatasetVersionModel.version_number.desc())
-            .first()
-        )
+        from src.services.source_binding import dataset_source_version
+        version = dataset_source_version(db, dataset_id)
         snapshot = (
             db.query(ProfileRunSnapshotModel)
             .filter_by(

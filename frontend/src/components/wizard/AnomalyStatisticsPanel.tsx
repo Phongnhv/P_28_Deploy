@@ -37,10 +37,12 @@ export function AnomalyStatisticsPanel({
   anomalies,
   results,
   language,
+  decision,
 }: {
   anomalies: DqAnomaly[];
   results: DqResult[];
   language: "en" | "vi";
+  decision: string | null;
 }) {
   const vi = language === "vi";
 
@@ -83,7 +85,7 @@ export function AnomalyStatisticsPanel({
   );
 
   const checkedRules = results.length;
-  const cleanRules = Math.max(0, checkedRules - anomalies.length);
+  const cleanRules = results.filter((result) => result.status === "PASS").length;
 
   if (anomalies.length === 0) {
     return (
@@ -91,12 +93,12 @@ export function AnomalyStatisticsPanel({
         <div className="panel-heading">
           <div>
             <span className="eyebrow">{vi ? "GRAPH 3 · THỐNG KÊ BẤT THƯỜNG" : "GRAPH 3 · ANOMALY STATISTICS"}</span>
-            <h2>{vi ? "Không phát hiện bất thường" : "No Anomalies Detected"}</h2>
+            <h2>{decision ?? (vi ? "Chưa có kết luận Graph 3" : "No Graph 3 decision yet")}</h2>
             <p className="muted">
               {checkedRules > 0
                 ? vi
-                  ? `Cả ${checkedRules} luật đều nằm trong ngưỡng cho phép ở lượt chạy này.`
-                  : `All ${checkedRules} rules stayed within their thresholds on this run.`
+                  ? `${cleanRules}/${checkedRules} luật đạt. Không có tín hiệu trong bảng thống kê đã lọc; danh sách rỗng không có nghĩa là dữ liệu không có bất thường. Xem kết luận và bằng chứng trong báo cáo Graph 3.`
+                  : `${cleanRules}/${checkedRules} rules passed. No signals in the filtered statistics table; an empty list does not mean the data has no anomalies. See the Graph 3 report for its decision and evidence.`
                 : vi
                   ? "Chạy bộ luật đã duyệt ở bước 4 để có dữ liệu phân tích."
                   : "Run the approved rules in step 4 to produce something to analyse."}
@@ -112,7 +114,7 @@ export function AnomalyStatisticsPanel({
       <div className="panel-heading">
         <div>
           <span className="eyebrow">{vi ? "GRAPH 3 · THỐNG KÊ BẤT THƯỜNG" : "GRAPH 3 · ANOMALY STATISTICS"}</span>
-          <h2>{vi ? "Thống kê & Chỉ số đo lường từ Graph 3" : "Graph 3 Anomaly Metrics & Statistics"}</h2>
+          <h2>{decision ?? (vi ? "Thống kê tín hiệu" : "Signal statistics")}</h2>
           <p className="muted">
             {vi
               ? `${anomalies.length} tín hiệu lệch trên ${checkedRules} luật đã kiểm.`
