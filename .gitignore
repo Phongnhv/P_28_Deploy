@@ -10,6 +10,7 @@ build/
 # Virtual environments
 venv/
 .venv/
+/.venv-e2e/
 env/
 
 # Environment variables
@@ -49,6 +50,7 @@ logs/
 .pytest_cache/
 .pytest_tmp/
 .pytest_tmp_*/
+/.pytest-*/
 htmlcov/
 .coverage
 coverage.xml
