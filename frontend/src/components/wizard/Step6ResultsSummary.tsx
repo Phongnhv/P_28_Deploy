@@ -465,8 +465,8 @@ export const Step6ResultsSummary: React.FC<Step6ResultsSummaryProps> = ({
                   </svg>
                 </div>
                 <div className="results-kpi-val" style={{ display: "flex", alignItems: "baseline", gap: "6px" }}>
-                  <strong style={{ fontSize: "20px", fontWeight: 800, color: graph3NeedsReview ? "#f59e0b" : "var(--text)" }}>
-                    {decision ?? "—"}
+                  <strong style={{ fontSize: "20px", fontWeight: 800, minWidth: 0, overflowWrap: "anywhere", color: graph3NeedsReview ? "#f59e0b" : "var(--text)" }}>
+                    {decision?.replaceAll("_", " ") ?? "—"}
                   </strong>
                   <span className="results-kpi-sub" style={{ fontSize: "12px", color: "var(--muted)", fontWeight: 600 }}>
                   </span>

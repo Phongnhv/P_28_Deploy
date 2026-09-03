@@ -137,7 +137,11 @@ def generate_profile_digest(dataset_profile: dict) -> dict:
             else:
                 role = "generic"
 
-            null_pct = round(col_data.get("null_pct", col_data.get("null_pct_sampled", 0.0)) * 100, 1)
+            null_rate = col_data.get("null_pct", col_data.get("null_pct_sampled"))
+            null_count = col_data.get("null_count")
+            # This is model evidence, not a display label. Rounding rare nulls
+            # to zero made the model infer mandatory fields from false evidence.
+            null_pct = null_rate * 100 if null_rate is not None else None
 
             col_digest: dict = {
                 "name": col_name,
@@ -190,9 +194,12 @@ def generate_profile_digest(dataset_profile: dict) -> dict:
             signals: list[str] = []
 
             # Null signals
-            if col_data.get("null_count", 0) == 0:
+            if (null_count == 0 or null_rate == 0) and not (
+                (null_count is not None and null_count > 0)
+                or (null_rate is not None and null_rate > 0)
+            ):
                 signals.append("no_nulls")
-            elif null_pct > 80.0:
+            elif null_pct is not None and null_pct > 80.0:
                 signals.append("mostly_null")
 
             # Cardinality signal

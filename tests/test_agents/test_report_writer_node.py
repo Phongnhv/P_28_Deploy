@@ -20,6 +20,24 @@ from src.services.report_renderer import render_steward_report_vi
 EXECUTION_RUN_ID = "exec-writer-test-001"
 DATASET_ID = "test_dataset"
 
+
+def test_report_context_includes_rule_meaning_and_derives_missing_rate():
+    result = {"rule_id": "opaque-rule", "rule_title": "rating must not be null",
+              "status": "FAIL", "checked_count": 8807, "failed_count": 4,
+              "violation_rate": None}
+    context = _build_data_context("netflix-run", "netflix", {}, None, [result])
+    assert "rating must not be null" in context
+    assert "0.05%" in context
+    assert result["violation_rate"] is None
+
+
+def test_report_context_does_not_invent_rate_for_empty_execution():
+    result = {"rule_id": "empty-rule", "status": "ERROR", "checked_count": 0,
+              "failed_count": 0, "violation_rate": None}
+    context = _build_data_context("empty-run", "netflix", {}, None, [result])
+    assert "(N/A)" in context
+
+
 SAMPLE_DQ_RUN = {
     "id": EXECUTION_RUN_ID,
     "dataset_id": DATASET_ID,

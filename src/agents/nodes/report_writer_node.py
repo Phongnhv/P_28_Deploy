@@ -127,14 +127,22 @@ def _build_data_context(
         "Mỗi dòng có thể được kiểm tra bởi nhiều rules. Không suy diễn số dòng dataset từ tổng lượt kiểm tra.",
     ]
 
-    failed_results = [r for r in dq_results if r["status"] in ("FAIL", "FAILED", "ERROR")]
+    failed_results = []
+    for result in dq_results:
+        if result["status"] not in ("FAIL", "FAILED", "ERROR"):
+            continue
+        result = dict(result)
+        if (result.get("violation_rate") is None and result.get("checked_count", 0) > 0
+                and result.get("failed_count") is not None and result["status"] != "ERROR"):
+            result["violation_rate"] = result["failed_count"] / result["checked_count"]
+        failed_results.append(result)
     if failed_results:
         sections.append("\nRules thất bại (sắp xếp theo tỷ lệ vi phạm giảm dần):")
         for r in sorted(failed_results, key=lambda x: x.get("violation_rate") or 0.0, reverse=True):
             vr = r.get("violation_rate")
             vr_str = f"{vr * 100:.2f}%" if vr is not None else "N/A"
             sections.append(
-                f"  - {r['rule_id']}: {r['status']} | "
+                f"  - {r['rule_id']} ({r.get('rule_title') or r['rule_id']}): {r['status']} | "
                 f"Kiểm tra {r['checked_count']:,} hàng | "
                 f"Vi phạm {r['failed_count']:,} hàng ({vr_str})"
             )
