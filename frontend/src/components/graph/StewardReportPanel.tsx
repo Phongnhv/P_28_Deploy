@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { StewardReport } from "../../types";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -24,6 +24,27 @@ export function StewardReportPanel({
   const [report, setReport] = useState<StewardReport | null>(null);
   const [state, setState] = useState<"idle" | "loading" | "missing" | "error">("idle");
 
+  useEffect(() => {
+    if (!runId) return;
+    let cancelled = false;
+    setState("loading");
+    loadReport(runId)
+      .then((data) => {
+        if (!cancelled) {
+          setReport(data);
+          setState("idle");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setState("missing");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runId, loadReport]);
+
   async function open() {
     if (report) {
       setReport(null);
@@ -40,34 +61,29 @@ export function StewardReportPanel({
   }
 
   return (
-    <section className="panel steward-report-panel">
-      <div className="panel-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+    <section className="panel steward-report-panel" style={{ padding: "24px", height: "720px", display: "flex", flexDirection: "column" }}>
+      <div className="panel-heading" style={{ flexShrink: 0, marginBottom: "16px" }}>
         <div>
           <span className="eyebrow">{vi ? "GRAPH 3 · BÁO CÁO ĐIỀU TRA" : "GRAPH 3 · INVESTIGATION REPORT"}</span>
-          <h2>{vi ? "Báo cáo Steward từ Graph 3" : "Steward Report from Graph 3"}</h2>
-          <p className="muted">
+          <h2 style={{ fontSize: "18px", fontWeight: 700, marginTop: "4px" }}>
+            {vi ? "Báo cáo Steward từ Graph 3" : "Steward Report from Graph 3"}
+          </h2>
+          <p className="muted" style={{ fontSize: "13px", marginTop: "4px" }}>
             {vi
               ? "Do node report_writer sinh ra sau khi hoàn tất điều tra nguyên nhân gốc."
               : "Written by the report_writer node after completing root-cause investigation."}
           </p>
         </div>
-        <button className="button secondary" onClick={open} disabled={state === "loading"}>
-          {state === "loading"
-            ? vi
-              ? "Đang tải…"
-              : "Loading…"
-            : report
-              ? vi
-                ? "Ẩn báo cáo"
-                : "Hide report"
-              : vi
-                ? "Xem báo cáo"
-                : "View report"}
-        </button>
       </div>
 
+      {state === "loading" && (
+        <div className="steward-report-empty" style={{ marginTop: "16px" }}>
+          {vi ? "Đang tải báo cáo Steward…" : "Loading steward report…"}
+        </div>
+      )}
+
       {state === "missing" && (
-        <div className="steward-report-empty">
+        <div className="steward-report-empty" style={{ marginTop: "16px" }}>
           {vi
             ? "Lần chạy này chưa sinh báo cáo Steward nào."
             : "No steward report has been written for this run yet."}
@@ -75,7 +91,7 @@ export function StewardReportPanel({
       )}
 
       {report && (
-        <div className="steward-report-body">
+        <div className="steward-report-body" style={{ flex: 1, overflowY: "auto", minHeight: 0, paddingRight: "6px" }}>
           <div className="steward-report-meta" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: "var(--surface-muted, #f8fafc)", borderRadius: "8px", border: "1px solid var(--border)", marginBottom: "16px" }}>
             <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--ink)" }}>
               {`Report - ${new Date(report.generated_at).toLocaleDateString(vi ? "vi-VN" : "en-US")}`}

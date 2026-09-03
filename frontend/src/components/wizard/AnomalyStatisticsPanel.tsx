@@ -95,10 +95,10 @@ export function AnomalyStatisticsPanel({
             <p className="muted">
               {checkedRules > 0
                 ? vi
-                  ? `Cả ${checkedRules} luật đều nằm trong ngưỡng cho phép ở lượt chạy này.`
+                  ? `Cả ${checkedRules} quy tắc đều nằm trong ngưỡng cho phép ở lượt chạy này.`
                   : `All ${checkedRules} rules stayed within their thresholds on this run.`
                 : vi
-                  ? "Chạy bộ luật đã duyệt ở bước 4 để có dữ liệu phân tích."
+                  ? "Chạy bộ quy tắc đã duyệt ở bước 4 để có dữ liệu phân tích."
                   : "Run the approved rules in step 4 to produce something to analyse."}
             </p>
           </div>
@@ -115,7 +115,7 @@ export function AnomalyStatisticsPanel({
           <h2>{vi ? "Thống kê & Chỉ số đo lường từ Graph 3" : "Graph 3 Anomaly Metrics & Statistics"}</h2>
           <p className="muted">
             {vi
-              ? `${anomalies.length} tín hiệu lệch trên ${checkedRules} luật đã kiểm.`
+              ? `${anomalies.length} tín hiệu lệch trên ${checkedRules} quy tắc đã kiểm.`
               : `${anomalies.length} deviating signals across ${checkedRules} checked rules.`}
           </p>
         </div>
@@ -125,12 +125,12 @@ export function AnomalyStatisticsPanel({
         <article className="anomaly-kpi alert">
           <span>{vi ? "Bất thường" : "Anomalies"}</span>
           <strong>{anomalies.length}</strong>
-          <small>{vi ? `${cleanRules} luật bình thường` : `${cleanRules} rules clean`}</small>
+          <small>{vi ? `${cleanRules} quy tắc bình thường` : `${cleanRules} rules clean`}</small>
         </article>
         <article className="anomaly-kpi">
           <span>{vi ? "Tỷ lệ vi phạm cao nhất" : "Peak violation rate"}</span>
           <strong>{percent(stats.peakRate)}</strong>
-          <small>{vi ? "trên một luật đơn lẻ" : "on a single rule"}</small>
+          <small>{vi ? "trên một quy tắc đơn lẻ" : "on a single rule"}</small>
         </article>
         <article className="anomaly-kpi">
           <span>{vi ? "Z-score cao nhất" : "Peak z-score"}</span>
@@ -140,7 +140,7 @@ export function AnomalyStatisticsPanel({
         <article className="anomaly-kpi">
           <span>{vi ? "Dòng bị ảnh hưởng" : "Rows affected"}</span>
           <strong>{stats.affectedRows.toLocaleString()}</strong>
-          <small>{vi ? "cộng dồn các luật lệch" : "summed across deviating rules"}</small>
+          <small>{vi ? "cộng dồn các quy tắc lệch" : "summed across deviating rules"}</small>
         </article>
         <article className="anomaly-kpi">
           <span>{vi ? "Cột liên quan" : "Columns involved"}</span>
@@ -207,7 +207,7 @@ export function AnomalyStatisticsPanel({
             ))}
           </ul>
 
-          <h4 className="anomaly-subhead">{vi ? "Theo loại luật" : "By rule type"}</h4>
+          <h4 className="anomaly-subhead">{vi ? "Theo loại quy tắc" : "By rule type"}</h4>
           <ul className="anomaly-breakdown">
             {stats.byRuleType.map(([type, count]) => (
               <li key={type}>
@@ -228,7 +228,7 @@ export function AnomalyStatisticsPanel({
           <table className="anomaly-table">
             <thead>
               <tr>
-                <th>{vi ? "Luật" : "Rule"}</th>
+                <th>{vi ? "Quy tắc" : "Rule"}</th>
                 <th>{vi ? "Loại" : "Type"}</th>
                 <th className="numeric">{vi ? "Hiện tại" : "Current"}</th>
                 <th className="numeric">{vi ? "Baseline" : "Baseline"}</th>

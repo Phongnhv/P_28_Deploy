@@ -415,9 +415,13 @@ function LoginScreen({
         <div className="orb orb-two" />
         <div className="grid-lines" />
         <div className="brand-lockup">
-          <span className="brand-mark">RP</span>
+          <span className="brand-mark" title="DataPulse DQ">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}>
+              <path d="M3 12h3.5l2.5-7 4 14 3.5-10 2.5 3H21" />
+            </svg>
+          </span>
           <span>
-            RidePulse <em>DQ</em>
+            DataPulse <em>DQ</em>
           </span>
         </div>
         <div className="login-pitch">
@@ -448,7 +452,11 @@ function LoginScreen({
       </div>
       <section className="login-card">
         <div className="mobile-brand">
-          <span className="brand-mark">RP</span> RidePulse <em>DQ</em>
+          <span className="brand-mark" title="DataPulse DQ">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}>
+              <path d="M3 12h3.5l2.5-7 4 14 3.5-10 2.5 3H21" />
+            </svg>
+          </span> DataPulse <em>DQ</em>
         </div>
         <span className="eyebrow">ROLE-BASED ACCESS</span>
         <h2>Welcome back</h2>
@@ -833,6 +841,7 @@ function RuleProposerPanel({
   onConfirmContract,
   onRequestProposals,
   onApproveRule,
+  onApproveAllRules,
   onRejectRule,
   onEditRule,
   onDeleteRule,
@@ -853,6 +862,7 @@ function RuleProposerPanel({
   onConfirmContract: () => void;
   onRequestProposals: () => void;
   onApproveRule: (id: string) => void;
+  onApproveAllRules?: () => void;
   onRejectRule: (id: string) => void;
   onEditRule: (proposal: RuleProposal) => void;
   onDeleteRule: (id: string) => void;
@@ -881,18 +891,18 @@ function RuleProposerPanel({
         <div className="panel-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <span className="eyebrow">{language === "vi" ? "NĂNG LỰC AGENT" : "AGENT CAPABILITY"}</span>
-            <h2>{language === "vi" ? `Sinh & Đề xuất luật cho ${dataset.name}` : `Rule Generation & Proposals for ${dataset.name}`}</h2>
+            <h2>{language === "vi" ? `Sinh & Đề xuất quy tắc cho ${dataset.name}` : `Rule Generation & Proposals for ${dataset.name}`}</h2>
             <p className="muted">
               {understandingArtifact && !contractConfirmed
                 ? (language === "vi"
-                    ? "Hợp đồng ngữ nghĩa chưa được xác nhận. Vui lòng quay lại Bước 2 để xác nhận trước khi sinh luật."
+                    ? "Hợp đồng ngữ nghĩa chưa được xác nhận. Vui lòng quay lại Bước 2 để xác nhận trước khi sinh quy tắc."
                     : "The semantic contract is not confirmed yet. Please confirm in Step 2 before generating rules.")
                 : datasetProposals.length > 0
                   ? (language === "vi"
-                      ? `Đã có ${datasetProposals.length} đề xuất luật cho tập dữ liệu này. Bạn có thể duyệt hoặc sinh lại luật.`
+                      ? `Đã có ${datasetProposals.length} đề xuất quy tắc cho tập dữ liệu này. Bạn có thể duyệt hoặc sinh lại quy tắc.`
                       : `${datasetProposals.length} proposals exist for this dataset. You can review or regenerate rules.`)
                   : (language === "vi"
-                      ? "Agent đọc hợp đồng ngữ nghĩa và đề xuất bộ luật kiểm định chất lượng dữ liệu."
+                      ? "Agent đọc hợp đồng ngữ nghĩa và đề xuất bộ quy tắc kiểm định chất lượng dữ liệu."
                       : "The agent reads the semantic contract and proposes a set of quality validation rules.")}
             </p>
           </div>
@@ -912,7 +922,7 @@ function RuleProposerPanel({
                 disabled={busy}
                 onClick={onCreateManualRule}
               >
-                {language === "vi" ? "+ Thêm luật thủ công" : "+ Add manual rule"}
+                {language === "vi" ? "+ Thêm quy tắc thủ công" : "+ Add manual rule"}
               </button>
             )}
             <button
@@ -921,10 +931,10 @@ function RuleProposerPanel({
               onClick={onRequestProposals}
             >
               {busy
-                ? (language === "vi" ? "Đang sinh luật…" : "Generating…")
+                ? (language === "vi" ? "Đang sinh quy tắc…" : "Generating…")
                 : datasetProposals.length > 0
-                    ? (language === "vi" ? "↻ Sinh lại luật" : "↻ Regenerate rules")
-                    : (language === "vi" ? "Sinh Rule" : "Generate rules")}
+                    ? (language === "vi" ? "↻ Sinh lại quy tắc" : "↻ Regenerate rules")
+                    : (language === "vi" ? "Sinh quy tắc" : "Generate rules")}
             </button>
           </div>
         </div>
@@ -932,7 +942,7 @@ function RuleProposerPanel({
         <div className="understanding-holder" style={{ marginTop: "16px" }}>
           <div className="understanding-summary" style={{ padding: "16px", background: "var(--surface-muted, #f8fafc)", borderRadius: "8px", borderLeft: "4px solid var(--accent, #2563eb)" }}>
             <span className="eyebrow">
-              GRAPH 1B · {language === "vi" ? "ĐỀ XUẤT LUẬT KIỂM ĐỊNH AI" : "AI RULE PROPOSAL"}
+              GRAPH 1B · {language === "vi" ? "ĐỀ XUẤT QUY TẮC KIỂM ĐỊNH AI" : "AI RULE PROPOSAL"}
             </span>
             <p style={{ marginTop: "8px", fontSize: "15px", lineHeight: "1.5", color: "var(--ink)" }}>
               {datasetProposals.length > 0
@@ -940,14 +950,14 @@ function RuleProposerPanel({
                     ? `Agent đã đề xuất ${datasetProposals.length} quy tắc kiểm định. Đã duyệt: ${approvedCount}, Từ chối: ${rejectedCount}, Chờ duyệt: ${pendingCount}.`
                     : `Agent proposed ${datasetProposals.length} rules. Approved: ${approvedCount}, Rejected: ${rejectedCount}, Pending: ${pendingCount}.`)
                 : (language === "vi"
-                    ? "Chưa có quy tắc nào được đề xuất. Hãy nhấn 'Sinh Rule' để agent đề xuất bộ quy tắc."
+                    ? "Chưa có quy tắc nào được đề xuất. Hãy nhấn 'Sinh quy tắc' để agent đề xuất bộ quy tắc."
                     : "No rules proposed yet. Click 'Generate rules' to let the agent propose a ruleset.")}
             </p>
           </div>
 
           <div className="understanding-meta" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginTop: "16px", marginBottom: "20px" }}>
             <div>
-              <span>{language === "vi" ? "Tổng số luật đề xuất" : "Total Proposed Rules"}</span>
+              <span>{language === "vi" ? "Tổng số quy tắc đề xuất" : "Total Proposed Rules"}</span>
               <strong>{datasetProposals.length}</strong>
             </div>
             <div>
@@ -969,11 +979,20 @@ function RuleProposerPanel({
             <div className="understanding-section" style={{ marginTop: "20px" }}>
               <div className="panel-heading" style={{ marginBottom: "16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
-                  <span className="eyebrow">{language === "vi" ? "HÀNG ĐỢI DUYỆT LUẬT" : "RULE REVIEW QUEUE"}</span>
+                  <span className="eyebrow">{language === "vi" ? "HÀNG ĐỢI DUYỆT QUY TẮC" : "RULE REVIEW QUEUE"}</span>
                   <h3 style={{ margin: 0 }}>
-                    {language === "vi" ? `Đề xuất luật kiểm tra (${datasetProposals.length})` : `Rule Proposals (${datasetProposals.length})`}
+                    {language === "vi" ? `Đề xuất quy tắc kiểm tra (${datasetProposals.length})` : `Rule Proposals (${datasetProposals.length})`}
                   </h3>
                 </div>
+                {canOperate && pendingCount > 0 && onApproveAllRules && (
+                  <button
+                    className="button primary"
+                    disabled={busy}
+                    onClick={onApproveAllRules}
+                  >
+                    {language === "vi" ? "✓ Duyệt tất cả quy tắc" : "✓ Approve all rules"}
+                  </button>
+                )}
               </div>
 
               <div className="proposal-list" style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
@@ -1001,7 +1020,7 @@ function RuleProposerPanel({
           ) : (
             <div className="workflow-artifact-empty" style={{ marginTop: "16px", padding: "20px", background: "var(--color-bg-subtle, #f8fafc)", borderRadius: "8px", textAlign: "center" }}>
               {language === "vi"
-                ? "Chưa có đề xuất luật nào. Bấm 'Sinh Rule' để agent đọc Hợp đồng ngữ nghĩa và tạo bộ luật kiểm tra."
+                ? "Chưa có đề xuất quy tắc nào. Bấm 'Sinh quy tắc' để agent đọc Hợp đồng ngữ nghĩa và tạo bộ quy tắc kiểm tra."
                 : "No rule proposals yet. Click 'Generate rules' to have the agent infer rules from the Semantic Contract."}
             </div>
           )}
@@ -1064,7 +1083,7 @@ function DeterministicExecutionPanel({
             >
               {busy
                 ? (isVi ? "Đang thực thi…" : "Executing…")
-                : (isVi ? "Chạy luật đã duyệt →" : "Run approved rules →")}
+                : (isVi ? "Chạy quy tắc đã duyệt →" : "Run approved rules →")}
             </button>
           </div>
         </div>
@@ -1080,14 +1099,14 @@ function DeterministicExecutionPanel({
                     ? `Lượt chạy gần nhất (${activeRun.id}) tạo lúc ${formatTime(activeRun.created_at)}: Đã kiểm tra ${activeRun.total_checked.toLocaleString()} bản ghi, phát hiện ${activeRun.total_failed.toLocaleString()} lỗi vi phạm.`
                     : `Latest run (${activeRun.id}) created at ${formatTime(activeRun.created_at)}: Checked ${activeRun.total_checked.toLocaleString()} rows, detected ${activeRun.total_failed.toLocaleString()} violations.`)
                 : (isVi
-                    ? "Chưa thực thi lượt kiểm định nào cho bộ dữ liệu này. Nhấn 'Chạy luật đã duyệt' để bắt đầu."
+                    ? "Chưa thực thi lượt kiểm định nào cho bộ dữ liệu này. Nhấn 'Chạy quy tắc đã duyệt' để bắt đầu."
                     : "No execution run for this dataset yet. Click 'Run approved rules' to start.")}
             </p>
           </div>
 
           <div className="understanding-meta" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginTop: "16px", marginBottom: "20px" }}>
             <div>
-              <span>{isVi ? "Luật đã duyệt" : "Approved Rules"}</span>
+              <span>{isVi ? "Quy tắc đã duyệt" : "Approved Rules"}</span>
               <strong>{approvedCount}</strong>
             </div>
             <div>
@@ -1175,7 +1194,7 @@ function DeterministicExecutionPanel({
           ) : (
             <div className="workflow-artifact-empty" style={{ marginTop: "16px", padding: "20px", background: "var(--color-bg-subtle, #f8fafc)", borderRadius: "8px", textAlign: "center" }}>
               {isVi
-                ? "Chưa có kết quả kiểm tra nào. Hãy bấm 'Chạy luật đã duyệt' để bắt đầu thực thi."
+                ? "Chưa có kết quả kiểm tra nào. Hãy bấm 'Chạy quy tắc đã duyệt' để bắt đầu thực thi."
                 : "No check results available. Click 'Run approved rules' to execute."}
             </div>
           )}
@@ -1549,7 +1568,7 @@ function WorkflowPage({
             {lowConfidenceColumns > 0 && (
               <p className="schema-hint">
                 Cột được đánh dấu là nơi agent suy luận kém chắc chắn nhất — duyệt
-                từ đó trước, vì mọi luật sinh ra sau này đều dựa trên hợp đồng này.
+                từ đó trước, vì mọi quy tắc sinh ra sau này đều dựa trên hợp đồng này.
               </p>
             )}
             {/* Evidence keys are namespaced `profile.column.<name>.<signal>`, so
@@ -2478,6 +2497,8 @@ function App() {
       sessionStorage.setItem("ridepulse.username", session.username);
       setRole(session.role);
       setUsername(session.username);
+      setWizardStep(1);
+      workspaceHydrated.current = true;
       setAuthenticated(true);
     } catch (err) {
       setLoginError(getErrorMessage(err, "Unable to start session."));
@@ -2492,6 +2513,8 @@ function App() {
     sessionStorage.removeItem("ridepulse.role");
     sessionStorage.removeItem("ridepulse.username");
     sessionStorage.removeItem("ridepulse.dataset");
+    workspaceHydrated.current = false;
+    setWizardStep(1);
     setAuthenticated(false);
   }
 
@@ -2647,6 +2670,51 @@ function App() {
     }
   }
 
+  async function bulkApproveProposals() {
+    if (!dataset) return;
+    const datasetId = dataset.id;
+    const workflowId = workflow?.id;
+    setError("");
+    try {
+      const targets = proposals.filter(
+        (p) =>
+          (!datasetId || p.dataset_id === datasetId) &&
+          (!workflowId || p.workflow_run_id === workflowId) &&
+          ["PROPOSED", "EDITED"].includes(p.status),
+      );
+      if (targets.length === 0) return;
+      await api.bulkReviewProposals({
+        dataset_id: datasetId,
+        action: "approve",
+        pending_only: true,
+      });
+      setProposals(
+        proposalsForWorkflow(
+          await api.listProposals(datasetId, workflowId),
+          workflowId,
+        ),
+      );
+      setRuleConfigurations(await api.listRuleConfigurations(datasetId));
+      setAuditLogs(await api.listAuditLogs());
+      setToast(
+        language === "vi"
+          ? `Đã duyệt tất cả ${targets.length} quy tắc.`
+          : `Approved all ${targets.length} pending rules.`,
+      );
+      setError("");
+    } catch (err) {
+      setError(
+        getErrorMessage(
+          err,
+          language === "vi"
+            ? "Không thể duyệt tất cả quy tắc."
+            : "Unable to approve all rules.",
+          language,
+        ),
+      );
+    }
+  }
+
   async function deleteProposal(id: string) {
     if (!dataset) return;
     const datasetId = dataset.id;
@@ -2790,11 +2858,13 @@ function App() {
     if (!workflow) {
       setError(
         language === "vi"
-          ? "Hãy bắt đầu workflow và publish bộ luật trước khi chạy Graph 2."
+          ? "Hãy bắt đầu workflow và publish bộ quy tắc trước khi chạy Graph 2."
           : "Start the workflow and publish its ruleset before running Graph 2.",
       );
       return;
     }
+    setError("");
+    setToast("");
     let currentStep = workflow.current_step;
     if (currentStep === "REVIEW_RULES") {
       const confirmed = await confirmCurrentRuleset();
@@ -2805,20 +2875,15 @@ function App() {
       // Publishing is a durable workflow stage. Complete it before queuing
       // checks so the DQ run can only consume this workflow's immutable set.
       await startWorkflowStep("PUBLISH_RULESET");
+      setToast("");
       currentStep = "RUN_CHECKS";
     }
-    if (currentStep === "RUN_CHECKS") {
+    if (currentStep === "RUN_CHECKS" || currentStep === "ANALYZE_REPORT") {
       await startWorkflowStep("RUN_CHECKS");
-    } else if (currentStep === "ANALYZE_REPORT") {
-      setToast(
-        language === "vi"
-          ? "Graph 2 đã hoàn tất. Sang bước 5 để chạy Graph 3 analysis."
-          : "Graph 2 is complete. Go to step 5 to start Graph 3 analysis.",
-      );
     } else {
       setError(
         language === "vi"
-          ? "Hãy publish bộ luật ở workflow trước khi chạy Graph 2."
+          ? "Hãy publish bộ quy tắc ở workflow trước khi chạy Graph 2."
           : "Publish the workflow ruleset before starting Graph 2.",
       );
     }
@@ -2834,7 +2899,7 @@ function App() {
     if (!artifact || artifact.type !== "RULE_SET") {
       setError(
         language === "vi"
-          ? "Không tìm thấy bộ luật hiện tại để xác nhận. Hãy sinh lại luật trong Bước 3."
+          ? "Không tìm thấy bộ quy tắc hiện tại để xác nhận. Hãy sinh lại quy tắc trong Bước 3."
           : "The current rule set is unavailable. Regenerate the rules in step 3.",
       );
       return false;
@@ -2854,6 +2919,7 @@ function App() {
   async function startWorkflowStep(step: WorkflowStepKey, fresh = false) {
     if (!dataset || !canOperate || workflowActionBusy || activeJob) return;
     setError("");
+    setToast("");
     setRetryAction(null);
     setWorkflowActionBusy(true);
     setActiveJobStartedAt(new Date().toISOString());
@@ -3090,9 +3156,13 @@ function App() {
       <main className="main-content full-width">
         <header className="topbar">
           <div className="brand-lockup">
-            <span className="brand-mark">RP</span>
+            <span className="brand-mark" title="DataPulse DQ">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}>
+                <path d="M3 12h3.5l2.5-7 4 14 3.5-10 2.5 3H21" />
+              </svg>
+            </span>
             <span>
-              RidePulse <em>DQ</em>
+              DataPulse <em>DQ</em>
             </span>
           </div>
           <div className="topbar-actions">
@@ -3471,6 +3541,7 @@ function App() {
                         if (understandingArtifact) void confirmSemanticContract(understandingArtifact);
                       }}
                       onApproveRule={(id) => void reviewProposal(id, "approve")}
+                      onApproveAllRules={() => void bulkApproveProposals()}
                       onRejectRule={(id) => void reviewProposal(id, "reject")}
                       onEditRule={setEditingProposal}
                       onDeleteRule={(id) => void deleteProposal(id)}
@@ -3581,13 +3652,43 @@ function App() {
                     }
                   />
                   <div className="datasets-page" style={{ marginTop: "24px" }}>
-                    {activeRun && workflowArtifacts.some((artifact) => artifact.type === "ANOMALY_REPORT") ? (
-                      <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+                    <div className="graph3-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", alignItems: "stretch" }}>
+                      {/* Left Column (50%): BÁO CÁO ĐIỀU TRA */}
+                      {activeRun ? (
                         <StewardReportPanel
                           runId={activeRun.id}
                           language={language}
                           loadReport={loadStewardReport}
                         />
+                      ) : (
+                        <section className="panel steward-report-panel" style={{ padding: "24px", height: "720px", display: "flex", flexDirection: "column" }}>
+                          <div className="panel-heading" style={{ flexShrink: 0, marginBottom: "16px" }}>
+                            <div>
+                              <span className="eyebrow">
+                                {language === "vi"
+                                  ? "GRAPH 3 · BÁO CÁO ĐIỀU TRA"
+                                  : "GRAPH 3 · INVESTIGATION REPORT"}
+                              </span>
+                              <h2 style={{ fontSize: "18px", fontWeight: 700, marginTop: "4px" }}>
+                                {language === "vi" ? "Báo cáo Steward từ Graph 3" : "Steward Report from Graph 3"}
+                              </h2>
+                              <p className="muted" style={{ fontSize: "13px", marginTop: "4px" }}>
+                                {language === "vi"
+                                  ? "Do node report_writer sinh ra sau khi hoàn tất điều tra nguyên nhân gốc."
+                                  : "Written by the report_writer node after completing root-cause investigation."}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="steward-report-empty" style={{ marginTop: "16px" }}>
+                            {language === "vi"
+                              ? "Chưa thực thi lượt kiểm định nào. Bấm 'Chạy Graph 3 analysis' ở phía trên để sinh báo cáo."
+                              : "No execution run yet. Click 'Run Graph 3 analysis' above to generate the report."}
+                          </div>
+                        </section>
+                      )}
+
+                      {/* Right Column (50%): ĐIỀU TRA NGUYÊN NHÂN GỐC */}
+                      {activeRun && workflowArtifacts.some((artifact) => artifact.type === "ANOMALY_REPORT") ? (
                         <AnomalyInvestigationPanel
                           runId={activeRun.id}
                           canOperate={canOperate}
@@ -3595,44 +3696,48 @@ function App() {
                           proposals={proposals}
                           results={dqResults}
                         />
-                        <AnomalyStatisticsPanel
-                          anomalies={dqAnomalies}
-                          results={dqResults}
-                          language={language}
-                        />
-                      </div>
-                    ) : (
-                      <section className="panel investigation-panel" style={{ padding: "24px" }}>
-                        <div className="panel-heading">
-                          <div>
-                            <span className="eyebrow">
-                              {language === "vi"
-                                ? "GRAPH 3 · ĐIỀU TRA NGUYÊN NHÂN GỐC"
-                                : "GRAPH 3 · ROOT CAUSE INVESTIGATION"}
-                            </span>
-                            <h2>
-                              {language === "vi"
-                                ? "Giả thuyết & Phân tích từ AI Agent"
-                                : "Hypotheses & Analysis from AI Agent"}
-                            </h2>
-                            <p className="muted">
-                              {language === "vi"
-                                ? "Chạy bộ luật đã duyệt ở Bước 4 để kích hoạt Graph 3 phân tích kết quả."
-                                : "Execute approved rules in Step 4 to trigger Graph 3 analysis."}
-                            </p>
+                      ) : (
+                        <section className="panel investigation-panel" style={{ padding: "24px", height: "720px", display: "flex", flexDirection: "column" }}>
+                          <div className="panel-heading" style={{ flexShrink: 0, marginBottom: "16px" }}>
+                            <div>
+                              <span className="eyebrow">
+                                {language === "vi"
+                                  ? "GRAPH 3 · ĐIỀU TRA NGUYÊN NHÂN GỐC"
+                                  : "GRAPH 3 · ROOT CAUSE INVESTIGATION"}
+                              </span>
+                              <h2 style={{ fontSize: "18px", fontWeight: 700, marginTop: "4px" }}>
+                                {language === "vi"
+                                  ? "Giả thuyết & Phân tích từ AI Agent"
+                                  : "Hypotheses & Analysis from AI Agent"}
+                              </h2>
+                              <p className="muted" style={{ fontSize: "13px", marginTop: "4px" }}>
+                                {language === "vi"
+                                  ? "Chạy bộ quy tắc đã duyệt ở Bước 4 để kích hoạt Graph 3 phân tích kết quả."
+                                  : "Execute approved rules in Step 4 to trigger Graph 3 analysis."}
+                              </p>
+                            </div>
                           </div>
-                        </div>
-                        <p className="investigation-note" style={{ marginTop: "16px", fontSize: "14px", lineHeight: "1.6" }}>
-                          {activeRun
-                            ? (language === "vi"
-                                ? "Graph 2 đã có kết quả. Bấm 'Chạy Graph 3 analysis' ở phía trên để agent phân tích bất thường và tạo báo cáo nguyên nhân gốc."
-                                : "Graph 2 has results. Use 'Run Graph 3 analysis' above to investigate anomalies and create the root-cause report.")
-                            : (language === "vi"
-                                ? "Chạy luật đã duyệt ở Bước 4 để tạo kết quả, sau đó kích hoạt Graph 3."
-                                : "Run the approved rules in Step 4 to create results, then start Graph 3.")}
-                        </p>
-                      </section>
-                    )}
+                          <p className="investigation-note" style={{ marginTop: "16px", fontSize: "14px", lineHeight: "1.6" }}>
+                            {activeRun
+                              ? (language === "vi"
+                                  ? "Graph 2 đã có kết quả. Bấm 'Chạy Graph 3 analysis' ở phía trên để agent phân tích bất thường và tạo báo cáo nguyên nhân gốc."
+                                  : "Graph 2 has results. Use 'Run Graph 3 analysis' above to investigate anomalies and create the root-cause report.")
+                              : (language === "vi"
+                                  ? "Chạy quy tắc đã duyệt ở Bước 4 để tạo kết quả, sau đó kích hoạt Graph 3."
+                                  : "Run the approved rules in Step 4 to create results, then start Graph 3.")}
+                          </p>
+                        </section>
+                      )}
+                    </div>
+
+                    {/* Bottom Row (Full Width): THỐNG KÊ BẤT THƯỜNG */}
+                    <div style={{ marginTop: "24px" }}>
+                      <AnomalyStatisticsPanel
+                        anomalies={dqAnomalies}
+                        results={dqResults}
+                        language={language}
+                      />
+                    </div>
                   </div>
                 </div>
               )}
@@ -4415,7 +4520,7 @@ function ProposalCard({
 
   const sourceLabel =
     proposal.source === "MANUAL"
-      ? (isVi ? "Luật thủ công" : "Manual rule")
+      ? (isVi ? "Quy tắc thủ công" : "Manual rule")
       : (isVi ? "Đề xuất AI Agent" : "Agent proposal");
 
   const statusLabel =
@@ -4452,7 +4557,7 @@ function ProposalCard({
           <h3>{title}</h3>
           <p>{description}</p>
           <div className="rule-code">
-            <span>{isVi ? "LOẠI LUẬT" : "TYPE"}</span>
+            <span>{isVi ? "LOẠI QUY TẮC" : "TYPE"}</span>
             <code>{formatRule(proposal.rule, isVi)}</code>
           </div>
         </div>
@@ -4506,7 +4611,7 @@ function ProposalCard({
           {canReject && (
             <button className="button ghost proposal-action reject" onClick={onReject}>
               {proposal.status === "APPROVED"
-                ? (isVi ? "Từ chối luật đã duyệt" : "Reject approved rule")
+                ? (isVi ? "Từ chối quy tắc đã duyệt" : "Reject approved rule")
                 : (isVi ? "Từ chối" : "Reject")}
             </button>
           )}
@@ -4514,8 +4619,8 @@ function ProposalCard({
             {pending
               ? (isVi ? "Chỉnh sửa" : "Edit")
               : proposal.status === "APPROVED"
-                ? (isVi ? "Sửa luật đã duyệt" : "Edit approved rule")
-                : (isVi ? "Sửa luật từ chối" : "Edit rejected rule")}
+                ? (isVi ? "Sửa quy tắc đã duyệt" : "Edit approved rule")
+                : (isVi ? "Sửa quy tắc từ chối" : "Edit rejected rule")}
           </button>
           <button
             className="button primary proposal-action approve"
@@ -4554,7 +4659,7 @@ function getBasisLabel(basis: ProposalBasis, language: "en" | "vi"): string {
     SCHEMA_CONSTRAINT: { vi: "Ràng buộc schema", en: "Schema constraint" },
     DATA_PROFILE: { vi: "Hồ sơ dữ liệu", en: "Data profile" },
     DATA_DICTIONARY: { vi: "Từ điển dữ liệu", en: "Data dictionary" },
-    HISTORICAL_RULE: { vi: "Luật đã dùng trước đây", en: "Historical rule" },
+    HISTORICAL_RULE: { vi: "Quy tắc đã dùng trước đây", en: "Historical rule" },
     POLICY: { vi: "Chính sách quản trị", en: "Governance policy" },
     MIXED: { vi: "Nhiều nguồn", en: "Mixed sources" },
   };
@@ -4723,7 +4828,7 @@ function ProposalRationale({ proposal }: { proposal: RuleProposal }) {
           onClick={() => setOpen((value) => !value)}
         >
           <span className="rationale-caret">{open ? "▾" : "▸"}</span>
-          {isVi ? "Vì sao có luật này" : "Why this rule"}
+          {isVi ? "Vì sao có quy tắc này" : "Why this rule"}
         </button>
         {proposal.proposal_basis && (
           <span className={`basis-badge ${proposal.proposal_basis.toLowerCase()}`}>
@@ -4976,7 +5081,7 @@ function ActiveRulesPanel({
         setError(
           cause instanceof ApiError
             ? cause.message
-            : (isVi ? "Không tải được bộ luật đang hoạt động." : "Unable to load active ruleset."),
+            : (isVi ? "Không tải được bộ quy tắc đang hoạt động." : "Unable to load active ruleset."),
         );
       })
       .finally(() => {
@@ -4993,7 +5098,7 @@ function ActiveRulesPanel({
     <section className="panel active-rules-panel">
       <div className="panel-heading">
         <div>
-          <span className="eyebrow">{isVi ? "BỘ LUẬT ĐANG CHẠY" : "ACTIVE RULESET"}</span>
+          <span className="eyebrow">{isVi ? "BỘ QUY TẮC ĐANG CHẠY" : "ACTIVE RULESET"}</span>
           <h3>{isVi ? "Bộ quy tắc đang hoạt động" : "Active ruleset"}</h3>
         </div>
         <span className="panel-caption">
@@ -5009,7 +5114,7 @@ function ActiveRulesPanel({
       ) : rules.length === 0 ? (
         <p className="investigation-note">
           {isVi
-            ? "Chưa có luật nào được xuất bản. Duyệt và xuất bản ở bước 3 để luật bắt đầu canh dữ liệu."
+            ? "Chưa có quy tắc nào được xuất bản. Duyệt và xuất bản ở bước 3 để quy tắc bắt đầu canh dữ liệu."
             : "No rules published yet. Approve and publish rules in Step 3 to start monitoring."}
         </p>
       ) : (
@@ -5017,7 +5122,7 @@ function ActiveRulesPanel({
           <table className="active-rules-table">
             <thead>
               <tr>
-                <th>{isVi ? "Luật" : "Rule"}</th>
+                <th>{isVi ? "Quy tắc" : "Rule"}</th>
                 <th>{isVi ? "Cột" : "Column"}</th>
                 <th>{isVi ? "Loại" : "Type"}</th>
                 <th>{isVi ? "Chiều" : "Dimension"}</th>
@@ -5160,7 +5265,7 @@ const FEEDBACK_CHOICES: Array<{ label: AnomalyFeedbackLabel; text: string }> = [
   { label: "TRUE_ANOMALY", text: "Đúng là bất thường" },
   { label: "FALSE_POSITIVE", text: "Báo nhầm" },
   { label: "EXPECTED_CHANGE", text: "Thay đổi đã biết trước" },
-  { label: "RULE_MISCONFIGURATION", text: "Luật cấu hình sai" },
+  { label: "RULE_MISCONFIGURATION", text: "Quy tắc cấu hình sai" },
 ];
 
 const HYPOTHESIS_LABEL: Record<string, string> = {
@@ -5557,294 +5662,288 @@ function AnomalyInvestigationPanel({
   };
 
   return (
-    <section className="panel investigation-panel">
-      <div className="panel-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+    <section className="panel investigation-panel" style={{ padding: "24px", height: "720px", display: "flex", flexDirection: "column" }}>
+      <div className="panel-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexShrink: 0, marginBottom: "16px" }}>
         <div>
           <span className="eyebrow">{isVi ? "GRAPH 3 · ĐIỀU TRA NGUYÊN NHÂN GỐC" : "GRAPH 3 · ROOT CAUSE INVESTIGATION"}</span>
-          <h2>{isVi ? "Giả thuyết & Bằng chứng từ AI Agent" : "Root Cause Hypotheses & Evidence from AI Agent"}</h2>
-          <p className="muted">
+          <h2 style={{ fontSize: "18px", fontWeight: 700, marginTop: "4px" }}>
+            {isVi ? "Giả thuyết & Bằng chứng từ AI Agent" : "Root Cause Hypotheses & Evidence from AI Agent"}
+          </h2>
+          <p className="muted" style={{ fontSize: "13px", marginTop: "4px" }}>
             {isVi
               ? "Agent suy luận các giả thuyết nguyên nhân gốc kèm bằng chứng hai chiều và khuyến nghị xử lý."
               : "Agent inferred root cause hypotheses with two-way evidence and actionable recommendations."}
           </p>
         </div>
-        <span className="panel-caption">
+        <span className="panel-caption" style={{ fontSize: "12px", color: "var(--muted)", fontWeight: 600, marginTop: "4px" }}>
           {signals.length} {isVi ? "tín hiệu quan sát" : "signals"} · {hypotheses.length} {isVi ? "giả thuyết nguyên nhân" : "hypotheses"}
         </span>
       </div>
 
-      {loading ? (
-        <p className="investigation-note">Đang tải kết quả điều tra…</p>
-      ) : error ? (
-        <p className="investigation-note error">{error}</p>
-      ) : hypotheses.length === 0 ? (
-        <p className="investigation-note">
-          Chưa có giả thuyết nào cho lần chạy này. Agent điều tra chỉ chạy khi bộ
-          phát hiện thống kê tìm thấy tín hiệu bất thường.
-        </p>
-      ) : (
-        <div className="hypothesis-list" style={{ display: "grid", gap: "24px", marginTop: "20px" }}>
-          {hypotheses.map((hypothesis) => (
-            <article
-              className="hypothesis"
-              key={hypothesis.id}
-              style={{
-                background: "var(--surface-muted, #f8fafc)",
-                border: "1px solid var(--border)",
-                borderRadius: "12px",
-                padding: "24px",
-                boxShadow: "0 2px 8px rgba(0, 0, 0, 0.03)",
-              }}
-            >
-              <div className="hypothesis-top" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "12px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-                  <span
-                    className="hypothesis-type"
-                    style={{
-                      fontSize: "13px",
-                      fontWeight: 800,
-                      letterSpacing: "0.05em",
-                      textTransform: "uppercase",
-                      padding: "6px 14px",
-                      borderRadius: "999px",
-                      background: "var(--accent-soft, #e0f2fe)",
-                      color: "var(--accent-deep, #0369a1)",
-                      border: "1px solid color-mix(in srgb, var(--accent) 35%, transparent)",
-                    }}
-                  >
-                    {HYPOTHESIS_LABEL[hypothesis.hypothesis_type] ??
-                      hypothesis.hypothesis_type.replaceAll("_", " ")}
-                  </span>
-                  {hypothesis.fallback_used && (
-                    <span className="hypothesis-fallback" title="Agent phải dùng đường lui, độ tin cậy thấp hơn bình thường">
-                      đường lui
-                    </span>
-                  )}
-                </div>
-
-                <div className="hypothesis-confidence" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                  <span style={{ fontSize: "12.5px", color: "var(--muted)", fontWeight: 600 }}>
-                    {isVi ? "Xác suất tin cậy của Agent:" : "Agent confidence:"}
-                  </span>
-                  <span className="hc-track" style={{ width: "120px", height: "8px", borderRadius: "999px", background: "var(--border)", overflow: "hidden", display: "block" }}>
-                    <span style={{ width: `${Math.round(hypothesis.confidence * 100)}%`, height: "100%", background: "var(--accent, #3b82f6)", display: "block", borderRadius: "999px" }} />
-                  </span>
-                  <strong style={{ fontSize: "16px", color: "var(--ink)", fontVariantNumeric: "tabular-nums" }}>
-                    {Math.round(hypothesis.confidence * 100)}%
-                  </strong>
-                </div>
-              </div>
-
-              <div
-                className="hypothesis-summary-box"
+      <div style={{ flex: 1, overflowY: "auto", minHeight: 0, paddingRight: "6px" }}>
+        {loading ? (
+          <p className="investigation-note" style={{ marginTop: "16px" }}>Đang tải kết quả điều tra…</p>
+        ) : error ? (
+          <p className="investigation-note error" style={{ marginTop: "16px" }}>{error}</p>
+        ) : hypotheses.length === 0 ? (
+          <p className="investigation-note" style={{ marginTop: "16px" }}>
+            Chưa có giả thuyết nào cho lần chạy này. Agent điều tra chỉ chạy khi bộ
+            phát hiện thống kê tìm thấy tín hiệu bất thường.
+          </p>
+        ) : (
+          <div className="hypothesis-list" style={{ display: "grid", gap: "24px", marginTop: "20px" }}>
+            {hypotheses.map((hypothesis) => (
+              <article
+                className="hypothesis"
+                key={hypothesis.id}
                 style={{
-                  margin: "16px 0 22px",
-                  padding: "16px 20px",
-                  background: "var(--surface, #ffffff)",
+                  background: "var(--surface-muted, #f8fafc)",
                   border: "1px solid var(--border)",
-                  borderLeft: "4px solid var(--accent, #3b82f6)",
-                  borderRadius: "8px",
+                  borderRadius: "12px",
+                  padding: "24px",
+                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.03)",
                 }}
               >
-                <div style={{ fontSize: "11px", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--accent, #3b82f6)", marginBottom: "6px" }}>
-                  {isVi ? "KẾT LUẬN SUY LUẬN TỪ AI AGENT" : "AI AGENT INFERENCE SUMMARY"}
-                </div>
-                <p style={{ margin: 0, fontSize: "14.5px", lineHeight: "1.7", color: "var(--ink)", fontWeight: 500 }}>
-                  {formatHypothesisSummary(hypothesis.summary, isVi)}
-                </p>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: "20px", marginBottom: "22px" }}>
-                <div className="he-block" style={{ borderLeft: "4px solid var(--chart-warn, #f59e0b)", paddingLeft: "16px" }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "14px", borderBottom: "1px solid var(--border)", paddingBottom: "8px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                      <span style={{ fontSize: "16px" }}>⚠️</span>
-                      <h5 style={{ margin: 0, fontSize: "13px", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--ink)" }}>
-                        {isVi ? "Bằng chứng ủng hộ giả thuyết" : "Supporting Evidence"}
-                      </h5>
-                    </div>
-                    <span style={{ fontSize: "11px", fontWeight: 700, padding: "2px 8px", borderRadius: "10px", background: "color-mix(in srgb, var(--chart-warn, #f59e0b) 15%, transparent)", color: "var(--chart-warn, #b45309)" }}>
-                      {hypothesis.supporting_signal_ids.length} {isVi ? "bằng chứng" : "items"}
+                <div className="hypothesis-top" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "12px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                    <span
+                      className="hypothesis-type"
+                      style={{
+                        fontSize: "13px",
+                        fontWeight: 800,
+                        letterSpacing: "0.05em",
+                        textTransform: "uppercase",
+                        padding: "6px 14px",
+                        borderRadius: "999px",
+                        background: "var(--accent-soft, #e0f2fe)",
+                        color: "var(--accent-deep, #0369a1)",
+                        border: "1px solid color-mix(in srgb, var(--accent) 35%, transparent)",
+                      }}
+                    >
+                      {HYPOTHESIS_LABEL[hypothesis.hypothesis_type] ??
+                        hypothesis.hypothesis_type.replaceAll("_", " ")}
                     </span>
+                    {hypothesis.fallback_used && (
+                      <span className="hypothesis-fallback" title="Agent phải dùng đường lui, độ tin cậy thấp hơn bình thường">
+                        đường lui
+                      </span>
+                    )}
                   </div>
 
-                  {hypothesis.supporting_signal_ids.length === 0 ? (
-                    <p className="he-empty">{isVi ? "Không có bằng chứng vi phạm nào." : "No supporting evidence found."}</p>
-                  ) : (
-                    <div style={{ display: "grid", gap: "10px" }}>
-                      {hypothesis.supporting_signal_ids.map((id) => (
-                        <div key={id}>{renderSignalItem(id)}</div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="he-block against" style={{ borderLeft: "4px solid var(--chart-pass, #10b981)", paddingLeft: "16px" }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "14px", borderBottom: "1px solid var(--border)", paddingBottom: "8px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                      <span style={{ fontSize: "16px" }}>✓</span>
-                      <h5 style={{ margin: 0, fontSize: "13px", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--ink)" }}>
-                        {isVi ? "Bằng chứng phản bác (Quy tắc kiểm thử đạt)" : "Contradicting Evidence (Passed Rules)"}
-                      </h5>
-                    </div>
-                    <span style={{ fontSize: "11px", fontWeight: 700, padding: "2px 8px", borderRadius: "10px", background: "color-mix(in srgb, var(--chart-pass, #10b981) 15%, transparent)", color: "var(--chart-pass, #059669)" }}>
-                      {hypothesis.contradicting_signal_ids.length} {isVi ? "quy tắc đạt" : "items"}
+                  <div className="hypothesis-confidence" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <span style={{ fontSize: "12.5px", color: "var(--muted)", fontWeight: 600 }}>
+                      {isVi ? "Xác suất tin cậy của Agent:" : "Agent confidence:"}
                     </span>
+                    <span className="hc-track" style={{ width: "120px", height: "8px", borderRadius: "999px", background: "var(--border)", overflow: "hidden", display: "block" }}>
+                      <span style={{ width: `${Math.round(hypothesis.confidence * 100)}%`, height: "100%", background: "var(--accent, #3b82f6)", display: "block", borderRadius: "999px" }} />
+                    </span>
+                    <strong style={{ fontSize: "16px", color: "var(--ink)", fontVariantNumeric: "tabular-nums" }}>
+                      {Math.round(hypothesis.confidence * 100)}%
+                    </strong>
                   </div>
-
-                  {hypothesis.contradicting_signal_ids.length === 0 ? (
-                    <p className="he-empty">{isVi ? "Không có quy tắc đạt nào." : "No contradicting evidence found."}</p>
-                  ) : (
-                    <div style={{ display: "grid", gap: "10px" }}>
-                      {hypothesis.contradicting_signal_ids.map((id) => (
-                        <div key={id}>{renderSignalItem(id)}</div>
-                      ))}
-                    </div>
-                  )}
                 </div>
-              </div>
 
-              {hypothesis.recommended_checks.length > 0 && (
                 <div
-                  className="hypothesis-actions-block"
+                  className="hypothesis-summary-box"
                   style={{
-                    marginTop: "20px",
-                    padding: "18px 22px",
+                    margin: "16px 0 22px",
+                    padding: "16px 20px",
                     background: "var(--surface, #ffffff)",
                     border: "1px solid var(--border)",
-                    borderRadius: "10px",
-                    boxShadow: "0 1px 4px rgba(0, 0, 0, 0.03)",
+                    borderLeft: "4px solid var(--accent, #3b82f6)",
+                    borderRadius: "8px",
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
-                    <span style={{ fontSize: "16px" }}>📋</span>
-                    <h5 style={{ margin: 0, fontSize: "13px", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--ink)" }}>
-                      {isVi ? "Kế hoạch hành động & Kiểm tra khuyến nghị" : "Recommended Next Steps & Action Plan"}
-                    </h5>
+                  <div style={{ fontSize: "11px", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--accent, #3b82f6)", marginBottom: "6px" }}>
+                    {isVi ? "KẾT LUẬN SUY LUẬN TỪ AI AGENT" : "AI AGENT INFERENCE SUMMARY"}
                   </div>
-                  <p style={{ margin: "0 0 14px", fontSize: "12.5px", color: "var(--muted)" }}>
-                    {isVi
-                      ? "AI Agent đề xuất các bước kiểm tra cụ thể sau đây dành cho Data Steward để xác minh và xử lý nguồn gốc lỗi:"
-                      : "AI Agent suggests following these specific investigation steps to verify and resolve the root cause:"}
+                  <p style={{ margin: 0, fontSize: "14.5px", lineHeight: "1.7", color: "var(--ink)", fontWeight: 500 }}>
+                    {formatHypothesisSummary(hypothesis.summary, isVi)}
                   </p>
-                  <div style={{ display: "grid", gap: "10px" }}>
-                    {hypothesis.recommended_checks.map((check, idx) => (
-                      <div
-                        key={check}
-                        style={{
-                          display: "flex",
-                          alignItems: "flex-start",
-                          gap: "12px",
-                          padding: "10px 14px",
-                          background: "var(--surface-muted, #f8fafc)",
-                          border: "1px solid var(--border)",
-                          borderRadius: "6px",
-                        }}
-                      >
-                        <span
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: "20px", marginBottom: "22px" }}>
+                  <div className="he-block" style={{ borderLeft: "4px solid var(--chart-warn, #f59e0b)", paddingLeft: "16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "14px", borderBottom: "1px solid var(--border)", paddingBottom: "8px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{ fontSize: "16px" }}>⚠️</span>
+                        <h5 style={{ margin: 0, fontSize: "13px", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--ink)" }}>
+                          {isVi ? "Bằng chứng ủng hộ giả thuyết" : "Supporting Evidence"}
+                        </h5>
+                      </div>
+                      <span style={{ fontSize: "11px", fontWeight: 700, padding: "2px 8px", borderRadius: "10px", background: "color-mix(in srgb, var(--chart-warn, #f59e0b) 15%, transparent)", color: "var(--chart-warn, #b45309)" }}>
+                        {hypothesis.supporting_signal_ids.length} {isVi ? "bằng chứng" : "items"}
+                      </span>
+                    </div>
+
+                    {hypothesis.supporting_signal_ids.length === 0 ? (
+                      <p className="he-empty">{isVi ? "Không có bằng chứng vi phạm nào." : "No supporting evidence found."}</p>
+                    ) : (
+                      <div style={{ display: "grid", gap: "10px" }}>
+                        {hypothesis.supporting_signal_ids.map((id) => (
+                          <div key={id}>{renderSignalItem(id)}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="he-block against" style={{ borderLeft: "4px solid var(--chart-pass, #10b981)", paddingLeft: "16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "14px", borderBottom: "1px solid var(--border)", paddingBottom: "8px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{ fontSize: "16px" }}>✓</span>
+                        <h5 style={{ margin: 0, fontSize: "13px", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--ink)" }}>
+                          {isVi ? "Bằng chứng phản bác (Quy tắc kiểm thử đạt)" : "Contradicting Evidence (Passed Rules)"}
+                        </h5>
+                      </div>
+                      <span style={{ fontSize: "11px", fontWeight: 700, padding: "2px 8px", borderRadius: "10px", background: "color-mix(in srgb, var(--chart-pass, #10b981) 15%, transparent)", color: "var(--chart-pass, #047857)" }}>
+                        {hypothesis.contradicting_signal_ids.length} {isVi ? "bằng chứng" : "items"}
+                      </span>
+                    </div>
+
+                    {hypothesis.contradicting_signal_ids.length === 0 ? (
+                      <p className="he-empty">{isVi ? "Không tìm thấy bằng chứng phản bác." : "No contradicting evidence found."}</p>
+                    ) : (
+                      <div style={{ display: "grid", gap: "10px" }}>
+                        {hypothesis.contradicting_signal_ids.map((id) => (
+                          <div key={id}>{renderSignalItem(id)}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {hypothesis.recommended_checks.length > 0 && (
+                  <div className="he-recommendations" style={{ borderLeft: "4px solid var(--accent, #3b82f6)", paddingLeft: "16px", marginBottom: "20px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "14px" }}>
+                      <span style={{ fontSize: "16px" }}>💡</span>
+                      <h5 style={{ margin: 0, fontSize: "13px", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--ink)" }}>
+                        {isVi ? "Hành động khắc phục đề xuất từ Agent" : "Recommended Corrective Actions"}
+                      </h5>
+                    </div>
+                    <p className="muted" style={{ margin: "-6px 0 12px", fontSize: "12.5px" }}>
+                      {isVi
+                        ? "Các bước kiểm tra và xử lý kỹ thuật khuyến nghị:"
+                        : "Recommended technical investigation steps:"}
+                    </p>
+                    <div style={{ display: "grid", gap: "10px" }}>
+                      {hypothesis.recommended_checks.map((check, idx) => (
+                        <div
+                          key={check}
                           style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            width: "22px",
-                            height: "22px",
-                            borderRadius: "50%",
-                            background: "var(--accent, #3b82f6)",
-                            color: "#ffffff",
-                            fontSize: "12px",
-                            fontWeight: 800,
-                            flexShrink: 0,
-                            marginTop: "1px",
+                            display: "flex",
+                            alignItems: "flex-start",
+                            gap: "12px",
+                            padding: "10px 14px",
+                            background: "var(--surface-muted, #f8fafc)",
+                            border: "1px solid var(--border)",
+                            borderRadius: "6px",
                           }}
                         >
-                          {idx + 1}
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              width: "22px",
+                              height: "22px",
+                              borderRadius: "50%",
+                              background: "var(--accent, #3b82f6)",
+                              color: "#ffffff",
+                              fontSize: "12px",
+                              fontWeight: 800,
+                              flexShrink: 0,
+                              marginTop: "1px",
+                            }}
+                          >
+                            {idx + 1}
+                          </span>
+                          <span style={{ fontSize: "13.5px", lineHeight: "1.55", color: "var(--ink)" }}>
+                            {formatRecommendedCheck(check, isVi)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {(hypothesis.limitations || hypothesis.missing_evidence) && (
+                  <div
+                    className="hypothesis-limits-box"
+                    style={{
+                      marginTop: "18px",
+                      padding: "16px 20px",
+                      background: "color-mix(in srgb, var(--accent, #3b82f6) 4%, var(--surface, #ffffff))",
+                      border: "1px solid color-mix(in srgb, var(--accent, #3b82f6) 25%, transparent)",
+                      borderRadius: "10px",
+                      fontSize: "13px",
+                      lineHeight: "1.6",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: 800, fontSize: "13px", color: "var(--ink)", marginBottom: "8px" }}>
+                      <span style={{ fontSize: "15px" }}>ℹ️</span>
+                      <span style={{ letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                        {isVi ? "Lưu ý về giới hạn quan sát & Bằng chứng cần bổ sung" : "Observation Constraints & Missing Evidence"}
+                      </span>
+                    </div>
+
+                    {hypothesis.limitations && (
+                      <div style={{ marginBottom: "10px" }}>
+                        <span style={{ fontWeight: 700, color: "var(--ink)", marginRight: "6px" }}>
+                          {isVi ? "📌 Giới hạn quan sát:" : "📌 Observation limitations:"}
                         </span>
-                        <span style={{ fontSize: "13.5px", lineHeight: "1.55", color: "var(--ink)" }}>
-                          {formatRecommendedCheck(check, isVi)}
+                        <span style={{ color: "var(--ink)" }}>
+                          {formatLimitations(hypothesis.limitations, isVi)}
                         </span>
                       </div>
+                    )}
+
+                    {hypothesis.missing_evidence && (
+                      <div>
+                        <span style={{ fontWeight: 700, color: "var(--chart-warn, #b45309)", display: "block", marginBottom: "4px" }}>
+                          {isVi ? "⚠️ Các bằng chứng còn thiếu cần thu thập thêm:" : "⚠️ Missing evidence to collect:"}
+                        </span>
+                        <ul style={{ margin: 0, paddingLeft: "20px", display: "grid", gap: "4px" }}>
+                          {getMissingEvidenceList(hypothesis.missing_evidence, isVi).map((item, i) => (
+                            <li key={i} style={{ color: "var(--ink)", lineHeight: "1.5" }}>
+                              {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </article>
+            ))}
+
+            {canOperate && (
+              <div className="feedback-bar">
+                <span className="feedback-label">Kết luận của bạn về lần điều tra này</span>
+                {sent ? (
+                  <span className="feedback-sent">
+                    Đã ghi nhận:{" "}
+                    {FEEDBACK_CHOICES.find((choice) => choice.label === sent)?.text ?? sent}
+                  </span>
+                ) : (
+                  <div className="feedback-buttons">
+                    {FEEDBACK_CHOICES.map((choice) => (
+                      <button
+                        key={choice.label}
+                        type="button"
+                        className="button secondary"
+                        disabled={sending}
+                        onClick={() => void sendFeedback(choice.label)}
+                      >
+                        {choice.text}
+                      </button>
                     ))}
                   </div>
-                </div>
-              )}
-
-              {(hypothesis.limitations || hypothesis.missing_evidence) && (
-                <div
-                  className="hypothesis-limits-box"
-                  style={{
-                    marginTop: "18px",
-                    padding: "16px 20px",
-                    background: "color-mix(in srgb, var(--accent, #3b82f6) 4%, var(--surface, #ffffff))",
-                    border: "1px solid color-mix(in srgb, var(--accent, #3b82f6) 25%, transparent)",
-                    borderRadius: "10px",
-                    fontSize: "13px",
-                    lineHeight: "1.6",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: 800, fontSize: "13px", color: "var(--ink)", marginBottom: "8px" }}>
-                    <span style={{ fontSize: "15px" }}>ℹ️</span>
-                    <span style={{ letterSpacing: "0.04em", textTransform: "uppercase" }}>
-                      {isVi ? "Lưu ý về giới hạn quan sát & Bằng chứng cần bổ sung" : "Observation Constraints & Missing Evidence"}
-                    </span>
-                  </div>
-
-                  {hypothesis.limitations && (
-                    <div style={{ marginBottom: "10px" }}>
-                      <span style={{ fontWeight: 700, color: "var(--ink)", marginRight: "6px" }}>
-                        {isVi ? "📌 Giới hạn quan sát:" : "📌 Observation limitations:"}
-                      </span>
-                      <span style={{ color: "var(--ink)" }}>
-                        {formatLimitations(hypothesis.limitations, isVi)}
-                      </span>
-                    </div>
-                  )}
-
-                  {hypothesis.missing_evidence && (
-                    <div>
-                      <span style={{ fontWeight: 700, color: "var(--chart-warn, #b45309)", display: "block", marginBottom: "4px" }}>
-                        {isVi ? "⚠️ Các bằng chứng còn thiếu cần thu thập thêm:" : "⚠️ Missing evidence to collect:"}
-                      </span>
-                      <ul style={{ margin: 0, paddingLeft: "20px", display: "grid", gap: "4px" }}>
-                        {getMissingEvidenceList(hypothesis.missing_evidence, isVi).map((item, i) => (
-                          <li key={i} style={{ color: "var(--ink)", lineHeight: "1.5" }}>
-                            {item}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              )}
-            </article>
-          ))}
-
-          {canOperate && (
-            <div className="feedback-bar">
-              <span className="feedback-label">Kết luận của bạn về lần điều tra này</span>
-              {sent ? (
-                <span className="feedback-sent">
-                  Đã ghi nhận:{" "}
-                  {FEEDBACK_CHOICES.find((choice) => choice.label === sent)?.text ?? sent}
-                </span>
-              ) : (
-                <div className="feedback-buttons">
-                  {FEEDBACK_CHOICES.map((choice) => (
-                    <button
-                      key={choice.label}
-                      type="button"
-                      className="button secondary"
-                      disabled={sending}
-                      onClick={() => void sendFeedback(choice.label)}
-                    >
-                      {choice.text}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </section>
   );
 }
@@ -5918,7 +6017,7 @@ function RunsPage({
             }}
             disabled={!approvedCount || busy || !canOperate}
           >
-            {vi ? "Chạy luật đã duyệt" : "Run approved rules"} <span>→</span>
+            {vi ? "Chạy quy tắc đã duyệt" : "Run approved rules"} <span>→</span>
           </button>
         </div>
       </div>
@@ -5929,7 +6028,7 @@ function RunsPage({
           <p>
             {hasPriorRun
               ? vi
-                ? `Có sẵn kết quả của lượt chạy trước (${activeRun?.rule_ids.length} luật). Chạy lượt mới, hoặc mở lại kết quả cũ.`
+                ? `Có sẵn kết quả của lượt chạy trước (${activeRun?.rule_ids.length} quy tắc). Chạy lượt mới, hoặc mở lại kết quả cũ.`
                 : `A previous run is available (${activeRun?.rule_ids.length} rules). Start a new run, or open the earlier results.`
               : vi
                 ? "Duyệt ít nhất một đề xuất ở bước 3, rồi chạy chúng qua bộ thực thi chỉ đọc."
@@ -5950,7 +6049,7 @@ function RunsPage({
                 }}
                 disabled={!approvedCount || busy}
               >
-                {vi ? "Chạy luật đã duyệt" : "Run approved rules"} →
+                {vi ? "Chạy quy tắc đã duyệt" : "Run approved rules"} →
               </button>
             </div>
           )}

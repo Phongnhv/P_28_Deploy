@@ -8804,3 +8804,15 @@ button.step-nav-button:disabled {
   line-height: 1;
   margin-top: 2px;
 }
+
+.graph3-grid .steward-report-panel,
+.graph3-grid .investigation-panel {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+@media (max-width: 1024px) {
+  .graph3-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
