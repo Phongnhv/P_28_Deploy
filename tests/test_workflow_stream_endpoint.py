@@ -68,6 +68,7 @@ async def test_latest_workflow_restores_persisted_state_without_creating_a_run(s
     response = await steward_client.get(f"/api/v1/datasets/{_DATASET_ID}/workflows/latest")
     assert response.status_code == 200
     assert response.json()["id"] == run_id
+    assert response.json()["source_binding"] is None
 
 
 @pytest.mark.asyncio

@@ -100,7 +100,11 @@ def _complete(steps: list[dict[str, Any]], key: str) -> None:
 
 
 def serialize_run(run: WorkflowRunModel) -> dict[str, Any]:
-    binding = _step(_decode_steps(run), "UPLOAD_PROFILE").get("source_binding")
+    steps = _decode_steps(run)
+    # Older saved runs can lack this step. Reading history must not invent a
+    # source binding; execution still validates the pinned source separately.
+    upload_step = next((item for item in steps if item.get("key") == "UPLOAD_PROFILE"), {})
+    binding = upload_step.get("source_binding")
     return {
         "id": run.id,
         "dataset_id": run.dataset_id,
@@ -108,7 +112,7 @@ def serialize_run(run: WorkflowRunModel) -> dict[str, Any]:
         "current_step": run.current_step,
         "iteration": run.revision,
         "max_iterations": 1,
-        "steps": _decode_steps(run),
+        "steps": steps,
     }
 
 
