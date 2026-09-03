@@ -176,6 +176,7 @@ async def main():
     # the development DDL reconciliation here as well races the API startup and
     # can deadlock shared Supabase tables before the job is claimed.
     canonical_job_types = {
+        "WORKFLOW_PROFILE",
         "INGEST_PROFILE",
         "GRAPH1_EXECUTION",
         "GRAPH1_CONTINUATION",

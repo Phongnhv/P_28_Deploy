@@ -628,6 +628,8 @@ async def run_proposal_graph(
     connection_string: str | None = None,
     sampling_rate: float = 1.0,
     auto_confirm_semantic: bool = True,
+    dataset_version_id: str | None = None,
+    profile_run_id: str | None = None,
 ) -> dict:
     """Chạy toàn bộ pipeline Run 1 (Đề xuất Rule): Raw Profiler -> Digest -> Understanding -> Semantic Gate -> Candidates -> Customizer -> Proposer -> HITL Gate."""
     import uuid
@@ -645,6 +647,14 @@ async def run_proposal_graph(
     run_id = uuid.uuid4().hex
     settings = get_settings()
     conn_str = connection_string or settings.database_url
+    from sqlalchemy.orm import Session
+
+    from src.services.rule_proposer_workflow import _raw_profile_for_graph, _semantic_payload
+    from src.services.rule_store import get_engine
+    from src.services.source_binding import resolve_source_binding
+    with Session(get_engine()) as db:
+        binding = resolve_source_binding(db, dataset_id, dataset_version_id=dataset_version_id, profile_run_id=profile_run_id)
+        uploaded_profile = _raw_profile_for_graph(db, dataset_id, _semantic_payload(db, dataset_id, binding=binding))
 
     logger.info("Bắt đầu Run 1 (Proposal) | run_id=%s | dataset=%s", run_id, dataset_id)
     create_run(run_id=run_id, dataset_id=dataset_id)
@@ -658,7 +668,12 @@ async def run_proposal_graph(
     initial_state = {
         "dataset_id": dataset_id,
         "rule_run_id": run_id,
+        "dataset_version_id": binding["dataset_version_id"],
+        "profile_run_id": binding["profile_run_id"],
+        "target_tables": [dataset_id],
         "metadata": {
+            "uploaded_dataset_profile": uploaded_profile,
+            "source_binding": binding,
             "connection_string": conn_str,
             "sampling_rate": sampling_rate,
             "auto_confirm_semantic": auto_confirm_semantic,
@@ -725,6 +740,27 @@ async def run_execution_graph(
     )
 
     init_db()
+    from sqlalchemy.orm import Session
+
+    from src.models.database import DatasetModel, Graph1RunModel
+    from src.services.rule_store import get_engine
+    from src.services.source_binding import resolve_source_binding
+    binding = None
+    review_snapshot_id = None
+    with Session(get_engine()) as db:
+        dataset = db.get(DatasetModel, dataset_id)
+        if dataset and dataset.manifest_version == "versioned-v1":
+            binding = resolve_source_binding(db, dataset_id)
+            query = db.query(Graph1RunModel).filter_by(dataset_id=dataset_id, dataset_version_id=binding["dataset_version_id"], status="COMPLETED")
+            reviewed = query.filter_by(id=proposal_run_id).first() if proposal_run_id else query.order_by(Graph1RunModel.created_at.desc()).first()
+            if reviewed:
+                import json
+                reviewed_state = json.loads(reviewed.state_json or "{}")
+                review_snapshot_id = reviewed_state.get("rule_review_snapshot_id")
+                proposal_run_id = reviewed.id
+                binding = resolve_source_binding(db, dataset_id, profile_run_id=reviewed.profile_run_id)
+            if not review_snapshot_id:
+                raise ValueError("Approve the selected dataset's rules in the pipeline before running checks")
     test_run_id = uuid.uuid4().hex
     create_test_run(test_run_id=test_run_id, dataset_id=dataset_id)
     update_test_run_status(test_run_id=test_run_id, status="RUNNING")
@@ -744,10 +780,16 @@ async def run_execution_graph(
         "test_run_id": test_run_id,
         "rule_run_id": proposal_run_id,
         "approved_rules": rules_to_test,
+        "dataset_version_id": binding["dataset_version_id"] if binding else None,
+        "profile_run_id": binding["profile_run_id"] if binding else None,
+        "rule_review_snapshot_id": review_snapshot_id,
+        "metadata": {"source_binding": binding},
     }
 
     try:
         final_state = await execution_graph.ainvoke(initial_state)
+        if final_state.get("error"):
+            raise ValueError(str(final_state["error"]))
 
         _test_run_rec = get_test_run(test_run_id)
         results = get_test_results(test_run_id)
@@ -824,25 +866,26 @@ async def run_anomaly_graph(
     settings = get_settings()
     active_mode = investigation_mode or settings.anomaly_investigation_mode
 
-    # Tự động tìm execution_run_id mới nhất nếu caller không truyền
-    if not execution_run_id:
-        try:
-            with Session(get_engine()) as db:
-                latest_run = (
-                    db.query(DqRunModel)
-                    .filter(DqRunModel.dataset_id == dataset_id)
-                    .order_by(DqRunModel.created_at.desc())
-                    .first()
-                )
-                if latest_run:
-                    execution_run_id = latest_run.id
-                else:
-                    # Lấy run bất kỳ mới nhất nếu không khớp dataset_id
-                    any_run = db.query(DqRunModel).order_by(DqRunModel.created_at.desc()).first()
-                    execution_run_id = any_run.id if any_run else uuid.uuid4().hex
-        except Exception:
-            execution_run_id = uuid.uuid4().hex
-
+    from src.models.database import DatasetModel, WorkflowRunModel
+    from src.services.rule_store import TestRunModel
+    from src.services.source_binding import resolve_source_binding, workflow_binding
+    binding = None
+    with Session(get_engine()) as db:
+        if execution_run_id:
+            execution = db.get(DqRunModel, execution_run_id) or db.get(TestRunModel, execution_run_id)
+        else:
+            execution = db.query(DqRunModel).filter_by(dataset_id=dataset_id, status="SUCCEEDED").order_by(DqRunModel.created_at.desc()).first()
+            execution_run_id = execution.id if execution else None
+        if not execution or execution.dataset_id != dataset_id:
+            raise ValueError("SOURCE_BINDING_INVALID: No completed execution for the selected dataset")
+        workflow = db.get(WorkflowRunModel, stream_id) if stream_id else None
+        if stream_id:
+            if not workflow or workflow.dataset_id != dataset_id or getattr(execution, "workflow_run_id", None) != stream_id:
+                raise ValueError("SOURCE_BINDING_INVALID: Execution does not belong to this workflow/dataset")
+            binding = workflow_binding(db, workflow)
+        dataset = db.get(DatasetModel, dataset_id)
+        if not binding and dataset and dataset.manifest_version == "versioned-v1":
+            binding = resolve_source_binding(db, dataset_id, profile_run_id=getattr(execution, "profile_run_id", None))
     anomaly_run_id = f"anom-{uuid.uuid4().hex[:12]}"
 
     anomaly_graph = build_anomaly_graph(investigation_mode=active_mode)
@@ -860,8 +903,12 @@ async def run_anomaly_graph(
         "execution_run_id": execution_run_id,
         "dataset_id": dataset_id,
         "detector_config_version": settings.detector_config_version,
+        "dataset_version_id": binding["dataset_version_id"] if binding else None,
+        "profile_run_id": binding["profile_run_id"] if binding else None,
         "metadata": {
             "investigation_mode": active_mode,
+            "workflow_run_id": stream_id if workflow else None,
+            "source_binding": binding,
         },
     }
 
@@ -928,7 +975,9 @@ async def main():
             cleaned_args.append(arg)
 
     mode = cleaned_args[0] if cleaned_args else "all"
-    dataset_id = cleaned_args[1] if len(cleaned_args) > 1 else DEFAULT_CLI_DATASET_ID
+    if len(cleaned_args) < 2:
+        raise ValueError("An explicit dataset ID is required; there is no implicit legacy dataset")
+    dataset_id = cleaned_args[1]
 
     if mode in ("1", "proposal"):
         print(f"🚀 Lựa chọn: CHẠY RUN 1 (Proposal Graph) cho dataset {dataset_id}")

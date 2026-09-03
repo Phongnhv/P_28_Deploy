@@ -13,7 +13,7 @@ from src.agents.nodes.templates import (
     ANOMALY_INVESTIGATION_USER_PROMPT,
 )
 from src.agents.state import AnomalyGraphState
-from src.agents.tools.anomaly_investigation_tools import ANOMALY_INVESTIGATION_TOOLS
+from src.agents.tools.anomaly_investigation_tools import scoped_investigation_tools
 from src.config import get_settings
 from src.models.rule_schemas import AnomalyInvestigationResponse
 from src.services.llm import get_llm, telemetry_callbacks
@@ -104,7 +104,7 @@ async def anomaly_investigation_node(state: AnomalyGraphState) -> dict:
 
         agent = create_deep_agent(
             model=model,
-            tools=ANOMALY_INVESTIGATION_TOOLS,
+            tools=scoped_investigation_tools(state),
             system_prompt=ANOMALY_INVESTIGATION_SYSTEM_PROMPT,
             response_format=AnomalyInvestigationResponse,
             middleware=middlewares,

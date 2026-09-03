@@ -687,7 +687,8 @@ export const mockApi: ApiClient = {
     access = existing ? access.map((item) => item.id === existing.id ? grant : item) : [...access, grant]; addAudit("DATASET_ACCESS_GRANTED", "dataset_access", grant.id, `Updated access for '${account.username}'.`); return grant;
   },
   async revokeDatasetAccess(id: string, username: string) { ensureAdmin(); const grant = access.find((item) => item.dataset_id === id && item.username === username.toLowerCase()); if (!grant) throw new Error("Dataset access grant not found."); access = access.filter((item) => item.id !== grant.id); addAudit("DATASET_ACCESS_REVOKED", "dataset_access", grant.id, `Revoked access for '${username}'.`); },
-  async createWorkflow(id: string, fresh = false) {
+  async createWorkflow(id: string, fresh = false, _datasetVersionId?: string, freshProfile = false, _requestKey?: string) {
+    if (freshProfile) throw new Error("Fresh source profiling requires the real local API, not the mock adapter.");
     await wait(180);
     const existing = fresh
       ? undefined
@@ -727,9 +728,10 @@ export const mockApi: ApiClient = {
     if (!workflow) throw new Error("Workflow run not found.");
     return structuredClone(workflow);
   },
-  async runWorkflowStep(id: string, step: WorkflowStepKey) {
+  async runWorkflowStep(id: string, step: WorkflowStepKey, expectedDatasetId?: string, _expectedVersionId?: string) {
     const workflow = workflowRuns.find((item) => item.id === id);
     if (!workflow) throw new Error("Workflow run not found.");
+    if (expectedDatasetId && workflow.dataset_id !== expectedDatasetId) throw new Error("Workflow dataset mismatch");
     if (workflow.current_step !== step) throw new Error(`Step ${step} is not ready. Complete ${workflow.current_step} first.`);
     const current = workflow.steps.find((item) => item.key === step);
     if (!current || !["READY", "FAILED", ...(step === "ANALYZE_REPORT" ? ["COMPLETED"] : [])].includes(current.status)) throw new Error("This workflow step is waiting for review.");

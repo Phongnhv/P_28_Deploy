@@ -263,7 +263,7 @@ class DatasetProfileSchema(BaseModel):
     dataset_id: str
     row_count: int
     completeness_score: float
-    validity_score: float
+    validity_score: float | None
     duplicate_rate: float
     columns: list[ColumnProfileSchema]
     cross_field_metrics: list[CrossFieldProfileSchema]
@@ -774,12 +774,11 @@ def list_datasets(
         datasets = [dataset for dataset in datasets if dataset.id in allowed_ids]
     response = []
     for d in datasets:
-        latest_version = (
-            db.query(DatasetVersionModel)
-            .filter_by(dataset_id=d.id, status="READY")
-            .order_by(DatasetVersionModel.version_number.desc())
-            .first()
-        )
+        from src.services.source_binding import dataset_source_version
+        try:
+            latest_version = dataset_source_version(db, d.id)
+        except SourceIntegrityError:
+            latest_version = None
         latest_profile = (
             db.query(ProfileRunSnapshotModel)
             .filter_by(dataset_version_id=latest_version.id, status="COMPLETED")
@@ -1026,11 +1025,16 @@ async def import_versioned_dataset(
         governance = db.query(DatasetGovernanceModel).filter_by(dataset_id=logical_id, workspace_id=workspace_id).first()
         if not governance:
             raise HTTPException(status_code=404, detail={"code": "DATASET_NOT_FOUND", "message": "Dataset not found in workspace"})
+        # Different bytes are a separate dataset. Keep existing source/history
+        # intact and never create another selectable source under the same ID.
+        logical_id = f"dataset-import-{uuid.uuid4().hex[:20]}"
+        existing_dataset = None
+        governance = None
     else:
         governance = None
 
-    version_number = (db.query(DatasetVersionModel.version_number).filter_by(workspace_id=workspace_id, dataset_id=logical_id).order_by(DatasetVersionModel.version_number.desc()).first() or (0,))[0] + 1
-    parent = db.query(DatasetVersionModel).filter_by(workspace_id=workspace_id, dataset_id=logical_id).order_by(DatasetVersionModel.version_number.desc()).first()
+    version_number = 1
+    parent = None
     version_id = f"dv-{uuid.uuid4().hex[:24]}"
     reservation_message = json.dumps({
         "kind": "VERSIONED_IMPORT_RESERVATION",
@@ -1245,8 +1249,6 @@ def start_graph1_run(
         ).first()
         if not selected_version:
             raise HTTPException(status_code=404, detail={"code": "DATASET_VERSION_NOT_FOUND", "message": "Dataset version not found"})
-        if not profile_run_id:
-            raise HTTPException(status_code=422, detail={"code": "PROFILE_RUN_REQUIRED", "message": "profile_run_id is required for a versioned Graph 1 run"})
     try:
         run = create_graph1_run(
             db, dataset_id, session.username, idempotency_key,
@@ -1759,6 +1761,8 @@ def start_ingestion(
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
     require_dataset_access(db, session, id, manage=True)
+    if dataset.manifest_version == "versioned-v1":
+        raise HTTPException(status_code=409, detail={"code": "VERSIONED_PROFILE_REQUIRED", "message": "Prepare a workflow with an explicit dataset version to create a fresh profile"})
 
     collision_job_id = verify_idempotency(db, idempotency_key)
     if collision_job_id:
@@ -1822,7 +1826,8 @@ def get_job_status(
 
 @router.get("/datasets/{id}/profile", response_model=DatasetProfileSchema)
 def get_dataset_profile(
-    id: str, session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])), db: Session = Depends(get_db)
+    id: str, session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])), db: Session = Depends(get_db),
+    dataset_version_id: str | None = Query(None), profile_run_id: str | None = Query(None),
 ):
     """
     GET /api/v1/datasets/{id}/profile - Returns completed profiling details. Returns 404 until complete.
@@ -1833,7 +1838,7 @@ def get_dataset_profile(
     require_dataset_access(db, session, id)
 
     profile = db.query(ProfileModel).filter(ProfileModel.dataset_id == id).first()
-    if profile and dataset.status == "PROFILE_READY":
+    if profile and dataset.status == "PROFILE_READY" and dataset.manifest_version != "versioned-v1" and not dataset_version_id and not profile_run_id:
         cols = db.query(ColumnProfileModel).filter(ColumnProfileModel.profile_dataset_id == id).all()
 
         columns_list = [
@@ -1872,15 +1877,15 @@ def get_dataset_profile(
     # ProfileModel rows. Adapt the aggregate snapshot to the existing
     # dashboard contract so the UI does not make a second, domain-specific
     # profiling request after a successful versioned import.
-    latest_version = (
-        db.query(DatasetVersionModel)
-        .filter_by(dataset_id=id, status="READY")
-        .order_by(DatasetVersionModel.version_number.desc())
-        .first()
-    )
+    from src.services.source_binding import dataset_source_version
+    try:
+        latest_version = dataset_source_version(db, id, dataset_version_id)
+    except SourceIntegrityError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     version_profile = (
         db.query(ProfileRunSnapshotModel)
-        .filter_by(dataset_version_id=latest_version.id, status="COMPLETED")
+        .filter_by(dataset_id=id, dataset_version_id=latest_version.id, status="COMPLETED")
+        .filter(ProfileRunSnapshotModel.id == profile_run_id if profile_run_id else True)
         .order_by(ProfileRunSnapshotModel.completed_at.desc())
         .first()
         if latest_version
@@ -1913,7 +1918,7 @@ def get_dataset_profile(
         dataset_id=id,
         row_count=version_profile.row_count,
         completeness_score=float(version_profile.completeness_score or metrics.get("completeness_score") or 0.0),
-        validity_score=float(version_profile.validity_score or metrics.get("validity_score") or 0.0),
+        validity_score=version_profile.validity_score if version_profile.validity_score is not None else metrics.get("validity_score"),
         duplicate_rate=float(version_profile.duplicate_rate or metrics.get("duplicate_rate") or 0.0),
         columns=columns_list,
         cross_field_metrics=[],
@@ -1926,6 +1931,9 @@ def get_dataset_profile(
 def create_workflow(
     id: str,
     fresh: bool = Query(False),
+    fresh_profile: bool = Query(False),
+    dataset_version_id: str | None = Query(None),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
@@ -1933,7 +1941,32 @@ def create_workflow(
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
     require_dataset_access(db, session, id, manage=True)
-    run = get_or_create_run(db, dataset, force_new=fresh)
+    request_run_id = None
+    if fresh_profile:
+        if not idempotency_key:
+            raise HTTPException(status_code=422, detail={"code": "SOURCE_BINDING_REQUIRED", "message": "Fresh profiling requires Idempotency-Key"})
+        from src.services.source_binding import dataset_source_version
+        try:
+            dataset_version_id = dataset_source_version(db, id, dataset_version_id).id
+        except SourceIntegrityError as exc:
+            raise HTTPException(status_code=409, detail={"code": "SOURCE_BINDING_INVALID", "message": str(exc)}) from exc
+        import hashlib
+        request_run_id = "workflow-" + hashlib.sha256(f"{session.id}:{id}:{idempotency_key}".encode()).hexdigest()[:32]
+    try:
+        run = get_or_create_run(db, dataset, force_new=fresh, dataset_version_id=dataset_version_id, fresh_profile=fresh_profile, request_run_id=request_run_id)
+    except IntegrityError:
+        db.rollback()
+        if not request_run_id:
+            raise
+        run = db.get(WorkflowRunModel, request_run_id)
+        if not run or run.dataset_id != id:
+            raise
+        from src.services.source_binding import workflow_binding
+        existing_binding = workflow_binding(db, run, require_profile=False)
+        if not existing_binding or existing_binding["dataset_version_id"] != dataset_version_id:
+            raise HTTPException(status_code=409, detail={"code": "IDEMPOTENCY_CONFLICT", "message": "Key belongs to another dataset version"})
+    except (SourceIntegrityError, WorkflowError) as exc:
+        raise HTTPException(status_code=409, detail={"code": "SOURCE_BINDING_INVALID", "message": str(exc)}) from exc
     db.commit()
     return serialize_run(run)
 
@@ -1995,6 +2028,8 @@ def run_workflow_step(
     workflow_run_id: str,
     step: str,
     background_tasks: BackgroundTasks,
+    dataset_id: str | None = Query(None),
+    dataset_version_id: str | None = Query(None),
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     session: SessionModel = Depends(require_role(["STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
@@ -2003,10 +2038,19 @@ def run_workflow_step(
     if not run:
         raise HTTPException(status_code=404, detail="Workflow run not found")
     require_dataset_access(db, session, run.dataset_id, manage=True)
-    collision = verify_idempotency(db, idempotency_key)
-    if collision:
-        return CreateJobResponse(job_id=collision, status="SUCCEEDED")
+    from src.services.source_binding import workflow_binding
+    try:
+        binding = workflow_binding(db, run, require_profile=step != "UPLOAD_PROFILE")
+        if dataset_id and dataset_id != run.dataset_id:
+            raise SourceIntegrityError("Requested dataset does not match the workflow")
+        if dataset_version_id and (not binding or binding["dataset_version_id"] != dataset_version_id):
+            raise SourceIntegrityError("Requested version does not match the workflow")
+    except SourceIntegrityError as exc:
+        raise HTTPException(status_code=409, detail={"code": "SOURCE_BINDING_INVALID", "message": str(exc)}) from exc
     workflow_job_type = (
+        "WORKFLOW_PROFILE"
+        if step == "UPLOAD_PROFILE"
+        else
         "UNDERSTAND_DATA"
         if step == "UNDERSTAND_DATA"
         else "WORKFLOW_PROPOSE_RULES"
@@ -2023,6 +2067,12 @@ def run_workflow_step(
         if step == "ANALYZE_REPORT"
         else "PROPOSE_RULES"
     )
+    collision = verify_idempotency(db, idempotency_key)
+    if collision:
+        existing = db.get(JobModel, collision)
+        if not existing or existing.linked_entity != run.id or existing.type != workflow_job_type:
+            raise HTTPException(status_code=409, detail={"code": "IDEMPOTENCY_CONFLICT", "message": "Key belongs to another workflow or step"})
+        return CreateJobResponse(job_id=collision, status=existing.status)
     active_stage_types = {
         "RUN_CHECKS": {"RUN_DQ", "WORKFLOW_RUN_CHECKS"},
         "ANALYZE_REPORT": {"ANALYSIS_GRAPH2_GRAPH3", "WORKFLOW_ANALYZE_REPORT"},
@@ -2074,6 +2124,7 @@ def run_workflow_step(
         attempt_count=1,
     )
     db.add(job)
+    queued_job_id, queued_workflow_id = job.id, run.id
     try:
         if step == "RUN_CHECKS":
             queue_check_run(db, run, job)
@@ -2085,18 +2136,18 @@ def run_workflow_step(
             job.linked_entity = run.id
             job.message = "Queued workflow quality checks"
             db.commit()
-            background_tasks.add_task(dispatch_persisted_job, job.id)
-            return CreateJobResponse(job_id=job.id, status="PENDING")
+            background_tasks.add_task(dispatch_persisted_job, queued_job_id)
+            return CreateJobResponse(job_id=queued_job_id, status="PENDING")
         if step == "ANALYZE_REPORT":
             if run.current_step != "ANALYZE_REPORT":
                 raise WorkflowError("Complete Graph 2 before starting Graph 3 analysis.")
             db.commit()
-            background_tasks.add_task(dispatch_persisted_job, job.id)
-            return CreateJobResponse(job_id=job.id, status="PENDING")
+            background_tasks.add_task(dispatch_persisted_job, queued_job_id)
+            return CreateJobResponse(job_id=queued_job_id, status="PENDING")
         if step == "PROPOSE_RULES":
             db.commit()
-            background_tasks.add_task(dispatch_persisted_job, job.id)
-            return CreateJobResponse(job_id=job.id, status="PENDING")
+            background_tasks.add_task(dispatch_persisted_job, queued_job_id)
+            return CreateJobResponse(job_id=queued_job_id, status="PENDING")
         steps = json.loads(run.steps_json or "[]")
         current = next((item for item in steps if item.get("key") == step), None)
         # WAITING_APPROVAL is a re-run, not a skip: the stage already produced an
@@ -2109,8 +2160,11 @@ def run_workflow_step(
         run.steps_json = json.dumps(steps, ensure_ascii=False)
         job.status, job.progress = "PENDING", 0.0
         db.commit()
-        background_tasks.add_task(run_workflow_stage_job, run.id, step, job.id)
-        return CreateJobResponse(job_id=job.id, status="PENDING")
+        if step == "UPLOAD_PROFILE":
+            background_tasks.add_task(dispatch_persisted_job, queued_job_id)
+        else:
+            background_tasks.add_task(run_workflow_stage_job, queued_workflow_id, step, queued_job_id)
+        return CreateJobResponse(job_id=queued_job_id, status="PENDING")
     except WorkflowError as exc:
         job.status, job.error, job.message = "FAILED", str(exc), "Workflow step failed"
         db.commit()
@@ -2355,12 +2409,8 @@ async def upload_dataset_data_dictionary(
     except DataDictionaryError as exc:
         raise HTTPException(status_code=422, detail={"code": "INVALID_DATA_DICTIONARY", "message": str(exc)}) from exc
 
-    latest_version = (
-        db.query(DatasetVersionModel)
-        .filter_by(dataset_id=id, status="READY")
-        .order_by(DatasetVersionModel.version_number.desc())
-        .first()
-    )
+    from src.services.source_binding import dataset_source_version
+    latest_version = dataset_source_version(db, id) if dataset.manifest_version == "versioned-v1" else None
     record = save_data_dictionary(
         db,
         dataset_id=id,
@@ -2470,10 +2520,11 @@ def query_dataset_rows(
     # Versioned uploads are served through the workspace authorization and
     # schema-driven source adapter. The legacy taxi projection below remains
     # available only for datasets without a canonical version artifact.
-    version_query = db.query(DatasetVersionModel).filter_by(dataset_id=id, status="READY")
-    if dataset_version_id:
-        version_query = version_query.filter(DatasetVersionModel.id == dataset_version_id)
-    latest_version = version_query.order_by(DatasetVersionModel.version_number.desc()).first()
+    from src.services.source_binding import dataset_source_version
+    try:
+        latest_version = dataset_source_version(db, id, dataset_version_id) if dataset.manifest_version == "versioned-v1" else None
+    except SourceIntegrityError as exc:
+        raise HTTPException(status_code=409, detail={"code": "SOURCE_BINDING_INVALID", "message": str(exc)}) from exc
     governance = db.query(DatasetGovernanceModel).filter_by(dataset_id=id).first() if latest_version else None
     account = db.query(UserAccountModel).filter_by(username=session.username).first() if latest_version else None
     if latest_version and governance and account:
@@ -2499,6 +2550,8 @@ def query_dataset_rows(
                 raise HTTPException(status_code=404, detail="Dataset not found") from exc
             if isinstance(exc, AccessDeniedError):
                 raise HTTPException(status_code=403, detail="Rows access is not granted") from exc
+            if isinstance(exc, SourceIntegrityError):
+                raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {
             "dataset_id": id,
@@ -2689,11 +2742,15 @@ def query_dataset_rows(
 @router.get("/datasets/{id}/dq-runs/latest", response_model=DqRunSchema | None)
 def get_latest_dq_run(
     id: str,
+    workflow_run_id: str | None = Query(None),
     session: SessionModel = Depends(require_role(["USER", "STEWARD", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
     require_dataset_access(db, session, id)
-    run = db.query(DqRunModel).filter(DqRunModel.dataset_id == id).order_by(DqRunModel.created_at.desc()).first()
+    query = db.query(DqRunModel).filter(DqRunModel.dataset_id == id)
+    if workflow_run_id:
+        query = query.filter(DqRunModel.workflow_run_id == workflow_run_id, DqRunModel.stale.is_(False))
+    run = query.order_by(DqRunModel.created_at.desc()).first()
     if not run:
         return None
     return DqRunSchema(

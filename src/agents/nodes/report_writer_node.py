@@ -115,6 +115,7 @@ def _build_data_context(
         f"Execution Run ID: {execution_run_id}",
         f"Anomaly Run ID: {anomaly_run_id}",
         f"Dataset: {dataset_id}",
+        f"Số dòng của dataset trong profile đã gắn với execution: {dq_run.get('dataset_row_count', 'Chưa có') if dq_run else 'Chưa có'}",
         f"Trạng thái thực thi: {dq_run['status'] if dq_run else 'KHÔNG TÌM THẤY'}",
         "",
         "--- KẾT QUẢ KIỂM TRA RULES (Graph 2) ---",
@@ -122,7 +123,8 @@ def _build_data_context(
         f"Đạt (PASS): {passed}",
         f"Thất bại (FAIL): {failed_count}",
         f"Lỗi kỹ thuật (ERROR): {errors}",
-        f"Tổng số hàng kiểm tra: {total_checked:,}",
+        f"Tổng số lượt kiểm tra dòng qua các rules (không phải số dòng duy nhất): {total_checked:,}",
+        "Mỗi dòng có thể được kiểm tra bởi nhiều rules. Không suy diễn số dòng dataset từ tổng lượt kiểm tra.",
     ]
 
     failed_results = [r for r in dq_results if r["status"] in ("FAIL", "FAILED", "ERROR")]
@@ -218,14 +220,15 @@ def _build_data_context(
 def _strip_code_fences(text: Any) -> str:
     """Loại bỏ code fences (```markdown ... ```) nếu LLM bọc output."""
     if isinstance(text, list):
-        text = "".join(
-            part.get("text", str(part))
-            if isinstance(part, dict)
-            else getattr(part, "text", str(part))
-            if hasattr(part, "text")
-            else str(part)
-            for part in text
-        )
+        parts = []
+        for part in text:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict) and part.get("type") in {"text", "output_text"}:
+                parts.append(part.get("text", ""))
+            elif getattr(part, "type", None) in {"text", "output_text"}:
+                parts.append(getattr(part, "text", ""))
+        text = "".join(part for part in parts if isinstance(part, str))
     text_str = str(text or "").strip()
     # Match ```markdown, ```md, or ``` at start
     pattern = r"^```(?:markdown|md)?\s*\n(.*?)\n```\s*$"

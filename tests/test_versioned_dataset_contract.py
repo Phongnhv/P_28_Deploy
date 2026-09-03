@@ -189,7 +189,7 @@ def test_cross_field_parse_failure_is_a_degraded_violation_not_runner_error():
 
 
 @pytest.mark.asyncio
-async def test_versioned_import_creates_two_immutable_versions(client, monkeypatch, tmp_path):
+async def test_changed_upload_creates_separate_datasets_with_one_source_each(client, monkeypatch, tmp_path):
     from unittest.mock import AsyncMock
 
     import src.services.versioned_dataset as versioned_dataset
@@ -223,13 +223,21 @@ async def test_versioned_import_creates_two_immutable_versions(client, monkeypat
     version2 = second.json()["version"]
     assert version1["id"] != version2["id"]
     assert version1["version_number"] == 1
-    assert version2["version_number"] == 2
+    assert version2["version_number"] == 1
+    second_id = second.json()["dataset"]["id"]
+    assert second_id != "orders"
     profile = await client.get("/api/v1/datasets/orders/profile")
     assert profile.status_code == 200, profile.text
-    assert {column["name"] for column in profile.json()["columns"]} >= {"order_id", "amount", "status"}
+    assert {column["name"] for column in profile.json()["columns"]} == {"order_id", "amount"}
+    assert profile.json()["row_count"] == 2
+    second_profile = await client.get(f"/api/v1/datasets/{second_id}/profile")
+    assert second_profile.status_code == 200
+    assert second_profile.json()["row_count"] == 1
+    assert {column["name"] for column in second_profile.json()["columns"]} == {"order_id", "amount", "status"}
     with Session(get_engine()) as db:
         versions = db.query(DatasetVersionModel).filter_by(dataset_id="orders").order_by(DatasetVersionModel.version_number).all()
-        assert [version.status for version in versions] == ["READY", "READY"]
+        assert [version.status for version in versions] == ["READY"]
+        assert db.query(DatasetVersionModel).filter_by(dataset_id=second_id).count() == 1
         assert db.get(ProfileRunSnapshotModel, f"profile-{version1['id']}").status == "COMPLETED"
         assert db.get(ProfileRunSnapshotModel, f"profile-{version2['id']}").status == "COMPLETED"
 
@@ -237,9 +245,8 @@ async def test_versioned_import_creates_two_immutable_versions(client, monkeypat
     monkeypatch.setattr(get_settings(), "openai_api_key", "test-key")
     monkeypatch.setattr("src.services.graph1_workflow.execute_graph1_run", AsyncMock())
     graph1 = await client.post(
-        "/api/v1/datasets/orders/graph1-runs",
+        f"/api/v1/datasets/{second_id}/graph1-runs",
         headers={"X-CSRF-Token": csrf, "Idempotency-Key": "orders-graph1-v2"},
-        params={"dataset_version_id": version2["id"], "profile_run_id": f"profile-{version2['id']}"},
     )
     assert graph1.status_code == 202, graph1.text
     assert graph1.json()["dataset_version_id"] == version2["id"]

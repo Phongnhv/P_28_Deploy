@@ -332,6 +332,10 @@ async def test_execution_graph_execution():
 @pytest.mark.asyncio
 async def test_runners(monkeypatch, tmp_path):
     """Kiểm tra 2 hàm pipeline runner tiện ích: run_proposal_graph & run_execution_graph."""
+    # The convenience runner now requires an immutable source binding. Source
+    # isolation is exercised separately; this test isolates graph persistence.
+    monkeypatch.setattr("src.services.source_binding.resolve_source_binding", lambda db, dataset_id, **kw: {"dataset_id": dataset_id, "dataset_version_id": "test-v1", "profile_run_id": "test-profile"})
+    monkeypatch.setattr("src.services.rule_proposer_workflow._semantic_payload", lambda *args, **kw: {"rows": 4, "columns": [{"name": "status", "data_type": "string", "null_rate": 0, "distinct_count": 2}]})
     mock_rules = [
         {
             "rule_id": "demo_graph_table.status.ACCEPTED_VALUES",

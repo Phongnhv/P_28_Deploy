@@ -23,6 +23,7 @@ import { Graph2Analytics } from "./components/wizard/WizardAnalytics";
 import { DataExplorerDialog } from "./components/wizard/DataExplorerDialog";
 import { Step1DataPreparation } from "./components/wizard/Step1DataPreparation";
 import { AnomalyStatisticsPanel } from "./components/wizard/AnomalyStatisticsPanel";
+import { graph3Decision } from "./components/wizard/graph3Outcome";
 import { DetailOverlay } from "./components/wizard/DetailOverlay";
 import { NotificationBell, type AppNotification } from "./components/NotificationBell";
 import { DatasetCatalogView } from "./components/wizard/DatasetCatalogView";
@@ -634,7 +635,7 @@ function SemanticContractPanel({
                 </div>
                 <div>
                   <span>{t("datasets.validityScore")}</span>
-                  <strong>{profile ? `${profile.validity_score.toFixed(1)}%` : "—"}</strong>
+                  <strong>{profile?.validity_score != null ? `${profile.validity_score.toFixed(1)}%` : "—"}</strong>
                 </div>
                 <div>
                   <span>{t("datasets.artifactStatus")}</span>
@@ -976,7 +977,7 @@ function DeterministicExecutionPanel({
               {activeRun
                 ? (isVi
                     ? `Lượt chạy gần nhất (${activeRun.id}) tạo lúc ${formatTime(activeRun.created_at)}: Đã kiểm tra ${activeRun.total_checked.toLocaleString()} bản ghi, phát hiện ${activeRun.total_failed.toLocaleString()} lỗi vi phạm.`
-                    : `Latest run (${activeRun.id}) created at ${formatTime(activeRun.created_at)}: Checked ${activeRun.total_checked.toLocaleString()} rows, detected ${activeRun.total_failed.toLocaleString()} violations.`)
+                    : `Latest run (${activeRun.id}) created at ${formatTime(activeRun.created_at)}: Performed ${activeRun.total_checked.toLocaleString()} row checks, detected ${activeRun.total_failed.toLocaleString()} violations.`)
                 : (isVi
                     ? "Chưa thực thi lượt kiểm định nào cho bộ dữ liệu này. Nhấn 'Chạy luật đã duyệt' để bắt đầu."
                     : "No execution run for this dataset yet. Click 'Run approved rules' to start.")}
@@ -989,11 +990,11 @@ function DeterministicExecutionPanel({
               <strong>{approvedCount}</strong>
             </div>
             <div>
-              <span>{isVi ? "Số dòng kiểm tra" : "Checked Rows"}</span>
+              <span>{isVi ? "Lượt kiểm tra dòng" : "Row Checks"}</span>
               <strong>{activeRun ? activeRun.total_checked.toLocaleString() : "—"}</strong>
             </div>
             <div>
-              <span>{isVi ? "Số dòng vi phạm" : "Failed Rows"}</span>
+              <span>{isVi ? "Lượt vi phạm" : "Failed Checks"}</span>
               <strong style={{ color: activeRun && activeRun.total_failed > 0 ? "var(--danger, #dc2626)" : "var(--success, #16a34a)" }}>
                 {activeRun ? activeRun.total_failed.toLocaleString() : "—"}
               </strong>
@@ -1284,7 +1285,7 @@ function WorkflowPage({
                       <strong>{item.name}</strong>
                       <small>
                         {item.row_count.toLocaleString()} rows ·{" "}
-                        {item.manifest_version}
+                        {item.source_label}
                       </small>
                     </span>
                     <span>{item.status.replaceAll("_", " ")}</span>
@@ -1419,16 +1420,12 @@ function WorkflowPage({
             <div>
               <span>Validity</span>
               <strong>
-                {profile ? `${profile.validity_score.toFixed(1)}%` : "—"}
+                {profile?.validity_score != null ? `${profile.validity_score.toFixed(1)}%` : "—"}
               </strong>
             </div>
             <div>
               <span>Source</span>
               <strong>{dataset.source_label}</strong>
-            </div>
-            <div>
-              <span>Manifest</span>
-              <strong>{dataset.manifest_version}</strong>
             </div>
           </div>
           <div className="understanding-section">
@@ -1990,6 +1987,7 @@ function App() {
   // running jobs use it to avoid writing results for an older selection into
   // the newly selected dataset's panels.
   const selectionGeneration = useRef(0);
+  const workflowActionLock = useRef(false);
   const [profile, setProfile] = useState<DatasetProfile | null>(null);
   const [datasetProfiles, setDatasetProfiles] = useState<
     Record<string, DatasetProfile>
@@ -2104,20 +2102,22 @@ function App() {
       if (nextDataset)
         sessionStorage.setItem("ridepulse.dataset", nextDataset.id);
       if (nextDataset?.status === "PROFILE_READY") {
-        const [nextConfigurations, latestRun, nextTrends, latestWorkflow] =
+        const [nextConfigurations, nextTrends, latestWorkflow] =
           await Promise.all([
             api.listRuleConfigurations(nextDataset.id),
-            api.getLatestDqRun(nextDataset.id),
             api.getQualityTrends(nextDataset.id),
             workflowApi.getLatestWorkflow(nextDataset.id),
           ]);
+        const latestRun = latestWorkflow ? await api.getLatestDqRun(nextDataset.id, latestWorkflow.id) : null;
         const nextProposals = latestWorkflow
           ? proposalsForWorkflow(
               await api.listProposals(nextDataset.id, latestWorkflow.id),
               latestWorkflow.id,
             )
           : [];
-        const nextProfile = nextProfiles[nextDataset.id] ?? null;
+        const nextProfile = latestWorkflow?.source_binding?.profile_run_id
+          ? await api.getProfile(nextDataset.id, latestWorkflow.source_binding.dataset_version_id, latestWorkflow.source_binding.profile_run_id)
+          : nextProfiles[nextDataset.id] ?? null;
         setProfile(nextProfile);
         setProposals(nextProposals);
         setRuleConfigurations(nextConfigurations);
@@ -2140,6 +2140,9 @@ function App() {
           ]);
           setDqResults(latestResults);
           setDqAnomalies(latestAnomalies);
+        } else {
+          setDqResults([]);
+          setDqAnomalies([]);
         }
       } else {
         setProfile(null);
@@ -2254,7 +2257,7 @@ function App() {
     const artifacts = await workflowApi.listWorkflowArtifacts(runId);
     const reportArtifact = [...artifacts]
       .reverse()
-      .find((artifact) => artifact.type === "ANOMALY_REPORT");
+      .find((artifact) => artifact.type === "ANOMALY_REPORT" && artifact.status !== "STALE" && !artifact.temporary);
     const payload = reportArtifact?.payload;
     const markdown = payload && typeof payload === "object" && "report_markdown" in payload
       ? String((payload as Record<string, unknown>).report_markdown || "")
@@ -2323,6 +2326,7 @@ function App() {
   }, [canAdmin, dataset]);
 
   function selectDataset(datasetId: string) {
+    if (workflowActionLock.current || activeJob) return;
     const chosen = datasets.find((item) => item.id === datasetId);
     if (!chosen || datasetId === selectedDatasetId) return;
 
@@ -2346,8 +2350,8 @@ function App() {
     setRuleQueueOpen(false);
     setToast(
       language === "vi"
-        ? `Đã chọn "${chosen?.name ?? datasetId}". Chọn Profile dataset để tiếp tục.`
-        : `Selected "${chosen?.name ?? datasetId}". Choose Profile dataset to continue.`,
+        ? `Đã chọn "${chosen?.name ?? datasetId}". Bấm Tiếp tục để kiểm tra nguồn và tạo profile mới.`
+        : `Selected "${chosen?.name ?? datasetId}". Continue to verify the source and build a fresh profile.`,
     );
   }
 
@@ -2506,6 +2510,10 @@ function App() {
 
   async function startAnalysis() {
     if (!dataset) return;
+    if (dataset.manifest_version === "versioned-v1") {
+      await handleWizardNext(true);
+      return;
+    }
     const datasetId = dataset.id;
     const generationAtStart = selectionGeneration.current;
     setError("");
@@ -2820,8 +2828,16 @@ function App() {
     setWorkflowArtifacts(nextArtifacts);
   }
 
-  async function startWorkflowStep(step: WorkflowStepKey, fresh = false) {
-    if (!dataset || !canOperate || workflowActionBusy || activeJob) return;
+  async function startWorkflowStep(step: WorkflowStepKey, fresh = false, requestedDatasetId = selectedDatasetId) {
+    const dataset = datasets.find((item) => item.id === requestedDatasetId);
+    if (!dataset || !canOperate || workflowActionLock.current || workflowActionBusy || activeJob) return;
+    if (step === "UNDERSTAND_DATA" && dataset.manifest_version === "versioned-v1" && (!workflow?.source_binding?.profile_run_id || workflow.dataset_id !== dataset.id)) {
+      setError(language === "vi" ? "Bấm Tiếp tục ở Bước 1 để kiểm tra nguồn và tạo profile mới." : "Continue from Step 1 to verify the source and build a fresh profile.");
+      setWizardStep(1);
+      return;
+    }
+    workflowActionLock.current = true;
+    const generation = selectionGeneration.current;
     setError("");
     setRetryAction(null);
     setWorkflowActionBusy(true);
@@ -2847,9 +2863,10 @@ function App() {
         });
         return;
       }
-      let currentWorkflow = workflow;
+      let currentWorkflow = workflow?.dataset_id === dataset.id ? workflow : null;
       if (!currentWorkflow) {
         currentWorkflow = await workflowApi.createWorkflow(dataset.id, fresh);
+        if (selectionGeneration.current !== generation) return;
         setWorkflow(currentWorkflow);
         setWorkflowArtifacts(
           await workflowApi.listWorkflowArtifacts(currentWorkflow.id),
@@ -2864,13 +2881,16 @@ function App() {
       const queuedJob = await workflowApi.runWorkflowStep(
         currentWorkflow.id,
         step,
+        dataset.id,
+        currentWorkflow.source_binding?.dataset_version_id,
       );
       await pollJob(
         queuedJob,
         async () => {
+          if (selectionGeneration.current !== generation) return;
           await refreshWorkflow(currentWorkflow!.id);
           await refreshNodeRuns();
-          setProfile(await api.getProfile(dataset.id));
+          setProfile(await api.getProfile(dataset.id, currentWorkflow!.source_binding?.dataset_version_id, currentWorkflow!.source_binding?.profile_run_id || undefined));
           setProposals(
             proposalsForWorkflow(
               await api.listProposals(dataset.id, currentWorkflow!.id),
@@ -2878,7 +2898,7 @@ function App() {
             ),
           );
           if (step === "RUN_CHECKS" || step === "ANALYZE_REPORT") {
-            const latestRun = await api.getLatestDqRun(dataset.id);
+            const latestRun = await api.getLatestDqRun(dataset.id, currentWorkflow!.id);
             setActiveRun(latestRun);
             if (latestRun) {
               const [nextResults, nextAnomalies] = await Promise.all([
@@ -2905,6 +2925,7 @@ function App() {
         ),
       );
     } finally {
+      workflowActionLock.current = false;
       setWorkflowActionBusy(false);
     }
   }
@@ -3004,7 +3025,39 @@ function App() {
     }
   }
 
-  async function handleWizardNext() {
+  async function handleWizardNext(prepareOnly = false) {
+    if ((wizardStep === 1 || prepareOnly) && dataset?.manifest_version === "versioned-v1") {
+      if (workflowActionLock.current || activeJob) return;
+      const chosen = dataset;
+      const generation = selectionGeneration.current;
+      workflowActionLock.current = true;
+      setWorkflowActionBusy(true);
+      setError("");
+      try {
+        const current = workflow?.dataset_id === chosen.id && workflow.current_step === "UPLOAD_PROFILE"
+          ? workflow
+          : await workflowApi.createWorkflow(chosen.id, true, undefined, true, crypto.randomUUID());
+        if (generation !== selectionGeneration.current) return;
+        setWorkflow(current);
+        setWorkflowArtifacts([]);
+        const job = await workflowApi.runWorkflowStep(current.id, "UPLOAD_PROFILE", chosen.id, current.source_binding?.dataset_version_id);
+        await pollJob(job, async () => {
+          const ready = await workflowApi.getWorkflow(current.id);
+          const freshProfile = await api.getProfile(chosen.id, ready.source_binding?.dataset_version_id, ready.source_binding?.profile_run_id || undefined);
+          if (generation !== selectionGeneration.current) return;
+          if (ready.dataset_id !== chosen.id || ready.source_binding?.dataset_version_id !== current.source_binding?.dataset_version_id || !ready.source_binding?.profile_run_id) throw new Error("Prepared source binding mismatch");
+          setWorkflow(ready);
+          setProfile(freshProfile);
+          setWizardStep(2);
+        }, workflowApi);
+      } catch (err) {
+        if (generation === selectionGeneration.current) setError(getErrorMessage(err, "Không thể xác thực nguồn hoặc tạo profile mới.", language));
+      } finally {
+        workflowActionLock.current = false;
+        setWorkflowActionBusy(false);
+      }
+      return;
+    }
     if (
       wizardStep === 2 &&
       workflow?.current_step === "UNDERSTAND_DATA" &&
@@ -3413,7 +3466,7 @@ function App() {
                       busy={workflowActionBusy || Boolean(activeJob)}
                       onStartUnderstand={(id) => {
                         if (id !== dataset?.id) void selectDataset(id);
-                        void startWorkflowStep("UNDERSTAND_DATA", true);
+                        void startWorkflowStep("UNDERSTAND_DATA", true, id);
                       }}
                       onConfirmContract={(artifact) => void confirmSemanticContract(artifact)}
                       language={language}
@@ -3576,11 +3629,13 @@ function App() {
                     {activeRun && workflow && workflowArtifacts.some((artifact) => artifact.type === "ANOMALY_REPORT") ? (
                       <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
                         <StewardReportPanel
+                          key={[...workflowArtifacts].reverse().find((artifact) => artifact.type === "ANOMALY_REPORT" && artifact.status !== "STALE")?.id}
                           runId={workflow.id}
                           language={language}
                           loadReport={loadStewardReport}
                         />
                         <AnomalyStatisticsPanel
+                          decision={graph3Decision(workflowArtifacts, activeRun.id)}
                           anomalies={dqAnomalies}
                           results={dqResults}
                           language={language}
@@ -3668,7 +3723,7 @@ function App() {
                   disabled={
                     wizardStep === 6 ||
                     (!dataset && wizardStep === 1) ||
-                    (wizardStep === 1 && !profile) ||
+                    (wizardStep === 1 && !profile && dataset?.manifest_version !== "versioned-v1") ||
                     (wizardStep === 2 && !contractConfirmed) ||
                     (wizardStep === 3 &&
                       workflow?.current_step === "REVIEW_RULES" &&
@@ -3683,7 +3738,7 @@ function App() {
                   title={
                     !dataset && wizardStep === 1
                       ? (t("wizard.selectDatasetTooltip") || "Vui lòng chọn hoặc tải lên một bộ dữ liệu ở Bước 1")
-                      : wizardStep === 1 && !profile
+                      : wizardStep === 1 && !profile && dataset?.manifest_version !== "versioned-v1"
                         ? (language === "vi" ? "Hãy tạo profile cho tập dữ liệu trước" : "Build the dataset profile first")
                         : wizardStep === 2 && !contractConfirmed
                           ? (language === "vi" ? "Vui lòng bấm 'Xác nhận hợp đồng' trước khi tiếp tục" : "Please confirm the semantic contract before continuing")
@@ -3691,7 +3746,7 @@ function App() {
                   }
                   onClick={() => void handleWizardNext()}
                 >
-                  {t("wizard.next")}
+                  {wizardStep === 1 && workflowActionBusy ? (language === "vi" ? "Đang kiểm tra nguồn / profile…" : "Preparing source / profile…") : t("wizard.next")}
                 </button>
               </div>
             </>
@@ -3814,7 +3869,7 @@ function OverviewPage({
     const itemProfile =
       datasetProfiles[item.id] ?? (item.id === dataset?.id ? profile : null);
     const score = itemProfile
-      ? (itemProfile.completeness_score + itemProfile.validity_score) / 2
+      ? (itemProfile.validity_score == null ? itemProfile.completeness_score : (itemProfile.completeness_score + itemProfile.validity_score) / 2)
       : null;
     return { dataset: item, profile: itemProfile, score };
   });
@@ -3930,9 +3985,9 @@ function OverviewPage({
         />
         <StatCard
           label={vi ? "Độ hợp lệ" : "Validity"}
-          value={selectedProfile ? `${selectedProfile.validity_score.toFixed(1)}%` : "—"}
-          detail={selectedProfile ? (vi ? "Giá trị khớp với kiểu dữ liệu" : "Values matching their declared type") : (vi ? "Chờ dữ liệu profile" : "Awaiting profile data")}
-          tone={selectedProfile && selectedProfile.validity_score < 95 ? "amber" : "green"}
+          value={selectedProfile?.validity_score != null ? `${selectedProfile.validity_score.toFixed(1)}%` : "—"}
+          detail={selectedProfile?.validity_score != null ? (vi ? "Giá trị khớp với kiểu dữ liệu" : "Values matching their declared type") : (vi ? "Chờ dữ liệu profile" : "Awaiting profile data")}
+          tone={selectedProfile?.validity_score != null && selectedProfile.validity_score < 95 ? "amber" : "green"}
         />
         <StatCard
           label={vi ? "Tỷ lệ trùng lặp" : "Duplicate rate"}
@@ -4166,7 +4221,7 @@ function OverviewQualityBars({
                 <i style={{ width: `${row.profile?.validity_score ?? 0}%` }} />
               </div>
               <strong>
-                {row.profile
+                {row.profile?.validity_score != null
                   ? `${row.profile.validity_score.toFixed(1)}%`
                   : "—"}
               </strong>

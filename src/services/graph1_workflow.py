@@ -126,20 +126,22 @@ def _versioned_profile(
     if not isinstance(schema, list) or not schema:
         raise ValueError("The selected profile snapshot has no immutable schema evidence.")
     raw_columns: dict[str, Any] = {}
+    metric_columns = {item["name"]: item for item in metrics.get("columns", []) if isinstance(item, dict) and item.get("name")}
     for item in schema:
         if not isinstance(item, dict) or not item.get("name"):
             continue
         name = str(item["name"])
+        item = {**item, **metric_columns.get(name, {})}
         raw_columns[name] = {
             "type": item.get("logical_type") or item.get("data_type") or "string",
             "null_count": item.get("null_count", 0),
-            "null_pct": float(item.get("null_rate", 0.0)) * 100,
+            "null_pct": float(item.get("null_rate", 0.0)),
             "distinct_in_sample": item.get("distinct_count", 0),
             "full_distinct_count": item.get("distinct_count", 0),
             "is_unique_full_table": item.get("is_unique_full_table"),
             "min": item.get("min"),
             "max": item.get("max"),
-            "negative_pct": float(item.get("negative_rate", 0.0) or 0.0) * 100,
+            "negative_pct": float(item.get("negative_rate", 0.0) or 0.0),
             "percentiles": item.get("quantiles", {}),
             "sample_values": [],
             "is_categorical": item.get("logical_type") in {"string", "boolean"},
@@ -182,7 +184,15 @@ def create_graph1_run(
 ) -> Graph1RunModel:
     existing = db.query(Graph1RunModel).filter(Graph1RunModel.idempotency_key == idempotency_key).first()
     if existing:
+        if existing.dataset_id != dataset_id:
+            raise ValueError("This request belongs to another dataset.")
         return existing
+    dataset = db.get(DatasetModel, dataset_id)
+    binding = None
+    if dataset and dataset.manifest_version == "versioned-v1":
+        from src.services.source_binding import resolve_source_binding
+        binding = resolve_source_binding(db, dataset_id, dataset_version_id=dataset_version_id, profile_run_id=profile_run_id)
+        dataset_version_id, profile_run_id = binding["dataset_version_id"], binding["profile_run_id"]
     if dataset_version_id:
         if not profile_run_id:
             raise ValueError("profile_run_id is required when dataset_version_id is specified.")
@@ -214,6 +224,7 @@ def create_graph1_run(
             "source_checksum": (db.get(DatasetVersionModel, dataset_version_id).checksum if dataset_version_id else None),
             **({"normalized_data_dictionary": supplied_dictionary, "data_dictionary_source": "supplied"} if supplied_dictionary else {}),
             "metadata": {
+                "source_binding": binding,
                 "uploaded_dataset_profile": profile,
                 "workflow": "graph1-studio",
                 "allowed_columns": list(next(iter(profile.values())).get("columns", {}).keys()),

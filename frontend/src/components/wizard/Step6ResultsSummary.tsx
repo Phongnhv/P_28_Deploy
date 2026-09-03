@@ -27,6 +27,7 @@ import type {
 } from "../../types";
 import { formatDuration } from "../graph/NodeCard";
 import { latestRunsByGraph } from "../graph/graphRunUtils";
+import { graph3Decision } from "./graph3Outcome";
 
 export interface Step6ResultsSummaryProps {
   dataset?: Dataset;
@@ -72,6 +73,8 @@ export const Step6ResultsSummary: React.FC<Step6ResultsSummaryProps> = ({
   onOpenObservatory,
 }) => {
   const isVi = language === "vi";
+  const decision = graph3Decision(workflowArtifacts, activeRun?.id);
+  const graph3NeedsReview = decision !== null && decision !== "NORMAL";
 
   // -------------------------------------------------------------------------
   // Quality Score Calculation
@@ -121,8 +124,8 @@ export const Step6ResultsSummary: React.FC<Step6ResultsSummaryProps> = ({
         tone: "good",
         color: "#10b981",
         description: isVi
-          ? "Dữ liệu đạt mức độ toàn vẹn và độ tin cậy rất cao, sẵn sàng phục vụ báo cáo và mô hình ML."
-          : "Data exhibits very high integrity and reliability, production-ready for reporting and ML.",
+          ? "Điểm cao trên bộ luật đã chạy. Xem các vi phạm và kết luận Graph 3 trước khi sử dụng dữ liệu."
+          : "High score on the executed rules. Review violations and the Graph 3 decision before using the data.",
       };
     }
     if (qualityScore >= 75) {
@@ -132,8 +135,8 @@ export const Step6ResultsSummary: React.FC<Step6ResultsSummaryProps> = ({
         tone: "good",
         color: "#10b981",
         description: isVi
-          ? "Dữ liệu đáp ứng phần lớn các tiêu chuẩn, chỉ có một số vi phạm nhỏ cần lưu ý."
-          : "Data meets most quality benchmarks with minor non-critical violations.",
+          ? "Phần lớn lượt kiểm tra đạt. Điểm tổng hợp không xác định mức độ nghiêm trọng của từng vi phạm."
+          : "Most checks passed. The aggregate score does not determine the severity of individual violations.",
       };
     }
     if (qualityScore >= 50) {
@@ -288,30 +291,29 @@ export const Step6ResultsSummary: React.FC<Step6ResultsSummaryProps> = ({
               </div>
 
               <div className="results-kpi-box">
-                <span className="eyebrow">{isVi ? "BẢN GHI ĐÃ QUÉT" : "ROWS AUDITED"}</span>
+                <span className="eyebrow">{isVi ? "LƯỢT KIỂM TRA DÒNG" : "ROW CHECKS"}</span>
                 <div className="results-kpi-val">
                   <strong>{totalRowsChecked > 0 ? totalRowsChecked.toLocaleString() : rowCount.toLocaleString()}</strong>
-                  <span className="results-kpi-sub">{isVi ? "dòng" : "rows"}</span>
+                  <span className="results-kpi-sub">{isVi ? "lượt" : "checks"}</span>
                 </div>
                 <small className="muted">
                   {totalRowsFailed > 0
-                    ? isVi ? `${totalRowsFailed.toLocaleString()} dòng vi phạm quy tắc` : `${totalRowsFailed.toLocaleString()} invalid rows`
-                    : isVi ? "0 bản ghi vi phạm" : "0 invalid rows"}
+                    ? isVi ? `${totalRowsFailed.toLocaleString()} lượt vi phạm quy tắc` : `${totalRowsFailed.toLocaleString()} failed checks`
+                    : isVi ? "0 lượt vi phạm" : "0 failed checks"}
                 </small>
               </div>
 
               <div className="results-kpi-box">
-                <span className="eyebrow">{isVi ? "BẤT THƯỜNG PHÁT HIỆN" : "ANOMALIES FLAGGED"}</span>
+                <span className="eyebrow">{isVi ? "KẾT LUẬN GRAPH 3" : "GRAPH 3 DECISION"}</span>
                 <div className="results-kpi-val">
-                  <strong style={{ color: dqAnomalies.length > 0 ? "#f59e0b" : "#10b981" }}>
-                    {dqAnomalies.length}
+                  <strong style={{ color: graph3NeedsReview ? "#f59e0b" : "var(--text)", fontSize: "20px" }}>
+                    {decision ?? "—"}
                   </strong>
-                  <span className="results-kpi-sub">{isVi ? "tín hiệu" : "signals"}</span>
                 </div>
                 <small className="muted">
-                  {dqAnomalies.length > 0
-                    ? isVi ? "Đã điều tra nguyên nhân gốc ở Graph 3" : "Investigated via Graph 3"
-                    : isVi ? "Không phát hiện đột biến bất thường" : "No anomaly spikes detected"}
+                  {decision
+                    ? isVi ? "Theo báo cáo của lượt thực thi này" : "From this execution's report"
+                    : isVi ? "Chưa có báo cáo cho lượt thực thi này" : "No report for this execution yet"}
                 </small>
               </div>
 
@@ -395,8 +397,8 @@ export const Step6ResultsSummary: React.FC<Step6ResultsSummaryProps> = ({
               </div>
               <p className="results-stage-desc muted">
                 {isVi
-                  ? `Đã sinh ${proposals.length} ứng viên quy tắc, cấu hình ngưỡng kiểm tra và phê duyệt ${approvedRules.length} quy tắc.`
-                  : `Generated ${proposals.length} candidate rules, calibrated thresholds, and approved ${approvedRules.length} rules.`}
+                  ? `${proposals.length} quy tắc được chuẩn bị; ${approvedRules.length} quy tắc đã duyệt.`
+                  : `${proposals.length} rules prepared; ${approvedRules.length} rules approved.`}
               </p>
               <div className="results-stage-footer">
                 <button type="button" className="button ghost small" onClick={() => onNavigateToStep(3)}>
@@ -421,8 +423,8 @@ export const Step6ResultsSummary: React.FC<Step6ResultsSummaryProps> = ({
               </div>
               <p className="results-stage-desc muted">
                 {isVi
-                  ? `Biên dịch sang dbt / SQL runner, kiểm tra ${totalRules} quy tắc trên ${totalRowsChecked.toLocaleString()} dòng dữ liệu.`
-                  : `Compiled to dbt / SQL runner, executed ${totalRules} rules across ${totalRowsChecked.toLocaleString()} rows.`}
+                  ? `Biên dịch sang dbt / SQL runner, thực hiện ${totalRowsChecked.toLocaleString()} lượt kiểm tra qua ${totalRules} quy tắc.`
+                  : `Compiled to dbt / SQL runner, performed ${totalRowsChecked.toLocaleString()} row checks across ${totalRules} rules.`}
               </p>
               <div className="results-stage-footer">
                 <button type="button" className="button ghost small" onClick={() => onNavigateToStep(4)}>
@@ -438,17 +440,15 @@ export const Step6ResultsSummary: React.FC<Step6ResultsSummaryProps> = ({
                   <span className="eyebrow">BƯỚC 5 · GRAPH 3</span>
                   <h4>{isVi ? "Bất thường & Nguyên nhân gốc" : "Anomalies & Root Cause"}</h4>
                 </div>
-                <span className={`status-pill ${dqAnomalies.length === 0 ? "success" : "warning"}`}>
+                <span className={`status-pill ${decision === "NORMAL" ? "success" : "warning"}`}>
                   <span className="status-dot" />
-                  {dqAnomalies.length === 0
-                    ? isVi ? "Bình thường" : "Clean"
-                    : isVi ? `${dqAnomalies.length} bất thường` : `${dqAnomalies.length} anomalies`}
+                  {decision ?? (isVi ? "Chưa phân tích" : "Not analysed")}
                 </span>
               </div>
               <p className="results-stage-desc muted">
                 {isVi
-                  ? `Phát hiện ${dqAnomalies.length} tín hiệu bất thường, suy luận giả thuyết nguyên nhân gốc và tạo báo cáo Steward.`
-                  : `Detected ${dqAnomalies.length} anomaly signals, inferred root causes, and drafted Steward investigation.`}
+                  ? `Kết luận: ${decision ?? "chưa có"}. Bảng thống kê có ${dqAnomalies.length} tín hiệu sau lọc. Xem báo cáo để đọc bằng chứng và giới hạn phân tích.`
+                  : `Decision: ${decision ?? "pending"}. The statistics table contains ${dqAnomalies.length} signals after filtering. See the report for evidence and analysis limitations.`}
               </p>
               <div className="results-stage-footer">
                 <button type="button" className="button ghost small" onClick={() => onNavigateToStep(5)}>
@@ -673,17 +673,17 @@ export const Step6ResultsSummary: React.FC<Step6ResultsSummaryProps> = ({
                       <strong>{isVi ? `Xử lý ${failedRules} quy tắc có bản ghi vi phạm` : `Remediate ${failedRules} failing rules`}</strong>
                       <p className="muted" style={{ margin: "4px 0 0 0", fontSize: "13px" }}>
                         {isVi
-                          ? `Có ${totalRowsFailed.toLocaleString()} dòng dữ liệu không thoả mãn ràng buộc. Xem lại các cột tương ứng hoặc điều chỉnh ngưỡng kiểm định nếu có thay đổi nghiệp vụ.`
-                          : `${totalRowsFailed.toLocaleString()} records violated business assertions. Review source transformations or adjust thresholds in Step 3.`}
+                          ? `Có ${totalRowsFailed.toLocaleString()} lượt vi phạm ràng buộc (một dòng có thể vi phạm nhiều luật). Xem lại các cột tương ứng hoặc điều chỉnh ngưỡng kiểm định nếu có thay đổi nghiệp vụ.`
+                          : `${totalRowsFailed.toLocaleString()} checks violated assertions (one row can fail multiple rules). Review source transformations or adjust thresholds in Step 3.`}
                       </p>
                     </div>
                   </div>
                 )}
-                {dqAnomalies.length > 0 && (
+                {(graph3NeedsReview || dqAnomalies.length > 0) && (
                   <div className="results-rec-item info">
                     <div className="results-rec-icon">💡</div>
                     <div>
-                      <strong>{isVi ? `Kiểm tra ${dqAnomalies.length} tín hiệu bất thường được Graph 3 ghi nhận` : `Investigate ${dqAnomalies.length} anomaly signals from Graph 3`}</strong>
+                      <strong>{isVi ? "Xem lại kết luận và bằng chứng Graph 3" : "Review the Graph 3 decision and evidence"}</strong>
                       <p className="muted" style={{ margin: "4px 0 0 0", fontSize: "13px" }}>
                         {isVi
                           ? "Truy cập Bước 5 (Graph 3) để xem các giả thuyết nguyên nhân gốc được agent suy luận và đọc Báo cáo Steward chi tiết."

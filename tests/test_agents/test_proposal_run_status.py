@@ -6,6 +6,13 @@ import src.agents.graph as graph_module
 from src.services.rule_store import get_run
 
 
+@pytest.fixture(autouse=True)
+def resolved_source(monkeypatch):
+    """These tests isolate run-status handling, not source resolution."""
+    monkeypatch.setattr("src.services.source_binding.resolve_source_binding", lambda db, dataset_id, **kw: {"dataset_id": dataset_id, "dataset_version_id": "test-v1", "profile_run_id": "test-profile"})
+    monkeypatch.setattr("src.services.rule_proposer_workflow._semantic_payload", lambda *args, **kw: {"rows": 1, "columns": []})
+
+
 class _FakeGraph:
     """Graph giả lập trả về đúng final_state đã định sẵn."""
 

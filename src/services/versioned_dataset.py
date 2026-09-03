@@ -57,6 +57,10 @@ class DatasetContractError(ValueError):
 class SourceIntegrityError(DatasetContractError):
     """A source object cannot be trusted against its recorded metadata."""
 
+    @property
+    def code(self) -> str:
+        return "SOURCE_ARTIFACT_MISSING" if "missing" in str(self).lower() else "SOURCE_INTEGRITY_ERROR"
+
 
 class UploadTooLargeError(DatasetContractError):
     """The multipart wire payload exceeded the configured limit."""
@@ -700,6 +704,14 @@ def _local_storage_root() -> Path:
     return Path(__file__).resolve().parents[2] / "data" / "source_artifacts"
 
 
+def _local_source_storage_allowed() -> bool:
+    # Cloud Run instances/jobs do not share their writable filesystem. Even a
+    # mistakenly inherited development APP_ENV must not produce local locators.
+    return get_settings().app_env in {"local", "development", "test"} and not (
+        os.getenv("K_SERVICE") or os.getenv("CLOUD_RUN_JOB")
+    )
+
+
 def _to_extended_path(path: Path) -> Path:
     if os.name == "nt":
         resolved = str(path.resolve())
@@ -714,8 +726,7 @@ def store_source_artifact(content: bytes, inspected: InspectedUpload, *, workspa
 
     checksum = inspected.checksum
     key = safe_source_object_key(workspace_id, dataset_id, dataset_version_id, checksum, inspected.filename)
-    settings = get_settings()
-    if settings.app_env in {"local", "development", "test"}:
+    if _local_source_storage_allowed():
         raw_path = _local_storage_root() / key
         path = _to_extended_path(raw_path)
         try:
@@ -743,8 +754,7 @@ def store_source_artifact_path(path: Path, inspected: InspectedUpload, *, worksp
     """Store a verified temporary file without loading it into memory."""
     from src.services.dbt_artifact_store import get_dbt_artifact_store
     key = safe_source_object_key(workspace_id, dataset_id, dataset_version_id, inspected.checksum, inspected.filename)
-    settings = get_settings()
-    if settings.app_env in {"local", "development", "test"}:
+    if _local_source_storage_allowed():
         target = _to_extended_path(_local_storage_root() / key)
         target.parent.mkdir(parents=True, exist_ok=True)
         existed = target.exists()
@@ -786,6 +796,8 @@ def materialize_source_artifact(ref: SourceArtifactRef | dict[str, Any]) -> Path
     """Materialize an artifact for a bounded execution/profile operation."""
     value = ref if isinstance(ref, SourceArtifactRef) else SourceArtifactRef(**ref)
     if value.storage_locator.startswith("local:"):
+        if not _local_source_storage_allowed():
+            raise SourceIntegrityError("Local source artifact is not portable to cloud workers; restore this version to durable object storage")
         path = Path(value.storage_locator.removeprefix("local:"))
         verify_file(path, value.checksum, value.size_bytes)
         return path
@@ -801,6 +813,10 @@ def materialize_source_artifact(ref: SourceArtifactRef | dict[str, Any]) -> Path
         handle.write(content)
         handle.close()
         path = Path(handle.name)
-        verify_file(path, value.checksum, value.size_bytes)
+        try:
+            verify_file(path, value.checksum, value.size_bytes)
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
         return path
     raise SourceIntegrityError("Unsupported source artifact locator")

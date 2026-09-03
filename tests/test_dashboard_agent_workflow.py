@@ -102,7 +102,7 @@ def test_evidence_allow_list_excludes_raw_samples_and_identifiers():
     assert by_name["vendor_id"].is_unique_full_table is True
     assert evidence.cross_field_metrics[0].violation_rate == 0.03
 
-    digest = evidence.to_agent_digest()["source_rows"]
+    digest = evidence.to_agent_digest()[evidence.dataset_id]
     assert digest["dashboard_candidate_mode"] is True
     assert "private-vendor" not in json.dumps(digest)
     assert {candidate["rule_type"] for candidate in digest["dashboard_rule_candidates"]} == {
@@ -434,7 +434,7 @@ def test_graph_mode_uses_dashboard_graph_with_aggregate_digest(monkeypatch):
         assert "secret-payment" not in serialized_digest
         assert "source_row_id" not in serialized_digest
         assert state["metadata"]["max_retries"] == 0
-        dashboard_digest = digest["source_rows"]
+        dashboard_digest = digest[state["dataset_id"]]
         assert dashboard_digest["dashboard_candidate_mode"] is True
         assert len(dashboard_digest["dashboard_rule_candidates"]) >= 4
         return {

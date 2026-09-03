@@ -100,9 +100,11 @@ def _complete(steps: list[dict[str, Any]], key: str) -> None:
 
 
 def serialize_run(run: WorkflowRunModel) -> dict[str, Any]:
+    binding = _step(_decode_steps(run), "UPLOAD_PROFILE").get("source_binding")
     return {
         "id": run.id,
         "dataset_id": run.dataset_id,
+        "source_binding": binding,
         "current_step": run.current_step,
         "iteration": run.revision,
         "max_iterations": 1,
@@ -158,7 +160,7 @@ def _dictionary_snapshot(semantic_payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _versioned_profile_snapshot_row(db: Session, dataset_id: str) -> ProfileRunSnapshotModel | None:
+def _versioned_profile_snapshot_row(db: Session, dataset_id: str, *, dataset_version_id: str | None = None, profile_run_id: str | None = None) -> ProfileRunSnapshotModel | None:
     """The completed aggregate snapshot a versioned import produces.
 
     ``POST /workspaces/{id}/datasets/import`` never writes a ``ProfileModel``
@@ -167,17 +169,14 @@ def _versioned_profile_snapshot_row(db: Session, dataset_id: str) -> ProfileRunS
     for the dashboard, but this module did not, so a versioned dataset looked
     unprofiled to the workflow no matter how complete its profile was.
     """
-    latest_version = (
-        db.query(DatasetVersionModel)
-        .filter_by(dataset_id=dataset_id, status="READY")
-        .order_by(DatasetVersionModel.version_number.desc())
-        .first()
-    )
-    if not latest_version:
+    from src.services.source_binding import dataset_source_version
+    if not db.query(DatasetVersionModel).filter_by(dataset_id=dataset_id).first():
         return None
+    latest_version = dataset_source_version(db, dataset_id, dataset_version_id)
     return (
         db.query(ProfileRunSnapshotModel)
-        .filter_by(dataset_version_id=latest_version.id, status="COMPLETED")
+        .filter_by(dataset_id=dataset_id, dataset_version_id=latest_version.id, status="COMPLETED")
+        .filter(ProfileRunSnapshotModel.id == profile_run_id if profile_run_id else True)
         .order_by(ProfileRunSnapshotModel.completed_at.desc())
         .first()
     )
@@ -185,6 +184,9 @@ def _versioned_profile_snapshot_row(db: Session, dataset_id: str) -> ProfileRunS
 
 def _has_completed_profile(db: Session, dataset_id: str) -> bool:
     """True for either profiling path, legacy or versioned."""
+    dataset = db.get(DatasetModel, dataset_id)
+    if dataset and dataset.manifest_version == "versioned-v1":
+        return _versioned_profile_snapshot_row(db, dataset_id) is not None
     if db.get(ProfileModel, dataset_id) is not None:
         return True
     return _versioned_profile_snapshot_row(db, dataset_id) is not None
@@ -215,8 +217,8 @@ def _snapshot_from_versioned_profile(snapshot: ProfileRunSnapshotModel) -> dict[
             "negative_rate": column.get("negative_rate"),
             "out_of_domain_rate": column.get("out_of_domain_rate"),
             "sample_value": column.get("sample_value"),
-            "min_value": column.get("min_value"),
-            "max_value": column.get("max_value"),
+            "min_value": column.get("min_value", column.get("min")),
+            "max_value": column.get("max_value", column.get("max")),
         })
     row_count = int(snapshot.row_count or 0)
     duplicate_rate = float(snapshot.duplicate_rate or metrics.get("duplicate_rate") or 0.0)
@@ -245,7 +247,7 @@ def _snapshot_from_versioned_profile(snapshot: ProfileRunSnapshotModel) -> dict[
         "duplicate_rate": duplicate_rate,
         "duplicate_count": round(row_count * duplicate_rate / 100),
         "completeness_score": float(snapshot.completeness_score or metrics.get("completeness_score") or 0.0),
-        "validity_score": float(snapshot.validity_score or metrics.get("validity_score") or 0.0),
+        "validity_score": snapshot.validity_score if snapshot.validity_score is not None else metrics.get("validity_score"),
         "evidence_keys": evidence_keys,
         "profile_generated_at": completed.isoformat() if completed else None,
         "columns": columns,
@@ -253,12 +255,16 @@ def _snapshot_from_versioned_profile(snapshot: ProfileRunSnapshotModel) -> dict[
     }
 
 
-def _profile_snapshot(db: Session, dataset_id: str) -> dict[str, Any]:
-    profile = db.get(ProfileModel, dataset_id)
+def _profile_snapshot(db: Session, dataset_id: str, *, binding: dict[str, Any] | None = None) -> dict[str, Any]:
+    dataset = db.get(DatasetModel, dataset_id)
+    if binding and binding.get("dataset_id") != dataset_id:
+        raise WorkflowError("Profile binding belongs to another dataset")
+    profile = None if binding or (dataset and dataset.manifest_version == "versioned-v1") else db.get(ProfileModel, dataset_id)
     if not profile:
-        versioned = _versioned_profile_snapshot_row(db, dataset_id)
+        versioned = _versioned_profile_snapshot_row(db, dataset_id, dataset_version_id=(binding or {}).get("dataset_version_id"), profile_run_id=(binding or {}).get("profile_run_id"))
         if versioned:
             snapshot = _snapshot_from_versioned_profile(versioned)
+            snapshot.update(dataset_version_id=versioned.dataset_version_id, profile_run_id=versioned.id)
             if not snapshot["columns"]:
                 raise WorkflowError("The completed profile has no column profiles.")
             return snapshot
@@ -323,7 +329,16 @@ def confirm_semantic_contract(db: Session, run: WorkflowRunModel, *, artifact_id
     return confirmed
 
 
-def get_or_create_run(db: Session, dataset: DatasetModel, *, force_new: bool = False) -> WorkflowRunModel:
+def get_or_create_run(db: Session, dataset: DatasetModel, *, force_new: bool = False, dataset_version_id: str | None = None, fresh_profile: bool = False, request_run_id: str | None = None) -> WorkflowRunModel:
+    if request_run_id:
+        existing = db.get(WorkflowRunModel, request_run_id)
+        if existing:
+            from src.services.source_binding import workflow_binding
+            binding = workflow_binding(db, existing, require_profile=False)
+            if existing.dataset_id != dataset.id or (dataset_version_id and (not binding or binding["dataset_version_id"] != dataset_version_id)):
+                raise WorkflowError("Idempotency key belongs to another dataset/version")
+            return existing
+        force_new = True
     run = (
         None
         if force_new
@@ -335,12 +350,17 @@ def get_or_create_run(db: Session, dataset: DatasetModel, *, force_new: bool = F
         )
     )
     if run:
+        from src.services.source_binding import workflow_binding
+        binding = workflow_binding(db, run, require_profile=False)
+        if binding and dataset_version_id and binding["dataset_version_id"] != dataset_version_id:
+            raise WorkflowError("Existing workflow belongs to another dataset version; start a fresh workflow")
         # Profiling is performed by the ingestion endpoint.  Once it finishes,
         # reconcile an already-created run instead of leaving its first stage
         # permanently stuck at UPLOAD_PROFILE.
         if (
             run.current_step == "UPLOAD_PROFILE"
             and dataset.status == "PROFILE_READY"
+            and not binding
             and _has_completed_profile(db, dataset.id)
         ):
             steps = _decode_steps(run)
@@ -349,12 +369,19 @@ def get_or_create_run(db: Session, dataset: DatasetModel, *, force_new: bool = F
             run.current_step = "UNDERSTAND_DATA"
             _encode_steps(run, steps)
         return run
-    profile_ready = dataset.status == "PROFILE_READY" and _has_completed_profile(db, dataset.id)
+    profile_ready = not fresh_profile and dataset.status == "PROFILE_READY" and _has_completed_profile(db, dataset.id)
+    steps = _steps(profile_ready)
+    if dataset.manifest_version == "versioned-v1":
+        from src.services.source_binding import resolve_source_binding
+        binding = resolve_source_binding(db, dataset.id, dataset_version_id=dataset_version_id, require_profile=profile_ready)
+        _step(steps, "UPLOAD_PROFILE")["source_binding"] = binding
+        if fresh_profile:
+            _step(steps, "UPLOAD_PROFILE")["status"] = "READY"
     run = WorkflowRunModel(
-        id=f"workflow-{uuid.uuid4().hex[:20]}",
+        id=request_run_id or f"workflow-{uuid.uuid4().hex[:20]}",
         dataset_id=dataset.id,
         current_step="UNDERSTAND_DATA" if profile_ready else "UPLOAD_PROFILE",
-        steps_json=json.dumps(_steps(profile_ready)),
+        steps_json=json.dumps(steps),
     )
     db.add(run)
     db.flush()
@@ -390,13 +417,16 @@ def _add_artifact(
     status: str = "VALIDATED",
 ) -> WorkflowArtifactModel:
     previous = db.query(WorkflowArtifactModel).filter_by(workflow_run_id=run.id, step_key=step_key, artifact_type=artifact_type).count()
-    dataset = db.get(DatasetModel, run.dataset_id)
+    from src.services.source_binding import workflow_binding
+    binding = workflow_binding(db, run)
     version = previous + 1
     payload = {
         **payload,
         "workflow_run_id": run.id,
         "dataset_id": run.dataset_id,
-        "dataset_version_id": getattr(dataset, "manifest_version", None) or run.dataset_id,
+        "dataset_version_id": binding["dataset_version_id"] if binding else None,
+        "profile_run_id": binding["profile_run_id"] if binding else None,
+        "source_binding": binding,
         "step_key": step_key,
         "artifact_type": artifact_type,
         "artifact_version": version,
@@ -419,7 +449,7 @@ def _add_artifact(
     return artifact
 
 
-def _semantic_payload(db: Session, dataset_id: str) -> dict[str, Any]:
+def _semantic_payload(db: Session, dataset_id: str, *, binding: dict[str, Any] | None = None) -> dict[str, Any]:
     """Deterministic contract built from whichever profile the dataset has.
 
     Reads the unified snapshot rather than ``ColumnProfileModel`` directly: a
@@ -427,7 +457,7 @@ def _semantic_payload(db: Session, dataset_id: str) -> dict[str, Any]:
     Graph 1A refused to start for every dataset uploaded through the canonical
     import path.
     """
-    snapshot = _profile_snapshot(db, dataset_id)
+    snapshot = _profile_snapshot(db, dataset_id, binding=binding)
     semantic_columns = []
     for column in snapshot["columns"]:
         name = str(column.get("name") or "")
@@ -531,7 +561,10 @@ def _agent_semantic_payload(db: Session, dataset_id: str, *, workflow_run_id: st
     No source rows are exposed to the model: the agent receives names, types,
     aggregate counts/rates and bounded value/range metadata only.
     """
-    fallback = _semantic_payload(db, dataset_id)
+    from src.services.source_binding import workflow_binding
+    run = db.get(WorkflowRunModel, workflow_run_id) if workflow_run_id else None
+    binding = workflow_binding(db, run) if run else None
+    fallback = _semantic_payload(db, dataset_id, binding=binding)
     if get_settings().agent_mode != "graph":
         fallback["summary"] = "Deterministic profile contract (agent mode is disabled)."
         fallback["agent_mode"] = "deterministic-fallback"
@@ -553,9 +586,11 @@ def _agent_semantic_payload(db: Session, dataset_id: str, *, workflow_run_id: st
             graph.ainvoke(
                 {
                     "dataset_id": dataset_id,
+                    "dataset_version_id": (binding or {}).get("dataset_version_id"),
+                    "profile_run_id": (binding or {}).get("profile_run_id"),
                     "dataset_profile": _raw_profile_for_graph(db, dataset_id, fallback),
                     "target_tables": [dataset_id],
-                    "metadata": {"domain_hint": domain_hint},
+                    "metadata": {"domain_hint": domain_hint, "source_binding": binding},
                 }
             ),
             timeout=UNDERSTANDING_GRAPH_TIMEOUT_SECONDS,
@@ -573,7 +608,8 @@ def _agent_semantic_payload(db: Session, dataset_id: str, *, workflow_run_id: st
         # A timeout or transport failure is the same outcome as a node error:
         # no contract.  Treat it the same way rather than letting it escape.
         result = {"error": "understanding_agent_unavailable"}
-    if result.get("error") or not result.get("semantic_contract", {}).get("tables"):
+    semantic_result = result.get("semantic_contract", {})
+    if result.get("error") or not semantic_result.get("tables") or semantic_result.get("heuristic_fallback_used"):
         # An unreachable model provider must not strand the workflow: the
         # deterministic profile already carries enough evidence for a steward to
         # review, so degrade to it and say so rather than failing the stage.
@@ -587,7 +623,8 @@ def _agent_semantic_payload(db: Session, dataset_id: str, *, workflow_run_id: st
             "was unavailable, so only deterministic aggregate evidence is shown."
         )
         fallback["agent_mode"] = "deterministic-fallback"
-        fallback["fallback_reason"] = "agent_provider_unavailable"
+        fallback["fallback_reason"] = "semantic_generation_failed" if semantic_result.get("errors") else "agent_provider_unavailable"
+        fallback["generation_errors"] = semantic_result.get("errors") or [result.get("error", "No semantic contract returned")]
         return fallback
     contract = next(iter(result["semantic_contract"]["tables"].values()))
     return {
@@ -714,11 +751,29 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
     if step_status not in {"READY", "FAILED", "COMPLETED", "RUNNING", "WAITING_APPROVAL"}:
         raise WorkflowError("This workflow step is not ready to run.")
     if step_key == "UPLOAD_PROFILE":
-        raise WorkflowError(
-            "Upload/profile runs through the dataset ingestion endpoint. Refresh this workflow when profiling completes."
-        )
+        from src.services.job_runner import _versioned_profile_run
+        from src.services.source_binding import workflow_binding
+        binding = workflow_binding(db, run, require_profile=False)
+        if not binding:
+            raise WorkflowError("Import an immutable dataset version before fresh profiling")
+        job = db.query(JobModel).filter_by(linked_entity=run.id, type="WORKFLOW_PROFILE").order_by(JobModel.created_at.desc()).first()
+        if not job:
+            raise WorkflowError("The profiling job is missing")
+        profile_id = _versioned_profile_run(db, job, binding["dataset_version_id"], session_id=None, actor_role="STEWARD", profile_id=f"profile-{run.id}")
+        if binding["row_count"] == 0:
+            raise WorkflowError("EMPTY_DATASET: Source verified and profiled, but contains no rows to analyze")
+        steps = _decode_steps(run)
+        _step(steps, "UPLOAD_PROFILE")["source_binding"]["profile_run_id"] = profile_id
+        _complete(steps, "UPLOAD_PROFILE")
+        _step(steps, "UNDERSTAND_DATA")["status"] = "READY"
+        run.current_step = "UNDERSTAND_DATA"
+        _encode_steps(run, steps)
+        logger.info("Source prepared workflow=%s job=%s dataset=%s version=%s profile=%s source_kind=%s checksum=%s rows=%s fallback_kind=none", run.id, job.id, run.dataset_id, binding["dataset_version_id"], profile_id, binding["source_kind"], binding["checksum"], binding["row_count"])
+        return
+    from src.services.source_binding import workflow_binding
+    binding = workflow_binding(db, run)
     if step_key == "UNDERSTAND_DATA":
-        snapshot_payload = _profile_snapshot(db, run.dataset_id)
+        snapshot_payload = _profile_snapshot(db, run.dataset_id, binding=binding)
         semantic = _agent_semantic_payload(db, run.dataset_id, workflow_run_id=run.id)
         _mark_downstream_stale(db, run, step_key)
         _mark_stage_artifacts_stale(db, run, step_key)
@@ -753,7 +808,7 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
             )
             proposal_generation_mode = "deterministic-policy-fallback"
             proposal_fallback_reason = f"{type(exc).__name__}: {str(exc)[:240]}"
-            proposals = generate_dashboard_policy_fallback_proposals(db, run.dataset_id)
+            proposals = generate_dashboard_policy_fallback_proposals(db, run.dataset_id, workflow_run_id=run.id)
         if not proposals:
             raise WorkflowError("No usable rule proposals were produced.")
         _mark_downstream_stale(db, run, step_key)
@@ -880,11 +935,17 @@ def queue_check_run(db: Session, run: WorkflowRunModel, job: JobModel) -> DqRunM
     rule_ids = [item["rule_version_id"] for item in json.loads(ruleset.normalized_rules)]
     if not rule_ids:
         raise WorkflowError("The published ruleset has no executable rules.")
+    from src.services.source_binding import workflow_binding
+    binding = workflow_binding(db, run) or {}
     dq_run = DqRunModel(
         id=f"run_{uuid.uuid4().hex[:8]}",
         job_id=job.id,
         dataset_id=run.dataset_id,
         workflow_run_id=run.id,
+        dataset_version_id=binding.get("dataset_version_id"),
+        profile_run_id=binding.get("profile_run_id"),
+        workspace_id=binding.get("workspace_id"),
+        source_checksum=binding.get("checksum"),
         ruleset_version_id=ruleset.id,
         rule_ids=json.dumps(rule_ids),
         status="PENDING",

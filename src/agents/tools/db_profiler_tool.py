@@ -216,6 +216,8 @@ def profile_database(
         Chuỗi JSON chứa thông tin schema và các chỉ số thống kê của bảng, bao gồm
         schema_constraints, cross_column_hints và các field mới theo plan cải tiến.
     """
+    if table_name.lower().split(".")[-1].strip('"') == "source_rows":
+        return json.dumps({"error": "SOURCE_SCOPE_REQUIRED: Shared source_rows requires dataset/version isolation; use the verified versioned profiler"})
     engine = None
     temp_table_created = False
     temp_table = f"_sample_{table_name}"

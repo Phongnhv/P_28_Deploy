@@ -488,6 +488,13 @@ Nhiệm vụ của bạn là phân tích các số liệu thống kê (Profile D
 3. **business_invariants (Quy tắc logic nghiệp vụ ngầm định)**:
    - Nhận diện các ràng buộc tự nhiên (ví dụ: `pickup_datetime <= dropoff_datetime`, `amount >= 0`).
 
+4. **Phạm vi và quan hệ**:
+   - `columns` phải chứa đúng mỗi cột trong Profile Digest một lần; không thêm cột từ ví dụ hoặc bảng khác.
+   - `relationships` chỉ biểu diễn so sánh giữa HAI CỘT KHÁC NHAU có thật trong bảng.
+   - Không dùng một cột ở cả hai vế. Không giả làm cột cho hằng số, ngưỡng hay ngày hiện tại.
+   - Điều kiện như `amount >= 0` hay ngày đăng ký không ở tương lai chỉ ghi trong `business_assumptions`, không đưa vào `relationships`.
+   - Nếu không có quan hệ liên cột có căn cứ, trả `relationships` rỗng. Phân biệt giả định nghiệp vụ với thống kê đã quan sát.
+
 Hãy phân tích toàn diện và trả về JSON cấu trúc TableSemanticContract cho bảng `{table_name}`.
 """
 

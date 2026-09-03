@@ -13,6 +13,34 @@ from src.services.job_dispatch import create_persisted_job, dispatch_job
 from src.services.job_service import check_and_cleanup_stale_leases
 
 
+def test_inline_dispatch_releases_lookup_connection(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.pool import QueuePool
+
+    from src.services.job_dispatch import dispatch_persisted_job
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'dispatch.db'}", poolclass=QueuePool,
+        pool_size=1, max_overflow=0, pool_timeout=0.1,
+    )
+    JobModel.__table__.create(engine)
+    Graph1RunModel.__table__.create(engine)
+    monkeypatch.setattr("src.services.rule_store._engine", engine)
+    monkeypatch.setattr("src.services.graph1_workflow.execute_graph1_run", AsyncMock())
+    with Session(engine) as db:
+        db.add(Graph1RunModel(id="graph-pool", dataset_id="dataset-pool", status="PENDING",
+                             created_by="admin", idempotency_key="graph-pool", state_json="{}"))
+        db.add(JobModel(id="job-pool", type="GRAPH1_EXECUTION", status="PENDING",
+                        idempotency_key="job-pool", linked_entity="graph-pool"))
+        db.commit()
+    try:
+        assert dispatch_persisted_job("job-pool") is True
+        with Session(engine) as db:
+            assert db.get(JobModel, "job-pool").status == "SUCCEEDED"
+    finally:
+        engine.dispose()
+
+
 def test_canonical_dispatch_claims_and_completes_graph1_job(test_db, monkeypatch):
     with Session(test_db) as db:
         db.add(Graph1RunModel(
