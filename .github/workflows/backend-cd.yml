@@ -69,7 +69,7 @@ jobs:
             --project="${PROJECT_ID}" \
             --region="${REGION}" \
             --image="${IMMUTABLE_IMAGE}" \
-            --update-env-vars="AGENT_MODE=graph,ANOMALY_INVESTIGATION_MODE=deepagent,RULE_PROPOSER_MODE=deepagent,RULE_PROPOSER_ALLOW_LEGACY_FALLBACK=false,EVALGATE_DETERMINISTIC_LLM=0,LANGSMITH_TRACING=true,LANGSMITH_PROJECT=ridepulse-dq-dev,LANGSMITH_ENDPOINT=https://api.smith.langchain.com,LANGSMITH_HIDE_INPUTS=false,LANGSMITH_HIDE_OUTPUTS=false" \
+            --update-env-vars="AGENT_MODE=graph,ANOMALY_INVESTIGATION_MODE=deepagent,RULE_PROPOSER_MODE=deepagent,RULE_PROPOSER_ALLOW_LEGACY_FALLBACK=false,EVALGATE_DETERMINISTIC_LLM=0,LLM_REQUEST_TIMEOUT_SECONDS=180,LANGSMITH_TRACING=true,LANGSMITH_PROJECT=ridepulse-dq-dev,LANGSMITH_ENDPOINT=https://api.smith.langchain.com,LANGSMITH_HIDE_INPUTS=false,LANGSMITH_HIDE_OUTPUTS=false" \
             --update-secrets="LANGSMITH_API_KEY=LANGSMITH_API_KEY:1"
 
       - name: Deploy Cloud Run API
@@ -78,7 +78,7 @@ jobs:
             --project="${PROJECT_ID}" \
             --region="${REGION}" \
             --image="${IMMUTABLE_IMAGE}" \
-            --update-env-vars="AGENT_MODE=graph,ANOMALY_INVESTIGATION_MODE=deepagent,RULE_PROPOSER_MODE=deepagent,RULE_PROPOSER_ALLOW_LEGACY_FALLBACK=false,EVALGATE_DETERMINISTIC_LLM=0,LANGSMITH_TRACING=true,LANGSMITH_PROJECT=ridepulse-dq-dev,LANGSMITH_ENDPOINT=https://api.smith.langchain.com,LANGSMITH_HIDE_INPUTS=false,LANGSMITH_HIDE_OUTPUTS=false" \
+            --update-env-vars="AGENT_MODE=graph,ANOMALY_INVESTIGATION_MODE=deepagent,RULE_PROPOSER_MODE=deepagent,RULE_PROPOSER_ALLOW_LEGACY_FALLBACK=false,EVALGATE_DETERMINISTIC_LLM=0,LLM_REQUEST_TIMEOUT_SECONDS=180,LANGSMITH_TRACING=true,LANGSMITH_PROJECT=ridepulse-dq-dev,LANGSMITH_ENDPOINT=https://api.smith.langchain.com,LANGSMITH_HIDE_INPUTS=false,LANGSMITH_HIDE_OUTPUTS=false" \
             --update-secrets="LANGSMITH_API_KEY=LANGSMITH_API_KEY:1"
 
       - name: Health check API
