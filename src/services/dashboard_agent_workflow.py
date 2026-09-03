@@ -52,6 +52,29 @@ class AgentWorkflowError(ValueError):
     """An expected, redacted failure returned by the product workflow."""
 
 
+@dataclass(frozen=True)
+class DashboardProposal:
+    id: str
+    title: str
+    description: str
+    severity: str
+    rule_type: str
+    rule_spec: dict[str, Any]
+    evidence_refs: list[str]
+    evidence_summary: str
+    confidence: float
+    model_name: str
+    rule_name: str
+    business_rationale: str
+    proposal_basis: str
+    evidence: dict[str, Any]
+    confidence_breakdown: dict[str, Any]
+    rule_description: str = ""
+    ai_reasoning: str = ""
+    parameter_provenance: list[dict[str, Any]] = field(default_factory=list)
+    assumptions: list[str] = field(default_factory=list)
+
+
 class CrossFieldRulePolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -333,31 +356,6 @@ class ProposalEvidence(BaseModel):
         }
 
 
-@dataclass(frozen=True)
-class DashboardProposal:
-    id: str
-    title: str
-    description: str
-    severity: str
-    rule_type: str
-    rule_spec: dict[str, Any]
-    evidence_refs: list[str]
-    evidence_summary: str
-    confidence: float
-    model_name: str
-    rule_name: str
-    business_rationale: str
-    proposal_basis: str
-    evidence: dict[str, Any]
-    confidence_breakdown: dict[str, Any]
-    # Keep the Agent's canonical narrative fields available between Graph 1B
-    # normalization and persistence.  The public API continues to use the
-    # existing title/description/evidence_summary fields to avoid a migration.
-    rule_description: str = ""
-    ai_reasoning: str = ""
-    assumptions: list[str] = field(default_factory=list)
-    parameter_provenance: list[dict[str, Any]] = field(default_factory=list)
-
 
 def _parse_json_dict(raw: str | None) -> dict[str, float]:
     if not raw:
@@ -554,6 +552,39 @@ def build_proposal_evidence(db: Session, dataset_id: str, *, workflow_run_id: st
         cross_field_metrics = [
             ProposalCrossFieldEvidence.model_validate(item) for item in _parse_json_list(profile.cross_field_metrics_json)
         ]
+    else:
+        try:
+            from src.services.rule_proposer_workflow import (
+                _snapshot_from_versioned_profile,
+                _versioned_profile_snapshot_row,
+            )
+            versioned_row = _versioned_profile_snapshot_row(db, dataset_id)
+            if versioned_row:
+                snap = _snapshot_from_versioned_profile(versioned_row)
+                raw_cols = snap.get("columns") or []
+                safe_columns = [
+                    ProposalColumnEvidence(
+                        name=col["name"],
+                        data_type=col.get("data_type", "string"),
+                        null_rate=float(col.get("null_rate") or 0.0),
+                        distinct_count=col.get("distinct_count"),
+                        non_null_count=col.get("non_null_count"),
+                        negative_rate=col.get("negative_rate"),
+                        quantiles=_parse_json_dict(json.dumps(col.get("quantiles"))) if isinstance(col.get("quantiles"), (dict, list)) else {},
+                        out_of_domain_rate=col.get("out_of_domain_rate"),
+                        full_distinct_count=col.get("full_distinct_count"),
+                        uniqueness_rate=col.get("uniqueness_rate"),
+                        is_unique_full_table=col.get("is_unique_full_table"),
+                        min_value=col.get("min_value"),
+                        max_value=col.get("max_value"),
+                    )
+                    for col in raw_cols
+                    if isinstance(col, dict) and col.get("name") and col.get("name") != "source_row_id"
+                ]
+                dataset.status = "PROFILE_READY"
+                db.commit()
+        except Exception as err:
+            logger.warning("Could not build proposal evidence from versioned profile: %s", err)
     if not safe_columns:
         raise AgentWorkflowError("A completed aggregate profile is required before requesting proposals.")
 
@@ -965,6 +996,24 @@ def _has_unsupported_range_number(text: str, candidate: DashboardRuleCandidate) 
     return False
 
 
+def _build_observed_metrics(candidate: DashboardRuleCandidate, evidence: ProposalEvidence) -> dict[str, Any]:
+    col_map = {c.name: c for c in evidence.columns}
+    col = col_map.get(candidate.column)
+    metrics: dict[str, Any] = {"sample_row_count": evidence.row_count}
+    if col:
+        metrics.update({
+            "null_rate": round(col.null_rate, 4),
+            "null_count": int(round(col.null_rate * evidence.row_count)),
+            "distinct_count": col.distinct_count,
+            "data_type": col.data_type,
+        })
+        if col.min_value is not None:
+            metrics["min_value"] = col.min_value
+        if col.max_value is not None:
+            metrics["max_value"] = col.max_value
+    return metrics
+
+
 def _normalise_graph_rule(
     raw: dict[str, Any], evidence: ProposalEvidence, candidate: DashboardRuleCandidate
 ) -> DashboardProposal | None:
@@ -998,7 +1047,14 @@ def _normalise_graph_rule(
     selected_refs = raw.get("selected_evidence_refs") or candidate.evidence_refs
     if not set(selected_refs).issubset(candidate.evidence_refs):
         return None
-    capped_confidence = min(confidence, candidate.confidence_ceiling)
+
+    col_map = {c.name: c for c in evidence.columns}
+    col = col_map.get(candidate.column)
+    dynamic_ceiling = candidate.confidence_ceiling
+    if col and candidate.dashboard_rule_type == "not_null" and col.null_rate == 0.0:
+        dynamic_ceiling = max(candidate.confidence_ceiling, 0.98)
+
+    capped_confidence = min(confidence, dynamic_ceiling)
     normalized_breakdown = dict(
         confidence_payload
         or {
@@ -1010,6 +1066,7 @@ def _normalise_graph_rule(
         }
     )
     normalized_breakdown["overall"] = capped_confidence
+
     return DashboardProposal(
         id=f"proposal-{uuid.uuid4().hex}",
         title=candidate.title,
@@ -1031,7 +1088,7 @@ def _normalise_graph_rule(
             "sample_row_count": evidence.row_count,
             "sample_rate": 1.0,
             "sampling_caveat": None,
-            "observed_metrics": {},
+            "observed_metrics": _build_observed_metrics(candidate, evidence),
             "source_refs": candidate.evidence_refs,
         },
         confidence_breakdown=normalized_breakdown,
@@ -1218,17 +1275,30 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
         if col.name in ("source_row_id", "id"):
             continue
         if col.name not in existing_column_rules:
-            candidates.append(
-                DashboardRuleCandidate(
-                    id=f"not-null:{col.name}", rule_type="NOT_NULL", column=col.name, parameters={},
-                    dashboard_rule_type="not_null", rule_spec={"type": "not_null", "column": col.name},
-                    evidence_refs=[f"profile.column.{col.name}.null_rate"],
-                    selection_reason=f"Column {col.name} observed null rate is {col.null_rate*100:.1f}%.",
-                    priority=90, title=f"{col.name} must not be null",
-                    description=f"Ensure every row contains a valid {col.name}.",
-                    severity="HIGH", confidence_ceiling=0.9,
+            if col.null_rate == 0.0:
+                candidates.append(
+                    DashboardRuleCandidate(
+                        id=f"not-null:{col.name}", rule_type="NOT_NULL", column=col.name, parameters={},
+                        dashboard_rule_type="not_null", rule_spec={"type": "not_null", "column": col.name},
+                        evidence_refs=[f"profile.column.{col.name}.null_rate"],
+                        selection_reason=f"Column {col.name} observed null rate is 0.0% across all {evidence.row_count:,} rows.",
+                        priority=90, title=f"{col.name} must not be null",
+                        description=f"Ensure every row contains a valid {col.name}.",
+                        severity="HIGH", confidence_ceiling=0.95,
+                    )
                 )
-            )
+            elif col.null_rate <= 0.01:
+                candidates.append(
+                    DashboardRuleCandidate(
+                        id=f"not-null:{col.name}", rule_type="NOT_NULL", column=col.name, parameters={},
+                        dashboard_rule_type="not_null", rule_spec={"type": "not_null", "column": col.name},
+                        evidence_refs=[f"profile.column.{col.name}.null_rate"],
+                        selection_reason=f"Column {col.name} observed null rate is {col.null_rate*100:.1f}%.",
+                        priority=70, title=f"{col.name} must not be null",
+                        description=f"Ensure every row contains a valid {col.name}.",
+                        severity="MEDIUM", confidence_ceiling=0.75,
+                    )
+                )
             if col.data_type in ("numeric", "float", "integer", "real") and col.min_value is not None:
                 min_val = 0.0 if col.min_value >= 0 else float(col.min_value)
                 upper = _upper_bound(col)
@@ -1346,7 +1416,7 @@ def _fallback_core_fields(
             "sample_row_count": evidence.row_count,
             "sample_rate": 1.0,
             "sampling_caveat": None,
-            "observed_metrics": {},
+            "observed_metrics": _build_observed_metrics(candidate, evidence),
             "source_refs": candidate.evidence_refs,
         },
         "confidence_breakdown": {
@@ -1491,6 +1561,8 @@ def _mock_proposals(evidence: ProposalEvidence) -> list[DashboardProposal]:
                     "sample_representativeness": 1.0,
                     "explanation": "Policy-backed duplicate candidate",
                 },
+                parameter_provenance=[],
+                assumptions=[],
             )
         )
     if not result:

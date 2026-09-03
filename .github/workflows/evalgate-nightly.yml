@@ -7,7 +7,7 @@ on:
 
 jobs:
   live-evaluation:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       LANGCHAIN_TRACING_V2: "false"

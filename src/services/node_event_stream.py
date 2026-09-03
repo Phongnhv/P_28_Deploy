@@ -22,6 +22,7 @@ import threading
 import time
 import uuid
 from collections import defaultdict, deque
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
@@ -97,6 +98,54 @@ class NodeEventBroker:
 broker = NodeEventBroker()
 
 
+#: True while ``run_graph_streamed`` is driving a graph. It already publishes one event
+#: per node, so the per-node hook below must stay quiet or every node of a streamed graph
+#: would be reported twice.
+_STREAMING: ContextVar[bool] = ContextVar("node_event_streaming", default=False)
+
+
+def publish_node_event(node_name: str, **extra: Any) -> None:
+    """Publish one node event from whatever graph scope is currently open.
+
+    ``run_graph_streamed`` observes a graph from the outside and is the better mechanism,
+    but it only wraps one call site. Every other graph invocation went unobserved, and
+    the resulting trace covered four nodes of one graph out of nineteen declared across
+    six -- while ``trace_coverage`` read 1.0, because that ratio divides by the events
+    that were written rather than by the nodes that ran.
+
+    This is the inside-out counterpart: any node running within a ``start_graph_run``
+    scope reports itself, whatever invoked the graph. Both are safe to leave in place;
+    ``_STREAMING`` keeps them from doubling up.
+
+    Silent by design when there is no scope or no workflow id to publish under. A node
+    running outside a correlated graph run has nothing to correlate the event to, and a
+    stream nobody can key is worse than no event.
+    """
+    if _STREAMING.get():
+        return
+    try:
+        from src.services.node_telemetry import current_graph_run
+
+        context = current_graph_run()
+    except Exception:  # noqa: BLE001 - telemetry must never break a product node
+        return
+    if context is None or not context.workflow_run_id:
+        return
+    try:
+        broker.publish(str(context.workflow_run_id), {
+            "type": "node",
+            "event": "node",
+            "trace_id": context.graph_run_id,
+            "workflow_run_id": str(context.workflow_run_id),
+            "dataset_id": str(context.dataset_id or "unknown"),
+            "timestamp": datetime.now(UTC).isoformat(),
+            "node": node_name,
+            **extra,
+        })
+    except Exception:  # noqa: BLE001
+        return
+
+
 def _safe_preview(value: Any, _depth: int = 0) -> Any:
     """Return a JSON-safe, size-bounded, secret-stripped preview of node output."""
     if _depth > 4:
@@ -131,6 +180,7 @@ async def run_graph_streamed(
     :data:`broker` under ``stream_id`` as it happens.
     """
     broker.reset(stream_id)
+    streaming_token = _STREAMING.set(True)
     trace_id = uuid.uuid4().hex
     dataset_id = str(initial_state.get("dataset_id") or "unknown")
 
@@ -147,15 +197,20 @@ async def run_graph_streamed(
 
     broker.publish(stream_id, event("run_start", stream_id=stream_id))
     final_state: dict[str, Any] = dict(initial_state)
+    step_start_time = time.perf_counter()
     try:
         # stream_mode="updates" yields {node_name: delta} per node; "values" yields the
         # full accumulated state so the caller receives an ainvoke-equivalent result.
         async for mode, chunk in graph.astream(initial_state, stream_mode=["updates", "values"]):
             if mode == "updates" and isinstance(chunk, dict):
+                now = time.perf_counter()
+                latency_ms = round((now - step_start_time) * 1000, 2)
+                step_start_time = now
                 for node_name, delta in chunk.items():
                     broker.publish(stream_id, event(
                         "node",
                         node=node_name,
+                        latency_ms=latency_ms,
                         preview=_safe_preview(delta),
                     ))
             elif mode == "values" and isinstance(chunk, dict):
@@ -165,5 +220,7 @@ async def run_graph_streamed(
         broker.publish(stream_id, event("error", error_type=type(exc).__name__))
         broker.publish(stream_id, event("done", stream_id=stream_id))
         raise
+    finally:
+        _STREAMING.reset(streaming_token)
     broker.publish(stream_id, event("done", stream_id=stream_id))
     return final_state

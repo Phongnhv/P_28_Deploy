@@ -218,7 +218,7 @@ def _build_data_context(
 
 
 def _strip_code_fences(text: Any) -> str:
-    """Loại bỏ code fences (```markdown ... ```) nếu LLM bọc output."""
+    """Loại bỏ code fences (```markdown ... ```) nếu LLM bọc output, lọc bỏ các khối reasoning."""
     if isinstance(text, list):
         parts = []
         for part in text:
@@ -230,6 +230,8 @@ def _strip_code_fences(text: Any) -> str:
                 parts.append(getattr(part, "text", ""))
         text = "".join(part for part in parts if isinstance(part, str))
     text_str = str(text or "").strip()
+    # Loại bỏ các chuỗi metadata reasoning dạng text nếu bị lọt vào
+    text_str = re.sub(r"^\[?\{'id':\s*'[^']+',.*?'encrypted_content':\s*'[^']+'\s*\}?\]?\s*", "", text_str, flags=re.DOTALL)
     # Match ```markdown, ```md, or ``` at start
     pattern = r"^```(?:markdown|md)?\s*\n(.*?)\n```\s*$"
     match = re.match(pattern, text_str, re.DOTALL | re.IGNORECASE)

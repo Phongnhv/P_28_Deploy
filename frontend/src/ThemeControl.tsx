@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 type Theme = "light" | "dark";
 
 function getInitialTheme(): Theme {
-  return localStorage.getItem("ridepulse.theme") === "dark" ? "dark" : "light";
+  return (localStorage.getItem("datapulse.theme") || localStorage.getItem("ridepulse.theme")) === "dark" ? "dark" : "light";
 }
 
 export default function ThemeControl() {
@@ -11,9 +11,8 @@ export default function ThemeControl() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem("ridepulse.theme", theme);
+    localStorage.setItem("datapulse.theme", theme);
   }, [theme]);
-
   const nextTheme = theme === "light" ? "dark" : "light";
 
   return (

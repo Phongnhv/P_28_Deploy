@@ -180,10 +180,17 @@ def test_understanding_falls_back_when_agent_provider_is_unavailable(monkeypatch
     async def unavailable_dictionary(_state):
         return {"error": "provider unavailable"}
 
+    async def unavailable_understanding(_state):
+        return {"error": "provider unavailable"}
+
     monkeypatch.setattr(get_settings(), "agent_mode", "graph")
     monkeypatch.setattr(
         "src.agents.nodes.data_dictionary_generator_node.data_dictionary_generator_node",
         unavailable_dictionary,
+    )
+    monkeypatch.setattr(
+        "src.agents.nodes.dataset_understanding_node.dataset_understanding_node",
+        unavailable_understanding,
     )
     with Session(get_engine()) as db:
         dataset = db.get(DatasetModel, DATASET_ID)

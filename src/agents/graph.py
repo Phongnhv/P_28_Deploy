@@ -110,6 +110,15 @@ def _timed_node(node_name: str, node_func: Callable) -> Callable:
             duration = time.perf_counter() - start_ts
             tracker.record_node_time(node_name, duration)
             tracker.reset_current_node(token)
+            # build_proposal_graph wraps its nodes here rather than through
+            # node_telemetry.instrument, so without this the whole graph is invisible
+            # to the trace even while every node is being timed.
+            try:
+                from src.services.node_event_stream import publish_node_event
+
+                publish_node_event(node_name, latency_ms=round(duration * 1000, 2))
+            except Exception:  # noqa: BLE001 - never fail a node for a trace event
+                pass
 
     return _wrapped
 
@@ -246,9 +255,11 @@ def build_dashboard_proposal_graph() -> StateGraph:
     from src.agents.nodes.rule_proposer_node import rule_proposer_node
 
     graph = StateGraph(AgentState)
-    graph.add_node("rule_candidate_builder", rule_candidate_builder_node)
-    graph.add_node("prompt_customizer", prompt_customizer_node)
-    graph.add_node("rule_proposer", rule_proposer_node)
+    # Wrapped like every other graph: an unwrapped node is timed by nobody and seen by
+    # nobody, and this graph is the one the served dashboard path actually runs.
+    graph.add_node("rule_candidate_builder", _timed_node("rule_candidate_builder", rule_candidate_builder_node))
+    graph.add_node("prompt_customizer", _timed_node("prompt_customizer", prompt_customizer_node))
+    graph.add_node("rule_proposer", _timed_node("rule_proposer", rule_proposer_node))
     graph.set_entry_point("rule_candidate_builder")
     graph.add_edge("rule_candidate_builder", "prompt_customizer")
     graph.add_edge("prompt_customizer", "rule_proposer")

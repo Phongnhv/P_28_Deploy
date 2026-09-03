@@ -17,13 +17,13 @@ const I18nContext = createContext<I18nContextType | undefined>(undefined);
 
 export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [language, setLanguageState] = useState<Language>(() => {
-    const saved = localStorage.getItem("ridepulse.lang");
+    const saved = localStorage.getItem("datapulse.lang") || localStorage.getItem("ridepulse.lang");
     return (saved === "vi" || saved === "en") ? saved : "en";
   });
 
   const setLanguage = (lang: Language) => {
     setLanguageState(lang);
-    localStorage.setItem("ridepulse.lang", lang);
+    localStorage.setItem("datapulse.lang", lang);
   };
 
   const t = (keyPath: string, params?: Record<string, string | number>): string => {

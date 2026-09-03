@@ -54,6 +54,7 @@ import type {
   ManualRuleInput,
   ProposalBasis,
   RuleProposal,
+  ParameterProvenance,
   RuleConfiguration,
   RuleConfigurationInput,
   RuleSpec,
@@ -95,15 +96,132 @@ function formatTime(value: string) {
   }).format(new Date(value));
 }
 
-function formatRule(rule: RuleSpec) {
-  if (rule.type === "not_null") return `NOT NULL · ${rule.column}`;
+function formatRule(rule: RuleSpec, isVi?: boolean) {
+  if (rule.type === "not_null")
+    return isVi ? `BẮT BUỘC CÓ GIÁ TRỊ · ${rule.column}` : `NOT NULL · ${rule.column}`;
   if (rule.type === "numeric_range")
-    return `RANGE · ${rule.column} ≥ ${rule.min_value}`;
+    return isVi ? `KHOẢNG HỢP LỆ · ${rule.column} ≥ ${rule.min_value}` : `RANGE · ${rule.column} ≥ ${rule.min_value}`;
   if (rule.type === "accepted_values")
-    return `VALUES · ${rule.column} ∈ ${(rule.allowed_values ?? []).join(", ")}`;
+    return isVi ? `BỘ GIÁ TRỊ · ${rule.column} ∈ ${(rule.allowed_values ?? []).join(", ")}` : `VALUES · ${rule.column} ∈ ${(rule.allowed_values ?? []).join(", ")}`;
   if (rule.type === "cross_field_comparison")
-    return `COMPARE · ${(rule.columns ?? []).join(` ${rule.operator ?? "≤"} `)}`;
-  return `DUPLICATE · ${(rule.fingerprint_columns ?? []).join(" + ")}`;
+    return isVi ? `SO SÁNH CỘT · ${(rule.columns ?? []).join(` ${rule.operator ?? "≤"} `)}` : `COMPARE · ${(rule.columns ?? []).join(` ${rule.operator ?? "≤"} `)}`;
+  return isVi ? `TRÙNG LẶP · ${(rule.fingerprint_columns ?? []).join(" + ")}` : `DUPLICATE · ${(rule.fingerprint_columns ?? []).join(" + ")}`;
+}
+
+function formatSourceRef(ref: string, isVi?: boolean): string {
+  if (!isVi || !ref) return ref;
+  if (ref.startsWith("policy.nonnegative_column.")) {
+    const col = ref.replace("policy.nonnegative_column.", "");
+    return `Chính sách: Cột không âm (${col})`;
+  }
+  if (ref.startsWith("policy.required_identifier.")) {
+    const col = ref.replace("policy.required_identifier.", "");
+    return `Chính sách: Khóa bắt buộc (${col})`;
+  }
+  if (ref.startsWith("policy.governed_value_set.")) {
+    const col = ref.replace("policy.governed_value_set.", "");
+    return `Chính sách: Bộ giá trị chuẩn (${col})`;
+  }
+  if (ref.startsWith("policy.duplicate_fingerprint")) {
+    return "Chính sách: Kiểm soát trùng lặp";
+  }
+  if (ref.includes(".quantile.")) {
+    const parts = ref.split(".quantile.");
+    const col = parts[0].replace("profile.column.", "");
+    const q = parts[1];
+    return `Hồ sơ dữ liệu: Phân vị ${q} (${col})`;
+  }
+  if (ref.endsWith(".null_rate")) {
+    const col = ref.replace("profile.column.", "").replace(".null_rate", "");
+    return `Hồ sơ dữ liệu: Tỷ lệ rỗng (${col})`;
+  }
+  if (ref.endsWith(".min_value")) {
+    const col = ref.replace("profile.column.", "").replace(".min_value", "");
+    return `Hồ sơ dữ liệu: Giá trị nhỏ nhất (${col})`;
+  }
+  if (ref.endsWith(".max_value")) {
+    const col = ref.replace("profile.column.", "").replace(".max_value", "");
+    return `Hồ sơ dữ liệu: Giá trị lớn nhất (${col})`;
+  }
+  if (ref.endsWith(".distinct_count")) {
+    const col = ref.replace("profile.column.", "").replace(".distinct_count", "");
+    return `Hồ sơ dữ liệu: Số giá trị phân biệt (${col})`;
+  }
+  if (ref.endsWith(".negative_rate")) {
+    const col = ref.replace("profile.column.", "").replace(".negative_rate", "");
+    return `Hồ sơ dữ liệu: Tỷ lệ âm (${col})`;
+  }
+  if (ref.endsWith(".out_of_domain_rate")) {
+    const col = ref.replace("profile.column.", "").replace(".out_of_domain_rate", "");
+    return `Hồ sơ dữ liệu: Tỷ lệ ngoài miền (${col})`;
+  }
+  if (ref === "profile.row_count") return "Hồ sơ dữ liệu: Tổng số dòng";
+  if (ref === "profile.duplicate_rate") return "Hồ sơ dữ liệu: Tỷ lệ trùng lặp";
+  return ref;
+}
+
+function formatDescription(desc: string, isVi?: boolean): string {
+  if (!isVi || !desc) return desc;
+  const nonNegMatch = desc.match(/Reject rows where the policy-defined non-negative measure (\w+) is below zero\./i);
+  if (nonNegMatch) {
+    return `Loại bỏ các bản ghi có giá trị ${nonNegMatch[1]} âm theo chính sách quản trị.`;
+  }
+  const notNullMatch = desc.match(/Ensure every row contains a valid (\w+)\./i);
+  if (notNullMatch) {
+    return `Đảm bảo mọi bản ghi đều có giá trị hợp lệ cho cột ${notNullMatch[1]}.`;
+  }
+  const requiredIdMatch = desc.match(/Require every row to contain the policy-required identifier (\w+)\./i);
+  if (requiredIdMatch) {
+    return `Yêu cầu mọi bản ghi phải có mã định danh bắt buộc ${requiredIdMatch[1]}.`;
+  }
+  const enumMatch = desc.match(/Validate (\w+) against the governed values configured for this dataset\./i);
+  if (enumMatch) {
+    return `Kiểm tra giá trị ${enumMatch[1]} theo danh mục giá trị cho phép của tập dữ liệu.`;
+  }
+  if (desc.includes("Check the dataset-policy fingerprint for duplicate rows")) {
+    return "Kiểm tra các bản ghi trùng lặp theo chính sách dấu vân tay dữ liệu.";
+  }
+  return desc;
+}
+
+function formatEvidenceSummary(summary: string, isVi?: boolean): string {
+  if (!isVi || !summary) return summary;
+
+  let text = summary;
+  text = text.replace(
+    /Aggregate persisted profile evidence: ([^()]+) \(rows: (\d+)\)\./gi,
+    "Bằng chứng tổng hợp từ hồ sơ dữ liệu ($2 dòng)."
+  );
+  text = text.replace(/Selection basis:/gi, "Cơ sở lựa chọn:");
+  text = text.replace(
+    /Dataset policy defines this measure as non-negative; full-table bounds, negative rate and quantiles describe current behavior\./gi,
+    "Chính sách quy định đại lượng này không âm; các giá trị biên, tỷ lệ âm và phân vị mô tả hành vi thực tế."
+  );
+  text = text.replace(
+    /Upper bound ([\d,.]+) sits above p95 so the rule can still reject an outlier\./gi,
+    "Ngưỡng trên $1 nằm trên p95 để loại bỏ các giá trị ngoại lai dị thường."
+  );
+  text = text.replace(
+    /Upper bound ([\d,.]+) sits above p95 and below the observed maximum, so the rule can reject an outlier instead of admitting everything\./gi,
+    "Ngưỡng trên $1 nằm trên p95 và dưới cực đại để loại bỏ ngoại lai."
+  );
+  text = text.replace(
+    /Column (\w+) observed null rate is 0\.0% across all ([\d,.]+) rows\./gi,
+    "Cột $1 có tỷ lệ khuyết thiếu 0.0% trên toàn bộ $2 dòng."
+  );
+  text = text.replace(
+    /Column (\w+) observed null rate is ([\d.]+)%\./gi,
+    "Cột $1 có tỷ lệ rỗng ghi nhận là $2%."
+  );
+  text = text.replace(
+    /Dataset policy marks this identifier as required; the profile supplies its null rate\./gi,
+    "Chính sách quy định đây là trường định danh bắt buộc; hồ sơ dữ liệu cung cấp tỷ lệ khuyết thiếu."
+  );
+  text = text.replace(
+    /Dataset policy supplies the governed code set; the full-table profile supplies observed cardinality and out-of-domain rate\./gi,
+    "Chính sách cung cấp bộ mã chuẩn; hồ sơ dữ liệu cung cấp số lượng phân biệt và tỷ lệ ngoài miền."
+  );
+  return text;
 }
 
 function getErrorMessage(error: unknown, fallback: string, language: "en" | "vi" = "en") {
@@ -305,9 +423,13 @@ function LoginScreen({
         <div className="orb orb-two" />
         <div className="grid-lines" />
         <div className="brand-lockup">
-          <span className="brand-mark">RP</span>
+          <span className="brand-mark" title="DataPulse DQ">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}>
+              <path d="M3 12h3.5l2.5-7 4 14 3.5-10 2.5 3H21" />
+            </svg>
+          </span>
           <span>
-            RidePulse <em>DQ</em>
+            DataPulse <em>DQ</em>
           </span>
         </div>
         <div className="login-pitch">
@@ -338,7 +460,11 @@ function LoginScreen({
       </div>
       <section className="login-card">
         <div className="mobile-brand">
-          <span className="brand-mark">RP</span> RidePulse <em>DQ</em>
+          <span className="brand-mark" title="DataPulse DQ">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}>
+              <path d="M3 12h3.5l2.5-7 4 14 3.5-10 2.5 3H21" />
+            </svg>
+          </span> DataPulse <em>DQ</em>
         </div>
         <span className="eyebrow">ROLE-BASED ACCESS</span>
         <h2>Welcome back</h2>
@@ -732,6 +858,7 @@ function RuleProposerPanel({
   onConfirmContract,
   onRequestProposals,
   onApproveRule,
+  onApproveAllRules,
   onRejectRule,
   onEditRule,
   onDeleteRule,
@@ -752,6 +879,7 @@ function RuleProposerPanel({
   onConfirmContract: () => void;
   onRequestProposals: () => void;
   onApproveRule: (id: string) => void;
+  onApproveAllRules?: () => void;
   onRejectRule: (id: string) => void;
   onEditRule: (proposal: RuleProposal) => void;
   onDeleteRule: (id: string) => void;
@@ -780,18 +908,18 @@ function RuleProposerPanel({
         <div className="panel-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <span className="eyebrow">{language === "vi" ? "NĂNG LỰC AGENT" : "AGENT CAPABILITY"}</span>
-            <h2>{language === "vi" ? `Sinh & Đề xuất luật cho ${dataset.name}` : `Rule Generation & Proposals for ${dataset.name}`}</h2>
+            <h2>{language === "vi" ? `Sinh & Đề xuất quy tắc cho ${dataset.name}` : `Rule Generation & Proposals for ${dataset.name}`}</h2>
             <p className="muted">
               {understandingArtifact && !contractConfirmed
                 ? (language === "vi"
-                    ? "Hợp đồng ngữ nghĩa chưa được xác nhận. Vui lòng quay lại Bước 2 để xác nhận trước khi sinh luật."
+                    ? "Hợp đồng ngữ nghĩa chưa được xác nhận. Vui lòng quay lại Bước 2 để xác nhận trước khi sinh quy tắc."
                     : "The semantic contract is not confirmed yet. Please confirm in Step 2 before generating rules.")
                 : datasetProposals.length > 0
                   ? (language === "vi"
-                      ? `Đã có ${datasetProposals.length} đề xuất luật cho tập dữ liệu này. Bạn có thể duyệt hoặc sinh lại luật.`
+                      ? `Đã có ${datasetProposals.length} đề xuất quy tắc cho tập dữ liệu này. Bạn có thể duyệt hoặc sinh lại quy tắc.`
                       : `${datasetProposals.length} proposals exist for this dataset. You can review or regenerate rules.`)
                   : (language === "vi"
-                      ? "Agent đọc hợp đồng ngữ nghĩa và đề xuất bộ luật kiểm định chất lượng dữ liệu."
+                      ? "Agent đọc hợp đồng ngữ nghĩa và đề xuất bộ quy tắc kiểm định chất lượng dữ liệu."
                       : "The agent reads the semantic contract and proposes a set of quality validation rules.")}
             </p>
           </div>
@@ -811,7 +939,7 @@ function RuleProposerPanel({
                 disabled={busy}
                 onClick={onCreateManualRule}
               >
-                {language === "vi" ? "+ Thêm luật thủ công" : "+ Add manual rule"}
+                {language === "vi" ? "+ Thêm quy tắc thủ công" : "+ Add manual rule"}
               </button>
             )}
             <button
@@ -820,10 +948,10 @@ function RuleProposerPanel({
               onClick={onRequestProposals}
             >
               {busy
-                ? (language === "vi" ? "Đang sinh luật…" : "Generating…")
+                ? (language === "vi" ? "Đang sinh quy tắc…" : "Generating…")
                 : datasetProposals.length > 0
-                    ? (language === "vi" ? "↻ Sinh lại luật" : "↻ Regenerate rules")
-                    : (language === "vi" ? "Sinh Rule" : "Generate rules")}
+                    ? (language === "vi" ? "↻ Sinh lại quy tắc" : "↻ Regenerate rules")
+                    : (language === "vi" ? "Sinh quy tắc" : "Generate rules")}
             </button>
           </div>
         </div>
@@ -831,7 +959,7 @@ function RuleProposerPanel({
         <div className="understanding-holder" style={{ marginTop: "16px" }}>
           <div className="understanding-summary" style={{ padding: "16px", background: "var(--surface-muted, #f8fafc)", borderRadius: "8px", borderLeft: "4px solid var(--accent, #2563eb)" }}>
             <span className="eyebrow">
-              GRAPH 1B · {language === "vi" ? "ĐỀ XUẤT LUẬT KIỂM ĐỊNH AI" : "AI RULE PROPOSAL"}
+              GRAPH 1B · {language === "vi" ? "ĐỀ XUẤT QUY TẮC KIỂM ĐỊNH AI" : "AI RULE PROPOSAL"}
             </span>
             <p style={{ marginTop: "8px", fontSize: "15px", lineHeight: "1.5", color: "var(--ink)" }}>
               {datasetProposals.length > 0
@@ -839,14 +967,14 @@ function RuleProposerPanel({
                     ? `Agent đã đề xuất ${datasetProposals.length} quy tắc kiểm định. Đã duyệt: ${approvedCount}, Từ chối: ${rejectedCount}, Chờ duyệt: ${pendingCount}.`
                     : `Agent proposed ${datasetProposals.length} rules. Approved: ${approvedCount}, Rejected: ${rejectedCount}, Pending: ${pendingCount}.`)
                 : (language === "vi"
-                    ? "Chưa có quy tắc nào được đề xuất. Hãy nhấn 'Sinh Rule' để agent đề xuất bộ quy tắc."
+                    ? "Chưa có quy tắc nào được đề xuất. Hãy nhấn 'Sinh quy tắc' để agent đề xuất bộ quy tắc."
                     : "No rules proposed yet. Click 'Generate rules' to let the agent propose a ruleset.")}
             </p>
           </div>
 
           <div className="understanding-meta" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginTop: "16px", marginBottom: "20px" }}>
             <div>
-              <span>{language === "vi" ? "Tổng số luật đề xuất" : "Total Proposed Rules"}</span>
+              <span>{language === "vi" ? "Tổng số quy tắc đề xuất" : "Total Proposed Rules"}</span>
               <strong>{datasetProposals.length}</strong>
             </div>
             <div>
@@ -868,11 +996,20 @@ function RuleProposerPanel({
             <div className="understanding-section" style={{ marginTop: "20px" }}>
               <div className="panel-heading" style={{ marginBottom: "16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
-                  <span className="eyebrow">{language === "vi" ? "HÀNG ĐỢI DUYỆT LUẬT" : "RULE REVIEW QUEUE"}</span>
+                  <span className="eyebrow">{language === "vi" ? "HÀNG ĐỢI DUYỆT QUY TẮC" : "RULE REVIEW QUEUE"}</span>
                   <h3 style={{ margin: 0 }}>
-                    {language === "vi" ? `Đề xuất luật kiểm tra (${datasetProposals.length})` : `Rule Proposals (${datasetProposals.length})`}
+                    {language === "vi" ? `Đề xuất quy tắc kiểm tra (${datasetProposals.length})` : `Rule Proposals (${datasetProposals.length})`}
                   </h3>
                 </div>
+                {canOperate && pendingCount > 0 && onApproveAllRules && (
+                  <button
+                    className="button primary"
+                    disabled={busy}
+                    onClick={onApproveAllRules}
+                  >
+                    {language === "vi" ? "✓ Duyệt tất cả quy tắc" : "✓ Approve all rules"}
+                  </button>
+                )}
               </div>
 
               <div className="proposal-list" style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
@@ -900,7 +1037,7 @@ function RuleProposerPanel({
           ) : (
             <div className="workflow-artifact-empty" style={{ marginTop: "16px", padding: "20px", background: "var(--color-bg-subtle, #f8fafc)", borderRadius: "8px", textAlign: "center" }}>
               {language === "vi"
-                ? "Chưa có đề xuất luật nào. Bấm 'Sinh Rule' để agent đọc Hợp đồng ngữ nghĩa và tạo bộ luật kiểm tra."
+                ? "Chưa có đề xuất quy tắc nào. Bấm 'Sinh quy tắc' để agent đọc Hợp đồng ngữ nghĩa và tạo bộ quy tắc kiểm tra."
                 : "No rule proposals yet. Click 'Generate rules' to have the agent infer rules from the Semantic Contract."}
             </div>
           )}
@@ -963,7 +1100,7 @@ function DeterministicExecutionPanel({
             >
               {busy
                 ? (isVi ? "Đang thực thi…" : "Executing…")
-                : (isVi ? "Chạy luật đã duyệt →" : "Run approved rules →")}
+                : (isVi ? "Chạy quy tắc đã duyệt →" : "Run approved rules →")}
             </button>
           </div>
         </div>
@@ -979,14 +1116,14 @@ function DeterministicExecutionPanel({
                     ? `Lượt chạy gần nhất (${activeRun.id}) tạo lúc ${formatTime(activeRun.created_at)}: Đã kiểm tra ${activeRun.total_checked.toLocaleString()} bản ghi, phát hiện ${activeRun.total_failed.toLocaleString()} lỗi vi phạm.`
                     : `Latest run (${activeRun.id}) created at ${formatTime(activeRun.created_at)}: Performed ${activeRun.total_checked.toLocaleString()} row checks, detected ${activeRun.total_failed.toLocaleString()} violations.`)
                 : (isVi
-                    ? "Chưa thực thi lượt kiểm định nào cho bộ dữ liệu này. Nhấn 'Chạy luật đã duyệt' để bắt đầu."
+                    ? "Chưa thực thi lượt kiểm định nào cho bộ dữ liệu này. Nhấn 'Chạy quy tắc đã duyệt' để bắt đầu."
                     : "No execution run for this dataset yet. Click 'Run approved rules' to start.")}
             </p>
           </div>
 
           <div className="understanding-meta" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginTop: "16px", marginBottom: "20px" }}>
             <div>
-              <span>{isVi ? "Luật đã duyệt" : "Approved Rules"}</span>
+              <span>{isVi ? "Quy tắc đã duyệt" : "Approved Rules"}</span>
               <strong>{approvedCount}</strong>
             </div>
             <div>
@@ -1074,7 +1211,7 @@ function DeterministicExecutionPanel({
           ) : (
             <div className="workflow-artifact-empty" style={{ marginTop: "16px", padding: "20px", background: "var(--color-bg-subtle, #f8fafc)", borderRadius: "8px", textAlign: "center" }}>
               {isVi
-                ? "Chưa có kết quả kiểm tra nào. Hãy bấm 'Chạy luật đã duyệt' để bắt đầu thực thi."
+                ? "Chưa có kết quả kiểm tra nào. Hãy bấm 'Chạy quy tắc đã duyệt' để bắt đầu thực thi."
                 : "No check results available. Click 'Run approved rules' to execute."}
             </div>
           )}
@@ -1444,7 +1581,7 @@ function WorkflowPage({
             {lowConfidenceColumns > 0 && (
               <p className="schema-hint">
                 Cột được đánh dấu là nơi agent suy luận kém chắc chắn nhất — duyệt
-                từ đó trước, vì mọi luật sinh ra sau này đều dựa trên hợp đồng này.
+                từ đó trước, vì mọi quy tắc sinh ra sau này đều dựa trên hợp đồng này.
               </p>
             )}
             {/* Evidence keys are namespaced `profile.column.<name>.<signal>`, so
@@ -2398,6 +2535,8 @@ function App() {
       sessionStorage.setItem("ridepulse.username", session.username);
       setRole(session.role);
       setUsername(session.username);
+      setWizardStep(1);
+      workspaceHydrated.current = true;
       setAuthenticated(true);
     } catch (err) {
       setLoginError(getErrorMessage(err, "Unable to start session."));
@@ -2412,6 +2551,8 @@ function App() {
     sessionStorage.removeItem("ridepulse.role");
     sessionStorage.removeItem("ridepulse.username");
     sessionStorage.removeItem("ridepulse.dataset");
+    workspaceHydrated.current = false;
+    setWizardStep(1);
     setAuthenticated(false);
   }
 
@@ -2624,6 +2765,52 @@ function App() {
     }
   }
 
+  async function bulkApproveProposals() {
+    if (!dataset) return;
+    const datasetId = dataset.id;
+    const workflowId = workflow?.id;
+    setError("");
+    try {
+      const targets = proposals.filter(
+        (p) =>
+          (!datasetId || p.dataset_id === datasetId) &&
+          (!workflowId || p.workflow_run_id === workflowId) &&
+          ["PROPOSED", "EDITED"].includes(p.status),
+      );
+      if (targets.length === 0) return;
+      await api.bulkReviewProposals({
+        dataset_id: datasetId,
+        workflow_run_id: workflowId,
+        action: "approve",
+        pending_only: true,
+      });
+      setProposals(
+        proposalsForWorkflow(
+          await api.listProposals(datasetId, workflowId),
+          workflowId,
+        ),
+      );
+      setRuleConfigurations(await api.listRuleConfigurations(datasetId));
+      setAuditLogs(await api.listAuditLogs());
+      setToast(
+        language === "vi"
+          ? `Đã duyệt tất cả ${targets.length} quy tắc.`
+          : `Approved all ${targets.length} pending rules.`,
+      );
+      setError("");
+    } catch (err) {
+      setError(
+        getErrorMessage(
+          err,
+          language === "vi"
+            ? "Không thể duyệt tất cả quy tắc."
+            : "Unable to approve all rules.",
+          language,
+        ),
+      );
+    }
+  }
+
   async function deleteProposal(id: string) {
     if (!dataset) return;
     const datasetId = dataset.id;
@@ -2767,11 +2954,13 @@ function App() {
     if (!workflow) {
       setError(
         language === "vi"
-          ? "Hãy bắt đầu workflow và publish bộ luật trước khi chạy Graph 2."
+          ? "Hãy bắt đầu workflow và publish bộ quy tắc trước khi chạy Graph 2."
           : "Start the workflow and publish its ruleset before running Graph 2.",
       );
       return;
     }
+    setError("");
+    setToast("");
     let currentStep = workflow.current_step;
     if (currentStep === "REVIEW_RULES") {
       const confirmed = await confirmCurrentRuleset();
@@ -2782,20 +2971,15 @@ function App() {
       // Publishing is a durable workflow stage. Complete it before queuing
       // checks so the DQ run can only consume this workflow's immutable set.
       await startWorkflowStep("PUBLISH_RULESET");
+      setToast("");
       currentStep = "RUN_CHECKS";
     }
-    if (currentStep === "RUN_CHECKS") {
+    if (currentStep === "RUN_CHECKS" || currentStep === "ANALYZE_REPORT") {
       await startWorkflowStep("RUN_CHECKS");
-    } else if (currentStep === "ANALYZE_REPORT") {
-      setToast(
-        language === "vi"
-          ? "Graph 2 đã hoàn tất. Sang bước 5 để chạy Graph 3 analysis."
-          : "Graph 2 is complete. Go to step 5 to start Graph 3 analysis.",
-      );
     } else {
       setError(
         language === "vi"
-          ? "Hãy publish bộ luật ở workflow trước khi chạy Graph 2."
+          ? "Hãy publish bộ quy tắc ở workflow trước khi chạy Graph 2."
           : "Publish the workflow ruleset before starting Graph 2.",
       );
     }
@@ -2811,7 +2995,7 @@ function App() {
     if (!artifact || artifact.type !== "RULE_SET") {
       setError(
         language === "vi"
-          ? "Không tìm thấy bộ luật hiện tại để xác nhận. Hãy sinh lại luật trong Bước 3."
+          ? "Không tìm thấy bộ quy tắc hiện tại để xác nhận. Hãy sinh lại quy tắc trong Bước 3."
           : "The current rule set is unavailable. Regenerate the rules in step 3.",
       );
       return false;
@@ -2839,6 +3023,7 @@ function App() {
     workflowActionLock.current = true;
     const generation = selectionGeneration.current;
     setError("");
+    setToast("");
     setRetryAction(null);
     setWorkflowActionBusy(true);
     setActiveJobStartedAt(new Date().toISOString());
@@ -3131,9 +3316,13 @@ function App() {
             aria-label={language === "vi" ? "Về trang chủ" : "Go to home"}
             title={language === "vi" ? "Về trang chủ" : "Go to home"}
           >
-            <span className="brand-mark">RP</span>
+            <span className="brand-mark" title="DataPulse DQ">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}>
+                <path d="M3 12h3.5l2.5-7 4 14 3.5-10 2.5 3H21" />
+              </svg>
+            </span>
             <span>
-              RidePulse <em>DQ</em>
+              DataPulse <em>DQ</em>
             </span>
           </button>
           <div className="topbar-actions">
@@ -3512,6 +3701,7 @@ function App() {
                         if (understandingArtifact) void confirmSemanticContract(understandingArtifact);
                       }}
                       onApproveRule={(id) => void reviewProposal(id, "approve")}
+                      onApproveAllRules={() => void bulkApproveProposals()}
                       onRejectRule={(id) => void reviewProposal(id, "reject")}
                       onEditRule={setEditingProposal}
                       onDeleteRule={(id) => void deleteProposal(id)}
@@ -3626,53 +3816,94 @@ function App() {
                     }
                   />
                   <div className="datasets-page" style={{ marginTop: "24px" }}>
-                    {activeRun && workflow && workflowArtifacts.some((artifact) => artifact.type === "ANOMALY_REPORT") ? (
-                      <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+                    <div className="graph3-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", alignItems: "stretch" }}>
+                      {/* Left Column (50%): BÁO CÁO ĐIỀU TRA */}
+                      {activeRun && workflow ? (
                         <StewardReportPanel
                           key={[...workflowArtifacts].reverse().find((artifact) => artifact.type === "ANOMALY_REPORT" && artifact.status !== "STALE")?.id}
                           runId={workflow.id}
                           language={language}
                           loadReport={loadStewardReport}
                         />
-                        <AnomalyStatisticsPanel
-                          decision={graph3Decision(workflowArtifacts, activeRun.id)}
-                          anomalies={dqAnomalies}
-                          results={dqResults}
-                          language={language}
-                        />
-                      </div>
-                    ) : (
-                      <section className="panel investigation-panel" style={{ padding: "24px" }}>
-                        <div className="panel-heading">
-                          <div>
-                            <span className="eyebrow">
-                              {language === "vi"
-                                ? "GRAPH 3 · ĐIỀU TRA NGUYÊN NHÂN GỐC"
-                                : "GRAPH 3 · ROOT CAUSE INVESTIGATION"}
-                            </span>
-                            <h2>
-                              {language === "vi"
-                                ? "Giả thuyết & Phân tích từ AI Agent"
-                                : "Hypotheses & Analysis from AI Agent"}
-                            </h2>
-                            <p className="muted">
-                              {language === "vi"
-                                ? "Chạy bộ luật đã duyệt ở Bước 4 để kích hoạt Graph 3 phân tích kết quả."
-                                : "Execute approved rules in Step 4 to trigger Graph 3 analysis."}
-                            </p>
+                      ) : (
+                        <section className="panel steward-report-panel" style={{ padding: "24px", height: "720px", display: "flex", flexDirection: "column" }}>
+                          <div className="panel-heading" style={{ flexShrink: 0, marginBottom: "16px" }}>
+                            <div>
+                              <span className="eyebrow">
+                                {language === "vi"
+                                  ? "GRAPH 3 · BÁO CÁO ĐIỀU TRA"
+                                  : "GRAPH 3 · INVESTIGATION REPORT"}
+                              </span>
+                              <h2 style={{ fontSize: "18px", fontWeight: 700, marginTop: "4px" }}>
+                                {language === "vi" ? "Báo cáo Steward từ Graph 3" : "Steward Report from Graph 3"}
+                              </h2>
+                              <p className="muted" style={{ fontSize: "13px", marginTop: "4px" }}>
+                                {language === "vi"
+                                  ? "Do node report_writer sinh ra sau khi hoàn tất điều tra nguyên nhân gốc."
+                                  : "Written by the report_writer node after completing root-cause investigation."}
+                              </p>
+                            </div>
                           </div>
-                        </div>
-                        <p className="investigation-note" style={{ marginTop: "16px", fontSize: "14px", lineHeight: "1.6" }}>
-                          {activeRun
-                            ? (language === "vi"
-                                ? "Graph 2 đã có kết quả. Bấm 'Chạy Graph 3 analysis' ở phía trên để agent phân tích bất thường và tạo báo cáo nguyên nhân gốc."
-                                : "Graph 2 has results. Use 'Run Graph 3 analysis' above to investigate anomalies and create the root-cause report.")
-                            : (language === "vi"
-                                ? "Chạy luật đã duyệt ở Bước 4 để tạo kết quả, sau đó kích hoạt Graph 3."
-                                : "Run the approved rules in Step 4 to create results, then start Graph 3.")}
-                        </p>
-                      </section>
-                    )}
+                          <div className="steward-report-empty" style={{ marginTop: "16px" }}>
+                            {language === "vi"
+                              ? "Chưa thực thi lượt kiểm định nào. Bấm 'Chạy Graph 3 analysis' ở phía trên để sinh báo cáo."
+                              : "No execution run yet. Click 'Run Graph 3 analysis' above to generate the report."}
+                          </div>
+                        </section>
+                      )}
+
+                      {/* Right Column (50%): ĐIỀU TRA NGUYÊN NHÂN GỐC */}
+                      {activeRun && workflowArtifacts.some((artifact) => artifact.type === "ANOMALY_REPORT") ? (
+                        <AnomalyInvestigationPanel
+                          runId={activeRun.id}
+                          canOperate={canOperate}
+                          language={language}
+                          proposals={proposals}
+                          results={dqResults}
+                        />
+                      ) : (
+                        <section className="panel investigation-panel" style={{ padding: "24px", height: "720px", display: "flex", flexDirection: "column" }}>
+                          <div className="panel-heading" style={{ flexShrink: 0, marginBottom: "16px" }}>
+                            <div>
+                              <span className="eyebrow">
+                                {language === "vi"
+                                  ? "GRAPH 3 · ĐIỀU TRA NGUYÊN NHÂN GỐC"
+                                  : "GRAPH 3 · ROOT CAUSE INVESTIGATION"}
+                              </span>
+                              <h2 style={{ fontSize: "18px", fontWeight: 700, marginTop: "4px" }}>
+                                {language === "vi"
+                                  ? "Giả thuyết & Phân tích từ AI Agent"
+                                  : "Hypotheses & Analysis from AI Agent"}
+                              </h2>
+                              <p className="muted" style={{ fontSize: "13px", marginTop: "4px" }}>
+                                {language === "vi"
+                                  ? "Chạy bộ quy tắc đã duyệt ở Bước 4 để kích hoạt Graph 3 phân tích kết quả."
+                                  : "Execute approved rules in Step 4 to trigger Graph 3 analysis."}
+                              </p>
+                            </div>
+                          </div>
+                          <p className="investigation-note" style={{ marginTop: "16px", fontSize: "14px", lineHeight: "1.6" }}>
+                            {activeRun
+                              ? (language === "vi"
+                                  ? "Graph 2 đã có kết quả. Bấm 'Chạy Graph 3 analysis' ở phía trên để agent phân tích bất thường và tạo báo cáo nguyên nhân gốc."
+                                  : "Graph 2 has results. Use 'Run Graph 3 analysis' above to investigate anomalies and create the root-cause report.")
+                              : (language === "vi"
+                                  ? "Chạy quy tắc đã duyệt ở Bước 4 để tạo kết quả, sau đó kích hoạt Graph 3."
+                                  : "Run the approved rules in Step 4 to create results, then start Graph 3.")}
+                          </p>
+                        </section>
+                      )}
+                    </div>
+
+                    {/* Bottom Row (Full Width): THỐNG KÊ BẤT THƯỜNG */}
+                    <div style={{ marginTop: "24px" }}>
+                      <AnomalyStatisticsPanel
+                        decision={graph3Decision(workflowArtifacts, activeRun?.id)}
+                        anomalies={dqAnomalies}
+                        results={dqResults}
+                        language={language}
+                      />
+                    </div>
                   </div>
                 </div>
               )}
@@ -4450,10 +4681,15 @@ function ProposalCard({
   const evidenceSummary = proposal.evidence_summary;
   const businessRationale = proposal.business_rationale;
   const confidenceExplanation = proposal.confidence_breakdown?.explanation;
+  const rawMetrics = proposal.evidence?.observed_metrics;
+  const observedMetrics =
+    rawMetrics && typeof rawMetrics === "object" && !Array.isArray(rawMetrics)
+      ? (rawMetrics as Record<string, unknown>)
+      : null;
 
   const sourceLabel =
     proposal.source === "MANUAL"
-      ? (isVi ? "Luật thủ công" : "Manual rule")
+      ? (isVi ? "Quy tắc thủ công" : "Manual rule")
       : (isVi ? "Đề xuất AI Agent" : "Agent proposal");
 
   const statusLabel =
@@ -4490,8 +4726,8 @@ function ProposalCard({
           <h3>{title}</h3>
           <p>{description}</p>
           <div className="rule-code">
-            <span>{isVi ? "LOẠI LUẬT" : "TYPE"}</span>
-            <code>{formatRule(proposal.rule)}</code>
+            <span>{isVi ? "LOẠI QUY TẮC" : "TYPE"}</span>
+            <code>{formatRule(proposal.rule, isVi)}</code>
           </div>
         </div>
         <div className="confidence">
@@ -4505,9 +4741,38 @@ function ProposalCard({
       <div className="evidence-row">
         <span className="evidence-label">{isVi ? "BẰNG CHỨNG" : "EVIDENCE"}</span>
         <span>{evidenceSummary}</span>
-        {proposal.evidence_refs.map((ref) => (
-          <code key={ref}>{ref}</code>
-        ))}
+        {Boolean(observedMetrics) && (
+          <span style={{ display: "inline-flex", gap: "6px", flexWrap: "wrap", marginLeft: "4px" }}>
+            {observedMetrics?.null_rate !== undefined && (
+              <span
+                style={{
+                  background: "var(--surface-muted, #f1f5f9)",
+                  padding: "2px 8px",
+                  borderRadius: "4px",
+                  fontSize: "11px",
+                  fontWeight: 600,
+                }}
+              >
+                {isVi ? "Tỷ lệ rỗng:" : "Null rate:"}{" "}
+                {(Number(observedMetrics.null_rate) * 100).toFixed(1)}%
+              </span>
+            )}
+            {observedMetrics?.null_count !== undefined && (
+              <span
+                style={{
+                  background: "var(--surface-muted, #f1f5f9)",
+                  padding: "2px 8px",
+                  borderRadius: "4px",
+                  fontSize: "11px",
+                  fontWeight: 600,
+                }}
+              >
+                {isVi ? "Dòng rỗng:" : "Null rows:"}{" "}
+                {Number(observedMetrics.null_count).toLocaleString()}
+              </span>
+            )}
+          </span>
+        )}
       </div>
       {businessRationale && (
         <p className="proposal-rationale-preview">
@@ -4525,7 +4790,7 @@ function ProposalCard({
           {canReject && (
             <button className="button ghost proposal-action reject" onClick={onReject}>
               {proposal.status === "APPROVED"
-                ? (isVi ? "Từ chối luật đã duyệt" : "Reject approved rule")
+                ? (isVi ? "Từ chối quy tắc đã duyệt" : "Reject approved rule")
                 : (isVi ? "Từ chối" : "Reject")}
             </button>
           )}
@@ -4533,8 +4798,8 @@ function ProposalCard({
             {pending
               ? (isVi ? "Chỉnh sửa" : "Edit")
               : proposal.status === "APPROVED"
-                ? (isVi ? "Sửa luật đã duyệt" : "Edit approved rule")
-                : (isVi ? "Sửa luật từ chối" : "Edit rejected rule")}
+                ? (isVi ? "Sửa quy tắc đã duyệt" : "Edit approved rule")
+                : (isVi ? "Sửa quy tắc từ chối" : "Edit rejected rule")}
           </button>
           <button
             className="button primary proposal-action approve"
@@ -4573,11 +4838,126 @@ function getBasisLabel(basis: ProposalBasis, language: "en" | "vi"): string {
     SCHEMA_CONSTRAINT: { vi: "Ràng buộc schema", en: "Schema constraint" },
     DATA_PROFILE: { vi: "Hồ sơ dữ liệu", en: "Data profile" },
     DATA_DICTIONARY: { vi: "Từ điển dữ liệu", en: "Data dictionary" },
-    HISTORICAL_RULE: { vi: "Luật đã dùng trước đây", en: "Historical rule" },
+    HISTORICAL_RULE: { vi: "Quy tắc đã dùng trước đây", en: "Historical rule" },
     POLICY: { vi: "Chính sách quản trị", en: "Governance policy" },
     MIXED: { vi: "Nhiều nguồn", en: "Mixed sources" },
   };
   return labels[basis]?.[language] ?? String(basis);
+}
+
+function getEffectiveProvenance(proposal: RuleProposal, isVi?: boolean): ParameterProvenance[] {
+  if (proposal.parameter_provenance && proposal.parameter_provenance.length > 0) {
+    return proposal.parameter_provenance;
+  }
+  const rule = proposal.rule;
+  const refs = proposal.evidence_refs || [];
+
+  if (rule.type === "not_null") {
+    const col = rule.column || "cột";
+    const ref = refs.find((r) => r.includes(col)) || refs[0] || `profile.column.${col}.null_rate`;
+    const isPolicy = ref.startsWith("policy");
+    return [
+      {
+        parameter_name: isVi ? "Cột bắt buộc" : "Required column",
+        source_type: isPolicy ? "POLICY" : "DATA_PROFILE",
+        source_ref: ref,
+        derivation_method: isVi
+          ? `Đánh giá tỷ lệ khuyết thiếu (null rate) trên toàn bộ tập dữ liệu.`
+          : `Evaluated null rate across full dataset profile.`,
+      },
+    ];
+  }
+
+  if (rule.type === "duplicate_fingerprint") {
+    return [
+      {
+        parameter_name: isVi ? "Khóa định danh" : "Fingerprint keys",
+        source_type: "POLICY",
+        source_ref: refs[0] || "policy.duplicate_fingerprint",
+        derivation_method: isVi
+          ? "Tập các cột tạo thành khóa định danh duy nhất theo chính sách quản trị."
+          : "Columns forming the unique business key from dataset policy.",
+      },
+    ];
+  }
+
+  if (rule.type === "numeric_range") {
+    const col = rule.column || "cột";
+    const items: ParameterProvenance[] = [];
+    if (rule.min_value !== undefined) {
+      const minRef = refs.find((r) => r.includes("min") || r.includes("nonnegative")) || refs[0] || `profile.column.${col}.min_value`;
+      items.push({
+        parameter_name: "min",
+        source_type: minRef.startsWith("policy") ? "POLICY" : "DATA_PROFILE",
+        source_ref: minRef,
+        derivation_method: isVi
+          ? `Ngưỡng dưới ${rule.min_value} xác định từ chính sách hoặc hồ sơ dữ liệu.`
+          : `Lower bound ${rule.min_value} from policy or profile.`,
+      });
+    }
+    if (rule.max_value !== undefined) {
+      const maxRef = refs.find((r) => r.includes("max") || r.includes("p95")) || refs[1] || refs[0] || `profile.column.${col}.max_value`;
+      items.push({
+        parameter_name: "max",
+        source_type: maxRef.startsWith("policy") ? "POLICY" : "DATA_PROFILE",
+        source_ref: maxRef,
+        derivation_method: isVi
+          ? `Ngưỡng trên ${rule.max_value} xác định từ phân vị p95 và phân phối dữ liệu.`
+          : `Upper bound ${rule.max_value} from p95 and profile.`,
+      });
+    }
+    return items.length > 0
+      ? items
+      : [
+          {
+            parameter_name: "range",
+            source_type: "DATA_PROFILE",
+            source_ref: refs[0] || `profile.column.${col}.min_value`,
+            derivation_method: isVi
+              ? `Khoảng giá trị hợp lệ cho cột ${col}.`
+              : `Valid value range for column ${col}.`,
+          },
+        ];
+  }
+
+  if (rule.type === "accepted_values") {
+    const col = rule.column || "cột";
+    const enumRef = refs.find((r) => r.includes("governed") || r.includes("distinct")) || refs[0] || `policy.governed_value_set.${col}`;
+    return [
+      {
+        parameter_name: isVi ? "Bộ giá trị" : "Allowed values",
+        source_type: enumRef.startsWith("policy") ? "POLICY" : "DATA_PROFILE",
+        source_ref: enumRef,
+        derivation_method: isVi
+          ? `Danh mục các giá trị hợp lệ được quy định cho cột ${col}.`
+          : `Governed value set allowed for column ${col}.`,
+      },
+    ];
+  }
+
+  if (rule.type === "cross_field_comparison") {
+    return [
+      {
+        parameter_name: isVi ? "Điều kiện so sánh" : "Comparison",
+        source_type: refs[0]?.startsWith("policy") ? "POLICY" : "DATA_PROFILE",
+        source_ref: refs[0] || "policy.cross_field_rule",
+        derivation_method: isVi
+          ? `Kiểm tra ràng buộc logic thứ tự giữa các trường dữ liệu.`
+          : `Logical order constraint between related fields.`,
+      },
+    ];
+  }
+
+  return [
+    {
+      parameter_name: rule.type,
+      source_type: "DATA_PROFILE",
+      source_ref: refs[0] || "profile.dataset",
+      derivation_method: isVi
+        ? "Căn cứ từ hồ sơ thống kê dữ liệu và chính sách quản trị."
+        : "Derived from dataset profile and governance policy.",
+    },
+  ];
 }
 
 /**
@@ -4596,7 +4976,7 @@ function ProposalRationale({ proposal }: { proposal: RuleProposal }) {
   const { language } = useI18n();
   const isVi = language === "vi";
 
-  const provenance = proposal.parameter_provenance ?? [];
+  const provenance = getEffectiveProvenance(proposal, isVi);
   const assumptions = proposal.assumptions ?? [];
   const breakdown = proposal.confidence_breakdown;
   const businessRationale = proposal.business_rationale;
@@ -4627,7 +5007,7 @@ function ProposalRationale({ proposal }: { proposal: RuleProposal }) {
           onClick={() => setOpen((value) => !value)}
         >
           <span className="rationale-caret">{open ? "▾" : "▸"}</span>
-          {isVi ? "Vì sao có luật này" : "Why this rule"}
+          {isVi ? "Vì sao có quy tắc này" : "Why this rule"}
         </button>
         {proposal.proposal_basis && (
           <span className={`basis-badge ${proposal.proposal_basis.toLowerCase()}`}>
@@ -4695,7 +5075,7 @@ function ProposalRationale({ proposal }: { proposal: RuleProposal }) {
                         </td>
                         <td>{getBasisLabel(item.source_type, language)}</td>
                         <td>
-                          <code>{item.source_ref}</code>
+                          <code>{formatSourceRef(item.source_ref, isVi)}</code>
                         </td>
                         <td>{item.derivation_method}</td>
                       </tr>
@@ -4880,7 +5260,7 @@ function ActiveRulesPanel({
         setError(
           cause instanceof ApiError
             ? cause.message
-            : (isVi ? "Không tải được bộ luật đang hoạt động." : "Unable to load active ruleset."),
+            : (isVi ? "Không tải được bộ quy tắc đang hoạt động." : "Unable to load active ruleset."),
         );
       })
       .finally(() => {
@@ -4897,7 +5277,7 @@ function ActiveRulesPanel({
     <section className="panel active-rules-panel">
       <div className="panel-heading">
         <div>
-          <span className="eyebrow">{isVi ? "BỘ LUẬT ĐANG CHẠY" : "ACTIVE RULESET"}</span>
+          <span className="eyebrow">{isVi ? "BỘ QUY TẮC ĐANG CHẠY" : "ACTIVE RULESET"}</span>
           <h3>{isVi ? "Bộ quy tắc đang hoạt động" : "Active ruleset"}</h3>
         </div>
         <span className="panel-caption">
@@ -4913,7 +5293,7 @@ function ActiveRulesPanel({
       ) : rules.length === 0 ? (
         <p className="investigation-note">
           {isVi
-            ? "Chưa có luật nào được xuất bản. Duyệt và xuất bản ở bước 3 để luật bắt đầu canh dữ liệu."
+            ? "Chưa có quy tắc nào được xuất bản. Duyệt và xuất bản ở bước 3 để quy tắc bắt đầu canh dữ liệu."
             : "No rules published yet. Approve and publish rules in Step 3 to start monitoring."}
         </p>
       ) : (
@@ -4921,7 +5301,7 @@ function ActiveRulesPanel({
           <table className="active-rules-table">
             <thead>
               <tr>
-                <th>{isVi ? "Luật" : "Rule"}</th>
+                <th>{isVi ? "Quy tắc" : "Rule"}</th>
                 <th>{isVi ? "Cột" : "Column"}</th>
                 <th>{isVi ? "Loại" : "Type"}</th>
                 <th>{isVi ? "Chiều" : "Dimension"}</th>
@@ -5064,7 +5444,7 @@ const FEEDBACK_CHOICES: Array<{ label: AnomalyFeedbackLabel; text: string }> = [
   { label: "TRUE_ANOMALY", text: "Đúng là bất thường" },
   { label: "FALSE_POSITIVE", text: "Báo nhầm" },
   { label: "EXPECTED_CHANGE", text: "Thay đổi đã biết trước" },
-  { label: "RULE_MISCONFIGURATION", text: "Luật cấu hình sai" },
+  { label: "RULE_MISCONFIGURATION", text: "Quy tắc cấu hình sai" },
 ];
 
 const HYPOTHESIS_LABEL: Record<string, string> = {
@@ -5076,6 +5456,119 @@ const HYPOTHESIS_LABEL: Record<string, string> = {
   DATA_QUALITY_VIOLATION: "Vi phạm quy tắc chất lượng",
   UNKNOWN: "Chưa xác định",
 };
+
+function formatHypothesisSummary(summary: string, isVi?: boolean): string {
+  if (!isVi || !summary) return summary;
+  if (summary.includes("Broad value-domain corruption or invalid record content is the most likely explanation")) {
+    return "Khả năng cao nhất là lỗi dữ liệu trên diện rộng hoặc nội dung bản ghi không hợp lệ. Nhiều quy tắc độc lập về khoảng giá trị và danh mục đồng thời thất bại với tỷ lệ vi phạm đáng kể trên các trường cước phí, khoảng cách, phụ phí, số lượng hành khách, phương thức thanh toán và tổng tiền.";
+  }
+  if (summary.includes("A source-system or upstream transformation change is plausible")) {
+    return "Có khả năng hệ thống nguồn hoặc tầng biến đổi dữ liệu thượng nguồn đã thay đổi, khiến nhiều trường tiền tệ và hành trình đồng thời vi phạm khoảng giá trị. Cần thêm dữ liệu lịch sử hoặc dữ liệu phân vùng để phân biệt với một lô dữ liệu lỗi cục bộ.";
+  }
+  if (summary.includes("A schema or contract change is possible")) {
+    return "Có khả năng cấu trúc schema hoặc ràng buộc dữ liệu đã bị thay đổi, đặc biệt là trường payment_type và các trường số. Tuy nhiên dữ liệu thực tế cho thấy các trường tiền tệ và khoảng cách vẫn duy trì kiểu số, và payment_type vẫn là kiểu chuỗi.";
+  }
+  return summary;
+}
+
+function formatRecommendedCheck(check: string, isVi?: boolean): string {
+  if (!isVi || !check) return check;
+  let text = check;
+  if (text.includes("Inspect source and transformation logic for")) {
+    return text.replace(
+      /Inspect source and transformation logic for ([^.]+)\./gi,
+      "Kiểm tra mã nguồn và logic biến đổi dữ liệu cho các trường: $1."
+    );
+  }
+  if (text.includes("Quantify whether invalid values are concentrated")) {
+    return "Xác định xem các giá trị không hợp lệ có tập trung ở một phân vùng hoặc lô nhập liệu cụ thể nào không.";
+  }
+  if (text.includes("Validate unit conventions, parsing, numeric coercion")) {
+    return "Xác thực quy ước đơn vị đo, hàm phân tích cú pháp, ép kiểu số và cách xử lý các giá trị đặc biệt trước khi đánh giá quy tắc.";
+  }
+  if (text.includes("Reconcile the") && text.includes("duplicate rate")) {
+    return text.replace(
+      /Reconcile the ([\d.]+)% dataset duplicate rate with the failed records and inspect whether duplicate or replayed rows account for the violations\./gi,
+      "Đối soát tỷ lệ trùng lặp dữ liệu $1% với các bản ghi vi phạm và kiểm tra xem các dòng trùng lặp có phải nguyên nhân gây lỗi không."
+    );
+  }
+  if (text.includes("Compare the failed-value distributions with the immediately preceding")) {
+    return "So sánh phân phối giá trị lỗi với các đợt trích xuất nguồn hoặc các lô dữ liệu sản xuất liền trước.";
+  }
+  if (text.includes("Review ingestion and transformation deployment changes")) {
+    return text.replace(
+      /Review ingestion and transformation deployment changes around execution run ([^.]+)\./gi,
+      "Rà soát các thay đổi triển khai trong pipeline nhập liệu và biến đổi xung quanh phiên chạy $1."
+    );
+  }
+  if (text.includes("Check whether monetary fields changed units")) {
+    return "Kiểm tra xem các trường tiền tệ có bị thay đổi đơn vị tính, quy ước dấu âm/dương hoặc dấu phân tách thập phân không.";
+  }
+  if (text.includes("Compare the current schema and rule contract")) {
+    return "So sánh schema hiện tại và ràng buộc quy tắc với phiên bản schema của nhà sản xuất dữ liệu (producer).";
+  }
+  if (text.includes("Inspect rejected and accepted payment_type values")) {
+    return "Kiểm tra các giá trị payment_type bị từ chối và được chấp nhận (đảm bảo không làm lộ dữ liệu nhạy cảm).";
+  }
+  if (text.includes("Verify whether range thresholds were changed")) {
+    return "Xác minh xem các ngưỡng khoảng có bị thay đổi hoặc áp dụng nhầm sang phiên bản tập dữ liệu khác không.";
+  }
+  return text;
+}
+
+function formatLimitations(text?: string | null, isVi?: boolean): string {
+  if (!text) return "";
+  if (!isVi) return text;
+  let out = text;
+  out = out.replace(
+    /The case loading response contained no signal payload and reported a decision inconsistent with the authoritative detector decision supplied in the request\. Violation_rate was null in persisted quality-result summaries, so rates were derived only from failed_count divided by checked_count where needed\./gi,
+    "Tỷ lệ vi phạm được tính toán trực tiếp từ số dòng vi phạm chia cho tổng số dòng kiểm tra do thiếu payload tóm tắt từ trước."
+  );
+  out = out.replace(
+    /The volume detector explicitly lacked sufficient history, so absence of volume evidence does not rule out upstream drift\./gi,
+    "Bộ phát hiện khối lượng dữ liệu chưa có đủ lịch sử quan sát, do đó việc thiếu bằng chứng về khối lượng không loại trừ khả năng có trôi dạt dữ liệu từ thượng nguồn."
+  );
+  out = out.replace(
+    /The observed failures are primarily value-domain violations, which by themselves do not demonstrate a schema change\./gi,
+    "Các vi phạm ghi nhận chủ yếu thuộc miền giá trị, bản thân chúng chưa đủ để kết luận có thay đổi cấu trúc schema."
+  );
+  return out;
+}
+
+function getMissingEvidenceList(text?: string | null, isVi?: boolean): string[] {
+  if (!text) return [];
+  const items = text
+    .split(/,\s*(?=[A-Z]|No |Chưa |Thiếu )/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  return items.map((item) => {
+    if (!isVi) return item;
+    let out = item;
+    if (out.includes("No prior clean-run baseline exists for reliable trend comparison")) {
+      return "Chưa có dữ liệu baseline sạch từ các phiên chạy trước để so sánh xu hướng đáng tin cậy.";
+    }
+    if (out.includes("No raw-value or partition-level breakdown of failed rows was available")) {
+      return "Chưa có phân rã chi tiết mức dòng lỗi hoặc phân vùng dữ liệu để khoanh vùng sự cố.";
+    }
+    if (out.includes("No lineage, schema-version, or ingestion-job metadata was returned")) {
+      return "Thiếu thông tin metadata về lineage, phiên bản schema hoặc tác vụ pipeline nhập liệu.";
+    }
+    if (out.includes("No deployment, lineage, partition, or source-batch metadata was available")) {
+      return "Thiếu metadata về đợt triển khai, lineage, phân vùng hoặc lô dữ liệu nguồn.";
+    }
+    if (out.includes("No schema version, contract diff, or rule-change history was returned")) {
+      return "Thiếu thông tin phiên bản schema, lịch sử thay đổi quy tắc hoặc sai khác hợp đồng dữ liệu.";
+    }
+    if (out.includes("No frequency distribution of governed payment_type values was available")) {
+      return "Chưa có phân phối tần suất của các giá trị payment_type chuẩn để đối chiếu.";
+    }
+    if (out.includes("metric history contained only run_")) {
+      return "Lịch sử số liệu chỉ chứa duy nhất dữ liệu của phiên chạy hiện tại, chưa có dữ liệu đối sánh quá khứ.";
+    }
+    return out;
+  });
+}
 
 /**
  * Kết quả điều tra nguyên nhân gốc của Graph 3.
@@ -5090,10 +5583,14 @@ function AnomalyInvestigationPanel({
   runId,
   canOperate,
   language = "vi",
+  proposals = [],
+  results = [],
 }: {
   runId: string;
   canOperate: boolean;
   language?: "en" | "vi";
+  proposals?: RuleProposal[];
+  results?: DqResult[];
 }) {
   const isVi = language === "vi";
   const [signals, setSignals] = useState<AnomalySignal[]>([]);
@@ -5135,11 +5632,198 @@ function AnomalyInvestigationPanel({
     [signals],
   );
 
-  const describeSignal = (signalId: string) => {
+  const resolveSignalDetail = (signal: AnomalySignal) => {
+    const rawTarget = signal.target_id || "";
+    const cleanId = rawTarget.replace(/^rv_/, "");
+
+    // 1. Tìm proposal tương ứng
+    const prop = proposals.find(
+      (p) => p.id === cleanId || p.id === rawTarget,
+    );
+
+    // 2. Tìm dqResult tương ứng
+    const res = results.find(
+      (r) => r.rule_id === cleanId || r.rule_id === rawTarget || (prop && r.rule_id === prop.id),
+    );
+
+    // Xác định tên cột
+    let col = prop?.rule?.column || "";
+    if (!col) {
+      const match = rawTarget.match(/(?:source_rows\.|column\.)([a-zA-Z0-9_]+)/);
+      if (match) col = match[1];
+    }
+
+    // Xác định tiêu đề quy tắc
+    let title = "";
+    if (prop) {
+      title = (isVi ? (prop.rule_name || prop.title) : (prop.title || prop.rule_name)) || "";
+    } else if (res?.rule_title) {
+      title = res.rule_title;
+    } else if (rawTarget.includes("dataset-")) {
+      title = isVi ? "Kiểm tra khối lượng toàn tập dữ liệu" : "Dataset volume verification";
+      col = rawTarget;
+    } else if (col) {
+      const type = rawTarget.includes("NOT_NULL") ? (isVi ? "Bắt buộc có giá trị (không rỗng)" : "Must not be null")
+        : rawTarget.includes("RANGE") ? (isVi ? "Khoảng giá trị hợp lệ" : "Valid value range")
+        : rawTarget;
+      title = `${col} · ${type}`;
+    } else {
+      title = rawTarget;
+    }
+
+    // Số liệu kiểm thử quan sát được
+    let metricsText = "";
+    if (res && res.checked_count > 0) {
+      const rate = res.violation_rate != null ? res.violation_rate : res.failed_count / res.checked_count;
+      const ratePct = (rate * 100).toFixed(2);
+      metricsText = isVi
+        ? `${res.failed_count.toLocaleString()} / ${res.checked_count.toLocaleString()} dòng (${ratePct}%)`
+        : `${res.failed_count.toLocaleString()} / ${res.checked_count.toLocaleString()} rows (${ratePct}%)`;
+    } else if (signal.observed_value !== undefined && signal.observed_value !== null) {
+      const num = parseFloat(String(signal.observed_value));
+      if (!isNaN(num)) {
+        if (num > 0 && num <= 1) {
+          metricsText = isVi ? `Tỷ lệ vi phạm: ${(num * 100).toFixed(2)}%` : `Violation rate: ${(num * 100).toFixed(2)}%`;
+        } else if (num > 1000) {
+          metricsText = isVi ? `Tổng số: ${num.toLocaleString()} dòng` : `Total: ${num.toLocaleString()} rows`;
+        }
+      }
+    }
+
+    const isFail = signal.score > 0 || (res && res.status === "FAIL");
+    const scoreVal = signal.score;
+
+    return {
+      col,
+      title,
+      metricsText,
+      isFail,
+      scoreVal,
+      scoreStr: scoreVal.toFixed(2),
+    };
+  };
+
+  const renderSignalItem = (signalId: string) => {
     const signal = signalById.get(signalId);
-    if (!signal) return signalId;
-    const score = signal.score.toFixed(2);
-    return `${signal.explanation_code} · ${signal.target_id} (điểm ${score})`;
+    if (!signal) return <span style={{ color: "var(--muted)" }}>{signalId}</span>;
+
+    const detail = resolveSignalDetail(signal);
+    const isCritical = detail.isFail && detail.scoreVal >= 0.7;
+    const isWarn = detail.isFail && detail.scoreVal < 0.7;
+
+    return (
+      <div
+        className="signal-detail-card"
+        style={{
+          padding: "12px 16px",
+          background: isCritical
+            ? "color-mix(in srgb, var(--red, #ef4444) 6%, var(--surface, #ffffff))"
+            : isWarn
+              ? "color-mix(in srgb, var(--chart-warn, #f59e0b) 6%, var(--surface, #ffffff))"
+              : "var(--surface, #ffffff)",
+          border: isCritical
+            ? "1px solid color-mix(in srgb, var(--red, #ef4444) 35%, transparent)"
+            : isWarn
+              ? "1px solid color-mix(in srgb, var(--chart-warn, #f59e0b) 35%, transparent)"
+              : "1px solid var(--border)",
+          borderRadius: "8px",
+          boxShadow: "0 1px 3px rgba(0, 0, 0, 0.04)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "6px",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px" }}>
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px" }}>
+            {detail.col && (
+              <span
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 800,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                  padding: "2px 8px",
+                  borderRadius: "4px",
+                  background: isCritical
+                    ? "color-mix(in srgb, var(--red, #ef4444) 12%, transparent)"
+                    : "var(--surface-muted, #f1f5f9)",
+                  border: "1px solid var(--border)",
+                  color: isCritical ? "var(--red, #b91c1c)" : "var(--ink)",
+                }}
+              >
+                {detail.col}
+              </span>
+            )}
+            <span style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--ink)", lineHeight: 1.4 }}>
+              {detail.title}
+            </span>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
+            <span
+              style={{
+                fontSize: "11px",
+                fontWeight: 800,
+                padding: "2px 8px",
+                borderRadius: "4px",
+                background: isCritical
+                  ? "color-mix(in srgb, var(--red, #ef4444) 15%, transparent)"
+                  : isWarn
+                    ? "color-mix(in srgb, var(--chart-warn, #f59e0b) 15%, transparent)"
+                    : "color-mix(in srgb, var(--chart-pass, #10b981) 15%, transparent)",
+                color: isCritical
+                  ? "var(--red, #ef4444)"
+                  : isWarn
+                    ? "var(--chart-warn, #b45309)"
+                    : "var(--chart-pass, #059669)",
+                border: "1px solid currentColor",
+              }}
+            >
+              {isCritical
+                ? (isVi ? "TÍN HIỆU ĐIỂM CAO" : "HIGH SIGNAL SCORE")
+                : isWarn
+                  ? (isVi ? "CẢNH BÁO" : "WARNING")
+                  : (isVi ? "ĐIỂM TÍN HIỆU 0" : "ZERO SIGNAL SCORE")}
+            </span>
+            <span
+              style={{
+                fontSize: "11px",
+                fontWeight: 600,
+                padding: "2px 6px",
+                borderRadius: "4px",
+                background: "var(--surface, #fff)",
+                border: "1px solid var(--border)",
+                color: "var(--muted)",
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              {isVi ? `Điểm: ${detail.scoreStr}` : `Score: ${detail.scoreStr}`}
+            </span>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px", fontSize: "12.5px", marginTop: "2px", paddingTop: "6px", borderTop: "1px dashed var(--border)" }}>
+          <span style={{ color: isCritical ? "var(--red, #b91c1c)" : isWarn ? "var(--ink)" : "var(--muted)" }}>
+            {signal.explanation_code}
+          </span>
+          {detail.metricsText && (
+            <span
+              style={{
+                fontWeight: 700,
+                fontSize: "12px",
+                color: isCritical ? "var(--red, #ef4444)" : "var(--ink)",
+                background: "var(--surface-muted, #f8fafc)",
+                padding: "2px 8px",
+                borderRadius: "4px",
+                border: "1px solid var(--border)",
+              }}
+            >
+              {detail.metricsText}
+            </span>
+          )}
+        </div>
+      </div>
+    );
   };
 
   const sendFeedback = async (label: AnomalyFeedbackLabel) => {
@@ -5157,132 +5841,288 @@ function AnomalyInvestigationPanel({
   };
 
   return (
-    <section className="panel investigation-panel">
-      <div className="panel-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+    <section className="panel investigation-panel" style={{ padding: "24px", height: "720px", display: "flex", flexDirection: "column" }}>
+      <div className="panel-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexShrink: 0, marginBottom: "16px" }}>
         <div>
           <span className="eyebrow">{isVi ? "GRAPH 3 · ĐIỀU TRA NGUYÊN NHÂN GỐC" : "GRAPH 3 · ROOT CAUSE INVESTIGATION"}</span>
-          <h2>{isVi ? "Giả thuyết & Bằng chứng từ AI Agent" : "Root Cause Hypotheses & Evidence from AI Agent"}</h2>
-          <p className="muted">
+          <h2 style={{ fontSize: "18px", fontWeight: 700, marginTop: "4px" }}>
+            {isVi ? "Giả thuyết & Bằng chứng từ AI Agent" : "Root Cause Hypotheses & Evidence from AI Agent"}
+          </h2>
+          <p className="muted" style={{ fontSize: "13px", marginTop: "4px" }}>
             {isVi
-              ? "Agent suy luận các giả thuyết nguyên nhân gốc kèm bằng chứng hai chiều và khuyến nghị."
-              : "Agent inferred root cause hypotheses with two-way evidence and recommendations."}
+              ? "Agent suy luận các giả thuyết nguyên nhân gốc kèm bằng chứng hai chiều và khuyến nghị xử lý."
+              : "Agent inferred root cause hypotheses with two-way evidence and actionable recommendations."}
           </p>
         </div>
-        <span className="panel-caption">
-          {signals.length} {isVi ? "tín hiệu" : "signals"} · {hypotheses.length} {isVi ? "giả thuyết" : "hypotheses"}
+        <span className="panel-caption" style={{ fontSize: "12px", color: "var(--muted)", fontWeight: 600, marginTop: "4px" }}>
+          {signals.length} {isVi ? "tín hiệu quan sát" : "signals"} · {hypotheses.length} {isVi ? "giả thuyết nguyên nhân" : "hypotheses"}
         </span>
       </div>
 
-      {loading ? (
-        <p className="investigation-note">Đang tải kết quả điều tra…</p>
-      ) : error ? (
-        <p className="investigation-note error">{error}</p>
-      ) : hypotheses.length === 0 ? (
-        <p className="investigation-note">
-          Chưa có giả thuyết nào cho lần chạy này. Agent điều tra chỉ chạy khi bộ
-          phát hiện thống kê tìm thấy tín hiệu bất thường.
-        </p>
-      ) : (
-        <div className="hypothesis-list">
-          {hypotheses.map((hypothesis) => (
-            <article className="hypothesis" key={hypothesis.id}>
-              <div className="hypothesis-top">
-                <span className="hypothesis-type">
-                  {HYPOTHESIS_LABEL[hypothesis.hypothesis_type] ??
-                    hypothesis.hypothesis_type.replaceAll("_", " ")}
-                </span>
-                {hypothesis.fallback_used && (
-                  <span className="hypothesis-fallback" title="Agent phải dùng đường lui, độ tin cậy thấp hơn bình thường">
-                    đường lui
-                  </span>
-                )}
-                <span className="hypothesis-confidence">
-                  <span className="hc-track">
-                    <span style={{ width: `${Math.round(hypothesis.confidence * 100)}%` }} />
-                  </span>
-                  <strong>{Math.round(hypothesis.confidence * 100)}%</strong>
-                </span>
-              </div>
-
-              <p className="hypothesis-summary">{hypothesis.summary}</p>
-
-              <div className="hypothesis-evidence">
-                <div className="he-block">
-                  <h5>Bằng chứng ủng hộ</h5>
-                  {hypothesis.supporting_signal_ids.length === 0 ? (
-                    <p className="he-empty">Không có</p>
-                  ) : (
-                    <ul>
-                      {hypothesis.supporting_signal_ids.map((id) => (
-                        <li key={id}>{describeSignal(id)}</li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-                <div className="he-block against">
-                  <h5>Bằng chứng phản bác</h5>
-                  {hypothesis.contradicting_signal_ids.length === 0 ? (
-                    <p className="he-empty">Không có</p>
-                  ) : (
-                    <ul>
-                      {hypothesis.contradicting_signal_ids.map((id) => (
-                        <li key={id}>{describeSignal(id)}</li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </div>
-
-              {hypothesis.recommended_checks.length > 0 && (
-                <div className="hypothesis-actions-block">
-                  <h5>Nên kiểm tra tiếp</h5>
-                  <ol>
-                    {hypothesis.recommended_checks.map((check) => (
-                      <li key={check}>{check}</li>
-                    ))}
-                  </ol>
-                </div>
-              )}
-
-              {(hypothesis.limitations || hypothesis.missing_evidence) && (
-                <p className="hypothesis-limits">
-                  {hypothesis.limitations}
-                  {hypothesis.limitations && hypothesis.missing_evidence ? " " : ""}
-                  {hypothesis.missing_evidence
-                    ? `Còn thiếu: ${hypothesis.missing_evidence}`
-                    : ""}
-                </p>
-              )}
-            </article>
-          ))}
-
-          {canOperate && (
-            <div className="feedback-bar">
-              <span className="feedback-label">Kết luận của bạn về lần điều tra này</span>
-              {sent ? (
-                <span className="feedback-sent">
-                  Đã ghi nhận:{" "}
-                  {FEEDBACK_CHOICES.find((choice) => choice.label === sent)?.text ?? sent}
-                </span>
-              ) : (
-                <div className="feedback-buttons">
-                  {FEEDBACK_CHOICES.map((choice) => (
-                    <button
-                      key={choice.label}
-                      type="button"
-                      className="button secondary"
-                      disabled={sending}
-                      onClick={() => void sendFeedback(choice.label)}
+      <div style={{ flex: 1, overflowY: "auto", minHeight: 0, paddingRight: "6px" }}>
+        {loading ? (
+          <p className="investigation-note" style={{ marginTop: "16px" }}>Đang tải kết quả điều tra…</p>
+        ) : error ? (
+          <p className="investigation-note error" style={{ marginTop: "16px" }}>{error}</p>
+        ) : hypotheses.length === 0 ? (
+          <p className="investigation-note" style={{ marginTop: "16px" }}>
+            Chưa có giả thuyết nào cho lần chạy này. Agent điều tra chỉ chạy khi bộ
+            phát hiện thống kê tìm thấy tín hiệu bất thường.
+          </p>
+        ) : (
+          <div className="hypothesis-list" style={{ display: "grid", gap: "24px", marginTop: "20px" }}>
+            {hypotheses.map((hypothesis) => (
+              <article
+                className="hypothesis"
+                key={hypothesis.id}
+                style={{
+                  background: "var(--surface-muted, #f8fafc)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "12px",
+                  padding: "24px",
+                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.03)",
+                }}
+              >
+                <div className="hypothesis-top" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "12px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                    <span
+                      className="hypothesis-type"
+                      style={{
+                        fontSize: "13px",
+                        fontWeight: 800,
+                        letterSpacing: "0.05em",
+                        textTransform: "uppercase",
+                        padding: "6px 14px",
+                        borderRadius: "999px",
+                        background: "var(--accent-soft, #e0f2fe)",
+                        color: "var(--accent-deep, #0369a1)",
+                        border: "1px solid color-mix(in srgb, var(--accent) 35%, transparent)",
+                      }}
                     >
-                      {choice.text}
-                    </button>
-                  ))}
+                      {HYPOTHESIS_LABEL[hypothesis.hypothesis_type] ??
+                        hypothesis.hypothesis_type.replaceAll("_", " ")}
+                    </span>
+                    {hypothesis.fallback_used && (
+                      <span className="hypothesis-fallback" title="Agent phải dùng đường lui, độ tin cậy thấp hơn bình thường">
+                        đường lui
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="hypothesis-confidence" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <span style={{ fontSize: "12.5px", color: "var(--muted)", fontWeight: 600 }}>
+                      {isVi ? "Xác suất tin cậy của Agent:" : "Agent confidence:"}
+                    </span>
+                    <span className="hc-track" style={{ width: "120px", height: "8px", borderRadius: "999px", background: "var(--border)", overflow: "hidden", display: "block" }}>
+                      <span style={{ width: `${Math.round(hypothesis.confidence * 100)}%`, height: "100%", background: "var(--accent, #3b82f6)", display: "block", borderRadius: "999px" }} />
+                    </span>
+                    <strong style={{ fontSize: "16px", color: "var(--ink)", fontVariantNumeric: "tabular-nums" }}>
+                      {Math.round(hypothesis.confidence * 100)}%
+                    </strong>
+                  </div>
                 </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+
+                <div
+                  className="hypothesis-summary-box"
+                  style={{
+                    margin: "16px 0 22px",
+                    padding: "16px 20px",
+                    background: "var(--surface, #ffffff)",
+                    border: "1px solid var(--border)",
+                    borderLeft: "4px solid var(--accent, #3b82f6)",
+                    borderRadius: "8px",
+                  }}
+                >
+                  <div style={{ fontSize: "11px", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--accent, #3b82f6)", marginBottom: "6px" }}>
+                    {isVi ? "KẾT LUẬN SUY LUẬN TỪ AI AGENT" : "AI AGENT INFERENCE SUMMARY"}
+                  </div>
+                  <p style={{ margin: 0, fontSize: "14.5px", lineHeight: "1.7", color: "var(--ink)", fontWeight: 500 }}>
+                    {formatHypothesisSummary(hypothesis.summary, isVi)}
+                  </p>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: "20px", marginBottom: "22px" }}>
+                  <div className="he-block" style={{ borderLeft: "4px solid var(--chart-warn, #f59e0b)", paddingLeft: "16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "14px", borderBottom: "1px solid var(--border)", paddingBottom: "8px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{ fontSize: "16px" }}>⚠️</span>
+                        <h5 style={{ margin: 0, fontSize: "13px", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--ink)" }}>
+                          {isVi ? "Bằng chứng ủng hộ giả thuyết" : "Supporting Evidence"}
+                        </h5>
+                      </div>
+                      <span style={{ fontSize: "11px", fontWeight: 700, padding: "2px 8px", borderRadius: "10px", background: "color-mix(in srgb, var(--chart-warn, #f59e0b) 15%, transparent)", color: "var(--chart-warn, #b45309)" }}>
+                        {hypothesis.supporting_signal_ids.length} {isVi ? "bằng chứng" : "items"}
+                      </span>
+                    </div>
+
+                    {hypothesis.supporting_signal_ids.length === 0 ? (
+                      <p className="he-empty">{isVi ? "Không có bằng chứng vi phạm nào." : "No supporting evidence found."}</p>
+                    ) : (
+                      <div style={{ display: "grid", gap: "10px" }}>
+                        {hypothesis.supporting_signal_ids.map((id) => (
+                          <div key={id}>{renderSignalItem(id)}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="he-block against" style={{ borderLeft: "4px solid var(--chart-pass, #10b981)", paddingLeft: "16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "14px", borderBottom: "1px solid var(--border)", paddingBottom: "8px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{ fontSize: "16px" }}>✓</span>
+                        <h5 style={{ margin: 0, fontSize: "13px", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--ink)" }}>
+                          {isVi ? "Bằng chứng phản bác (Quy tắc kiểm thử đạt)" : "Contradicting Evidence (Passed Rules)"}
+                        </h5>
+                      </div>
+                      <span style={{ fontSize: "11px", fontWeight: 700, padding: "2px 8px", borderRadius: "10px", background: "color-mix(in srgb, var(--chart-pass, #10b981) 15%, transparent)", color: "var(--chart-pass, #047857)" }}>
+                        {hypothesis.contradicting_signal_ids.length} {isVi ? "bằng chứng" : "items"}
+                      </span>
+                    </div>
+
+                    {hypothesis.contradicting_signal_ids.length === 0 ? (
+                      <p className="he-empty">{isVi ? "Không tìm thấy bằng chứng phản bác." : "No contradicting evidence found."}</p>
+                    ) : (
+                      <div style={{ display: "grid", gap: "10px" }}>
+                        {hypothesis.contradicting_signal_ids.map((id) => (
+                          <div key={id}>{renderSignalItem(id)}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {hypothesis.recommended_checks.length > 0 && (
+                  <div className="he-recommendations" style={{ borderLeft: "4px solid var(--accent, #3b82f6)", paddingLeft: "16px", marginBottom: "20px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "14px" }}>
+                      <span style={{ fontSize: "16px" }}>💡</span>
+                      <h5 style={{ margin: 0, fontSize: "13px", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--ink)" }}>
+                        {isVi ? "Hành động khắc phục đề xuất từ Agent" : "Recommended Corrective Actions"}
+                      </h5>
+                    </div>
+                    <p className="muted" style={{ margin: "-6px 0 12px", fontSize: "12.5px" }}>
+                      {isVi
+                        ? "Các bước kiểm tra và xử lý kỹ thuật khuyến nghị:"
+                        : "Recommended technical investigation steps:"}
+                    </p>
+                    <div style={{ display: "grid", gap: "10px" }}>
+                      {hypothesis.recommended_checks.map((check, idx) => (
+                        <div
+                          key={check}
+                          style={{
+                            display: "flex",
+                            alignItems: "flex-start",
+                            gap: "12px",
+                            padding: "10px 14px",
+                            background: "var(--surface-muted, #f8fafc)",
+                            border: "1px solid var(--border)",
+                            borderRadius: "6px",
+                          }}
+                        >
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              width: "22px",
+                              height: "22px",
+                              borderRadius: "50%",
+                              background: "var(--accent, #3b82f6)",
+                              color: "#ffffff",
+                              fontSize: "12px",
+                              fontWeight: 800,
+                              flexShrink: 0,
+                              marginTop: "1px",
+                            }}
+                          >
+                            {idx + 1}
+                          </span>
+                          <span style={{ fontSize: "13.5px", lineHeight: "1.55", color: "var(--ink)" }}>
+                            {formatRecommendedCheck(check, isVi)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {(hypothesis.limitations || hypothesis.missing_evidence) && (
+                  <div
+                    className="hypothesis-limits-box"
+                    style={{
+                      marginTop: "18px",
+                      padding: "16px 20px",
+                      background: "color-mix(in srgb, var(--accent, #3b82f6) 4%, var(--surface, #ffffff))",
+                      border: "1px solid color-mix(in srgb, var(--accent, #3b82f6) 25%, transparent)",
+                      borderRadius: "10px",
+                      fontSize: "13px",
+                      lineHeight: "1.6",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: 800, fontSize: "13px", color: "var(--ink)", marginBottom: "8px" }}>
+                      <span style={{ fontSize: "15px" }}>ℹ️</span>
+                      <span style={{ letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                        {isVi ? "Lưu ý về giới hạn quan sát & Bằng chứng cần bổ sung" : "Observation Constraints & Missing Evidence"}
+                      </span>
+                    </div>
+
+                    {hypothesis.limitations && (
+                      <div style={{ marginBottom: "10px" }}>
+                        <span style={{ fontWeight: 700, color: "var(--ink)", marginRight: "6px" }}>
+                          {isVi ? "📌 Giới hạn quan sát:" : "📌 Observation limitations:"}
+                        </span>
+                        <span style={{ color: "var(--ink)" }}>
+                          {formatLimitations(hypothesis.limitations, isVi)}
+                        </span>
+                      </div>
+                    )}
+
+                    {hypothesis.missing_evidence && (
+                      <div>
+                        <span style={{ fontWeight: 700, color: "var(--chart-warn, #b45309)", display: "block", marginBottom: "4px" }}>
+                          {isVi ? "⚠️ Các bằng chứng còn thiếu cần thu thập thêm:" : "⚠️ Missing evidence to collect:"}
+                        </span>
+                        <ul style={{ margin: 0, paddingLeft: "20px", display: "grid", gap: "4px" }}>
+                          {getMissingEvidenceList(hypothesis.missing_evidence, isVi).map((item, i) => (
+                            <li key={i} style={{ color: "var(--ink)", lineHeight: "1.5" }}>
+                              {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </article>
+            ))}
+
+            {canOperate && (
+              <div className="feedback-bar">
+                <span className="feedback-label">Kết luận của bạn về lần điều tra này</span>
+                {sent ? (
+                  <span className="feedback-sent">
+                    Đã ghi nhận:{" "}
+                    {FEEDBACK_CHOICES.find((choice) => choice.label === sent)?.text ?? sent}
+                  </span>
+                ) : (
+                  <div className="feedback-buttons">
+                    {FEEDBACK_CHOICES.map((choice) => (
+                      <button
+                        key={choice.label}
+                        type="button"
+                        className="button secondary"
+                        disabled={sending}
+                        onClick={() => void sendFeedback(choice.label)}
+                      >
+                        {choice.text}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </section>
   );
 }
@@ -5356,7 +6196,7 @@ function RunsPage({
             }}
             disabled={!approvedCount || busy || !canOperate}
           >
-            {vi ? "Chạy luật đã duyệt" : "Run approved rules"} <span>→</span>
+            {vi ? "Chạy quy tắc đã duyệt" : "Run approved rules"} <span>→</span>
           </button>
         </div>
       </div>
@@ -5367,7 +6207,7 @@ function RunsPage({
           <p>
             {hasPriorRun
               ? vi
-                ? `Có sẵn kết quả của lượt chạy trước (${activeRun?.rule_ids.length} luật). Chạy lượt mới, hoặc mở lại kết quả cũ.`
+                ? `Có sẵn kết quả của lượt chạy trước (${activeRun?.rule_ids.length} quy tắc). Chạy lượt mới, hoặc mở lại kết quả cũ.`
                 : `A previous run is available (${activeRun?.rule_ids.length} rules). Start a new run, or open the earlier results.`
               : vi
                 ? "Duyệt ít nhất một đề xuất ở bước 3, rồi chạy chúng qua bộ thực thi chỉ đọc."
@@ -5388,7 +6228,7 @@ function RunsPage({
                 }}
                 disabled={!approvedCount || busy}
               >
-                {vi ? "Chạy luật đã duyệt" : "Run approved rules"} →
+                {vi ? "Chạy quy tắc đã duyệt" : "Run approved rules"} →
               </button>
             </div>
           )}
@@ -6407,7 +7247,7 @@ function RuleSpecEditor({
       <span className="eyebrow">{isVi ? "THAM SỐ QUY TẮC" : "TYPED RULE PARAMETERS"}</span>
       <div className="rule-type-readonly">
         <strong>{rule.type.replaceAll("_", " ")}</strong>
-        <code>{formatRule(rule)}</code>
+        <code>{formatRule(rule, isVi)}</code>
       </div>
       {rule.type === "not_null" && (
         <label>

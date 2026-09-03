@@ -1,6 +1,6 @@
 # EVALGATE — BÁO CÁO TRIỂN KHAI, KIẾN TRÚC & TỰ ĐÁNH GIÁ
 
-> **ĐỌC MỤC 20 TRƯỚC.** Toàn bộ điểm số trong §1–§19 thuộc các run mà phán quyết
+> **ĐỌC MỤC 22 TRƯỚC, RỒI 21 VÀ 20.** Toàn bộ điểm số trong §1–§19 thuộc các run mà phán quyết
 > **chưa bao giờ có hiệu lực** — hoặc `EVALGATE_STALE` vì cây làm việc bẩn, hoặc điểm# PROMPT — READ-ONLY REVIEW TOÀN BỘ HỆ THỐNG AI
 >
 >
@@ -3926,6 +3926,8 @@
 | 14 | [**Sửa hai khuyết tật cấu trúc**](#14-sửa-hai-khuyết-tật-cấu-trúc)                                            |
 | 19 | [**Chạy EvalGate và đọc chỉ số trong terminal**](#19-chạy-evalgate-và-đọc-chỉ-số-trong-terminal)            |
 | 20 | [**Run được chứng nhận đầu tiên — 31/08/2026**](#20-run-được-chứng-nhận-đầu-tiên--31082026-64398cf)    |
+| 21 | [**Đo lại trên `main` đã merge — 02/09/2026**](#21-đo-lại-trên-main-đã-merge--02092026-5a5a1a2)          |
+| 22 | [**Đợt sửa mười defect — 02/09/2026, chiều**](#22-đợt-sửa-mười-defect--02092026-chiều)                  |
 
 ---
 
@@ -6553,9 +6555,1312 @@ Ba việc đầu đổi **bản chất độ tin cậy** của gate; bốn việ
 
 ---
 
+## 21. ĐO LẠI TRÊN `main` ĐÃ MERGE — 02/09/2026 (`5a5a1a2`)
+
+> Cùng khung với §20. Bundle dựng lại từ đầu qua đúng đường sản phẩm, chấm ở `--mode ci`
+> với manifest v2 hợp lệ. **Không sửa một dòng nào của `evalgate/` hay `src/` trước khi
+> chấm.** Chạy `--dry-run` nên `evidence/`, `reports/`, `runs/` giữ nguyên trạng thái
+> 31/08 — đã kiểm mtime, không file nào bị ghi đè.
+
+### 21.1 Phán quyết
+
+```text
+DECISION   RELEASE_BLOCKED          exit 3
+SCORE      79.58                    ← công bố (coverage 80.88% > sàn 60%)
+COVERAGE   80.88%                   (31/08: 72.36%)
+MANDATORY  100%
+RUN        product-a10049a59e094e6d979c596c6cc98423
+GIT        5a5a1a234b8de55e7423e4a7fd33255908b6530c
+BASELINE   product-ffd77da3e3e14473940d70e1b99f89d1  (45887f7)
+```
+
+**Điểm 79.58 không so trực tiếp được với 67.67 của §20.** Xem 21.8 — phần lớn khoảng
+cách đến từ evaluator mới, không từ sản phẩm.
+
+### 21.2 Chuỗi tin cậy — giữ xanh toàn bộ
+
+| Kiểm tra                 | 31/08 (§20)                   | 02/09                                   |
+| ------------------------ | ----------------------------- | --------------------------------------- |
+| `workspace_integrity_v1` | PASS                          | **PASS** — cây sạch tại `5a5a1a2`       |
+| `artifact_provenance_v1` | PASS                          | **PASS** — `valid: true`, `reasons: []` |
+| `regression_engine_v1`   | PASS — 19 evaluator, ci vs ci | **PASS — 19 evaluator, ci vs ci**       |
+| Điểm số                  | 67.67 công bố                 | **79.58 công bố**                       |
+
+`regression_engine`: `gate_score_drop_max = 0.0`, `hard_gates_newly_failing = 0`,
+`removed: []`, `out_of_profile: []`. Composition thay đổi một chiều — **6 evaluator được
+thêm, 0 bị gỡ**:
+
+```text
+added: anomaly_logic_probe_v1, governed_enum_conformance_v1, profile_accuracy_probe_v1,
+       report_grounding_probe_v1, sql_compilation_probe_v1, trace_coverage_v1
+```
+
+### 21.3 Điểm theo gate
+
+| Gate            |      Score | Weight | Coverage | Verdict |
+| --------------- | ---------: | -----: | -------- | ------- |
+| `ai_security`   | **100.00** |   0.25 | 6/7      | PASS    |
+| `observability` | **100.00** |   0.10 | **1/1**  | PASS    |
+| `input_data`    |      83.33 |   0.15 | 3/5      | PASS    |
+| `governance`    |      77.78 |   0.15 | **6/6**  | FAIL    |
+| `ai_quality`    |  **58.33** |   0.35 | 8/11     | FAIL    |
+
+```text
+ai_quality      58.33 × 0.35 = 20.42
+ai_security    100.00 × 0.25 = 25.00
+input_data      83.33 × 0.15 = 12.50
+governance      77.78 × 0.15 = 11.67
+observability  100.00 × 0.10 = 10.00
+                       TỔNG    79.58
+```
+
+**Lần đầu không gate nào bị loại**, nên trọng số **không phải tái chuẩn hoá** — §20 còn
+thiếu `observability` nên weight bị đẩy lên 0.36/0.29/0.20/0.15.
+
+35 evaluator: 20 PASS · 4 FAIL · 3 WARN · 8 `NOT_*`/BLOCKED · 102 metric · 6 critical
+finding (1 chặn release) · chi phí LLM $0.00.
+
+---
+
+### 21.3b TỪNG GATE ĐO GÌ, VÀ KẾT QUẢ RA SAO — 02/09/2026
+
+> Cùng khung với §5, số liệu thay bằng run `product-a10049a5…`. Mỗi gate mở đầu bằng
+> **câu hỏi nó trả lời**, rồi tới từng metric: *đo cái gì* và *con số này nghĩa là gì*.
+>
+> Điểm gate = **trung bình cộng** điểm các evaluator đóng góp được. Evaluator có
+> `per_dataset_breakdown` bị thu gọn bằng **P25** trước khi vào trung bình — nên hai
+> evaluator dưới đây có `score` khác hẳn con số thực sự vào gate (D-21.6).
+
+#### Bản đồ nhanh
+
+| Gate               | Câu hỏi gate này trả lời                              |      Điểm | Weight | Trạng thái                       |
+| ------------------ | ----------------------------------------------------- | --------: | -----: | -------------------------------- |
+| 1 · AI Quality     | Agent đề xuất luật **đúng và có tác dụng** không?     | **58.33** |   0.35 | 8/11 evaluator · 1 hard gate FAIL |
+| 2 · AI Security    | Người ngoài làm được điều không được phép không?      | **100.00** |  0.25 | 6/7 evaluator · 8 hard gate PASS |
+| 3 · Observability  | Khi sai, có truy được sai ở đâu không?                | **100.00** |  0.10 | **lần đầu có số** — 1/1          |
+| 4 · Input Data     | Dữ liệu vào có nguyên vẹn không?                      | **83.33** |   0.15 | 3/5 evaluator · 2 hard gate PASS |
+| 5 · Reliability    | Có chịu được sự cố phụ thuộc không?                   | **57.14** | *0.00* | 4/7 biện pháp · **không tính điểm** |
+| 6 · Governance     | Quyết định của AI có truy vết và audit được không?    | **77.78** |   0.15 | **6/6** evaluator · 1 FAIL       |
+| 7 · Business       | AI có giảm việc cho Steward không?                    |    *n/a* | *0.00* | **Không chạy ở `ci`** (nightly/pre_release) |
+
+---
+
+#### GATE 1 — AI QUALITY · 58.33 điểm · weight 0.35 → **20.42 điểm tổng**
+
+> **Câu hỏi:** agent đề xuất luật có *bắt được lỗi thật* không, và luật đó có *dùng được* không?
+
+```text
+58.33 = mean(0.00, 0.00, 66.67, 100.00, 0.00, 100.00, 100.00, 100.00)
+```
+
+Tám evaluator, nhưng **chỉ năm cái đọc bundle**. Ba cái cuối là unit test đội lốt
+evaluator (D-21.2) — xem ghi chú cuối gate.
+
+##### 1a · `replay_detection_v1` — agent có **bắt được** lỗi không? → **0.00**
+
+Chấm 1 artefact `execution-results` của bundle, đối chiếu ground truth phục hồi từ chính
+frame mà sản phẩm đã nạp.
+
+| Metric                             | Đo cái gì                                                    |          Kết quả | Nghĩa là                                             |
+| ---------------------------------- | ------------------------------------------------------------ | ---------------: | ---------------------------------------------------- |
+| `detection_precision`              | Trong các dòng agent gắn cờ, bao nhiêu % thật sự lỗi          |      🔴 **0.0** | Không một cờ nào trùng nhãn                          |
+| `detection_recall_macro`           | Trung bình theo *lớp lỗi*: mỗi lớp bắt được bao nhiêu %       |      🔴 **0.0** | Không bắt được lớp nào                               |
+| `detection_f1_macro`               | Cân bằng hai chỉ số trên                                      |      🔴 **0.0** | Ngưỡng đạt là 0.60                                   |
+| **`min_recall_per_class`**         | Lớp lỗi tệ nhất bắt được bao nhiêu %                          | ⚪ **None**      | ⚪ **HG-A1 NOT_EVALUATED** — evidence bị cắt          |
+| `evidence_complete`                | Mọi rule có ghi đủ tập dòng nó gắn cờ không                   |    🔴 **False** | **13 rule** ghi ít dòng hơn số nó tìm thấy           |
+| `archived_runs_scored`             | Số artefact được chấm                                         |                1 | (ngữ cảnh, không chấm điểm)                          |
+
+> **Vì sao `min_recall_per_class` là `None` chứ không phải 0.0:** evaluator từ chối khẳng
+> định. Một rule tìm ra 2.584 dòng nhưng chỉ ghi lại 20 thì *"chúng tôi không ghi lại"* và
+> *"agent bỏ sót"* là **hai mệnh đề khác nhau**, chỉ mệnh đề thứ hai nói về sản phẩm. Nên
+> HG-A1 để `NOT_EVALUATED` — vẫn chặn release (nó là mandatory), nhưng **không đổ lỗi cho
+> agent** vì một khiếm khuyết của artefact. Đây đúng là 20.9 mục 3, chưa sửa.
+
+##### 1b · `governed_enum_conformance_v1` — ngưỡng lấy từ **policy** hay từ **dữ liệu bẩn**? → **0.00**
+
+| Metric                          | Đo cái gì                                                    |       Kết quả | Nghĩa là                            |
+| ------------------------------- | ------------------------------------------------------------ | ------------: | ----------------------------------- |
+| **`governed_column_coverage`**  | Cột được policy quản có nhận được luật ACCEPTED_VALUES không |  🔴 **0.0** | 🔴 **HG-A8 FAIL** — **0/1 cột**     |
+
+> Chỉ một metric, vì evaluator **không có gì để soi**: agent không đề xuất bất kỳ
+> `ACCEPTED_VALUES` nào cho `payment_type`. Không có luật thì không đo được
+> `tautological_enum_count` → **HG-A3 `NOT_EVALUATED`**.
+>
+> Đây chính xác là lỗ hổng mà `HG-A8` được thêm ở §20 để bịt: **không sinh gì ra thì im
+> lặng, mà im lặng lại chấm điểm cao hơn sinh ra một luật tautological.** Nay
+> `governed_enum_conformance_v1` trả FAIL/0.0 thay vì NOT_MEASURED, nên sự vắng mặt bị
+> tính điểm chứ không rơi khỏi mẫu số.
+
+##### 1c · `golden_conformance_v1` — có đề xuất **đúng loại luật** không? → **0.00** *(score gốc 60.0)*
+
+| Metric                            | Đo cái gì                                                |         Kết quả | Nghĩa là                                           |
+| --------------------------------- | -------------------------------------------------------- | --------------: | -------------------------------------------------- |
+| `golden_case_pass_rate`           | % case đạt (chỉ tính case **kiểm được**)                 |    🟡 **0.60** | 6 đạt / 10 soi được / 3 áp dụng nhưng không soi được / 3 không áp dụng |
+| **`golden_critical_failures`**    | Case mức CRITICAL trượt                                   |   ✅ **0**     | ✅ **HG-A5 PASS** — lần đầu                        |
+| `golden_rule_expectation_rate`    | Tầng 2: đúng loại luật, đúng cột, đúng nguồn tham số      |   🟡 **0.667** | 2/6 case tầng 2 trượt                              |
+| `golden_prompt_compliance_rate`   | Tầng 3: văn bản sinh ra có tuân prompt của chính nó không |   🔴 **0.0**   | `business_rationale` vẫn chứa tên biến kỹ thuật    |
+| **`golden_applicability_rate`**   | Bao nhiêu case là phát biểu **về chính dataset này**      |  ✅ **0.8125** | ✅ **HG-A9 PASS** — 13/16, trên sàn 0.5            |
+
+> ⚠️ **`score` = 60.0 nhưng vào gate = 0.00.** `per_dataset_breakdown` ở đây chứa **16
+> case** (mỗi case 100 hoặc 0), không phải 16 dataset. P25 trên phân bố nhị phân có >25%
+> trượt luôn cho 0. Đây là D-21.6 — `DatasetBreakdown` đang bị dùng sai ngữ nghĩa, và nó
+> **đang làm `ai_quality` thấp hơn thực tế**.
+
+##### 1d · `vacuity_probe_v1` — luật có **bao giờ fail được** không? → **66.67**
+
+Không cần nhãn. Chỉ so tham số của luật với dữ liệu nó canh gác.
+
+| Metric                            | Đo cái gì                                       |        Kết quả | Nghĩa là                                        |
+| --------------------------------- | ----------------------------------------------- | -------------: | ----------------------------------------------- |
+| `vacuous_rule_rate`               | % luật mà **vi phạm là bất khả thi**            | 🟡 **0.3333** | **4/12** luật không bao giờ báo lỗi được        |
+| `worst_type_vacuity_rate`         | Loại luật tệ nhất                                | 🟡 **0.3333** | `RANGE` — 33% số luật loại này không thể fail   |
+| **`systemic_vacuous_rule_types`** | Số loại luật mà **quá nửa** vô dụng              |   ✅ **0**    | ✅ **HG-A6 PASS** — không loại nào hỏng hệ thống |
+| `degenerate_threshold_rules`      | Luật sống nhưng vô dụng                          |   ✅ **0**    | Không có `min_row_count = 1` kiểu cũ            |
+| `rules_not_judgeable`             | Loại luật cố ý không phán xét                    |         **19** | `NOT_NULL` trên cột sạch là **guard hợp lệ**    |
+
+> So §5 (bản 22/08): `vacuous_rule_rate` 0.428 → **0.333**, `worst_type` 0.892 → **0.333**,
+> `systemic_vacuous_rule_types` 1 → **0**. `ACCEPTED_VALUES` không còn là loại tệ nhất —
+> nhưng lý do là agent **không sinh `ACCEPTED_VALUES` nào cả** (xem 1b), nên cải thiện này
+> đọc chung với `HG-A8 FAIL` chứ không đọc riêng.
+
+##### 1e · `run_outcome_integrity_v1` — lần chạy gần nhất có **ra được gì** không? → **100.00**
+
+| Metric                           | Đo cái gì                                                             |        Kết quả | Nghĩa là                                |
+| -------------------------------- | --------------------------------------------------------------------- | -------------: | --------------------------------------- |
+| **`latest_run_produced_output`** | Lần chạy mới nhất có sinh ra output nào không                          |  ✅ **True**  | ✅ **HG-A7 PASS** — `PRODUCED_OUTPUT`   |
+| `empty_run_rate`                 | Tỷ lệ lần chạy không ra gì trong cửa sổ gần nhất                       |   ✅ **0.0**  | 0/1 lần chạy trắng tay                  |
+| **`schema_violation_rate`**      | % output có cấu trúc bị **chính validator sản phẩm** từ chối           |   ✅ **0.0**  | ✅ **HG-A2 PASS**                       |
+| `latest_run_failure_kind`        | Nếu trắng tay thì vì sao (TIMEOUT / SCHEMA_REJECTED / RATE_LIMITED / …) |     *(None)* | "latest run succeeded"                  |
+
+> **Đây là hai hard gate đổi trạng thái mạnh nhất so với §5:** `HG-A7` từ 🔴 False →
+> ✅ True, `HG-A2` từ 🔴 1.00 → ✅ 0.0. Nhưng đọc kèm 21.8: pipeline **có** ra output, chỉ
+> là output đến từ *heuristic fallback* sau khi 2/2 batch gọi LLM thất bại. Gate này hỏi
+> *"có ra gì không"*, không hỏi *"cái ra được có phải do agent không"*.
+
+##### 1f-1h · Ba probe **không đọc bundle** → mỗi cái **100.00**
+
+| Evaluator                   | Metric                                                          | Kết quả  |
+| --------------------------- | --------------------------------------------------------------- | -------- |
+| `anomaly_logic_probe_v1`    | `zscore_zero_mad_fallback` · `zscore_outlier_detection` · `detector_db_flow_fidelity` | True ×3 |
+|                             | `anomaly_logic_score` *(roll-up)*                                | **100.0** |
+| `sql_compilation_probe_v1`  | `identifier_quoting_safety` · `predicate_compilation_coverage`   | True ×2 |
+|                             | `sql_compilation_score` *(roll-up)*                              | **100.0** |
+| `report_grounding_probe_v1` | `report_structure_valid` · `figures_grounded_to_source`          | True ×2 |
+|                             | `report_grounding_score` *(roll-up)*                             | **100.0** |
+
+> 🔺 **Ba evaluator này không nhận `context`, không khai `required_artifacts`, không đọc
+> một byte nào của bundle** — chúng import `src.*` rồi tự dựng fixture. Chúng đóng góp
+> `300/8 = 37.5` trong tổng `58.33`, tức **+8.75 điểm tổng**.
+>
+> Bỏ cả ba: `ai_quality` = `166.67/5` = **33.33** — đúng bằng §20 từng chữ số. Xem D-21.2
+> và bảng kịch bản ở 21.8.
+>
+> `anomaly_logic_probe_v1` còn dùng **7 `assert` trần**: nếu sản phẩm sai, evaluator ném
+> `AssertionError` → `EVALUATOR_ERROR` → **rơi khỏi aggregate thay vì kéo điểm xuống**
+> (D-21.3).
+
+---
+
+#### GATE 2 — AI SECURITY · 100.00 điểm · weight 0.25 → **25.00 điểm tổng**
+
+> **Câu hỏi:** người ngoài có làm được điều không được phép không?
+
+Sáu evaluator, **cả sáu đều 100.00**. Đây là gate đáng tin nhất của run: toàn bộ là probe
+tĩnh (AST) hoặc probe ASGI **gửi request thật**, không phụ thuộc LLM.
+
+| Evaluator                    | Metric                                        | Đo cái gì                                                    |             Kết quả |
+| ---------------------------- | --------------------------------------------- | ------------------------------------------------------------ | ------------------: |
+| `authz_probe_v1`             | **`unauthenticated_mutating_endpoints`**      | Endpoint **đổi trạng thái** mà không cần đăng nhập            | ✅ **0** — HG-S1 |
+|                              | `unauthenticated_read_endpoints`              | Endpoint đọc không cần đăng nhập                              |               **1** |
+|                              | `total_endpoints_scanned`                     | Mẫu số                                                        |              **91** |
+| `asgi_behaviour_probe_v1`    | **`cross_tenant_violations`**                 | Tenant A đọc/ghi được object của tenant B (BOLA)              | ✅ **0** — HG-S2 |
+|                              | `role_escalation_violations`                  | Role thấp chạm được hành động của role cao (BFLA)             |               ✅ 0 |
+|                              | `unauthenticated_endpoints_reachable`         | Bản hành vi của metric tĩnh ở trên                            |               ✅ 0 |
+|                              | `csrf_enforced_rate`                          | % write probe bị từ chối đúng bằng mã `CSRF_INVALID`          |       ✅ **100.0** |
+|                              | `probe_cases_conclusive`                      | Số case **có control hợp lệ**, được tính vào metric           |         **162** |
+|                              | `probe_cases_inconclusive`                    | Số case bị loại khỏi mọi metric, không tính là pass           |           **0** |
+| `egress_probe_v1`            | `raw_row_egress_violations`                   | Artefact chứa **nguyên dòng dữ liệu** lọt ra ngoài            |               ✅ 0 |
+|                              | `pii_column_egress_violations`                | Trong đó có cột dữ liệu cá nhân                               |               ✅ 0 |
+|                              | **`raw_or_pii_egress_violations`**            | Tổng                                                          | ✅ **0** — HG-S3 |
+| `secret_scan_v1`             | **`secret_findings`**                         | Mật khẩu / API key trong file được git theo dõi               | ✅ **0** — HG-S6 |
+|                              | `tracked_files_scanned`                       | Mẫu số                                                        |             **486** |
+| `default_credential_probe_v1`| **`default_credentials_active`**              | Tài khoản seed đoán được, tạo mà không kiểm môi trường        | ✅ **False** — HG-S7 |
+|                              | `seeded_credential_count`                     | Số tài khoản như vậy                                          |               ✅ 0 |
+| `upload_probe_v1`            | **`malicious_upload_accepted_count`**         | Số case upload độc hại lọt qua handler                        | ⚠️ **0** — HG-S4 |
+
+> **162 case kết luận được / 0 case vô kết luận** là con số đáng tin nhất trong toàn bộ
+> report. Mỗi case cross-tenant chạy **hai lần** bởi cùng một actor — một lần vào object
+> của chính nó (control phải thành công), một lần vào object tenant kia. Nếu control
+> không thành công, case bị đánh `inconclusive` và **loại khỏi metric**, không tính là
+> pass. Zero inconclusive nghĩa là mọi case đều có control hợp lệ.
+>
+> ⚠️ **`HG-S4` đang PASS GIẢ.** `product_run.py:334` ghi khoá `accepted_malicious`;
+> `upload_behaviour_probe.py:35` đọc khoá `malicious_upload_accepted_count`. Hai khoá
+> không khớp → `accepted` **luôn = 0** bất kể sản phẩm có nhận file độc hay không. Đây là
+> D-21.1: **một hard gate chết đang được tính là PASS.** So sánh với §5 — nơi cùng gate
+> này báo 8 endpoint mở và HG-S1/S3/S7 đều đỏ — thì tiến bộ của Gate 2 là thật, nhưng
+> `HG-S4` phải bị gạch khỏi cột "đã kiểm chứng".
+
+---
+
+#### GATE 3 — OBSERVABILITY · 100.00 điểm · weight 0.10 → **10.00 điểm tổng**
+
+> **Câu hỏi:** khi hệ thống sai, có biết sai ở đâu không?
+
+**Lần đầu tiên gate này có số.** Ở §5 nó là *"chưa xây"* và bị loại khỏi điểm tổng; ở §20
+nó vẫn `NOT_IMPLEMENTED`. Nay `product_run` ghi `traces/node-events.jsonl` vào bundle nên
+`trace_coverage_v1` có cái để đọc.
+
+| Metric                  | Đo cái gì                                                       |         Kết quả | Nghĩa là                                        |
+| ----------------------- | --------------------------------------------------------------- | --------------: | ----------------------------------------------- |
+| `trace_coverage`        | % event mang đủ `trace_id`/`workflow_run_id`/`dataset_id`/`event`/`timestamp` |  ✅ **1.0** | **100%** event đủ trường định danh              |
+| `critical_node_errors`  | Số event `error` trong luồng                                     |     ✅ **0**   | Không node nào báo lỗi                          |
+| `trace_p95_latency_ms`  | Độ trễ p95 của node                                              | **42.52 ms**  | Dưới ngưỡng 1000ms → band 100                   |
+| `llm_cost_usd`          | Chi phí LLM cộng dồn từ trace                                    |    **$0.00**  | Bundle chạy LLM tất định, không tốn tiền        |
+
+> 🔺 **Đọc con số này một cách dè dặt.** 100/100 ở đây nghĩa là *"những event được ghi thì
+> ghi đủ trường"*, **không** nghĩa là *"mọi thứ đáng ghi đều đã được ghi"*. Không có metric
+> nào đo **mẫu số** — tức là bao nhiêu % số node đáng lẽ phải phát event thì thực sự phát.
+> Một hệ thống chỉ instrument 3 node và ghi đủ trường cho cả 3 cũng ra 1.0.
+>
+> Thêm nữa `run.py:270` **vẫn** ghi cứng `trace_coverage_v1 → NOT_IMPLEMENTED, "planned
+> for phase C; OpenTelemetry deps are commented out"` — một câu mô tả sai sự thật, phát ra
+> mỗi lần chạy profile `local` (D-21.5).
+
+---
+
+#### GATE 4 — INPUT DATA · 83.33 điểm · weight 0.15 → **12.50 điểm tổng**
+
+> **Câu hỏi:** dữ liệu đi vào hệ thống có còn nguyên vẹn không?
+
+```text
+83.33 = mean(100.00, 50.00, 100.00)
+```
+
+##### 4a · `ingest_fidelity_v1` — nạp dữ liệu có làm hỏng dữ liệu không? → **100.00**
+
+Chạy thẳng bộ ép kiểu của `src/worker.py` (`to_float`/`to_int`/`to_str`) qua ma trận 13
+giá trị bẩn có thật trong CSV, cộng một vòng round-trip trên 3 archetype tổng hợp.
+
+| Metric                     | Đo cái gì                                                            |        Kết quả | Nghĩa là                                            |
+| -------------------------- | -------------------------------------------------------------------- | -------------: | --------------------------------------------------- |
+| **`row_fidelity`**         | % dòng sống sót nguyên vẹn qua round-trip                             | ✅ **100.0** | ✅ **HG-D1 PASS**                                   |
+| `cell_fidelity`            | % ô sống sót nguyên vẹn                                               | ✅ **100.0** | Không ô sạch nào bị biến dạng                       |
+| `coercion_signal_rate`     | % giá trị bẩn bị **từ chối có tín hiệu** thay vì nuốt im lặng         |  ✅ **1.0**  | Mọi ca REJECT đều phát tín hiệu                     |
+| **`coercion_loss_count`**  | Số giá trị không parse được bị biến thành **null không phân biệt được** |  ✅ **0**   | ✅ **HG-D2 PASS**                                   |
+| `null_ambiguity_rate`      | Tỷ lệ đầu vào bẩn trông y hệt ô rỗng hợp lệ                            |  ✅ **0.0**  | Không còn "null do hệ thống tự chế"                 |
+
+> So §5 (37.50 điểm, HG-D1 FAIL): `"12,50"`, `"N/A"`, `"1e999"` từng lặng lẽ thành `None`,
+> rồi profiler đo tỷ lệ null cao đó, rồi agent đề xuất `NULL_RATE` chấp nhận nó — **hệ
+> thống chứng nhận thiệt hại do chính nó gây ra**. Nay cả hai hard gate D1/D2 xanh.
+
+##### 4b · `profile_accuracy_probe_v1` — profiler tính có đúng không? → **100.00**
+
+| Metric                     | Đo cái gì                                       |       Kết quả |
+| -------------------------- | ----------------------------------------------- | ------------: |
+| `null_rate_fidelity`       | Đếm null đúng trên fixture 100 dòng (10 null)   | ✅ **True** |
+| `min_max_fidelity`         | min = 30.0, max = 208.0 đúng chính xác           | ✅ **True** |
+| `distinct_count_fidelity`  | Đếm 5 category đúng                              | ✅ **True** |
+| `profile_accuracy_score`   | Roll-up của ba metric trên                       | **100.0**   |
+
+> 🔺 **Cũng không đọc bundle** (D-21.2) — dựng SQLite tạm rồi tự kiểm. Là unit test tốt,
+> nhưng nó đang cấp 100 điểm cho `input_data` mà không nói gì về dataset người dùng nạp.
+
+##### 4c · `multi_dataset_readiness_v1` — còn cách "nạp dataset bất kỳ" bao xa? → **50.00**
+
+| Dimension                        | Weight | Kết quả       | Chi tiết                                    |
+| -------------------------------- | -----: | ------------- | ------------------------------------------- |
+| `upload_surface_exists`          |   0.25 | ✅ **True**  | Có endpoint upload                          |
+| `schema_agnostic_row_storage`    |   0.20 | 🔴 **False** | Chưa có bảng landing JSONB                  |
+| `dataset_has_owner_or_schema`    |   0.15 | 🔴 **False** | `DatasetModel` chưa mang owner/tenant/schema |
+| `domain_not_hardcoded_in_prompt` |   0.15 | ✅ **True**  | System prompt không còn nhắc taxi/NYC       |
+| `dataset_deletion_endpoint`      |   0.10 | ✅ **True**  | Có `DELETE /datasets/…`                     |
+| `evidence_column_cap_sufficient` |   0.10 | 🔴 **False** | `ProposalEvidence` chặn ở **64** cột (cần ≥200) |
+| `low_single_domain_coupling`     |   0.05 | 🔴 **False** | **35 file** còn tham chiếu schema NYC       |
+| **`multi_dataset_readiness_score`** | — | **50.0**    | 0 = sản phẩm một-dataset; 100 = nạp được bất kỳ |
+| `single_domain_coupled_files`    |    — | **35**        | *Ngữ cảnh* — số file còn tham chiếu schema NYC |
+
+> 🔺 Evaluator này **không có nhánh PASS**: `FAIL if score < 50 else WARN`
+> ([multi_dataset_readiness.py:178](evalgate/gates/readiness/multi_dataset_readiness.py#L178)).
+> Dù sản phẩm đạt 100/100 nó vẫn báo WARN. Và nó đóng cứng 50.0 vào trung bình của
+> `input_data` — tức trần lý thuyết của gate này hiện là `(100+50+100)/3 = 83.33`, **đúng
+> bằng điểm đang có** (D-21.8).
+
+---
+
+#### GATE 5 — RELIABILITY · 57.14 điểm · weight **0.00** → **0 điểm tổng**
+
+> **Câu hỏi:** hệ thống có chịu được sự cố phụ thuộc không?
+
+| Control                          | Đo cái gì                              |       Kết quả | Ghi chú                                                    |
+| -------------------------------- | -------------------------------------- | ------------: | ---------------------------------------------------------- |
+| `db_statement_timeout_configured`| Timeout ở tầng câu lệnh SQL            |  ✅ **True** |                                                             |
+| `upload_size_limit_configured`   | Chặn kích thước file upload            |  ✅ **True** | Nhận cả `status_code=413` chứ không chỉ tên setting        |
+| `per_tenant_quota_configured`    | Hạn mức / rate-limit theo tenant       |  ✅ **True** |                                                             |
+| `retry_policy_configured`        | Có chính sách thử lại                  |  ✅ **True** |                                                             |
+| **`llm_timeout_configured`**     | Timeout gọi LLM **và không tự gây lỗi** | 🔴 **False** | *"configured, but 1 of the last 5 runs failed ON this timeout"* |
+| `job_queue_out_of_process`       | Hàng đợi chạy ngoài tiến trình web     | 🔴 **False** | `BackgroundTasks` in-process tại **12 chỗ**                |
+| `circuit_breaker_configured`     | Có ngắt mạch khi phụ thuộc chết        | 🔴 **False** |                                                             |
+
+`k6_load_v1`: `NOT_EXECUTED`. Cũng **không chạy** — profile của nó là `pre_release`, nên
+dòng này cũng đến từ `_declared_but_not_run`. Khác Gate 7 ở chỗ lý do được ghi — *"load
+testing requires explicit approval and a localhost target"* — là một **sự thật về môi
+trường EvalGate**, đúng loại mà docstring cho phép hardcode.
+
+> 🔺 **Gate này chạy, sinh 7 metric, và không ảnh hưởng một điểm nào.** `reliability` không
+> có trong `score.weights` của `evaluation_policy.yaml`, nên nó vừa không vào điểm tổng vừa
+> **không vào cả mẫu số coverage** (`evaluator_coverage` bỏ qua gate ngoài weights). Là chi
+> phí thuần (D-21.7).
+>
+> `llm_timeout_configured = False` là ví dụ đẹp nhất trong report về nguyên tắc *"control
+> không được cộng điểm chỉ vì nó tồn tại"*: timeout **có** được cấu hình, nhưng lịch sử
+> chạy cho thấy nó chính là thứ làm hỏng lần chạy — nên nó bị tính là **không có control**.
+
+---
+
+#### GATE 6 — GOVERNANCE · 77.78 điểm · weight 0.15 → **11.67 điểm tổng**
+
+> **Câu hỏi:** quyết định của AI có truy vết và audit được không?
+
+```text
+77.78 = mean(100.00, 66.67, 100.00, 100.00, 0.00, 100.00)
+```
+
+**Coverage 6/6 — gate duy nhất đo được toàn bộ evaluator đã khai báo.**
+
+##### 6a · `hitl_integrity_v1` — người duyệt có để lại dấu vết không? → **100.00**
+
+Chạy thật `review_rule` → `publish_approved_rules` trên SQLite tạm rồi hỏi lại database.
+
+| Metric                   | Đo cái gì                                                   |        Kết quả | Nghĩa là                              |
+| ------------------------ | ----------------------------------------------------------- | -------------: | ------------------------------------- |
+| **`hitl_integrity`**     | % chuyển trạng thái có ghi `AuditEventModel`                | ✅ **100.0** | ✅ **HG-G2 PASS** — APPROVE và PUBLISH đều ghi |
+| `unaudited_transitions`  | Số chuyển trạng thái không để lại audit                      |    ✅ **0**   |                                       |
+| `reviewer_persisted`     | Danh tính người duyệt có được lưu không                      | ✅ **True**  |                                       |
+
+##### 6b · `policy_resolution_v1` — hệ thống giải được policy cho dataset không? → **0.00** *(score gốc 100.0)*
+
+| Metric                              | Đo cái gì                                                 |        Kết quả | Nghĩa là                                |
+| ----------------------------------- | --------------------------------------------------------- | -------------: | --------------------------------------- |
+| **`policy_resolution_success_rate`**| % dataset mà resolver **trả lời được** (không raise)      | ✅ **100.0** | ✅ **HG-G1 PASS** — 7/7 dataset          |
+| `required_asset_presence`           | 3 tài sản quản trị bắt buộc có mặt đủ không                | ✅ **100.0** | `rule_policies.json` + manifest + fixture |
+| `datasets_with_policy_entry`        | Bao nhiêu dataset có entry policy viết tay                 |        **1/7** | *Ngữ cảnh* — vắng entry là trạng thái hợp lệ |
+
+> ⚠️ **Status PASS, mọi metric 100.0, nhưng đóng góp 0.00 vào gate.** `per_dataset_breakdown`
+> chứa 7 dataset probe: 1 cái `RESOLVED` (100), 6 cái `NONE` (0). P25 của phân bố đó = 0.
+> Đúng lỗi D-21.6: `NONE` được chính evaluator tuyên bố là *"a supported state, not a
+> defect"* trong metric, nhưng lại bị chấm 0 trong breakdown. **`governance` đáng lẽ là
+> 94.44 chứ không phải 77.78.**
+
+##### 6c · `contract_conformance_v1` — hệ thống có tuân hợp đồng nó tự viết không? → **66.67**
+
+| Metric                            | Đo cái gì                                              |       Kết quả | Nghĩa là                              |
+| --------------------------------- | ------------------------------------------------------ | ------------: | ------------------------------------- |
+| `safety_rule_conformance`         | 6 safety rule của `PRODUCT_SPEC.md` đạt mấy            | 🟡 **0.833** | **5/6** — trượt SAFETY-4              |
+| **`internal_field_exposed_count`**| Field nội bộ (SQL đã biên dịch, prompt…) lộ ra API      |   ✅ **0**   | ✅ **HG-S8 PASS**                     |
+| **`forgeable_actor_fields`**      | Endpoint nhận danh tính người duyệt **từ body request** |   ✅ **0**   | ✅ **HG-G4 PASS**                     |
+| `contract_drift_count`            | Năng lực spec loại trừ nhưng code có                    | 🟡 **1**    | `SCOPE-ML` — có `IsolationForest`     |
+| `job_state_vocabulary_violations` | Literal trạng thái job ngoài 5 giá trị tài liệu hoá     | 🟡 **1**    |                                       |
+| `duplicate_run_state_tables`      | Số bảng cùng mang trạng thái thực thi                   | 🟡 **9**    | `DATA_MODEL.md` nói chỉ nên có ≤2     |
+
+> **4 check trượt:** `SAFETY-4` (không module nào đọc `RUNNER_DATABASE_URL` — runner dùng
+> chung engine với app), `JOB-STATE`, `RUN-STATE` (9 bảng mang trạng thái), `SCOPE-ML`.
+> `SCOPE-ML` là **contract drift, không phải defect**: spec ghi "không có mô hình ML" còn
+> code có `IsolationForest`. EvalGate cố ý **không chặn** — nó không biết tài liệu nào mới
+> là chuẩn, và chặn release vì một câu spec cũ sẽ dạy đội ngũ bỏ qua cổng.
+
+##### 6d · `served_path_fidelity_v1` — đường người dùng chạm có phải đường đang chấm không? → **100.00**
+
+| Metric                            | Đo cái gì                                       |        Kết quả | Nghĩa là                       |
+| --------------------------------- | ----------------------------------------------- | -------------: | ------------------------------ |
+| **`served_path_is_mocked`**       | Chế độ hiệu lực có trả output đóng hộp không     | ✅ **False** | ✅ **HG-G5 PASS** — mode `graph` |
+| `mock_branch_count`               | Số nhánh code còn short-circuit ra output canned |        **2** | Còn tồn tại nhưng không được chọn |
+| `llm_credential_reaches_service`  | Có credential provider tới được service không    | ✅ **True**  |                                |
+
+##### 6e · `capability_regression_v1` — có mất năng lực nào so với baseline không? → **100.00**
+
+| Metric                                | Kết quả | Nghĩa là                                                    |
+| ------------------------------------- | ------: | ----------------------------------------------------------- |
+| **`critical_capability_regressions`** | ✅ **0** | ✅ **HG-R1 PASS**                                           |
+| `capability_regressions`              | ✅ **0** | Không năng lực nào biến mất                                 |
+| `capability_known_gaps`               |  **8** | Khoảng trống **có sẵn từ baseline** — báo cáo, không chặn   |
+| `capability_improvements`             |  **1** | 1 năng lực xuất hiện thêm                                   |
+
+##### 6f · `regression_engine_v1` — run này có tệ hơn baseline không? → **100.00**
+
+| Metric                        |  Kết quả | Nghĩa là                                    |
+| ----------------------------- | -------: | ------------------------------------------- |
+| `gate_score_drop_max`         | ✅ **0.0** | Không evaluator nào tụt quá `SCORE_DROP_LIMIT` (10 điểm) |
+| **`hard_gates_newly_failing`**| ✅ **0**  | ✅ **HG-R3 PASS** — không gate nào từ PASS thành FAIL |
+
+> So được **19 evaluator** giữa run này và baseline `product-ffd77da3`. Composition đổi một
+> chiều: **6 thêm, 0 gỡ**. `removed: []` là điều kiện để `REG-EVALUATOR-REMOVED` không kích
+> hoạt — gỡ một evaluator là giảm độ phủ và bị coi là regression CRITICAL.
+
+---
+
+#### GATE 7 — BUSINESS · *không chạy* · weight **0.00**
+
+> **Câu hỏi:** AI có giảm việc cho Data Steward không?
+
+**Không có metric nào, và evaluator không hề chạy trong run này.**
+
+| Sự thật                                          | Giá trị                                                            |
+| ------------------------------------------------ | ------------------------------------------------------------------ |
+| Profile khai báo                                  | `('nightly', 'pre_release')` — **không có `ci`**                    |
+| Có trong `load_profile('ci')`?                    | 🔴 **Không**                                                       |
+| Nguồn của dòng kết quả                            | `run.py:274` — `_declared_but_not_run`, **không phải runner loop** |
+| `metadata` trong result                           | chỉ có `reason`; **thiếu `mandatory` / `critical`**                |
+| Gate có trong `score.weights`?                    | 🔴 **Không** — nên không vào điểm tổng **và không vào cả mẫu số coverage** |
+
+##### ⚠️ Lý do được ghi trong report là một câu hardcode, không phải kết quả đo
+
+```text
+report ghi (run.py:274, hằng số):  "fewer than 3 datasets and 20 proposals in the database"
+evaluator nói khi chạy thật:       "aggregate steward event export is not configured"
+```
+
+Hai câu này mô tả **hai nguyên nhân khác hẳn nhau**:
+
+- Câu hardcode khẳng định một **sự thật về database sản phẩm** — rằng nó có ít hơn 3
+  dataset và 20 proposal. Không ai đo điều đó trong run này.
+- Nguyên nhân thật là biến môi trường `EVALGATE_STEWARD_EVENTS` **chưa được cấu hình**, nên
+  evaluator dừng ở dòng đầu tiên và **không bao giờ tới được** phép kiểm ngưỡng
+  `datasets < 3 or total < 20`.
+
+Nặng hơn: `steward_outcome.py` **không đọc database nào cả** — nó đọc một file JSON export
+trỏ bởi env var (`steward_outcome.py:14`). Câu hardcode mô tả một cơ chế không tồn tại.
+
+Soát cả 8 dòng trong `_declared_but_not_run` ở profile `ci`: **6 dòng hợp lệ** (thiếu
+package `great-expectations`/`evidently`/`deepeval`, cần `npx promptfoo`, cần model trả
+phí, cần phê duyệt và target cho load test) — đều là sự thật về môi trường EvalGate.
+**2 dòng vi phạm**: dòng `steward_behavior_v1` ở đây, và `run.py:262` cho
+`generalization_evaluator_v1` — *"six of seven corpus datasets cannot be ingested"*, một
+khẳng định về sản phẩm gắn vào một evaluator **không tồn tại trong REGISTRY**.
+
+Chính docstring của `_declared_but_not_run` cấm điều này:
+
+> *"A reason here is a statement about the product, and it is read as evidence. Where one
+> can be derived from the code, derive it; a constant is only acceptable for facts about
+> EvalGate's own environment, like a missing package or a paid call."*
+
+"Database sản phẩm có bao nhiêu dataset" là **statement về sản phẩm**, đúng loại mà quy tắc
+này cấm hardcode. Xem **D-21.10**.
+
+##### Nếu chạy thật thì nó đo gì
+
+Ngưỡng mẫu tối thiểu **3 dataset và 20 proposal** là thiết kế đúng: dưới ngưỡng đó tỷ lệ
+chấp nhận của steward là nhiễu chứ không phải tín hiệu, nên evaluator từ chối công bố số.
+Hai metric nó sẽ sinh: `steward_acceptance_rate` và `steward_edit_rate`.
+
+Nhưng để tới được đó cần **hai** thứ, và hiện chưa có thứ nào: chạy ở profile `nightly`
+hoặc `pre_release`, **và** có producer xuất file aggregate ra `EVALGATE_STEWARD_EVENTS`.
+`IMPLEMENTATION_CHANGE_REPORT.md` đã ghi nợ này: *"Business gate cần aggregate export thật
+từ tối thiểu 3 dataset và 20 proposal."*
+
+> **Cách gate này biến mất khỏi điểm khác với Gate 3 ở §5.** Gate 3 ngày đó được đưa vào
+> `weights` rồi bị loại và **tái chuẩn hoá trọng số**. `business` thì **chưa bao giờ nằm
+> trong `weights`** — nó không bị loại, nó không tồn tại với bộ chấm điểm. Hệ quả: nó cũng
+> không xuất hiện trong `coverage_detail`, nên độ phủ 80.88% **không hề bị trừ** vì gate
+> này trắng. Cùng cơ chế với `reliability` (D-21.7).
+
+---
+
+#### Tổng hợp: 24 hard gate ánh xạ về gate nào
+
+| Gate            | Hard gate                                          | PASS | FAIL | NOT_EVALUATED |
+| --------------- | -------------------------------------------------- | ---: | ---: | ------------: |
+| `ai_quality`    | A1 · A2 · A3 · A5 · A6 · A7 · A8 · A9              |    5 |  **1** (A8) | **2** (A1, A3) |
+| `ai_security`   | S1 · S2 · S3 · S4 · S5 · S6 · S7 · S8              |    7 |    0 | **1** (S5) |
+| `input_data`    | D1 · D2                                            |    2 |    0 |             0 |
+| `governance`    | G1 · G2 · G4 · G5 · R1 · R3                        |    6 |    0 |             0 |
+| **Tổng**        |                                                    | **20** | **1** | **3** |
+
+`HG-S8` và `HG-G4` do `contract_conformance_v1` (gate `governance`) sinh ra dù `HG-S8` được
+khai thuộc `ai_security` — hard gate đọc metric từ một **namespace phẳng**, nên gate nào
+sinh ra metric không quan trọng, miễn tên metric không trùng. `metric_collisions = {}` xác
+nhận không có tên nào bị hai evaluator cùng chiếm.
+
+---
+
+### 21.4 Hard gate — 24 tổng, **20 PASS**
+
+```text
+FAIL           HG-A8   governed_column_coverage        obs=0.0    ← chặn release
+NOT_EVALUATED  HG-A1   min_recall_per_class            (evidence bị cắt ở 20 id/rule)
+NOT_EVALUATED  HG-A3   tautological_enum_count         (không có rule để soi)
+NOT_EVALUATED  HG-S5   indirect_injection_pass_rate    (chỉ chạy ở nightly)
+```
+
+```text
+BLOCK REASONS
+  - mandatory hard gate(s) not evaluated: HG-A1, HG-A3
+  - mandatory evaluator(s) failed: contract_conformance_v1, golden_conformance_v1,
+                                   governed_enum_conformance_v1, replay_detection_v1
+```
+
+**Giống hệt §20 từng dòng.** Nguyên nhân chặn release không dịch chuyển một chút nào
+trong hai ngày.
+
+Chuyển biến thật ở tầng hard gate — bốn gate không có mẫu ở §20 nay đo được:
+
+| Gate    | 31/08          | 02/09                                         |
+| ------- | -------------- | --------------------------------------------- |
+| `HG-A2` | (không có mẫu) | **PASS** — `schema_violation_rate = 0.0`      |
+| `HG-A7` | (không có mẫu) | **PASS** — `latest_run_produced_output = 1`   |
+| `HG-A9` | (không có mẫu) | **PASS** — `golden_applicability_rate=0.8125` |
+| `HG-A5` | (không có mẫu) | **PASS** — `golden_critical_failures = 0`     |
+
+### 21.5 So với baseline và với §20
+
+|                    | Baseline `45887f7` | §20 `64398cf` | **02/09 `5a5a1a2`** |
+| ------------------ | -----------------: | ------------: | ------------------: |
+| Score              |              70.00 |         67.67 |           **79.58** |
+| Coverage           |             65.36% |        72.36% |          **80.88%** |
+| Mandatory evidence |                95% |          100% |            **100%** |
+| Evaluator          |                 31 |            31 |              **35** |
+| `ai_quality`       |        41.67 (4/8) |   33.33 (5/8) |    58.33 (**8/11**) |
+| `ai_security`      |       100.00 (6/7) |  100.00 (6/7) |        100.00 (6/7) |
+| `input_data`       |        75.00 (2/4) |   75.00 (2/4) |     83.33 (**3/5**) |
+| `governance`       |        73.33 (5/6) |   77.78 (6/6) |        77.78 (6/6)  |
+| `observability`    |                  — |             — |  **100.00 (1/1)**   |
+
+`regression_engine` kết luận PASS: không evaluator nào tụt quá `SCORE_DROP_LIMIT`, không
+hard gate nào từ PASS chuyển FAIL.
+
+### 21.6 Defect của chính EvalGate — **phát hiện, chưa sửa**
+
+§20.6 liệt kê chín defect *đã sửa*. Đợt này ngược lại: đây là review read-only, **không
+defect nào được sửa**, và mọi số đo trên đây chạy trên mã nguyên trạng.
+
+D-21.5 và D-21.10 là **cùng một lỗi cấu trúc**: `_declared_but_not_run` trong `run.py` giữ
+một bảng lý-do-viết-tay, và bảng đó không có cơ chế nào buộc nó đồng bộ với mã. Hai dòng
+đã lệch — một dòng mô tả sai trạng thái evaluator, một dòng khẳng định một sự thật về
+database sản phẩm mà không ai đo.
+
+| #      | Defect                                                                         | Bằng chứng đối chứng                                                                                                                                                                     |
+| ------ | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D-21.1 | `HG-S4` **luôn PASS do sai key**                                               | `product_run.py:334` ghi `accepted_malicious`; `upload_behaviour_probe.py:35` đọc `malicious_upload_accepted_count` → `accepted` luôn = 0                                                 |
+| D-21.2 | 4 evaluator **không gắn provenance**, luôn trả 100                             | `anomaly_logic` / `sql_compilation` / `report_grounding` / `profile_accuracy` — không nhận `context`, không khai `required_artifacts`. Bỏ 3 cái trong ai_quality: **79.58 → 70.83**        |
+| D-21.3 | `assert` trần trong evaluator: fail → `EVALUATOR_ERROR`, **rơi khỏi aggregate** | `anomaly_logic_probe.py:42-55`, 7 assert. `EVALUATOR_ERROR ∈ EXCLUDED_FROM_AGGREGATE` → không kéo điểm xuống, chỉ bị loại rồi tái chuẩn hoá trọng số. `python -O` xoá sạch                 |
+| D-21.4 | 3 evaluator **"ma"** ghì mẫu số coverage                                       | `gx_corpus_integrity_v1`, `evidently_drift_v1`, `generalization_evaluator_v1` **không có trong REGISTRY** nhưng vẫn vào mẫu số: `ai_quality` 8/**11** thay vì 8/8, `input_data` 3/**5** thay vì 3/3 |
+| D-21.5 | Lý do hardcode trong `_declared_but_not_run` đã lỗi thời                       | `run.py:270` vẫn ghi `trace_coverage_v1 → NOT_IMPLEMENTED, "planned for phase C"` trong khi nó **PASS 100.0** ở chính run này                                                             |
+| D-21.6 | `collapse_result_scores` P25 nuốt điểm của 2 evaluator                          | `golden_conformance_v1` score 60.0 → vào gate **0.00**; `policy_resolution_v1` score 100.0, status PASS, mọi metric 100 → vào gate **0.00**. `DatasetBreakdown` đang bị dùng cho *case*, không phải dataset |
+| D-21.7 | Hai gate **không có trọng số**: `reliability`, `business`                       | `config_static_check_v1` (57.14) và `k6_load_v1` chạy, sinh metric, **không vào aggregate và cũng không vào coverage**                                                                    |
+| D-21.8 | Hai evaluator **không bao giờ PASS được**                                      | `config_static_check.py:173` và `multi_dataset_readiness.py:178`: `FAIL if score < 50 else WARN` — không có nhánh PASS. Cái thứ hai đóng cứng 50.0 vào `input_data`                        |
+| D-21.9 | `evidence/` **không gắn run_id**                                               | `evidence/gate1/` chứa file 31/08 lẫn 01/09; `evidence_ref` trỏ đường dẫn cố định → người đọc có thể mở evidence của **run khác**                                                         |
+| D-21.10 | **2/8 lý do hardcode là khẳng định về sản phẩm, không phải về môi trường EvalGate** | `run.py:274` ghi *"fewer than 3 datasets and 20 proposals in the database"* trong khi evaluator chạy thật nói *"aggregate steward event export is not configured"*, và `steward_outcome.py:14` **không đọc database nào**. `run.py:262` ghi *"six of seven corpus datasets cannot be ingested"* — một khẳng định về sản phẩm, gắn vào một evaluator **không tồn tại trong REGISTRY** (xem D-21.4), chưa từng được kiểm chứng lại |
+
+### 21.7 Golden Dataset — kết quả run này
+
+Cấu trúc không đổi so với 20.7 (neo `corpus_id`, ba lớp phạm vi, năm mặt quyết định).
+
+```text
+16 case · áp dụng 13/16 (0.8125) · pass 0.60 · critical failures 0
+attribution: {decision: 3, negative_space: 1}
+tier 2 (rule expectation): 0.6667
+tier 3 (prompt compliance): 0.0000
+semantic_vocabulary: {numeric: 12, text: 5, category: 4}
+```
+
+**Trượt (4):**
+
+```text
+GC-E1-RANGE-NONNEGATIVE          decision        RANGE thiếu / bound không chặn âm
+GC-E4-CROSSFIELD-ORDERING        decision        không có CROSS_FIELD_COMPARISON trên pickup_at
+GL-RATIONALE-NO-TECHNICAL-NAMES  decision        business_rationale chứa tên biến kỹ thuật
+GS-COLD-START-ABSTAINS           negative_space  detector không trả INSUFFICIENT_HISTORY
+```
+
+**NOT_APPLICABLE (3)** — đúng ba case mà 20.9 mục 4 đã dự báo:
+`GS-CURRENCY-NON-NEGATIVE`, `GS-IDENTIFIER-NOT-NULL`, `GS-EVENT-ORDER-IS-CROSS-FIELD`.
+`semantic_vocabulary` xác nhận nguyên nhân: bộ tất định chỉ sinh `numeric/text/category`,
+**không có `currency` hay `identifier`** — selector ngữ nghĩa không có gì để khớp.
+
+`freeze --verify`: **OK**, tier 1 không drift.
+
+### 21.8 Điểm 79.58 nên đọc thế nào
+
+**Chấm lại chính bundle hôm nay với đúng tập evaluator của run 67.67:**
+
+| Kịch bản                                              |     Score | Coverage |
+| ----------------------------------------------------- | --------: | -------: |
+| A. Như đã chạy (35 evaluator)                         | **79.58** |   80.88% |
+| B. Bỏ 5 evaluator thêm sau §20 → **so cùng rổ**       | **66.20** |   65.80% |
+| C. Chỉ bỏ 3 probe không đọc bundle trong `ai_quality` |     70.83 |   77.30% |
+
+> **So cùng rổ: 67.67 → 66.20, tức −1.47 điểm. Sản phẩm gần như đứng yên.**
+> `ai_quality` ở kịch bản B vẫn đúng **33.33** — bằng §20 từng chữ số.
+
+13.38 điểm chênh giữa A và B đến từ evaluator mới, trong đó **8.75 điểm tổng** đến từ ba
+probe không đọc một byte nào của bundle (D-21.2). Đây chính là kiểu lỗi §20 đã kết luận:
+*EvalGate áp kỷ luật "chứng minh anh đã đo đúng thứ cần đo" cho sản phẩm mà chưa áp cho
+chính nó* — nay đo được bằng số.
+
+**Đáng tin:**
+
+- `ai_security = 100` với 6/7 evaluator — `HG-S1..S3`, `S6..S8` pass sạch bằng probe
+  tĩnh/ASGI chạy thật, không phụ thuộc LLM. **Trừ `HG-S4`, đang PASS giả do D-21.1.**
+- `governance = 77.78` với **6/6** — HITL 100, policy resolution 100, served path không
+  mock, capability không hồi quy. Con số này còn đang **bị chấm thấp hơn thực tế** vì
+  D-21.6 (nếu tính đúng: 94.44).
+
+**Chưa đáng tin:**
+
+- `ai_quality = 58.33`. Trừ ba probe không gắn bundle thì còn **33.33**, và nó đang chấm
+  **heuristic fallback chứ không phải agent**. Log bundle: *"Tất cả các lượt gọi LLM đều
+  thất bại (2/2 batches). Kích hoạt Heuristic Rule Promotion"*.
+
+### 21.9 Những gì **chưa** sửa
+
+Sáu mục của 20.9 **còn nguyên**, đã xác nhận lại trên run này:
+
+| # | Vấn đề (20.9)                                     | Trạng thái 02/09                                                                        |
+| - | ------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| 1 | `DeterministicEvalLLM` làm crash cả hai deep agent | **CÒN** — anomaly rơi fallback, `GS-COLD-START-ABSTAINS` trượt                          |
+| 2 | Bundle chạy đường dashboard, không phải canonical  | **CÒN** — transcript vẫn là `/workflows/{id}/steps/*`                                   |
+| 3 | Fix `violation_row_ids` chưa tới đường đang đo     | **CÒN** — `evidence_complete = false`, 13 rule truncated, `HG-A1` vẫn NOT_EVALUATED      |
+| 4 | 3 case `GS-*` ngữ nghĩa NOT_APPLICABLE             | **CÒN** — `semantic_vocabulary` không có `currency`/`identifier`                        |
+| 5 | `GS-VERIFIES-BEFORE-ASSERTING` chưa xác nhận E2E   | **CÒN**                                                                                 |
+| 6 | `profile.evidence_keys` công bố thiếu từ vựng      | **CÒN**                                                                                 |
+
+Cộng thêm **mười** defect mới ở 21.6, tất cả chưa sửa.
+
+### 21.10 Nợ
+
+Ba mục của 20.10:
+
+| Nợ                                              | Trạng thái 02/09                                                                                              |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `golden_conformance.py` ~900 dòng               | **ĐÃ TRẢ** — tách thành `golden_handlers/` (types/tier1/tier2/tier3), runner còn 452 dòng                      |
+| Thêm 2 hard gate trong một đợt (`HG-A8`,`HG-A9`) | **CÒN** — cả hai nay có mẫu: A8 FAIL (0.0), A9 PASS (0.8125). Ngưỡng 0.5 của A9 vẫn chưa có review riêng      |
+| `max_false_positive_rate` xây dở                | **CÒN** — `tier1_sdih.py:40` `truth = set(a.columns)`, caller không bao giờ populate → luôn `measurable=False` |
+
+### 21.11 Thứ tự khuyến nghị
+
+```text
+1. sửa key HG-S4               ← 1 dòng; đang là hard gate chết (D-21.1)
+2. dọn _declared_but_not_run   ← 3 evaluator ma + 2 lý do sai sự thật (D-21.4, D-21.5, D-21.10)
+3. bỏ assert trần              ← để evaluator FAIL đúng cách thay vì rơi khỏi aggregate (D-21.3)
+4. gắn 4 probe vào manifest    ← hoặc chuyển hẳn về evalgate/tests/ (D-21.2) — nặng nhất
+5. sửa DeterministicEvalLLM    ← nền của mọi con số ai_quality (20.9 mục 1)
+6. product_run → đường canonical
+7. tách ngữ nghĩa DatasetBreakdown khỏi case breakdown (D-21.6)
+8. đặt evidence/ dưới run_id   ← (D-21.9)
+```
+
+Mục 1-3 là vệ sinh rẻ nhưng đang làm sai ba con số công bố. Mục 4-6 đổi **bản chất độ tin
+cậy** của gate. Mục 7-8 là nợ cấu trúc.
+
+> **Nhận định:** so với §20, phần *hạ tầng* tiến thật — coverage 72.36% → 80.88%, lần đầu
+> không gate nào bị loại, bốn hard gate `ai_quality` chuyển từ không-có-mẫu sang PASS thật.
+> Phần *nội dung* đứng yên: cùng rổ evaluator thì 67.67 → 66.20, block reasons giống hệt
+> từng dòng, và nguyên nhân gốc — LLM tất định làm hỏng deep agent nên `ai_quality` chấm
+> heuristic — vẫn nguyên vẹn sau hai ngày.
+
+---
+
+## 22. ĐỢT SỬA MƯỜI DEFECT — 02/09/2026, CHIỀU
+
+> §21 đo và chỉ ra mười defect của chính bộ đo. Mục này sửa bảy trong số đó, và ghi lại
+> một chuỗi phát hiện mà việc sửa làm lộ ra: **mọi con số `ai_quality` EvalGate từng
+> công bố đều chấm heuristic fallback, không chấm agent.**
+>
+> Cùng khung với §21. Điểm ở đây đo trên **cùng bundle `product-a10049a5…` của §21**, chỉ
+> đổi bộ evaluator — nên hai con số so trực tiếp được với nhau. Không commit, không push.
+
+### 22.1 Phán quyết
+
+```text
+DECISION   RELEASE_BLOCKED          exit 3
+SCORE      75.80                    (§21 cùng bundle: 79.58)
+COVERAGE   80.88%                   (sàn 60%)
+MANDATORY  100%
+RUN        product-a10049a59e094e6d979c596c6cc98423
+GIT        5a5a1a234b8de55e7423e4a7fd33255908b6530c
+BASELINE   product-ffd77da3e3e14473940d70e1b99f89d1  (45887f7)
+```
+
+**Điểm giảm 3.78 vì bộ đo thành thật hơn, không phải vì sản phẩm tệ đi.** Bằng chứng ở
+22.8: cùng bundle, cùng bằng chứng, chỉ khác dụng cụ.
+
+Một run thứ hai — trên bundle đi qua **agent thật** — được ghi ở 22.7 và **không có phán
+quyết công bố được**; lý do ở đó.
+
+### 22.2 Chuỗi tin cậy — giữ xanh toàn bộ
+
+| Kiểm tra                 | §21                           | 22                                       |
+| ------------------------ | ----------------------------- | ---------------------------------------- |
+| `workspace_integrity_v1` | PASS                          | **PASS** — chỉ `evalgate/` bị sửa        |
+| `artifact_provenance_v1` | PASS                          | **PASS** — `valid: true`, `reasons: []`  |
+| `regression_engine_v1`   | PASS — 19 evaluator, ci vs ci | **PASS — `gate_score_drop_max = 0.0`**   |
+| Điểm số                  | 79.58 công bố                 | **75.80 công bố**                        |
+
+`regression_engine` không báo hồi quy dù điểm giảm — đúng thiết kế: nó so **từng
+evaluator**, và không evaluator nào tụt quá `SCORE_DROP_LIMIT`. Điểm tổng giảm vì
+`observability` được đo bằng mẫu số thật lần đầu, không vì evaluator nào xấu đi.
+
+### 22.3 Điểm theo gate
+
+| Gate            |      Score | Weight | Coverage | Verdict |
+| --------------- | ---------: | -----: | -------- | ------- |
+| `ai_security`   | **100.00** |   0.25 | 6/7      | PASS    |
+| `governance`    |  **94.44** |   0.15 | **6/6**  | FAIL    |
+| `input_data`    |      83.33 |   0.15 | 3/5      | PASS    |
+| `ai_quality`    |      62.93 |   0.35 | 8/11     | FAIL    |
+| `observability` |  **21.05** |   0.10 | 1/1      | FAIL    |
+
+```text
+ai_quality      62.93 × 0.35 = 22.03
+ai_security    100.00 × 0.25 = 25.00
+input_data      83.33 × 0.15 = 12.50
+governance      94.44 × 0.15 = 14.17
+observability   21.05 × 0.10 =  2.11
+                       TỔNG    75.80
+```
+
+35 evaluator: 17 PASS · 7 FAIL · 3 WARN · 8 `NOT_*`/BLOCKED · **108 metric** · 9 critical
+finding (2 chặn release) · chi phí LLM $0.00.
+
+---
+
+### 22.3b TỪNG GATE ĐO GÌ, VÀ KẾT QUẢ RA SAO — 02/09 CHIỀU
+
+> Cùng khung với §21.3b. 🔺 đánh dấu chỗ **đã sửa trong đợt này**; ⚠️ là khiếm khuyết còn lại.
+
+#### Bản đồ nhanh
+
+| Gate               | Câu hỏi gate này trả lời                           |      Điểm | Weight | Đổi so với §21 |
+| ------------------ | -------------------------------------------------- | --------: | -----: | -------------- |
+| 1 · AI Quality     | Agent đề xuất luật đúng và có tác dụng không?       | **62.93** |   0.35 | +4.60 🔺 |
+| 2 · AI Security    | Người ngoài làm được điều không được phép không?    | **100.00** |  0.25 | — (HG-S4 nay đo thật 🔺) |
+| 3 · Observability  | Khi sai, có truy được sai ở đâu không?              | **21.05** |  0.10 | **−78.95** 🔺 |
+| 4 · Input Data     | Dữ liệu vào có nguyên vẹn không?                    | **83.33** |   0.15 | — (163 phép đo thật 🔺) |
+| 5 · Reliability    | Có chịu được sự cố phụ thuộc không?                 | **57.14** | *0.00* | — |
+| 6 · Governance     | Quyết định của AI có truy vết và audit được không?  | **94.44** |   0.15 | **+16.67** 🔺 |
+| 7 · Business       | AI có giảm việc cho Steward không?                  |    *n/a* | *0.00* | — |
+
+---
+
+#### GATE 1 — AI QUALITY · 62.93 · weight 0.35 → **22.03**
+
+```text
+62.93 = mean(0.00, 60.00, 66.67, 100.00, 0.00, 80.00, 96.77, 100.00)
+```
+
+Tám evaluator, và **cả tám nay đọc bundle**. §21 có ba cái không đọc gì.
+
+##### 1a · `governed_enum_conformance_v1` → **0.00**
+
+| Metric | Kết quả |
+| ------ | ------: |
+| ⬛ `governed_column_coverage` → **HG-A8** | 🔴 **0.0** |
+
+Không đổi so với §21: agent không đề xuất `ACCEPTED_VALUES` nào cho `payment_type`, nên
+`HG-A3` vẫn `NOT_EVALUATED`.
+
+##### 1b · `golden_conformance_v1` → **60.00** *(§21: 0.00)* 🔺
+
+| Metric | Kết quả |
+| ------ | ------: |
+| `golden_case_pass_rate` | 🟡 **0.60** |
+| ⬛ `golden_critical_failures` → **HG-A5** | ✅ **0** |
+| `golden_rule_expectation_rate` | 🟡 0.6667 |
+| `golden_prompt_compliance_rate` | 🔴 0.0 |
+| ⬛ `golden_applicability_rate` → **HG-A9** | ✅ **0.8125** |
+
+> 🔺 **D-21.6 đã sửa.** `score` là 60.0, và **giờ 60.0 mới thật sự vào gate**. Trước đây
+> `per_dataset_breakdown` chứa 16 *case* nhị phân, P25 trả 0 ngay khi quá một phần tư
+> trượt. `DatasetBreakdown.kind = "case"` chuyển sang tính pass-rate.
+
+##### 1c · `vacuity_probe_v1` → **66.67**
+
+| Metric | Kết quả |
+| ------ | ------: |
+| `vacuous_rule_rate` | 🟡 0.3333 (4/12) |
+| `worst_type_vacuity_rate` | 🟡 0.3333 (`RANGE`) |
+| ⬛ `systemic_vacuous_rule_types` → **HG-A6** | ✅ **0** |
+| `degenerate_threshold_rules` | ✅ 0 |
+| `rules_not_judgeable` | 19 |
+
+##### 1d · `run_outcome_integrity_v1` → **100.00**
+
+| Metric | Kết quả |
+| ------ | ------: |
+| ⬛ `latest_run_produced_output` → **HG-A7** | ✅ True |
+| `empty_run_rate` | ✅ 0.0 |
+| ⬛ `schema_violation_rate` → **HG-A2** | ✅ 0.0 |
+| `latest_run_failure_kind` | *(None — run thành công)* |
+
+##### 1e · `replay_detection_v1` → **0.00**
+
+| Metric | Kết quả |
+| ------ | ------: |
+| `detection_precision` | 🔴 0.0 |
+| `detection_recall_macro` | 🔴 0.0 |
+| `detection_f1_macro` | 🔴 0.0 |
+| ⬛ `min_recall_per_class` → **HG-A1** | ⚪ None |
+| `evidence_complete` | 🔴 False — 13 rule ghi thiếu row id |
+| `archived_runs_scored` | 1 |
+
+Không đổi. Đây là 20.9 mục 3, vẫn chưa sửa.
+
+##### 1f · `sql_compilation_probe_v1` → **96.77** 🔺 *(§21: 100.00 giả)*
+
+Nay compile **31 luật thật của run** qua 2 dialect, thay cho 5 luật fixture.
+
+| Metric | Kết quả |
+| ------ | ------: |
+| `rule_compile_rate` | 🟡 **0.9677** |
+| `identifier_quoting_safety` | ✅ True |
+| `value_binding_safety` | ✅ True |
+| `uncompilable_rule_count` | 🔴 **1** |
+| `rules_compiled` | **31** |
+
+> 🔺 **Phát hiện thật đầu tiên:** agent đề xuất một luật `DUPLICATE_FINGERPRINT` mà
+> compiler **không có nhánh xử lý**. Luật đó không bao giờ chạy — và trong báo cáo thực
+> thi, một luật vắng mặt trông y hệt một luật pass. Probe cũ trả 100.0 cho đúng ca này.
+
+##### 1g · `anomaly_logic_probe_v1` → **80.00** 🔺 *(§21: 100.00 giả)*
+
+Nay chấm verdict trong bundle bằng 4 quy tắc coherence, thay cho 7 `assert` trần.
+
+| Metric | Kết quả |
+| ------ | ------: |
+| `anomaly_verdict_coherence` | 🟡 **0.8** (4/5) |
+| `anomaly_coherence_rules_checked` | 5 |
+| `anomaly_abstains_on_cold_start` | 🔴 **False** |
+| `anomaly_verdict_unsupported_count` | ✅ 0 |
+
+> 🔺 **Phát hiện thật thứ hai:** `ANOMALY-NO-ABSTENTION` — detector tuyên `ANOMALY` với
+> đúng **một** lần chạy lịch sử. Không có gì để so mà vẫn khẳng định bất thường. Cùng
+> điều mà golden case `GS-COLD-START-ABSTAINS` đang trượt, nay có metric riêng.
+>
+> 🔺 **D-21.3 đã sửa.** Bỏ hết `assert` trần: sản phẩm sai nay trả `FAIL` chứ không ném
+> `AssertionError` → `EVALUATOR_ERROR` → **rơi khỏi aggregate**.
+
+##### 1h · `report_grounding_probe_v1` → **100.00** 🔺
+
+Nay giải từng con số trong narrative về figure thật của execution.
+
+| Metric | Kết quả |
+| ------ | ------: |
+| `report_figure_grounding_rate` | ✅ **1.0** |
+| `report_figures_checked` | **1** |
+| `report_produced_decision` | ✅ True |
+| `report_linked_to_execution` | ✅ True |
+
+Narrative ghi *"14 quy tắc bị vi phạm"*; execution có đúng **14 FAIL**. Grounding thật.
+
+---
+
+#### GATE 2 — AI SECURITY · 100.00 · weight 0.25 → **25.00**
+
+| Evaluator | Metric | Kết quả |
+| --------- | ------ | ------: |
+| `authz_probe_v1` | ⬛ `unauthenticated_mutating_endpoints` → **HG-S1** | ✅ 0 |
+| | `unauthenticated_read_endpoints` · `total_endpoints_scanned` | 1 · **91** |
+| `asgi_behaviour_probe_v1` | ⬛ `cross_tenant_violations` → **HG-S2** | ✅ 0 |
+| | `role_escalation_violations` · `unauthenticated_endpoints_reachable` | ✅ 0 · ✅ 0 |
+| | `csrf_enforced_rate` | ✅ **100.0** |
+| | `probe_cases_conclusive` | **162** |
+| | `probe_cases_inconclusive` | **0** |
+| `egress_probe_v1` | `raw_row_egress_violations` · `pii_column_egress_violations` | ✅ 0 · ✅ 0 |
+| | ⬛ `raw_or_pii_egress_violations` → **HG-S3** | ✅ 0 |
+| `secret_scan_v1` | ⬛ `secret_findings` → **HG-S6** · `tracked_files_scanned` | ✅ 0 · 486 |
+| `default_credential_probe_v1` | ⬛ `default_credentials_active` → **HG-S7** | ✅ False |
+| | `seeded_credential_count` | ✅ 0 |
+| `upload_probe_v1` | ⬛ `malicious_upload_accepted_count` → **HG-S4** | ✅ **0** 🔺 |
+
+> 🔺 **D-21.1 đã sửa — `HG-S4` không còn PASS giả.** `product_run` ghi đúng khoá
+> `malicious_upload_accepted_count`; probe đọc cả tên cũ để bundle cũ vẫn chấm được; và
+> payload **thiếu cả hai** khoá nay trả `NOT_MEASURED` chứ không âm thầm thành 0.
+> Con số 0 lần này là đo được, không phải do `.get(..., 0)`.
+
+---
+
+#### GATE 3 — OBSERVABILITY · 21.05 · weight 0.10 → **2.11** 🔺
+
+| Metric | Kết quả |
+| ------ | ------: |
+| `trace_coverage` | ✅ **1.0** |
+| ⬛ `instrumented_node_coverage` → **HG-O1** | 🔴 **0.2105** |
+| `instrumented_workflow_coverage` | 🔴 **0.1667** |
+| `trace_events_recorded` | 6 |
+| `critical_node_errors` | ✅ 0 |
+| `trace_p95_latency_ms` | 42.52 |
+| `llm_cost_usd` | $0.00 |
+
+> 🔺 **Gate này rơi 78.95 điểm, và con số 100 của §21 là ảo.** `trace_coverage = 1.0`
+> chia cho **số event đã ghi**, không chia cho **số node đã chạy**. Mẫu số thật, đọc bằng
+> AST từ `add_node()` trong `src/agents/graph.py`: **19 node / 6 graph**. Run này chạm
+> được 4 node của 1 graph.
+>
+> `HG-O1` mới, `hard_gates.yaml` → **v8.0**, mandatory ở ci/nightly/pre_release. Cùng họ
+> với `HG-A9`: một gate canh chính cơ chế mà con số headline của nó phụ thuộc vào.
+
+---
+
+#### GATE 4 — INPUT DATA · 83.33 · weight 0.15 → **12.50**
+
+```text
+83.33 = mean(100.00, 50.00, 100.00)
+```
+
+##### 4a · `ingest_fidelity_v1` → 100.00
+
+| Metric | Kết quả |
+| ------ | ------: |
+| ⬛ `row_fidelity` → **HG-D1** · `cell_fidelity` | ✅ 100.0 · ✅ 100.0 |
+| ⬛ `coercion_loss_count` → **HG-D2** | ✅ 0 |
+| `coercion_signal_rate` · `null_ambiguity_rate` | ✅ 1.0 · ✅ 0.0 |
+
+##### 4b · `profile_accuracy_probe_v1` → 100.00 🔺
+
+Nay tính lại profile từ **chính `input-dataset` của bundle**, thay cho fixture SQLite 100 dòng.
+
+| Metric | Kết quả |
+| ------ | ------: |
+| `profile_statistic_fidelity` | ✅ **1.0** |
+| `profile_statistics_checked` | **163** *(§21: 6 boolean)* |
+| `profile_column_coverage` | ✅ 1.0 |
+| `profile_row_count_matches` | ✅ True |
+
+> 🔺 Điểm vẫn 100, nhưng **lần này là 100 đo được**: 163/163 figure sản phẩm công bố khớp
+> với frame nó đã nạp. Mẫu số được công bố riêng — 1.0 trên 0 phép đo không phải là
+> profiler khoẻ, mà là evaluator không soi gì.
+
+##### 4c · `multi_dataset_readiness_v1` → 50.00
+
+| Dimension | Weight | Kết quả |
+| --------- | -----: | ------- |
+| `upload_surface_exists` | 0.25 | ✅ True |
+| `schema_agnostic_row_storage` | 0.20 | 🔴 False |
+| `dataset_has_owner_or_schema` | 0.15 | 🔴 False |
+| `domain_not_hardcoded_in_prompt` | 0.15 | ✅ True |
+| `dataset_deletion_endpoint` | 0.10 | ✅ True |
+| `evidence_column_cap_sufficient` | 0.10 | 🔴 False — cap 64, cần ≥200 |
+| `low_single_domain_coupling` | 0.05 | 🔴 False |
+| `multi_dataset_readiness_score` | — | **50.0** |
+| `single_domain_coupled_files` | — | 35 |
+
+⚠️ **D-21.8 chưa sửa** — `FAIL if score < 50 else WARN`, không có nhánh PASS. Vẫn đóng
+cứng 50.0 vào trung bình, nên trần lý thuyết của gate là 83.33 — đúng bằng điểm đang có.
+
+---
+
+#### GATE 5 — RELIABILITY · 57.14 · weight **0.00** → **0 điểm**
+
+| Control | Kết quả |
+| ------- | ------- |
+| `db_statement_timeout_configured` | ✅ True |
+| `upload_size_limit_configured` | ✅ True |
+| `per_tenant_quota_configured` | ✅ True |
+| `retry_policy_configured` | ✅ True |
+| `llm_timeout_configured` | 🔴 False — *"1 of the last 5 runs failed ON this timeout"* |
+| `job_queue_out_of_process` | 🔴 False — `BackgroundTasks` in-process tại 12 chỗ |
+| `circuit_breaker_configured` | 🔴 False |
+
+⚠️ **D-21.7 chưa sửa** — `reliability` không có trong `score.weights`, nên chạy, sinh 7
+metric, và ảnh hưởng 0.
+
+---
+
+#### GATE 6 — GOVERNANCE · 94.44 · weight 0.15 → **14.17** 🔺
+
+```text
+94.44 = mean(100.00, 66.67, 100.00, 100.00, 100.00, 100.00)
+```
+
+| Evaluator | Metric chính | Kết quả |
+| --------- | ------------ | ------: |
+| `hitl_integrity_v1` | ⬛ `hitl_integrity` → **HG-G2** | ✅ 100.0 |
+| | `unaudited_transitions` · `reviewer_persisted` | ✅ 0 · ✅ True |
+| `policy_resolution_v1` | ⬛ `policy_resolution_success_rate` → **HG-G1** | ✅ 100.0 🔺 |
+| | `required_asset_presence` · `datasets_with_policy_entry` | ✅ 100.0 · 1/7 *(ngữ cảnh)* |
+| `served_path_fidelity_v1` | ⬛ `served_path_is_mocked` → **HG-G5** | ✅ False |
+| | `mock_branch_count` · `llm_credential_reaches_service` | 2 · ✅ True |
+| `capability_regression_v1` | ⬛ `critical_capability_regressions` → **HG-R1** | ✅ 0 |
+| | `capability_regressions` · `capability_known_gaps` · `capability_improvements` | ✅ 0 · 8 · 1 |
+| `regression_engine_v1` | ⬛ `hard_gates_newly_failing` → **HG-R3** | ✅ 0 |
+| | `gate_score_drop_max` | ✅ 0.0 |
+| `contract_conformance_v1` | `safety_rule_conformance` | 🟡 **0.833** (5/6) |
+| | ⬛ `internal_field_exposed_count` → **HG-S8** | ✅ 0 |
+| | ⬛ `forgeable_actor_fields` → **HG-G4** | ✅ 0 |
+| | `contract_drift_count` · `job_state_vocabulary_violations` | 🟡 1 (`SCOPE-ML`) · 🟡 1 |
+| | `duplicate_run_state_tables` | 🟡 9 |
+
+> 🔺 **`policy_resolution_v1` đóng góp 100.00 thay vì 0.00.** Đào sâu D-21.6 thì thấy lỗi
+> nặng hơn: breakdown ghi `status=PASS` nhưng `score=0.0` **trong cùng một dòng**, cho
+> 6/7 dataset — trong khi metric của chính nó (`policy_resolution_success_rate = 100.0`)
+> coi `NONE` là thành công. Sửa cả `kind="case"` lẫn phép gán score đó.
+>
+> `governance` **đáng lẽ đã là 94.44 từ §21**; con số 77.78 khi ấy là chấm sai.
+
+---
+
+#### GATE 7 — BUSINESS · *không chạy ở `ci`* · weight **0.00**
+
+Không đổi so với §21.3b. `steward_behavior_v1` chỉ có ở `nightly`/`pre_release`; dòng
+trong report đến từ `run.py:274`. Producer đã viết ở
+`gates/gate7_business/steward_export.py`; đo trên DB thật cho `dataset_count = 1` → vẫn
+`NOT_MEASURED`, nhưng nay là **kết luận đo được**, không phải câu viết tay.
+
+⚠️ **D-21.10 chưa sửa** — câu hardcode *"fewer than 3 datasets and 20 proposals in the
+database"* vẫn còn trong `run.py`.
+
+---
+
+### 22.4 Hard gate — **25** tổng, 21 PASS
+
+```text
+FAIL           HG-A8   governed_column_coverage        obs=0.0     ← chặn release
+FAIL           HG-O1   instrumented_node_coverage      obs=0.2105  ← MỚI, chặn release
+NOT_EVALUATED  HG-A1   min_recall_per_class            (evidence bị cắt)
+NOT_EVALUATED  HG-A3   tautological_enum_count         (không có rule để soi)
+NOT_EVALUATED  HG-S5   indirect_injection_pass_rate    (chỉ chạy nightly)
+```
+
+```text
+BLOCK REASONS
+  - mandatory hard gate(s) not evaluated: HG-A1, HG-A3
+  - mandatory evaluator(s) failed: anomaly_logic_probe_v1, contract_conformance_v1,
+      golden_conformance_v1, governed_enum_conformance_v1, replay_detection_v1,
+      sql_compilation_probe_v1, trace_coverage_v1
+```
+
+Danh sách evaluator FAIL dài hơn §21 (4 → 7) vì **ba probe nay có thể FAIL**. Trước đó
+chúng không có khả năng trượt trên bất kỳ artefact nào.
+
+### 22.5 So với §21 và baseline
+
+|                    | Baseline `45887f7` | §20 `64398cf` | §21 (sáng) | **§22 (chiều)** |
+| ------------------ | -----------------: | ------------: | ---------: | --------------: |
+| Score              |              70.00 |         67.67 |      79.58 |       **75.80** |
+| Coverage           |             65.36% |        72.36% |     80.88% |      **80.88%** |
+| Evaluator          |                 31 |            31 |         35 |          **35** |
+| Metric             |                  — |             — |        102 |         **108** |
+| Hard gate          |                 24 |            24 |         24 |          **25** |
+| `ai_quality`       |              41.67 |         33.33 |      58.33 |       **62.93** |
+| `ai_security`      |             100.00 |        100.00 |     100.00 |      **100.00** |
+| `input_data`       |              75.00 |         75.00 |      83.33 |       **83.33** |
+| `governance`       |              73.33 |         77.78 |      77.78 |       **94.44** |
+| `observability`    |                  — |             — |     100.00 |       **21.05** |
+
+`regression_engine`: `gate_score_drop_max = 0.0`, `hard_gates_newly_failing = 0`,
+`removed: []`. Điểm giảm mà không có hồi quy nào — vì mẫu số đổi, không vì evaluator đổi.
+
+### 22.6 Bảy defect đã sửa, ba còn lại
+
+| # | Defect (§21.6) | Trạng thái |
+| - | -------------- | ---------- |
+| D-21.1 | `HG-S4` luôn PASS do sai key | ✅ **sửa** — hai bên khớp tên; thiếu cả hai → `NOT_MEASURED` |
+| D-21.2 | 4 probe không đọc bundle | ✅ **sửa** — viết lại cả bốn, gắn `required_artifacts`, bump `2.0.0` |
+| D-21.3 | `assert` trần → rơi khỏi aggregate | ✅ **sửa** — bỏ hết, fixture chuyển sang `tests/` |
+| D-21.4 | 3 evaluator "ma" ghì coverage | ⚠️ **chưa** |
+| D-21.5 | Lý do hardcode lỗi thời | ⚠️ **chưa** |
+| D-21.6 | P25 nuốt điểm breakdown kiểu case | ✅ **sửa** — `DatasetBreakdown.kind` |
+| D-21.7 | `reliability`/`business` không trọng số | ⚠️ **chưa** |
+| D-21.8 | 2 evaluator không bao giờ PASS | ⚠️ **chưa** |
+| D-21.9 | `evidence/` không gắn `run_id` | ⚠️ **chưa** |
+| D-21.10 | Lý do hardcode khẳng định về database | ⚠️ **chưa** |
+| — | `policy_resolution` breakdown mâu thuẫn nội tại | ✅ **sửa** (mới phát hiện) |
+| — | Gate 3 không có mẫu số | ✅ **sửa** — `HG-O1` |
+
+**11 file `evalgate/` đã sửa.** Fixture cũ không bị vứt, chuyển thành test đúng chỗ:
+`test_profiler_math.py` · `test_sql_compilation.py` · `test_report_rendering.py` ·
+`test_anomaly_math.py`. Self-test **334 → 368**.
+
+### 22.7 Bốn thay đổi trong `src/` — và bundle đầu tiên đi qua agent thật
+
+`DeterministicEvalLLM` chỉ cài `with_structured_output`. Hai node đi qua
+`create_deep_agent` dùng cơ chế khác hẳn: `ToolStrategy` bind response schema **như một
+tool** rồi chờ `AIMessage.tool_calls`. Sửa nó làm lộ ra **bốn lỗi xếp chồng**:
+
+| # | Lỗi | Bằng chứng |
+| - | --- | ---------- |
+| 1 | `bind_tools()` vứt tools, `invoke()` không có `tool_calls` | agent nhận prose, `json.loads` vỡ |
+| 2 | `_Structured.invoke()` dùng `asyncio.run` | vỡ trong event loop của agent |
+| 3 | Nhận diện schema theo **class** không chạy | `ToolStrategy` bind thành `StructuredTool` mà `args_schema` **không phải** class đó |
+| 4 | **Bộ lọc candidate đòi key `evidence`** | prompt mang `evidence_items` → mọi danh sách trượt → double trả **0 luật** |
+
+Chẩn đoán trực tiếp lỗi 4:
+
+```text
+json_lists_found                71
+candidate_lists_found            1     ← double tìm ĐÚNG danh sách
+sizes                         [20]
+ids_per_list   [nonnegative:passenger_count, not-null:dropoff_location_id, ...]
+items_missing_evidence          20     ← nhưng cả 20 item thiếu key "evidence"
+rules_returned                   0
+```
+
+> **Đây là lời giải cho `"Model covered 0 of 20 candidates"` — dòng log có mặt trong mọi
+> lần chạy CI từ trước tới nay.** Double luôn trả 0 luật, sản phẩm luôn rơi xuống
+> Heuristic Rule Promotion, và **mọi con số `ai_quality` trong §5, §17, §20, §21 — kể cả
+> 62.93 ở trên — đều chấm heuristic chứ không chấm agent**, trong khi báo cáo ghi tên agent.
+
+Thay đổi thứ tư: `instrument()` và `_timed_node()` nay publish node event qua
+`GraphRunContext`; `build_dashboard_proposal_graph` được bọc như mọi graph khác;
+`_STREAMING` chống trùng với `run_graph_streamed`; `product_run.drain_node_events()` gom
+sau mỗi stage vì `broker.reset()` xoá event của các stage trước.
+
+**Bundle đầu tiên không fallback** (`product-22eec367…`):
+
+```text
+LLM invocation:  CandidateTableRuleProposal ×2 · AnomalyInvestigationResponse ×1
+Fallback:        0 x Heuristic Rule Promotion · 0 x DeepAgent gặp lỗi
+Luật đề xuất:    30, toàn bộ từ đường LLM (RANGE 12 · NOT_NULL 18)
+Node event:      12 event / 10 node phân biệt      (trước: 6 / 4)
+```
+
+Đo trực tiếp từng evaluator trên bundle này:
+
+| Evaluator | Kết quả | So với bundle heuristic |
+| --------- | ------- | ----------------------- |
+| `trace_coverage_v1` | **PASS 52.63** | `instrumented_node_coverage` 0.2105 → **0.5263** (10/19), workflow 1/6 → **5/6**. **HG-O1 qua sàn** |
+| `sql_compilation_probe_v1` | **PASS 100** | 30/30 compile; `DUPLICATE_FINGERPRINT` biến mất — đường LLM không sinh loại đó |
+| `profile_accuracy_probe_v1` | **PASS 100** | 163/163 |
+| `vacuity_probe_v1` | WARN 66.67 | không đổi |
+| `anomaly_logic_probe_v1` | **FAIL 60** | vẫn không abstain, **và** verdict không có bằng chứng đỡ |
+| `report_grounding_probe_v1` | PASS 100 | `report_figures_checked = 0` — double cố ý không sinh chữ số |
+
+> `report_figures_checked = 0` là chủ ý: nếu double bịa một con số, nó sẽ chế tạo đúng
+> cái defect mà probe kia sinh ra để bắt.
+
+### 22.8 Điểm 75.80 nên đọc thế nào
+
+**Đây là con số so được trực tiếp với 79.58 của §21** — cùng bundle, cùng bằng chứng, chỉ
+khác dụng cụ đo. Ba gate dịch chuyển, và mỗi dịch chuyển có một nguyên nhân đo lường:
+
+| Gate | Δ | Vì sao |
+| ---- | -: | ------ |
+| `observability` | −78.95 | 100 cũ chia cho số event đã ghi, không chia cho số node đã chạy |
+| `governance` | +16.67 | `policy_resolution` từng bị chấm 0.00 dù PASS với mọi metric 100 |
+| `ai_quality` | +4.60 | `golden_conformance` được trả lại 60.0; ba probe giả 100 biến mất |
+
+**Đáng tin:**
+
+- `ai_security = 100` với 6/7 evaluator — 162 case kết luận được / **0 vô kết luận**.
+  `HG-S4` nay đo thật thay vì PASS do sai khoá.
+- `governance = 94.44` với **6/6** — và con số này **không còn bị chấm thấp** như §21.
+- `input_data = 83.33` — nửa từ `profile_accuracy` nay là **163 phép đo trên frame thật**.
+
+**Chưa đáng tin:**
+
+- `ai_quality = 62.93` chấm **heuristic fallback**, không phải agent (22.7). Con số đầu
+  tiên mô tả agent thật cần một commit.
+- `observability = 21.05` là mẫu số thật nhưng của **bundle heuristic**; trên bundle agent
+  nó là **52.63**.
+
+### 22.9 Những gì **chưa** sửa
+
+| # | Vấn đề | Trạng thái |
+| - | ------ | ---------- |
+| 1 | `DeterministicEvalLLM` làm crash deep agent (20.9 #1) | ✅ **ĐÃ SỬA** — 22.7 |
+| 2 | Bundle chạy đường dashboard, không phải canonical (20.9 #2) | **CÒN** |
+| 3 | `violation_row_ids` chưa tới đường đang đo (20.9 #3) | **CÒN** — `evidence_complete = false`, `HG-A1` vẫn NOT_EVALUATED |
+| 4 | 3 case `GS-*` ngữ nghĩa NOT_APPLICABLE (20.9 #4) | **CÒN** |
+| 5 | `GS-VERIFIES-BEFORE-ASSERTING` chưa xác nhận E2E (20.9 #5) | **CÒN** |
+| 6 | `profile.evidence_keys` công bố thiếu (20.9 #6) | **CÒN** |
+| 7 | D-21.4 · D-21.5 · D-21.7 · D-21.8 · D-21.9 · D-21.10 | **CÒN** — 6 defect |
+| 8 | Detector không abstain khi cold-start | **CÒN** — mới đo được ở đợt này |
+| 9 | 9/19 node còn im lặng | **CÒN** — `HG-O1` qua sàn 0.5, chưa phải 1.0 |
+
+### 22.10 Nợ do chính đợt này tạo ra
+
+| Nợ | Mức | Xử lý đề xuất |
+| -- | --- | ------------- |
+| **4 file `src/` chưa commit → không phán quyết nào cho đường agent** | Cao | Commit rồi chạy `product_run --profile ci`. `EVALGATE_STALE` hiện tại là EvalGate hoạt động đúng, không phải hỏng |
+| Thêm **1 hard gate** (`HG-O1`) trong một đợt | Trung bình | Policy churn; ngưỡng 0.5 cần review riêng, cùng lý do `HG-A9` từng cần |
+| `_STREAMING` là ContextVar toàn cục | Thấp | Chống trùng đúng trong thực tế, nhưng là trạng thái ngầm giữa hai cơ chế trace |
+| `report_figures_checked = 0` trên bundle tất định | Thấp | Grounding chưa được kiểm thật ở CI; cần một run có narrative mang số |
+
+### 22.11 Thứ tự khuyến nghị
+
+```text
+1. commit src/ rồi chạy --mode ci   ← con số ĐẦU TIÊN mô tả agent, không phải heuristic
+2. detector abstain khi cold-start  ← ANOMALY-NO-ABSTENTION, đo được ở cả 2 bundle
+3. dọn _declared_but_not_run        ← D-21.4, D-21.5, D-21.10 (3 evaluator ma + 2 câu sai)
+4. instrument 9 node còn lại        ← HG-O1 từ 0.53 lên 1.0
+5. evidence/ đặt dưới run_id        ← D-21.9
+6. cho reliability/business trọng số ← D-21.7, hoặc bỏ hẳn khỏi profile
+7. multi_dataset_readiness có nhánh PASS ← D-21.8, gỡ trần 83.33 của input_data
+8. product_run → đường canonical    ← 20.9 #2
+```
+
+Mục 1 đổi **bản chất** của mọi con số `ai_quality`. Mục 2-4 là defect thật đã đo được.
+Mục 5-8 là nợ cấu trúc.
+
+> **Nhận định.** §20 kết luận EvalGate *"áp kỷ luật chứng minh anh đã đo đúng thứ cần đo
+> cho sản phẩm mà chưa áp cho chính nó"*. Đợt này áp nó cho chính nó, và cái giá là −3.78
+> điểm cùng một sự thật khó chịu: **mọi số liệu `ai_quality` từ trước tới nay mô tả một
+> đường code mà nhãn của nó ghi tên đường khác.** Bộ đo càng thành thật thì điểm càng
+> thấp — đó là dấu hiệu sửa đúng, không phải dấu hiệu hồi quy.
+
+---
+
 ## PHỤ LỤC — TRẠNG THÁI
 
 ### Hiện tại
+
+```text
+Ngày:                          2026-09-02 (chiều)
+Nhánh / commit:                chien @ 5a5a1a2 + 4 file src/ CHƯA COMMIT
+Phán quyết:                    EVALGATE_STALE (exit 4) — KHÔNG công bố được
+                               → 4 product file bị sửa; manifest workspace_dirty=true
+Điểm công bố được duy nhất:    75.80 (bundle product-a10049a5, bộ evaluator mới)
+                               79.58 → 75.80 do sửa 7 defect đo lường
+Bundle agent thật:             product-22eec367… — LẦN ĐẦU không fallback
+                               CandidateTableRuleProposal ×2, AnomalyInvestigationResponse ×1
+                               30 luật từ đường LLM, 0 x Heuristic Rule Promotion
+Self-test EvalGate:            368 passed, 4 skipped   (trước đợt: 334)
+Test sản phẩm (tests/):        442 passed, 10 skipped, 4 FAILED
+                               → 4 lỗi đều ở test_isolation_forest_detector.py, thiếu
+                                 scikit-learn ở venv. Fail y hệt TRƯỚC đợt này.
+ruff check src/ tests/ evalgate/: SẠCH
+Hard gate:                     25 tổng (thêm HG-O1), hard_gates.yaml v8.0
+Node instrumentation:          4/19 node → 10/19 · 1/6 graph → 5/6
+File evalgate/ đã sửa:         11
+File src/ đã sửa:              4 — deterministic_eval_llm, node_event_stream,
+                                   node_telemetry, agents/graph
+git add / commit / push:       KHÔNG THỰC HIỆN
+Mục 22.6 (còn lại):            6 mục — dẫn đầu là commit rồi chạy --mode ci
+```
+
+### Trước đó (giữ lại làm mốc lịch sử)
+
+```text
+Ngày:                          2026-09-02
+Nhánh:                         chien @ 5a5a1a2 (đã merge main)
+Lần chạy EvalGate:             product-a10049a59e094e6d979c596c6cc98423
+Phán quyết:                    RELEASE_BLOCKED (exit 3), điểm 79.58, độ phủ 80.88%
+                               → CÓ HIỆU LỰC: workspace sạch, provenance valid, điểm công bố
+                               → so CÙNG RỔ evaluator với 31/08: 66.20 (−1.47). Xem 21.8
+Baseline so sánh:              product-ffd77da3 (45887f7) — regression_engine PASS,
+                               19 evaluator so được, 6 thêm mới, 0 bị gỡ
+Self-test EvalGate:            334 pass, 4 skip
+Evaluator / metric:            35 / 102
+Critical finding:              6 (1 chặn release: HG-A8)
+Hard gate:                     24 tổng — 20 PASS / 1 FAIL (HG-A8) / 3 NOT_EVALUATED
+                               NOT_EVALUATED: HG-A1, HG-A3 (sản phẩm), HG-S5 (nightly)
+                               Mới PASS so với §20: HG-A2, HG-A5, HG-A7, HG-A9
+Golden tier 1:                 7/7 archetype, freeze --verify OK
+Golden tier 2/3:               16 case, áp dụng 13/16 (0.8125), pass 0.60
+                               attribution: {decision: 3, negative_space: 1}
+                               vocabulary: {numeric: 12, text: 5, category: 4}
+ruff check evalgate/:          SẠCH
+File bị sửa trước khi chấm:    KHÔNG — review read-only, không sửa evalgate/ lẫn src/
+Ghi vào evalgate/:             KHÔNG — chạy --dry-run; evidence/, reports/, runs/
+                               giữ nguyên mtime của 31/08 và 01/09 (đã kiểm)
+Chi phí LLM của EvalGate:      $0.00
+Dependency cài thêm:           KHÔNG
+git add / commit / push:       KHÔNG THỰC HIỆN
+Mục 21.6 (defect mới):         10 mục — dẫn đầu là HG-S4 luôn PASS do sai key
+Mục 21.9 (chưa sửa):           cả 6 mục của 20.9 CÒN NGUYÊN
+Mục 21.10 (nợ):                1/3 đã trả (tách golden_conformance), 2 còn
+Mục 21.11 (thứ tự tiếp):       PROPOSED — chưa thực hiện
+```
 
 ```text
 Ngày:                          2026-08-31
@@ -6587,8 +7892,6 @@ Mục 20.10 (nợ đợt này):        3 mục — dẫn đầu là golden_confo
 Mục 20.11 (thứ tự tiếp):       PROPOSED — chưa thực hiện
 ```
 
-### Trước đó (giữ lại làm mốc lịch sử)
-
 ```text
 Ngày:                          2026-08-23
 Nhánh:                         chien @ e3bd462
@@ -6610,7 +7913,11 @@ Mục 17.8 (việc còn lại):       PROPOSED — chưa thực hiện
 Mục 18 (hướng phát triển):     PROPOSED — thiết kế, chưa viết một dòng code nào
 ```
 
-> Điểm giữa hai khối **không so sánh trực tiếp được**: 43.41 là điểm của một run
-> `EVALGATE_STALE` với 20 hard gate và 30 evaluator; 67.67 là điểm của một run có hiệu
-> lực với 24 hard gate và 31 evaluator. Mốc so sánh hợp lệ duy nhất là baseline
-> `product-ffd77da3` trong §20.5.
+> **Ba khối không so sánh trực tiếp được với nhau.** 43.41 là điểm của một run
+> `EVALGATE_STALE` với 20 hard gate và 30 evaluator; 67.67 là run có hiệu lực với 24 hard
+> gate và 31 evaluator; 79.58 là run có hiệu lực với 24 hard gate và **35** evaluator.
+> Mỗi lần tập evaluator đổi, mẫu số đổi theo.
+>
+> Hai mốc so sánh hợp lệ duy nhất: baseline `product-ffd77da3` trong §20.5/§21.5, và phép
+> chấm-lại-cùng-rổ trong §21.8 — **67.67 → 66.20 trên cùng tập evaluator**, tức sản phẩm
+> đứng yên trong khi con số công bố tăng 11.91 điểm.

@@ -8,7 +8,7 @@ on:
 
 jobs:
   lint-and-test:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     env:
       LANGCHAIN_TRACING_V2: "false"
 
@@ -48,7 +48,7 @@ jobs:
     # The quality gate is deliberately a separate job. It grades the product; a
     # failure here means "this revision should not ship", not "the build broke",
     # and mixing the two makes both harder to read.
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: lint-and-test
     env:
       LANGCHAIN_TRACING_V2: "false"

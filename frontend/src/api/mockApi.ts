@@ -714,15 +714,15 @@ export const mockApi: ApiClient = {
     const workflow = [...workflowRuns].reverse().find((item) => item.dataset_id === id);
     return workflow ? structuredClone(workflow) : null;
   },
-  async importDataset(file) {
+  async importDataset(file: File): Promise<{ dataset: Dataset; job: CreateJobResponse }> {
     const imported = { ...dataset, id: `dataset-import-${Date.now()}`, name: file.name.replace(/\.[^.]+$/, ""), source_label: file.name, status: "PROFILE_READY" as const, updated_at: new Date().toISOString() };
     const job = makeJob("INGEST_PROFILE");
     return { dataset: imported, job: { job_id: job.id, status: "PENDING" as const } };
   },
-  async deleteDataset(id: string) {
+  async deleteDataset(_id: string): Promise<void> {
     await wait(100);
   },
-  async getWorkflow(id: string) {
+  async getWorkflow(id: string): Promise<WorkflowRun> {
     await wait(120);
     const workflow = workflowRuns.find((item) => item.id === id);
     if (!workflow) throw new Error("Workflow run not found.");
@@ -732,9 +732,9 @@ export const mockApi: ApiClient = {
     const workflow = workflowRuns.find((item) => item.id === id);
     if (!workflow) throw new Error("Workflow run not found.");
     if (expectedDatasetId && workflow.dataset_id !== expectedDatasetId) throw new Error("Workflow dataset mismatch");
-    if (workflow.current_step !== step) throw new Error(`Step ${step} is not ready. Complete ${workflow.current_step} first.`);
+    if (workflow.current_step !== step && !(step === "RUN_CHECKS" && workflow.current_step === "ANALYZE_REPORT")) throw new Error(`Step ${step} is not ready. Complete ${workflow.current_step} first.`);
     const current = workflow.steps.find((item) => item.key === step);
-    if (!current || !["READY", "FAILED", ...(step === "ANALYZE_REPORT" ? ["COMPLETED"] : [])].includes(current.status)) throw new Error("This workflow step is waiting for review.");
+    if (!current || !["READY", "FAILED", "COMPLETED", ...(step === "ANALYZE_REPORT" ? ["COMPLETED"] : [])].includes(current.status)) throw new Error("This workflow step is waiting for review.");
     clearTemporaryDownstreamSessions(workflow, step);
     if (step === "PROPOSE_RULES") {
       // The fixture starts with a deterministic proposal set. Attach that set
@@ -984,14 +984,14 @@ const mockGraphCatalog: GraphCatalog = {
       key: "G1B",
       builder: "build_rule_proposal_graph",
       label_en: "Graph 1B · Rule proposal",
-      label_vi: "Graph 1B · Sinh đề xuất luật",
+      label_vi: "Graph 1B · Sinh đề xuất quy tắc",
       run_en: "Run 1", run_vi: "Run 1",
       summary_en: "Candidates, a tailored prompt, then typed rules.",
-      summary_vi: "Ứng viên, prompt riêng, rồi luật có kiểu.",
+      summary_vi: "Ứng viên, prompt riêng, rồi quy tắc có kiểu.",
       nodes: [
-        mockNode("rule_candidate_builder", "Rule candidates", "Sinh ứng viên luật", "DETERMINISTIC"),
+        mockNode("rule_candidate_builder", "Rule candidates", "Sinh ứng viên quy tắc", "DETERMINISTIC"),
         mockNode("prompt_customizer", "Prompt customizer", "Tuỳ biến prompt", "LLM"),
-        mockNode("rule_proposer", "Rule proposer", "Đề xuất luật", "LLM"),
+        mockNode("rule_proposer", "Rule proposer", "Đề xuất quy tắc", "LLM"),
       ],
       edges: [
         { from: "rule_candidate_builder", to: "prompt_customizer" },

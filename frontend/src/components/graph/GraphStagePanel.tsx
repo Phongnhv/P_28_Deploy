@@ -18,7 +18,7 @@ export function GraphStagePanel({
   graphKeys,
   language,
   loadNodeDetail,
-  defaultOpen = true,
+  defaultOpen = false,
   showTimeline = true,
   emptyNote,
 }: {
