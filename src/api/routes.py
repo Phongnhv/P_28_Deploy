@@ -20,7 +20,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -281,6 +281,9 @@ class RuleSpecSchema(BaseModel):
     regex: str | None = None
     operator: str | None = None
     fingerprint_columns: list[str] | None = None
+    max_null_pct: float | None = Field(default=None, ge=0, le=100)
+    max_age_hours: float | None = Field(default=None, ge=0)
+    min_row_count: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_regex_rule(self):

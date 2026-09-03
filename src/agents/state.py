@@ -66,6 +66,8 @@ class AgentState(TypedDict, total=False):
     data_dictionary_source: str  # supplied | inferred
     semantic_contract: dict  # Hợp đồng ngữ nghĩa (Semantic Contract) được đề xuất hoặc đã duyệt
     rule_candidates: list[dict]  # Danh sách các candidates deterministic sinh từ Semantic Contract
+    rule_candidate_coverage: list[dict]  # Per-batch initial/retry/accepted candidate counts.
+    allow_heuristic_fallback: bool
     table_business_contexts: dict[
         str, str
     ]  # Tóm tắt nghiệp vụ chi tiết của từng bảng được tổng hợp từ Semantic Contract

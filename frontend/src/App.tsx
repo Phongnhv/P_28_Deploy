@@ -97,6 +97,10 @@ function formatTime(value: string) {
 }
 
 function formatRule(rule: RuleSpec, isVi?: boolean) {
+  if (rule.type === "unique")
+    return isVi ? `KHÔNG TRÙNG GIÁ TRỊ · ${rule.column}` : `UNIQUE · ${rule.column}`;
+  if (rule.type === "null_rate")
+    return isVi ? `TỶ LỆ THIẾU · ${rule.column} ≤ ${rule.max_null_pct}%` : `NULL RATE · ${rule.column} ≤ ${rule.max_null_pct}%`;
   if (rule.type === "not_null")
     return isVi ? `BẮT BUỘC CÓ GIÁ TRỊ · ${rule.column}` : `NOT NULL · ${rule.column}`;
   if (rule.type === "numeric_range")
@@ -7249,7 +7253,7 @@ function RuleSpecEditor({
         <strong>{rule.type.replaceAll("_", " ")}</strong>
         <code>{formatRule(rule, isVi)}</code>
       </div>
-      {rule.type === "not_null" && (
+      {(rule.type === "not_null" || rule.type === "unique" || rule.type === "null_rate") && (
         <label>
           {isVi ? "Tên cột" : "Column"}
           <input
@@ -7300,6 +7304,19 @@ function RuleSpecEditor({
             </label>
           </div>
         </>
+      )}
+      {rule.type === "null_rate" && (
+        <label>
+          {isVi ? "Tỷ lệ thiếu tối đa (%)" : "Maximum null percentage (%)"}
+          <input
+            type="number"
+            min={0}
+            max={100}
+            step="any"
+            value={rule.max_null_pct ?? ""}
+            onChange={(event) => update({ max_null_pct: event.target.value === "" ? undefined : Number(event.target.value) })}
+          />
+        </label>
       )}
       {rule.type === "accepted_values" && (
         <>

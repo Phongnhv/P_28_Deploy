@@ -21,7 +21,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
 from src.config import get_settings
@@ -35,7 +35,10 @@ SUPPORTED_RULE_TYPES = {
     "accepted_values",
     "cross_field_comparison",
     "duplicate_fingerprint",
+    "unique",
+    "null_rate",
 }
+NUMERIC_DATA_TYPES = {"number", "numeric", "float", "float64", "float32", "integer", "int", "int64", "int32", "real", "double", "decimal"}
 SAFE_OPERATORS = {"<", "<=", ">", ">=", "==", "!="}
 
 # Graph 1B has two LLM nodes. Keep its upper bound finite so a provider/network
@@ -161,18 +164,8 @@ def infer_dataset_rule_policy(columns: list[Any]) -> DatasetRulePolicy:
             continue
         dtype = getattr(c, "data_type", "")
         min_val = getattr(c, "min_value", None)
-        if dtype in ("numeric", "float", "integer", "int", "real", "double") and min_val is not None and min_val >= 0:
+        if str(dtype).lower() in NUMERIC_DATA_TYPES and min_val is not None and min_val >= 0:
             non_negs.append(name)
-            if len(non_negs) >= 3:
-                break
-    if not non_negs:
-        for c in columns:
-            name = c.name if hasattr(c, "name") else c.get("name", "")
-            dtype = getattr(c, "data_type", "")
-            min_val = getattr(c, "min_value", None)
-            if dtype in ("numeric", "float", "integer", "int", "real", "double") and min_val is not None:
-                non_negs.append(name)
-                break
 
     return DatasetRulePolicy(
         required_identifiers=req_ids,
@@ -217,7 +210,9 @@ def _upper_bound(column) -> float | None:
     p95 = column.quantiles.get("p95") if column.quantiles else None
     if p95 is None:
         return None
-    bound = round(float(p95) * _UPPER_BOUND_HEADROOM, 4)
+    bound = round(float(p95) + abs(float(p95)) * (_UPPER_BOUND_HEADROOM - 1), 4)
+    if column.min_value is not None and bound < float(column.min_value):
+        return None
     # A bound at or above the observed maximum constrains nothing on this data.
     if column.max_value is not None and bound >= float(column.max_value):
         return None
@@ -274,6 +269,11 @@ class ProposalColumnEvidence(BaseModel):
     min_value: float | None = None
     max_value: float | None = None
 
+    @field_validator("data_type")
+    @classmethod
+    def normalize_numeric_type(cls, value: str) -> str:
+        return "numeric" if value.strip().lower() in NUMERIC_DATA_TYPES else value
+
 
 class ProposalCrossFieldEvidence(BaseModel):
     """Aggregate violation metric for one configured relationship."""
@@ -300,7 +300,7 @@ class ProposalEvidence(BaseModel):
     validity_score: float | None = Field(ge=0.0, le=100.0)
     duplicate_rate: float = Field(ge=0.0, le=100.0)
     evidence_keys: list[str]
-    columns: list[ProposalColumnEvidence] = Field(min_length=1, max_length=64)
+    columns: list[ProposalColumnEvidence] = Field(min_length=1)
     cross_field_metrics: list[ProposalCrossFieldEvidence] = Field(default_factory=list)
 
     def to_agent_digest(self) -> dict[str, dict[str, Any]]:
@@ -804,6 +804,7 @@ def _invoke_rule_proposal_graph(
                 "semantic_contract": contract,
                 "normalized_data_dictionary": {"tables": tables},
                 "target_tables": [evidence.dataset_id],
+                "allow_heuristic_fallback": False,
                 "metadata": {
                     "workflow": "graph_1b",
                     "source_binding": binding,
@@ -942,9 +943,11 @@ def _normalise_graph_rules(raw_rules: list[dict[str, Any]], evidence: ProposalEv
     for raw in raw_rules:
         matched_candidate = _match_dashboard_candidate(raw, candidates, evidence)
         if not matched_candidate:
+            logger.warning("[%s] Rejected candidate %s: ID, type, column or parameters mismatch", evidence.dataset_id, raw.get("candidate_id"))
             continue
         proposal = _normalise_graph_rule(raw, evidence, matched_candidate)
         if not proposal:
+            logger.warning("[%s] Rejected candidate %s: narrative, confidence or evidence invalid", evidence.dataset_id, matched_candidate.id)
             continue
         if matched_candidate.id in candidate_ids:
             continue
@@ -952,6 +955,7 @@ def _normalise_graph_rules(raw_rules: list[dict[str, Any]], evidence: ProposalEv
         accepted.append((proposal, matched_candidate))
     # The model chooses candidates; server policy owns stable display order.
     accepted.sort(key=lambda item: item[1].priority, reverse=True)
+    logger.info("[%s] Rule coverage: candidates=%d returned=%d accepted=%d missing=%d", evidence.dataset_id, len(candidates), len(raw_rules), len(accepted), len(candidates) - len(candidate_ids))
     return [proposal for proposal, _candidate in accepted]
 
 
@@ -1100,10 +1104,10 @@ def _normalise_graph_rule(
 
 
 def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[DashboardRuleCandidate]:
-    """Create a small, diverse candidate set from safe aggregate evidence.
+    """Build the uncapped executable checklist from pinned aggregate evidence.
 
-    This is deliberately conservative: it does not infer business constraints from
-    a zero null rate alone, and it does not permit the model to invent thresholds.
+    Builder, prompt and response matcher share this contract. Profile-derived
+    thresholds are reviewable proposals, not confirmed business constraints.
     """
     columns = {column.name: column for column in evidence.columns}
     policy = get_dataset_rule_policy(evidence.dataset_id, evidence.columns)
@@ -1270,11 +1274,29 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
             )
         )
 
-    existing_column_rules = {candidate.column for candidate in candidates}
-    for col in evidence.columns:
-        if col.name in ("source_row_id", "id"):
+    for metric in evidence.cross_field_metrics:
+        candidate_id = f"cross-field:{metric.left_column}:{metric.operator}:{metric.right_column}"
+        if metric.left_column not in columns or metric.right_column not in columns or metric.checked_count == 0:
             continue
-        if col.name not in existing_column_rules:
+        if any(candidate.id == candidate_id for candidate in candidates):
+            continue
+        candidates.append(DashboardRuleCandidate(
+            id=candidate_id, rule_type="CROSS_FIELD_COMPARISON", column=metric.left_column,
+            parameters={"target_column": metric.right_column, "operator": metric.operator},
+            dashboard_rule_type="cross_field_comparison",
+            rule_spec={"type": "cross_field_comparison", "columns": [metric.left_column, metric.right_column], "operator": metric.operator},
+            evidence_refs=[f"profile.cross_field.{metric.left_column}.{metric.operator}.{metric.right_column}.violation_rate"],
+            selection_reason="The pinned profile measured this relationship between two columns in this dataset; review the proposed constraint.",
+            priority=85, title=f"{metric.left_column} {metric.operator} {metric.right_column}",
+            description=f"Check the profiled relationship {metric.left_column} {metric.operator} {metric.right_column}.",
+            severity="MEDIUM", confidence_ceiling=0.8,
+        ))
+
+    existing_rules = {(candidate.column, candidate.rule_type) for candidate in candidates}
+    for col in evidence.columns:
+        if col.name == "source_row_id":
+            continue
+        if (col.name, "NOT_NULL") not in existing_rules:
             if col.null_rate == 0.0:
                 candidates.append(
                     DashboardRuleCandidate(
@@ -1299,7 +1321,8 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
                         severity="MEDIUM", confidence_ceiling=0.75,
                     )
                 )
-            if col.data_type in ("numeric", "float", "integer", "real") and col.min_value is not None:
+        if (col.name, "RANGE") not in existing_rules:
+            if col.data_type.lower() in NUMERIC_DATA_TYPES and col.min_value is not None:
                 min_val = 0.0 if col.min_value >= 0 else float(col.min_value)
                 upper = _upper_bound(col)
                 range_parameters: dict[str, Any] = {"min": min_val}
@@ -1342,6 +1365,29 @@ def _build_dashboard_rule_candidates(evidence: ProposalEvidence) -> list[Dashboa
                         severity="MEDIUM", confidence_ceiling=0.85,
                     )
                 )
+
+        if col.is_unique_full_table and col.full_distinct_count == evidence.row_count and col.null_rate == 0:
+            candidates.append(DashboardRuleCandidate(
+                id=f"unique:{col.name}", rule_type="UNIQUE", column=col.name, parameters={},
+                dashboard_rule_type="unique", rule_spec={"type": "unique", "column": col.name},
+                evidence_refs=[f"profile.column.{col.name}.full_distinct_count", f"profile.column.{col.name}.null_rate"],
+                selection_reason="Every row has a distinct non-null value in the full pinned profile; review uniqueness as a proposed constraint.",
+                priority=80, title=f"{col.name} should remain unique",
+                description=f"Review and enforce the observed full-table uniqueness of {col.name}.",
+                severity="MEDIUM", confidence_ceiling=0.85,
+            ))
+        if col.null_rate > 0.01:
+            threshold = min(100.0, round(col.null_rate * 100 + 10.0, 4))
+            candidates.append(DashboardRuleCandidate(
+                id=f"null-rate:{col.name}", rule_type="NULL_RATE", column=col.name,
+                parameters={"max_null_pct": threshold}, dashboard_rule_type="null_rate",
+                rule_spec={"type": "null_rate", "column": col.name, "max_null_pct": threshold},
+                evidence_refs=[f"profile.column.{col.name}.null_rate"],
+                selection_reason="Proposed null-rate drift threshold: observed percentage plus 10 percentage points; requires review.",
+                priority=70, title=f"{col.name} null rate should not exceed {threshold}%",
+                description=f"Flag a null rate above the proposed {threshold}% threshold for {col.name}.",
+                severity="MEDIUM", confidence_ceiling=0.75,
+            ))
 
     return sorted(candidates, key=lambda candidate: candidate.priority, reverse=True)
 
@@ -1398,6 +1444,8 @@ def _candidate_parameters_match(
 def _dimension_for_rule_type(rule_type: str) -> str:
     return {
         "NOT_NULL": "COMPLETENESS",
+        "NULL_RATE": "COMPLETENESS",
+        "UNIQUE": "UNIQUENESS",
         "RANGE": "VALIDITY",
         "ACCEPTED_VALUES": "VALIDITY",
         "CROSS_FIELD_COMPARISON": "CONSISTENCY",

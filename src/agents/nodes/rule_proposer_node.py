@@ -152,9 +152,8 @@ def _build_coverage_requirements(table_digest: dict) -> list[dict]:
     dashboard_candidates = table_digest.get("dashboard_rule_candidates")
     if table_digest.get("dashboard_candidate_mode") and isinstance(dashboard_candidates, list):
         # The public dashboard workflow has already transformed persisted aggregate
-        # profile evidence into a small policy-approved candidate set.  Do not add
-        # legacy heuristic candidates here: doing so lets a model spend all five
-        # slots on repeated NOT_NULL rules and weakens the product contract.
+        # profile evidence into an executable checklist. Reuse every candidate;
+        # independently regenerated IDs cannot pass the dashboard matcher.
         return _attach_evidence_items(
             [candidate for candidate in dashboard_candidates if isinstance(candidate, dict)],
             table_digest,
@@ -513,10 +512,8 @@ def _bind_proposal_to_candidates(
     covered_candidates: list[dict] = []
     uncovered: list[str] = []
 
-    # Associate one model narrative with every server candidate. Correct IDs win;
-    # then an exact column/type match; finally checklist order. This tolerates the
-    # provider duplicating IDs or emitting an extra narrative without ever trusting
-    # model-owned execution fields.
+    # Associate narratives by identity, never by position: a missing candidate
+    # must not inherit another column's explanation just to fill the checklist.
     for candidate in candidates:
         candidate_id = str(candidate.get("candidate_id") or "")
         selected_index = next(
@@ -541,8 +538,6 @@ def _bind_proposal_to_candidates(
                 ),
                 None,
             )
-        if selected_index is None and unused_payload_indexes:
-            selected_index = min(unused_payload_indexes)
         if selected_index is None:
             uncovered.append(candidate_id)
             continue
@@ -1266,6 +1261,36 @@ def _promote_candidates_to_rules(
 # ---------------------------------------------------------------------------
 
 
+async def _propose_with_coverage_retry(**kwargs) -> tuple[CandidateTableRuleProposal, dict]:
+    """Retry only missing dashboard candidate IDs once; never regenerate covered rules."""
+    result = await _propose_for_table(**kwargs)
+    candidates = kwargs.get("candidates") or []
+    summary = {"table": kwargs["table_name"], "batch": kwargs.get("batch_index", 1),
+               "expected": len(candidates), "initial_returned": len(result.rules), "retried_ids": [], "missing_ids": []}
+    if not kwargs.get("table_digest", {}).get("dashboard_candidate_mode"):
+        summary["accepted"] = len(result.rules)
+        return result, summary
+    covered = {rule.candidate_id for rule in result.rules}
+    missing = [candidate for candidate in candidates if candidate["candidate_id"] not in covered]
+    if missing:
+        summary["retried_ids"] = [candidate["candidate_id"] for candidate in missing]
+        logger.info("[%s] Coverage retry for %d missing candidate IDs: %s", kwargs["table_name"], len(missing), summary["retried_ids"])
+        retry_kwargs = {**kwargs, "candidates": missing, "max_retries": 0,
+                        "table_digest": _filter_table_context(kwargs["table_digest"], missing),
+                        "semantic_contract": _filter_semantic_context(kwargs.get("semantic_contract"), missing)}
+        retry = await _propose_for_table(**retry_kwargs)
+        expected_missing = set(summary["retried_ids"])
+        recovered = [rule for rule in retry.rules if rule.candidate_id in expected_missing]
+        result = CandidateTableRuleProposal(table=kwargs["table_name"], rules=[*result.rules, *recovered])
+        covered.update(rule.candidate_id for rule in recovered)
+    summary["missing_ids"] = [candidate["candidate_id"] for candidate in candidates if candidate["candidate_id"] not in covered]
+    summary["accepted"] = len(result.rules)
+    logger.info("Rule candidate coverage: %s", summary)
+    if summary["missing_ids"]:
+        raise ValueError(f"Missing candidate narratives after targeted retry: {summary['missing_ids']}")
+    return result, summary
+
+
 async def rule_proposer_node(state: AgentState) -> dict:
     """Rule Proposer Node — fan-out LLM structured output per table.
 
@@ -1346,7 +1371,7 @@ async def rule_proposer_node(state: AgentState) -> dict:
 
     results = await asyncio.gather(
         *[
-            _propose_for_table(
+            _propose_with_coverage_retry(
                 table_name=table_name,
                 table_digest=_filter_table_context(per_table[table_name], candidate_batch),
                 structured_llm=structured_llm,
@@ -1373,6 +1398,7 @@ async def rule_proposer_node(state: AgentState) -> dict:
     flat_rules: list[dict] = []
     errors: list[dict] = []
     used_ids: set[str] = set()
+    coverage_summaries: list[dict] = []
 
     stamped_rule_keys: set[str] = set()
     for (table_name, batch_index, requirements), result in zip(batch_jobs, results):
@@ -1380,6 +1406,9 @@ async def rule_proposer_node(state: AgentState) -> dict:
             logger.error("Bảng '%s' batch %d thất bại: %s", table_name, batch_index, result)
             errors.append({"table": table_name, "batch": batch_index, "error": str(result)})
             continue
+
+        result, coverage = result
+        coverage_summaries.append(coverage)
 
         # Final strict validation remains the public contract after the
         # candidate-aware structured-output adapter has repaired provenance.
@@ -1457,6 +1486,7 @@ async def rule_proposer_node(state: AgentState) -> dict:
             "total_rules": len(flat_rules),
             "total_errors": len(errors),
             "heuristic_fallback_used": heuristic_fallback_used,
+            "candidate_coverage": coverage_summaries,
             "proposed_rules": flat_rules,
             "errors": errors,
         }
@@ -1469,6 +1499,7 @@ async def rule_proposer_node(state: AgentState) -> dict:
         "proposed_rules": flat_rules,
         "rule_proposal_errors": errors,
         "rule_run_id": run_id,
+        "rule_candidate_coverage": coverage_summaries,
     }
 
     if not flat_rules:

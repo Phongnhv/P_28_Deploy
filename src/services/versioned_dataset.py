@@ -454,6 +454,11 @@ def validate_rule_spec(rule: dict[str, Any], allowed_columns: Iterable[str]) -> 
     if not isinstance(parameters, dict):
         raise DatasetContractError("Rule parameters must be an object")
     column = rule.get("column") or parameters.get("column")
+    if not column and canonical in {"CROSS_FIELD_COMPARISON", "DUPLICATE_FINGERPRINT"}:
+        field = "columns" if canonical == "CROSS_FIELD_COMPARISON" else "fingerprint_columns"
+        referenced = rule.get(field) or parameters.get(field)
+        if isinstance(referenced, list) and referenced:
+            column = referenced[0]
     if canonical not in {"ROW_COUNT"}:
         if not isinstance(column, str) or column not in allowed:
             raise DatasetContractError(f"Rule references a column outside the immutable schema: {column}")
@@ -471,7 +476,7 @@ def validate_rule_spec(rule: dict[str, Any], allowed_columns: Iterable[str]) -> 
         if not isinstance(cols, list) or not cols or any(col not in allowed for col in cols):
             raise DatasetContractError("Duplicate fingerprint references a column outside the immutable schema")
     if canonical == "ACCEPTED_VALUES":
-        values = rule.get("allowed_values") or parameters.get("allowed_values")
+        values = rule.get("allowed_values") or parameters.get("allowed_values") or parameters.get("accepted_values")
         if not isinstance(values, list) or not values:
             raise DatasetContractError("Accepted values requires a non-empty list")
     if canonical == "REGEX_FORMAT":
@@ -481,6 +486,17 @@ def validate_rule_spec(rule: dict[str, Any], allowed_columns: Iterable[str]) -> 
         validate_regex(pattern)
     if canonical == "NUMERIC_RANGE" and parameters.get("min_value", parameters.get("min")) is None and parameters.get("max_value", parameters.get("max")) is None:
         raise DatasetContractError("Numeric range requires a minimum or maximum")
+    if canonical == "NUMERIC_RANGE":
+        lower = parameters.get("min_value", parameters.get("min"))
+        upper = parameters.get("max_value", parameters.get("max"))
+        if any(value is not None and _finite_float(value) is None for value in (lower, upper)):
+            raise DatasetContractError("Numeric range bounds must be finite numbers")
+        if lower is not None and upper is not None and float(lower) > float(upper):
+            raise DatasetContractError("Numeric range minimum exceeds maximum")
+    if canonical == "NULL_RATE":
+        threshold = _finite_float(parameters.get("max_null_pct"))
+        if threshold is None or not 0 <= threshold <= 100:
+            raise DatasetContractError("Null rate requires max_null_pct between 0 and 100")
     if canonical == "CROSS_FIELD_COMPARISON" and (parameters.get("operator") not in {"<", "<=", ">", ">=", "==", "=", "!=", "<>"}):
         raise DatasetContractError("Unsupported cross-field comparison operator")
     return {**rule, "rule_type": canonical, "column": column}
@@ -564,7 +580,7 @@ def _normalise_comparison_operands(left: Any, right: Any, schema: list[dict[str,
     return left_values, right_values, null_mask, parse_failure_mask, comparison_kind
 
 
-def execute_rule_frame(frame: Any, rule: dict[str, Any], *, failure_limit: int = FAILURE_SAMPLE_LIMIT) -> dict[str, Any]:
+def execute_rule_frame(frame: Any, rule: dict[str, Any], *, failure_limit: int = FAILURE_SAMPLE_LIMIT, row_ids: list[str] | None = None) -> dict[str, Any]:
     """Execute one validated rule without SQL or shared transaction state."""
     import pandas as pd
 
@@ -572,7 +588,9 @@ def execute_rule_frame(frame: Any, rule: dict[str, Any], *, failure_limit: int =
     normalized = validate_rule_spec(rule, [item["name"] for item in schema])
     rule_type = normalized["rule_type"]
     params = normalized.get("effective_parameters") or normalized.get("parameters") or normalized
-    ids = _row_ids(frame)
+    ids = _row_ids(frame) if row_ids is None else row_ids
+    if len(ids) != len(frame):
+        raise DatasetContractError("Row references do not match the source row count")
     total_rows = int(len(frame))
     started = datetime.now(UTC)
     if total_rows == 0 and rule_type != "ROW_COUNT":
@@ -612,7 +630,7 @@ def execute_rule_frame(frame: Any, rule: dict[str, Any], *, failure_limit: int =
         failed_mask = frame[column].notna() & ~matched
     elif rule_type == "ROW_COUNT":
         minimum = int(params.get("min_row_count", normalized.get("min_row_count", 0)))
-        failed_mask = pd.Series([total_rows < minimum] + [False] * max(0, total_rows - 1), index=frame.index)
+        failed_mask = pd.Series([total_rows < minimum] + [False] * (total_rows - 1), index=frame.index) if total_rows else pd.Series(False, index=frame.index)
     elif rule_type == "FRESHNESS":
         timestamps = pd.to_datetime(frame[column], errors="coerce", utc=True)
         newest = timestamps.max() if len(timestamps) else None
@@ -659,7 +677,7 @@ def execute_rule_frame(frame: Any, rule: dict[str, Any], *, failure_limit: int =
         status = "ERROR"
         failed_count = 0
     else:
-        status = "FAIL" if failed_count else "PASS"
+        status = "FAIL" if failed_count or (rule_type == "ROW_COUNT" and total_rows < minimum) else "PASS"
     return {
         "rule_id": normalized.get("rule_id", ""),
         "table_name": "version_source",

@@ -110,6 +110,7 @@ def test_evidence_allow_list_excludes_raw_samples_and_identifiers():
         "RANGE",
         "ACCEPTED_VALUES",
         "CROSS_FIELD_COMPARISON",
+        "UNIQUE",
     }
     digest_columns = {column["name"]: column for column in digest["columns"]}
     assert digest_columns["trip_distance"]["negative_pct"] == 1.0
@@ -129,6 +130,7 @@ def test_dashboard_candidates_are_diverse_and_use_only_aggregate_evidence():
         "cross_field_comparison",
         "not_null",
         "accepted_values",
+        "unique",
     }
     assert len(candidates) >= 4
     assert all(set(candidate.evidence_refs).issubset(evidence.evidence_keys) for candidate in candidates)
@@ -352,6 +354,7 @@ def test_mock_mode_returns_dashboard_supported_proposals(monkeypatch):
         "accepted_values",
         "cross_field_comparison",
         "duplicate_fingerprint",
+        "unique",
     }
     assert all(proposal.model_name == "agent-mock-v1" for proposal in proposals)
     payment_rule = next(proposal for proposal in proposals if proposal.rule_type == "accepted_values")

@@ -35,6 +35,8 @@ export type AgentArtifactType =
   | "LOOP_RECOMMENDATION";
 export type RuleType =
   | "not_null"
+  | "unique"
+  | "null_rate"
   | "numeric_range"
   | "accepted_values"
   | "cross_field_comparison"
@@ -153,6 +155,9 @@ export interface RuleSpec {
   allowed_values?: string[];
   operator?: string;
   fingerprint_columns?: string[];
+  max_null_pct?: number;
+  max_age_hours?: number;
+  min_row_count?: number;
 }
 
 /** Nguồn gốc của một đề xuất. Khớp `ProposalBasis` ở src/models/rule_schemas.py. */

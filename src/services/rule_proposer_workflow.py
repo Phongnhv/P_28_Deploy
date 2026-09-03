@@ -807,6 +807,8 @@ def execute_step(db: Session, run: WorkflowRunModel, step_key: str) -> None:
                 db, run.dataset_id, contract, workflow_run_id=run.id
             )
         except Exception as exc:
+            if not get_settings().rule_proposer_allow_legacy_fallback:
+                raise WorkflowError(f"Graph 1B failed with fallback disabled: {exc}") from exc
             logger.warning(
                 "Graph 1B failed for workflow %s, using deterministic policy fallback: %s", run.id, exc
             )

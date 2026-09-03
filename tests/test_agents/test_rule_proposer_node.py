@@ -26,7 +26,7 @@ from src.models.rule_schemas import (
 # ---------------------------------------------------------------------------
 
 
-def _make_table_proposal(table_name: str, n_rules: int = 2) -> TableRuleProposal:
+def _make_table_proposal(table_name: str, n_rules: int = 2, *, source_column: str | None = None) -> TableRuleProposal:
     """Tạo TableRuleProposal hợp lệ để dùng trong mock."""
     from src.agents.nodes.rule_proposer_node import CandidateProposedRule, CandidateTableRuleProposal
 
@@ -44,6 +44,8 @@ def _make_table_proposal(table_name: str, n_rules: int = 2) -> TableRuleProposal
         )
         for i in range(n_rules)
     ]
+    if source_column:
+        rules = [rules[0].model_copy(update={"column": source_column, "rule_description": f"{source_column} must be populated", "ai_reasoning": f"Observed {source_column} null percentage is zero"})]
     return CandidateTableRuleProposal(table=table_name, rules=rules)
 
 
@@ -252,7 +254,7 @@ def test_node8_restores_row_count_parameters_from_server_candidate():
     assert [item.parameter_name for item in rule.parameter_provenance] == ["min_row_count"]
 
 
-def test_node8_rebinds_duplicate_ids_and_ignores_extra_narratives():
+def test_node8_does_not_assign_duplicate_narratives_to_another_column():
     """Duplicated IDs and an extra narrative cannot corrupt the candidate batch."""
     from src.agents.nodes.rule_proposer_node import (
         CandidateTableRuleDraft,
@@ -291,11 +293,10 @@ def test_node8_rebinds_duplicate_ids_and_ignores_extra_narratives():
 
     result = _bind_proposal_to_candidates("source_rows", draft, candidates)
 
-    assert [rule.candidate_id for rule in result.rules] == ["candidate-1", "candidate-2"]
-    assert [rule.column for rule in result.rules] == ["col_0", "col_1"]
+    assert [rule.candidate_id for rule in result.rules] == ["candidate-1"]
+    assert [rule.column for rule in result.rules] == ["col_0"]
     assert [rule.selected_evidence_refs for rule in result.rules] == [
         ["profile:col_0:null_pct"],
-        ["profile:col_1:null_pct"],
     ]
 
 
@@ -503,9 +504,9 @@ async def test_failure_isolation():
     digest = _make_digest(tables)
 
     proposals = {
-        "orders": _make_table_proposal("orders", n_rules=2),
+        "orders": _make_table_proposal("orders", n_rules=1, source_column="id"),
         "customers": Exception("LLM timeout"),
-        "drivers": _make_table_proposal("drivers", n_rules=2),
+        "drivers": _make_table_proposal("drivers", n_rules=1, source_column="id"),
     }
 
     async def mock_ainvoke(messages):
@@ -566,7 +567,7 @@ async def test_retry_on_failure():
     table_name = "orders"
     digest = _make_digest([table_name])
 
-    success_proposal = _make_table_proposal(table_name, n_rules=2)
+    success_proposal = _make_table_proposal(table_name, n_rules=1, source_column="id")
     call_count = {"n": 0}
 
     async def flaky_ainvoke(messages):

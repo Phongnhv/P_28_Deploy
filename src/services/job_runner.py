@@ -1165,75 +1165,26 @@ def compile_rule_to_sql(rule_type: str, spec: dict, columns_allowlist: set[str])
         raise ValueError(f"Unsupported rule template: {rule_type}")
 
 
+def _uploaded_rule_outcome(uploaded_path: Path, rule_type: str, spec: dict, *, frame=None) -> dict:
+    """Use the versioned executor and its schema validation for uploaded sources."""
+    from src.services.versioned_dataset import DatasetContractError, execute_rule_frame, inspect_upload_path
+
+    if frame is None:
+        inspect_upload_path(uploaded_path, uploaded_path.name)
+        frame = pd.read_parquet(uploaded_path) if uploaded_path.suffix.lower() == ".parquet" else pd.read_csv(uploaded_path)
+    # Preserve the dashboard's existing row references; a business column named
+    # id is not the source row ordinal used by its evidence links.
+    row_ids = frame["source_row_id"].astype(str).tolist() if "source_row_id" in frame.columns else [str(i + 1) for i in range(len(frame))]
+    outcome = execute_rule_frame(frame, {**spec, "rule_type": normalize_rule_type(rule_type)}, row_ids=row_ids)
+    if outcome["status"] == "ERROR":
+        raise DatasetContractError(outcome.get("error") or "Rule execution failed")
+    return outcome
+
+
 def execute_uploaded_rule(uploaded_path: Path, rule_type: str, spec: dict) -> tuple[int, list[str], int]:
-    """Execute a data quality rule on an uploaded CSV/Parquet dataset via pandas."""
-    from src.services.versioned_dataset import inspect_upload_path
-    inspect_upload_path(uploaded_path, uploaded_path.name)
-    df = pd.read_parquet(uploaded_path) if uploaded_path.suffix.lower() == ".parquet" else pd.read_csv(uploaded_path)
-    total_rows = len(df)
-
-    if "source_row_id" in df.columns:
-        row_ids = df["source_row_id"].astype(str).tolist()
-    else:
-        row_ids = [str(i + 1) for i in range(total_rows)]
-
-    failed_indices = []
-
-    if rule_type == "not_null":
-        col = spec.get("column", "")
-        if col in df.columns:
-            failed_indices = df.index[df[col].isna()].tolist()
-
-    elif rule_type == "numeric_range":
-        col = spec.get("column", "")
-        if col in df.columns:
-            series = pd.to_numeric(df[col], errors="coerce")
-            min_v = spec.get("min_value")
-            max_v = spec.get("max_value")
-            cond = pd.Series(False, index=df.index)
-            if min_v is not None:
-                cond = cond | (series < min_v)
-            if max_v is not None:
-                cond = cond | (series > max_v)
-            failed_indices = df.index[cond | series.isna()].tolist()
-
-    elif rule_type == "accepted_values":
-        col = spec.get("column", "")
-        allowed = [str(v) for v in spec.get("allowed_values", [])]
-        if col in df.columns:
-            series = df[col].astype(str)
-            failed_indices = df.index[df[col].notna() & (~series.isin(allowed))].tolist()
-
-    elif rule_type == "cross_field_comparison":
-        cols = spec.get("columns", [])
-        op = spec.get("operator", "")
-        if len(cols) == 2 and cols[0] in df.columns and cols[1] in df.columns:
-            s1 = pd.to_numeric(df[cols[0]], errors="coerce")
-            s2 = pd.to_numeric(df[cols[1]], errors="coerce")
-            if op == "<":
-                valid = s1 < s2
-            elif op == "<=":
-                valid = s1 <= s2
-            elif op == ">":
-                valid = s1 > s2
-            elif op == ">=":
-                valid = s1 >= s2
-            elif op == "==":
-                valid = s1 == s2
-            elif op == "!=":
-                valid = s1 != s2
-            else:
-                valid = pd.Series(True, index=df.index)
-            failed_indices = df.index[~valid].tolist()
-
-    elif rule_type == "duplicate_fingerprint":
-        cols = spec.get("fingerprint_columns", [])
-        valid_cols = [c for c in cols if c in df.columns]
-        if valid_cols:
-            failed_indices = df.index[df.duplicated(subset=valid_cols, keep=False)].tolist()
-
-    failed_row_ids = [row_ids[i] for i in failed_indices if i < len(row_ids)]
-    return total_rows, failed_row_ids, len(failed_row_ids)
+    """Compatibility wrapper; full failure counts are independent of sampled IDs."""
+    outcome = _uploaded_rule_outcome(uploaded_path, rule_type, spec)
+    return outcome["checked_count"], outcome["violation_row_ids"], outcome["failed_count"]
 
 
 def run_dq_checks(
@@ -1308,6 +1259,10 @@ def run_dq_checks(
 
             if not rule_versions:
                 raise ValueError("No approved rules found for execution.")
+            if any(rv.dataset_id != dataset_id for rv in rule_versions):
+                raise ValueError("SOURCE_BINDING_INVALID: Approved rule belongs to another dataset")
+            if binding and any(rv.dataset_version_id and rv.dataset_version_id != binding["dataset_version_id"] for rv in rule_versions):
+                raise ValueError("SOURCE_BINDING_INVALID: Approved rule belongs to another dataset version")
 
             # The local fallback needs a profile-derived allowlist. The Supabase
             # adapter carries its own canonical-column allowlist.
@@ -1346,6 +1301,11 @@ def run_dq_checks(
             total_failed = 0
 
             uploaded_path = versioned_path or _uploaded_dataset_path(dataset_id)
+            uploaded_frame = None
+            if uploaded_path is not None and source_connection is None:
+                from src.services.versioned_dataset import inspect_upload_path
+                inspect_upload_path(uploaded_path, uploaded_path.name)
+                uploaded_frame = pd.read_parquet(uploaded_path) if uploaded_path.suffix.lower() == ".parquet" else pd.read_csv(uploaded_path)
 
             # Report the stages this executor really performs, so the Graph 2
             # panel reflects the run instead of showing five dbt nodes that were
@@ -1382,7 +1342,12 @@ def run_dq_checks(
                     failed_ids = outcome.failed_row_ids
                     failed_count = outcome.failed_count
                   elif uploaded_path is not None:
-                    total_rows, failed_ids, failed_count = execute_uploaded_rule(uploaded_path, rule_type, spec)
+                    outcome = _uploaded_rule_outcome(uploaded_path, rule_type, spec, frame=uploaded_frame)
+                    total_rows = outcome["checked_count"]
+                    failed_ids = outcome["violation_row_ids"]
+                    failed_count = outcome["failed_count"]
+                    aggregate_status = outcome["status"]
+                    aggregate_rate = outcome["violation_rate"]
                   elif normalize_rule_type(rule_type) in AGGREGATE_RULE_TYPES:
                     total_rows = (
                         db.execute(
@@ -1456,7 +1421,7 @@ def run_dq_checks(
                             run_id=run_id,
                             rule_id=rv.id,
                             rule_title=title,
-                            status="SKIPPED",
+                            status="ERROR",
                             checked_count=0,
                             failed_count=0,
                             failed_row_ids=json.dumps([]),
